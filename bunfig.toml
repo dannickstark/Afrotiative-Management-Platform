@@ -1,3 +1,5 @@
 [test]
-# Bun auto-loads .env.local; tests hit the real Neon DB via DATABASE_URL.
+# Bun skips .env.local when NODE_ENV=test; test-setup.ts preloads the real DB creds
+# from .env.local (single source of truth) so integration tests hit the real Neon DB.
 # Run DB-touching tests serially to avoid cross-test row contention.
+preload = ["./test-setup.ts"]
