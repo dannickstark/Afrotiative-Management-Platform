@@ -50,7 +50,7 @@ async function main() {
   const rows = Array.from({ length: 25 }).map((_, i) => {
     const status = statuses[i % statuses.length];
     const cat = cats[i % cats.length];
-    const lowConf = i % 5 === 0;
+    const lowConf = (status === "pending" || status === "in_review") && i % 3 === 0;
     return {
       title: SAMPLE_TITLES[i % SAMPLE_TITLES.length],
       bodyHtml: `<p>${SAMPLE_BODY}</p><h2>Contexte</h2><p>${SAMPLE_BODY}</p>`,
