@@ -661,7 +661,7 @@ git add -A && git commit -m "feat(auth): Better-Auth with admin plugin, RBAC sta
 - Test: manual (run the script; assert row counts)
 
 **Interfaces:**
-- Consumes: `auth.api.createUser`, all schema tables.
+- Consumes: `createCredentialUser` (from `lib/create-user.ts`), all schema tables.
 - Produces: 3 users (admin/editor/journalist), 6 feeds (mixed health), ~8 categories, ~15 tags, ~25 articles across every status incl. low-confidence, sources/tags/revisions, 3 pipeline runs incl. one failed.
 
 - [ ] **Step 1: Write the seed script**
