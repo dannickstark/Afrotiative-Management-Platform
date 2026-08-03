@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { signIn } from "@/lib/auth-client";
+import { loginErrorMessage } from "@/lib/login-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,20 +19,14 @@ export function LoginForm() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const { error } = await signIn.email({ email, password });
+    const { error: signInError } = await signIn.email({ email, password });
     setLoading(false);
-    if (error) {
-      // Verified against Better-Auth 1.6.25's admin plugin (2026-08-03): a banned
-      // account throws with body { code: "BANNED_USER", message: "You have been
-      // banned…" }. better-fetch spreads that body onto the client error object,
-      // so error.code === "BANNED_USER" here. Wrong password AND unknown email
-      // both come back as { code: "INVALID_EMAIL_OR_PASSWORD" } — same generic
-      // message for both, so we never leak whether an account exists.
-      if (error.code === "BANNED_USER" || /ban/i.test(error.message ?? "")) {
-        setError("Ce compte a été désactivé. Contactez un administrateur.");
-      } else {
-        setError("Email ou mot de passe incorrect.");
-      }
+    if (signInError) {
+      // loginErrorMessage distinguishes a banned account (code "BANNED_USER")
+      // from wrong-password/unknown-email (both "INVALID_EMAIL_OR_PASSWORD",
+      // one generic message → no account-existence leak). Verified & unit-tested
+      // against the real client error shape in tests/login.test.ts.
+      setError(loginErrorMessage(signInError));
       return;
     }
     router.push("/dashboard");
@@ -44,11 +39,11 @@ export function LoginForm() {
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
-            <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <Input id="email" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div className="space-y-2">
             <Label htmlFor="password">Mot de passe</Label>
-            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <Input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </div>
           {error && <p className="text-sm text-[var(--status-rejected)]" role="alert">{error}</p>}
           <Button type="submit" disabled={loading}

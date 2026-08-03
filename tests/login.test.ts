@@ -1,8 +1,32 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { auth } from "@/lib/auth";
 import { createCredentialUser } from "@/lib/create-user";
+import { loginErrorMessage } from "@/lib/login-error";
 import { db, user } from "@/db";
 import { eq } from "drizzle-orm";
+
+// Unit tests for the exact mapping components/login-form.tsx relies on. The
+// component branches on the CLIENT signIn.email() error's `.code`, so these
+// assert the client-shape codes directly (BANNED_USER vs INVALID_EMAIL_OR_PASSWORD),
+// independent of the DB. The server-API integration test below complements this
+// by proving the real end-to-end no-account-existence-leak behavior.
+describe("loginErrorMessage (client error mapping)", () => {
+  it("maps a banned account to the disabled-account message", () => {
+    expect(loginErrorMessage({ code: "BANNED_USER" }))
+      .toBe("Ce compte a été désactivé. Contactez un administrateur.");
+  });
+  it("maps a wrong password / unknown email to the generic message", () => {
+    expect(loginErrorMessage({ code: "INVALID_EMAIL_OR_PASSWORD" }))
+      .toBe("Email ou mot de passe incorrect.");
+  });
+  it("maps any other error code to the generic message (no false 'disabled')", () => {
+    expect(loginErrorMessage({ code: "SOME_OTHER" }))
+      .toBe("Email ou mot de passe incorrect.");
+  });
+  it("returns an empty string for a null error", () => {
+    expect(loginErrorMessage(null)).toBe("");
+  });
+});
 
 // Verifies the exact error shape login-form.tsx relies on to distinguish a
 // banned account ("Ce compte a été désactivé…") from a wrong password /
