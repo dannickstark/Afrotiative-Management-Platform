@@ -1,5 +1,5 @@
 import { db, articles, pipelineRuns, pipelineSteps } from "@/db";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte } from "drizzle-orm";
 
 export async function getDashboardData() {
   const dayAgo = new Date(Date.now() - 864e5);
@@ -19,7 +19,11 @@ export async function getDashboardData() {
 
   const latestErrors = await db.select({
     id: pipelineSteps.id, name: pipelineSteps.name, message: pipelineSteps.errorMessage,
-  }).from(pipelineSteps).where(eq(pipelineSteps.status, "failed")).limit(5);
+  }).from(pipelineSteps)
+    .innerJoin(pipelineRuns, eq(pipelineSteps.runId, pipelineRuns.id))
+    .where(eq(pipelineSteps.status, "failed"))
+    .orderBy(desc(pipelineRuns.startedAt))
+    .limit(5);
 
   return { pendingCount, failedRuns24h, publishedToday, publishedWeek, lastRun, latestPending, latestErrors };
 }

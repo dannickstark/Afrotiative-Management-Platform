@@ -13,6 +13,16 @@ export function statusLabel(s: ArticleStatus) {
   return STATUS_LABEL[s];
 }
 
+export type PipelineStatus = "success" | "partial" | "failed" | "running";
+
+export const PIPELINE_STATUS_LABEL: Record<PipelineStatus, string> = {
+  success: "Succès", partial: "Succès partiel", failed: "Échec", running: "En cours",
+};
+
+export function pipelineStatusLabel(s: PipelineStatus | null | undefined): string {
+  return s ? PIPELINE_STATUS_LABEL[s] : "—";
+}
+
 export function formatDate(d: Date | string | null): string {
   if (!d) return "—";
   return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d));

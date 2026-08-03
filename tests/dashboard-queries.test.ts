@@ -8,4 +8,12 @@ describe("getDashboardData", () => {
     expect(d.latestPending.length).toBeGreaterThan(0);
     expect(d.latestErrors.length).toBeGreaterThan(0); // seed has one failed step
   });
+
+  it("covers the date-boundary counts and lastRun", async () => {
+    const d = await getDashboardData();
+    expect(d.failedRuns24h).toBeGreaterThanOrEqual(1); // seed has one recent failed run
+    expect(d.publishedWeek).toBeGreaterThanOrEqual(1); // seed publishes within the last 7 days
+    expect(d.lastRun).toBeDefined();
+    expect(["success", "partial", "failed", "running"]).toContain(d.lastRun!.status);
+  });
 });

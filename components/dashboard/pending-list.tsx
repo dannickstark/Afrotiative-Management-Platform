@@ -2,9 +2,17 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { EmptyState } from "./empty-state";
-import { relativeDate } from "@/lib/format";
+import { relativeDate, type ArticleStatus } from "@/lib/format";
 
-export function PendingList({ items }: { items: { id: string; title: string; status: any; generatedAt: Date | null; confidenceFlags: any }[] }) {
+type PendingItem = {
+  id: string;
+  title: string;
+  status: ArticleStatus;
+  generatedAt: Date | null;
+  confidenceFlags: { categoryUncertain?: boolean; imageMissing?: boolean; clusterUncertain?: boolean };
+};
+
+export function PendingList({ items }: { items: PendingItem[] }) {
   return (
     <Card>
       <CardHeader><CardTitle className="text-base">Derniers articles en attente</CardTitle></CardHeader>
@@ -16,7 +24,7 @@ export function PendingList({ items }: { items: { id: string; title: string; sta
               return (
                 <li key={a.id} className="py-2">
                   <Link href={`/article/${a.id}`} className="flex items-center gap-2 hover:underline">
-                    {low && <span title="Faible confiance IA" className="size-2 rounded-full bg-[var(--status-pending)]" />}
+                    {low && <span title="Faible confiance IA" className="size-2 rounded-full bg-[var(--accent-brand)]" />}
                     <span className="flex-1 truncate">{a.title}</span>
                     <span className="text-xs text-muted-foreground">{relativeDate(a.generatedAt)}</span>
                     <StatusBadge status={a.status} />
