@@ -6,12 +6,12 @@
 
 **Architecture:** Next.js 16 App Router with React Server Components for reads and Server Actions for writes. Drizzle ORM against Neon (pooled connection). Better-Auth (admin plugin) for sessions + RBAC, enforced in server actions. The pipeline that *produces* articles and WordPress publishing are simulated via seed data + stub actions; their DB schema is built now so later segments (SP3/SP5) add only logic.
 
-**Tech Stack:** TypeScript · Next.js 16.3.0 · React 19.2.8 · Tailwind v4.3.3 · shadcn/ui · Drizzle 0.45.2 / drizzle-kit 0.31.10 · `pg` 8.22.0 · Better-Auth 1.6.25 · Tiptap 3.29.2 · TanStack Table 8.21.3 · sonner 2.0.7 · zod 4.4.3 · next-themes 0.4.6 · lucide-react 1.28.0 · Vitest 4.1.10 · tsx 4.23.5.
+**Tech Stack:** TypeScript · **Bun** (runtime, package manager, TS executor, test runner) · Next.js 16.3.0 · React 19.2.8 · Tailwind v4.3.3 · shadcn/ui · Drizzle 0.45.2 / drizzle-kit 0.31.10 · `pg` 8.22.0 · Better-Auth 1.6.25 · Tiptap 3.29.2 · TanStack Table 8.21.3 · sonner 2.0.7 · zod 4.4.3 · next-themes 0.4.6 · lucide-react 1.28.0 · `bun:test`.
 
 ## Global Constraints
 
-- **Package manager:** `pnpm`. Node ≥ 20.
-- **Exact versions (pin these):** next@16.3.0, react@19.2.8, react-dom@19.2.8, tailwindcss@4.3.3, better-auth@1.6.25, drizzle-orm@0.45.2, drizzle-kit@0.31.10, pg@8.22.0, @tiptap/react@3.29.2, @tiptap/starter-kit@3.29.2, @tiptap/extension-link@3.29.2, @tanstack/react-table@8.21.3, sonner@2.0.7, zod@4.4.3, next-themes@0.4.6, lucide-react@1.28.0, vitest@4.1.10, tsx@4.23.5.
+- **Runtime & toolchain: Bun (≥ 1.1).** Bun is the package manager (`bun install` / `bun add` / `bun add -d`), the script runner (`bun run <script>`), the TypeScript executor (`bun file.ts` — **no `tsx`/`ts-node`**), and the test runner (`bun test`, importing from `bun:test` — **no Vitest**). Next.js is launched through Bun with the `--bun` flag baked into the npm scripts so Next runs on the Bun runtime, not Node. **Bun auto-loads `.env.local`** into `process.env` — **no `dotenv`** is needed anywhere (app, scripts, tests, `drizzle.config.ts`). Bun reads `tsconfig.json` `paths`, so the `@/*` alias resolves in tests and scripts with no extra config.
+- **Exact versions (pin these):** next@16.3.0, react@19.2.8, react-dom@19.2.8, tailwindcss@4.3.3, better-auth@1.6.25, drizzle-orm@0.45.2, drizzle-kit@0.31.10, pg@8.22.0, @tiptap/react@3.29.2, @tiptap/starter-kit@3.29.2, @tiptap/extension-link@3.29.2, @tanstack/react-table@8.21.3, sonner@2.0.7, zod@4.4.3, next-themes@0.4.6, lucide-react@1.28.0. Dev: drizzle-kit@0.31.10, @faker-js/faker@10.5.0, @types/pg, bun-types (latest). (Test runner and TS execution are built into Bun — no Vitest/tsx/dotenv/jsdom.)
 - **Database:** use the **pooled** connection string (`DATABASE_URL`, host contains `-pooler`) in all app code and server actions; use **direct** (`DIRECT_URL`, no `-pooler`) only in `drizzle.config.ts` for migrations. Both already present in `.env.local`.
 - **UI language: French.** All visible strings in French. Currency/context: panafricain business & finance.
 - **Roles:** `admin`, `editor`, `journalist`. Role-gated actions are **hidden, not disabled** — a journalist never sees "Publier"/"Rejeter"/"Renvoyer à l'IA".
@@ -29,7 +29,7 @@
 
 ```
 package.json, tsconfig.json, next.config.ts, postcss.config.mjs, components.json
-vitest.config.ts, vitest.setup.ts, drizzle.config.ts, .env.example
+bunfig.toml, drizzle.config.ts, .env.example
 app/
   layout.tsx                      # root: html/body, ThemeProvider, Toaster, fonts
   globals.css                     # Tailwind v4 + design tokens (light/dark, accent, status)
@@ -75,84 +75,69 @@ tests/
 
 ---
 
-## Task 1: Project scaffold, tooling & Vitest
+## Task 1: Project scaffold & Bun tooling
 
 **Files:**
-- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, `app/layout.tsx`, `app/globals.css`, `app/page.tsx`, `vitest.config.ts`, `vitest.setup.ts`, `.env.example`, `components.json`
+- Create: `package.json`, `tsconfig.json`, `next.config.ts`, `postcss.config.mjs`, `app/layout.tsx`, `app/globals.css`, `app/page.tsx`, `bunfig.toml`, `.env.example`, `components.json`
 - Test: `tests/smoke.test.ts`
 
 **Interfaces:**
-- Produces: a booting Next.js app; `pnpm build`, `pnpm test`, `pnpm dev` scripts; path alias `@/*`.
+- Produces: a booting Next.js app running on the Bun runtime; `bun run dev/build/typecheck`, `bun test`, `bun run db:*` scripts; path alias `@/*`.
 
-- [ ] **Step 1: Scaffold Next.js in the current directory**
+- [ ] **Step 1: Scaffold Next.js in the current directory (Bun)**
 
-The repo already contains the two source `.md` docs, `.gitignore`, `.env.local`, and `docs/`. Scaffold into this non-empty dir with a temp folder then move:
+Bun must be installed (`bun --version`; if missing: `curl -fsSL https://bun.sh/install | bash`). The repo already contains the two source `.md` docs, `.gitignore`, `.env.local`, and `docs/`. Scaffold into this non-empty dir via a temp folder then move:
 
 ```bash
-pnpm dlx create-next-app@16.3.0 .afrotmp --ts --tailwind --app --src-dir=false --import-alias "@/*" --use-pnpm --no-eslint --turbopack --yes
+bunx create-next-app@16.3.0 .afrotmp --ts --tailwind --app --src-dir=false --import-alias "@/*" --use-bun --no-eslint --turbopack --yes
 # move generated files up, keeping our existing files
 rsync -a --ignore-existing .afrotmp/ ./ && cp -f .afrotmp/tsconfig.json .afrotmp/next.config.* .afrotmp/postcss.config.* .afrotmp/package.json ./ && rm -rf .afrotmp
 ```
 
-- [ ] **Step 2: Pin dependencies and add scripts**
+- [ ] **Step 2: Pin dependencies and add scripts (Bun)**
 
 Run:
 ```bash
-pnpm add next@16.3.0 react@19.2.8 react-dom@19.2.8 drizzle-orm@0.45.2 pg@8.22.0 better-auth@1.6.25 \
+bun add next@16.3.0 react@19.2.8 react-dom@19.2.8 drizzle-orm@0.45.2 pg@8.22.0 better-auth@1.6.25 \
   @tiptap/react@3.29.2 @tiptap/starter-kit@3.29.2 @tiptap/extension-link@3.29.2 \
   @tanstack/react-table@8.21.3 sonner@2.0.7 zod@4.4.3 next-themes@0.4.6 lucide-react@1.28.0
-pnpm add -D tailwindcss@4.3.3 drizzle-kit@0.31.10 vitest@4.1.10 @vitejs/plugin-react@6.0.5 tsx@4.23.5 \
-  @faker-js/faker@10.5.0 @types/pg dotenv@17.4.2
+bun add -d tailwindcss@4.3.3 drizzle-kit@0.31.10 @faker-js/faker@10.5.0 @types/pg bun-types
 ```
 
-Edit `package.json` scripts:
+Edit `package.json` scripts (`--bun` forces Next onto the Bun runtime; `bun test` and `bun db/seed.ts` need no extra tooling):
 ```json
 {
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
+    "dev": "bun --bun next dev --turbopack",
+    "build": "bun --bun next build",
+    "start": "bun --bun next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx db/seed.ts"
+    "db:seed": "bun db/seed.ts"
   }
 }
 ```
 
-- [ ] **Step 3: Configure Vitest**
+Also ensure `tsconfig.json` has `"types": ["bun-types"]` in `compilerOptions` (so `bun:test` and Bun globals typecheck).
 
-Create `vitest.config.ts`:
-```ts
-import { defineConfig } from "vitest/config";
-import react from "@vitejs/plugin-react";
-import path from "node:path";
+- [ ] **Step 3: Bun test config**
 
-export default defineConfig({
-  plugins: [react()],
-  test: {
-    environment: "node",
-    setupFiles: ["./vitest.setup.ts"],
-    globals: true,
-  },
-  resolve: { alias: { "@": path.resolve(__dirname, ".") } },
-});
+`bun test` needs no config file — it discovers `*.test.ts`, reads `tsconfig.json` `paths` for the `@/*` alias, and **auto-loads `.env.local`**. Create a minimal `bunfig.toml` only to keep test settings explicit and future-proof:
+```toml
+[test]
+# Bun auto-loads .env.local; tests hit the real Neon DB via DATABASE_URL.
+# Run DB-touching tests serially to avoid cross-test row contention.
 ```
-
-Create `vitest.setup.ts`:
-```ts
-import { config } from "dotenv";
-config({ path: ".env.local" });
-```
+> No `vitest.config.ts`, `vitest.setup.ts`, or `dotenv` — Bun replaces all three.
 
 - [ ] **Step 4: Write a smoke test**
 
 Create `tests/smoke.test.ts`:
 ```ts
-import { expect, test } from "vitest";
+import { expect, test } from "bun:test";
 
 test("environment is wired", () => {
   expect(1 + 1).toBe(2);
@@ -172,13 +157,13 @@ BETTER_AUTH_URL="http://localhost:3000"
 
 - [ ] **Step 6: Run test + build + typecheck**
 
-Run: `pnpm test && pnpm typecheck && pnpm build`
+Run: `bun test && bun run typecheck && bun run build`
 Expected: smoke test PASSES, typecheck clean, build succeeds.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add -A && git commit -m "chore: scaffold Next.js 16 app with Tailwind, Drizzle, Vitest tooling"
+git add -A && git commit -m "chore: scaffold Next.js 16 app with Bun toolchain, Tailwind, Drizzle"
 ```
 
 ---
@@ -413,12 +398,9 @@ export const distributions = pgTable("distributions", {
 
 - [ ] **Step 3: Create drizzle config (uses DIRECT url for migrations)**
 
-`drizzle.config.ts`:
+`drizzle.config.ts` (run via `bunx drizzle-kit …`, so Bun has already loaded `.env.local` into `process.env` — no dotenv):
 ```ts
-import "dotenv/config";
-import { config } from "dotenv";
 import { defineConfig } from "drizzle-kit";
-config({ path: ".env.local" });
 
 export default defineConfig({
   schema: "./db/schema.ts",
@@ -427,16 +409,16 @@ export default defineConfig({
   dbCredentials: { url: process.env.DIRECT_URL! },
 });
 ```
+> The drizzle-kit scripts (`db:generate`/`db:push`/`db:migrate`) must be invoked through Bun (`bun run db:push`) so `.env.local` is present. If you ever call `drizzle-kit` via another runner, prefix `DIRECT_URL=... `.
 
 - [ ] **Step 4: Enable pgvector, generate & push migration**
 
-Run:
+Run (Bun auto-loads `.env.local`, so no dotenv needed):
 ```bash
-# enable the extension on Neon (name is "vector")
-psql "$DIRECT_URL" -c 'CREATE EXTENSION IF NOT EXISTS vector;' 2>/dev/null \
-  || pnpm dlx tsx -e "import {config} from 'dotenv';config({path:'.env.local'});import {Client} from 'pg';const c=new Client({connectionString:process.env.DIRECT_URL});await c.connect();await c.query('CREATE EXTENSION IF NOT EXISTS vector;');await c.end();console.log('vector enabled')"
-pnpm db:generate
-pnpm db:push
+# enable the extension on Neon (SQL name is "vector") via a one-off bun script
+bun -e "import {Client} from 'pg';const c=new Client({connectionString:process.env.DIRECT_URL});await c.connect();await c.query('CREATE EXTENSION IF NOT EXISTS vector;');await c.end();console.log('vector enabled')"
+bun run db:generate
+bun run db:push
 ```
 Expected: migration files generated in `db/migrations`, push reports tables created.
 
@@ -446,7 +428,7 @@ Expected: migration files generated in `db/migrations`, push reports tables crea
 
 `tests/schema.test.ts`:
 ```ts
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll } from "bun:test";
 import { db, feeds } from "@/db";
 import { eq } from "drizzle-orm";
 
@@ -467,7 +449,7 @@ describe("schema", () => {
 
 - [ ] **Step 6: Run the test**
 
-Run: `pnpm test tests/schema.test.ts`
+Run: `bun test tests/schema.test.ts`
 Expected: PASS (connects to Neon via pooled URL, round-trips a row).
 
 - [ ] **Step 7: Commit**
@@ -613,7 +595,7 @@ export async function createCredentialUser(input: { email: string; name: string;
 
 `tests/auth.test.ts`:
 ```ts
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { auth } from "@/lib/auth";
 import { createCredentialUser } from "@/lib/create-user";
 import { db, user } from "@/db";
@@ -643,7 +625,7 @@ describe("auth", () => {
 
 - [ ] **Step 6: Run the test**
 
-Run: `pnpm test tests/auth.test.ts`
+Run: `bun test tests/auth.test.ts`
 Expected: PASS (correct sign-in works, wrong password throws).
 
 - [ ] **Step 7: Commit**
@@ -666,10 +648,8 @@ git add -A && git commit -m "feat(auth): Better-Auth with admin plugin, RBAC sta
 
 - [ ] **Step 1: Write the seed script**
 
-`db/seed.ts` (idempotent: clears app tables first, recreates users):
+`db/seed.ts` (idempotent: clears app tables first, recreates users; run via `bun run db:seed`, so `.env.local` is auto-loaded — no dotenv):
 ```ts
-import { config } from "dotenv";
-config({ path: ".env.local" });
 import { db } from "@/db";
 import {
   feeds, articles, articleSources, articleTags, articleRevisions,
@@ -788,14 +768,14 @@ main().catch((e) => { console.error(e); process.exit(1); });
 
 - [ ] **Step 2: Run the seed**
 
-Run: `pnpm db:seed`
+Run: `bun run db:seed`
 Expected: prints `Seed OK: 25 articles, 3 users.`
 
 - [ ] **Step 3: Verify counts**
 
 Run:
 ```bash
-pnpm dlx tsx -e "import {config} from 'dotenv';config({path:'.env.local'});import {db,articles,user,feeds} from './db';console.log('articles',(await db.select().from(articles)).length);console.log('users',(await db.select().from(user)).length);console.log('feeds',(await db.select().from(feeds)).length);process.exit(0)"
+bun -e "import {db,articles,user,feeds} from './db';console.log('articles',(await db.select().from(articles)).length);console.log('users',(await db.select().from(user)).length);console.log('feeds',(await db.select().from(feeds)).length);process.exit(0)"
 ```
 Expected: articles 25, users 3, feeds 6.
 
@@ -821,8 +801,8 @@ git add -A && git commit -m "feat(db): realistic French newsroom seed data"
 
 Run:
 ```bash
-pnpm dlx shadcn@latest init -d
-pnpm dlx shadcn@latest add button card badge table dialog sheet select input textarea \
+bunx shadcn@latest init -d
+bunx shadcn@latest add button card badge table dialog sheet select input textarea \
   dropdown-menu avatar tabs sonner tooltip label separator skeleton command popover
 ```
 
@@ -931,26 +911,28 @@ export function StatusBadge({ status }: { status: ArticleStatus }) {
 }
 ```
 
-- [ ] **Step 5: Test the pure mapping**
+- [ ] **Step 5: Test the pure status mapping (no DOM)**
 
-`tests/status-badge.test.tsx`:
-```tsx
-import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
-import { StatusBadge } from "@/components/status-badge";
+Test the label/style mapping as pure data — no React rendering, so `bun test` needs no DOM setup. `tests/status.test.ts`:
+```ts
+import { describe, it, expect } from "bun:test";
+import { STATUS_LABEL, statusLabel, type ArticleStatus } from "@/lib/format";
 
-describe("StatusBadge", () => {
-  it("renders the French label for each status", () => {
-    render(<StatusBadge status="pending" />);
-    expect(screen.getByText("En attente")).toBeTruthy();
+const ALL: ArticleStatus[] = ["draft", "pending", "in_review", "approved", "published", "rejected"];
+
+describe("status mapping", () => {
+  it("has a French label for every status value", () => {
+    for (const s of ALL) expect(STATUS_LABEL[s].length).toBeGreaterThan(0);
+    expect(statusLabel("pending")).toBe("En attente");
+    expect(statusLabel("rejected")).toBe("Rejeté");
   });
 });
 ```
-Add `jsdom` + testing-library: `pnpm add -D jsdom@25.0.1 @testing-library/react@16.1.0 @testing-library/jest-dom@6.6.3` and set `environment: "jsdom"` per-file via `// @vitest-environment jsdom` at the top of the test file.
+> Component rendering is validated in the end-to-end verification pass (Task 15), not with a DOM test runner — Bun stays dependency-free here.
 
 - [ ] **Step 6: Run test + typecheck**
 
-Run: `pnpm test tests/status-badge.test.tsx && pnpm typecheck`
+Run: `bun test tests/status.test.ts && bun run typecheck`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -978,7 +960,7 @@ git add -A && git commit -m "feat(ui): design tokens, theme provider, status bad
 
 `tests/rbac.test.ts`:
 ```ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { can } from "@/lib/rbac";
 
 describe("can()", () => {
@@ -1002,7 +984,7 @@ describe("can()", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pnpm test tests/rbac.test.ts`
+Run: `bun test tests/rbac.test.ts`
 Expected: FAIL ("Cannot find module '@/lib/rbac'").
 
 - [ ] **Step 3: Implement `lib/rbac.ts`**
@@ -1047,7 +1029,7 @@ export function requirePermission(role: Role, resource: string, action: string):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm test tests/rbac.test.ts`
+Run: `bun test tests/rbac.test.ts`
 Expected: PASS (all 3).
 
 - [ ] **Step 5: Role gate component**
@@ -1227,8 +1209,8 @@ export default function Page() {
 
 - [ ] **Step 7: Verify shell renders (manual)**
 
-Run: `pnpm dev`, then use the run/verify skill (browser) — but auth guard will redirect to `/login` (built next). For now confirm `pnpm build` + `pnpm typecheck` pass.
-Run: `pnpm typecheck && pnpm build`
+Run: `bun run dev`, then use the run/verify skill (browser) — but auth guard will redirect to `/login` (built next). For now confirm `bun run build` + `bun run typecheck` pass.
+Run: `bun run typecheck && bun run build`
 Expected: clean.
 
 - [ ] **Step 8: Commit**
@@ -1328,10 +1310,10 @@ export default async function LoginPage() {
 
 - [ ] **Step 3: Verify login flow (manual, real app)**
 
-Run: `pnpm dev`. Using the run/verify skill (browser):
+Run: `bun run dev`. Using the run/verify skill (browser):
 1. Visit `/login`, sign in as `editor@afrotiative.com` / `Afrotiative2026!` → lands on `/dashboard` (empty shell for now).
 2. Wrong password → "Email ou mot de passe incorrect."
-3. Temporarily ban the seed journalist (`await auth.api.banUser(...)` or set `user.banned=true` via a one-off tsx) → sign-in shows "Ce compte a été désactivé."
+3. Temporarily ban the seed journalist (set `user.banned=true` via a one-off `bun -e "import {db,user} from './db';import {eq} from 'drizzle-orm';await db.update(user).set({banned:true}).where(eq(user.email,'journaliste@afrotiative.com'));process.exit(0)"`) → sign-in shows "Ce compte a été désactivé."
 Expected: all three behave as described.
 
 - [ ] **Step 4: Commit**
@@ -1387,7 +1369,7 @@ export async function getDashboardData() {
 
 `tests/dashboard-queries.test.ts`:
 ```ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { getDashboardData } from "@/lib/queries/dashboard";
 
 describe("getDashboardData", () => {
@@ -1402,7 +1384,7 @@ describe("getDashboardData", () => {
 
 - [ ] **Step 3: Run the test**
 
-Run: `pnpm test tests/dashboard-queries.test.ts`
+Run: `bun test tests/dashboard-queries.test.ts`
 Expected: PASS (requires seed run first).
 
 - [ ] **Step 4: Summary cards + lists + empty state**
@@ -1513,7 +1495,7 @@ export default async function DashboardPage() {
 
 - [ ] **Step 6: Verify (manual)**
 
-Run: `pnpm dev`, sign in, confirm dashboard shows non-zero cards, 5 pending items link to editor, one pipeline error listed.
+Run: `bun run dev`, sign in, confirm dashboard shows non-zero cards, 5 pending items link to editor, one pipeline error listed.
 
 - [ ] **Step 7: Commit**
 
@@ -1567,7 +1549,7 @@ export async function getQueue(): Promise<QueueRow[]> {
 
 `tests/queue-actions.test.ts`:
 ```ts
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "bun:test";
 import { can } from "@/lib/rbac";
 
 // Unit-level guard: the action must refuse a journalist.
@@ -1677,8 +1659,8 @@ export default async function QueuePage() {
 
 - [ ] **Step 7: Run tests + verify (manual)**
 
-Run: `pnpm test tests/queue-actions.test.ts && pnpm typecheck`
-Then `pnpm dev`: as editor, filter/sort/search work, low-confidence rows show the badge, "Approuver rapidement" flips status + toasts; as journalist, only "Ouvrir" is visible.
+Run: `bun test tests/queue-actions.test.ts && bun run typecheck`
+Then `bun run dev`: as editor, filter/sort/search work, low-confidence rows show the badge, "Approuver rapidement" flips status + toasts; as journalist, only "Ouvrir" is visible.
 
 - [ ] **Step 8: Commit**
 
@@ -1762,7 +1744,7 @@ export type ArticleDetail = NonNullable<Awaited<ReturnType<typeof getArticle>>>;
 
 `tests/article-actions.test.ts`:
 ```ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { can } from "@/lib/rbac";
 import { LOCK_TTL_MS, isLockActive } from "@/lib/lock";
 
@@ -1782,7 +1764,7 @@ describe("article action rules", () => {
 
 - [ ] **Step 4: Run tests to confirm they fail**
 
-Run: `pnpm test tests/article-actions.test.ts`
+Run: `bun test tests/article-actions.test.ts`
 Expected: FAIL (module/exports missing).
 
 - [ ] **Step 5: Implement actions**
@@ -1878,7 +1860,7 @@ export async function schedule(input: { id: string; at: Date }) {
 
 - [ ] **Step 6: Run tests to confirm they pass**
 
-Run: `pnpm test tests/article-actions.test.ts`
+Run: `bun test tests/article-actions.test.ts`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
@@ -2009,7 +1991,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
 
 - [ ] **Step 6: Verify (manual, real app)**
 
-Run: `pnpm dev`. As editor: open a low-confidence article, edit title/body (toolbar only exposes the 6 controls), Enregistrer toasts success; Approuver & publier on an article with no category → error toast "Choisissez une catégorie…"; after setting a category → success stub toast, returns to queue. As journalist: no Rejeter/Publier/Renvoyer buttons. Open the same article in a second browser as another user → lock banner appears.
+Run: `bun run dev`. As editor: open a low-confidence article, edit title/body (toolbar only exposes the 6 controls), Enregistrer toasts success; Approuver & publier on an article with no category → error toast "Choisissez une catégorie…"; after setting a category → success stub toast, returns to queue. As journalist: no Rejeter/Publier/Renvoyer buttons. Open the same article in a second browser as another user → lock banner appears.
 
 - [ ] **Step 7: Commit**
 
@@ -2053,7 +2035,7 @@ git add -A && git commit -m "feat(article): two-column editor, constrained Tipta
 
 - [ ] **Step 6: Verify (manual)**
 
-Run: `pnpm dev`. Confirm: image credit always visible; new vs existing tags visually distinct; category constrained to the list; sources link out; history shows the generation + any edits you just made.
+Run: `bun run dev`. Confirm: image credit always visible; new vs existing tags visually distinct; category constrained to the list; sources link out; history shows the generation + any edits you just made.
 
 - [ ] **Step 7: Commit**
 
@@ -2078,7 +2060,7 @@ git add -A && git commit -m "feat(article): side panel — image/credit, categor
 
 `tests/create-actions.test.ts`:
 ```ts
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import { can } from "@/lib/rbac";
 describe("manual create", () => {
   it("journalist can create articles", () => { expect(can("journalist", "article", "create")).toBe(true); });
@@ -2121,8 +2103,8 @@ export async function submitForReview(id: string) {
 
 - [ ] **Step 4: Run test + verify (manual)**
 
-Run: `pnpm test tests/create-actions.test.ts`
-Then `pnpm dev` as journalist: "Nouvel article" → editor with no publish buttons → fill title/body, choose category/tags → "Soumettre en revue" → lands in queue as `pending`; confirm the journalist cannot see any publish/approve/reject control anywhere.
+Run: `bun test tests/create-actions.test.ts`
+Then `bun run dev` as journalist: "Nouvel article" → editor with no publish buttons → fill title/body, choose category/tags → "Soumettre en revue" → lands in queue as `pending`; confirm the journalist cannot see any publish/approve/reject control anywhere.
 
 - [ ] **Step 5: Commit**
 
@@ -2138,7 +2120,7 @@ git add -A && git commit -m "feat(article): manual creation + submit-for-review 
 
 - [ ] **Step 1: Full typecheck + build + tests**
 
-Run: `pnpm typecheck && pnpm test && pnpm build`
+Run: `bun run typecheck && bun test && bun run build`
 Expected: all clean/green.
 
 - [ ] **Step 2: Drive Parcours A end-to-end (run/verify skill, real app)**
