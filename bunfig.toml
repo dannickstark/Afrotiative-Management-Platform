@@ -1,0 +1,3 @@
+[test]
+# Bun auto-loads .env.local; tests hit the real Neon DB via DATABASE_URL.
+# Run DB-touching tests serially to avoid cross-test row contention.
