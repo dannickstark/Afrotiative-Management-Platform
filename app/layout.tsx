@@ -1,16 +1,32 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Inter, Lora } from "next/font/google";
+import { ThemeProvider } from "@/components/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
+const lora = Lora({ subsets: ["latin"], variable: "--font-editorial" });
+
 export const metadata: Metadata = {
-  title: "Afrotiative Media — Back-office",
-  description: "Internal news platform back-office",
+  title: "Afrotiative Media — Console éditoriale",
+  description: "Plateforme interne de gestion de contenu",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html
+      lang="fr"
+      suppressHydrationWarning
+      className={`${inter.variable} ${lora.variable} h-full`}
+    >
+      <body className="min-h-full flex flex-col font-sans antialiased">
+        <ThemeProvider>
+          <TooltipProvider>{children}</TooltipProvider>
+        </ThemeProvider>
+        <Toaster richColors position="top-right" />
+      </body>
     </html>
   );
 }
