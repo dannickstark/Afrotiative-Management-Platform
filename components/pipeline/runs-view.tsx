@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { RunNow } from "@/components/pipeline/run-now";
@@ -33,6 +34,11 @@ export function RunsView({ runs }: { runs: RunRow[] }) {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Tracks the run whose detail we currently want displayed, so a late/out-of-order
+  // getRunDetailAction resolution (open A → close → open B, A resolves after B) can be dropped
+  // rather than clobbering B's detail. Set to null on close so a resolution after close can't
+  // repopulate a dismissed drawer.
+  const latestReq = useRef<string | null>(null);
 
   const hasRunning = runs.some((r) => r.status === "running");
 
@@ -47,18 +53,25 @@ export function RunsView({ runs }: { runs: RunRow[] }) {
   }, [hasRunning, router]);
 
   function handleRowClick(id: string) {
+    latestReq.current = id;
     setOpenRunId(id);
     // Clear any previously-fetched run's detail BEFORE the new fetch resolves, so the sheet
     // renders a clean skeleton (loading=true, run=null) instead of the previous row's summary
     // while the new one is in flight — carried forward from the Task 3 review note.
     setDetail(null);
     startTransition(async () => {
-      const d = await getRunDetailAction(id);
-      setDetail(d);
+      try {
+        const d = await getRunDetailAction(id);
+        // Ignore a stale resolution: only apply if this is still the run the user wants shown.
+        if (latestReq.current === id) setDetail(d);
+      } catch {
+        if (latestReq.current === id) toast.error("Impossible de charger le détail de l'exécution.");
+      }
     });
   }
 
   function closeDrawer() {
+    latestReq.current = null;
     setOpenRunId(null);
     setDetail(null);
   }
