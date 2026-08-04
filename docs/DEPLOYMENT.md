@@ -115,6 +115,62 @@ bun run start            # sert la build de production sur le port 3000
 
 Vérification rapide : `bun test` (135 tests, sans réseau ni clés), `bun run typecheck`.
 
+### 5.1 Déploiement sur Railway — migrations automatiques à chaque déploiement
+
+Le fichier **`railway.json`** (à la racine, commité) pilote le build et surtout la **commande de pré-déploiement**, qui applique les migrations **une fois par déploiement, avant que le trafic ne bascule** sur la nouvelle version :
+
+```json
+{
+  "build":  { "buildCommand": "bun run build" },
+  "deploy": {
+    "preDeployCommand": "bun run db:migrate:deploy",
+    "startCommand": "bun run start",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
+```
+
+- **`preDeployCommand` = `bun run db:migrate:deploy`** → c'est la réponse à « comment garantir la migration à chaque déploiement ». Railway l'exécute **une seule fois** (pas par réplica), avec les variables d'env du service (`DIRECT_URL` = branche `production`), **avant** de promouvoir la version. Si la migration **échoue**, le déploiement est **stoppé** et l'ancienne version continue de servir — jamais de version applicative en avance de phase sur son schéma.
+- Le runner de migration (`db/migrate.ts`) n'utilise **que** `drizzle-orm` + `pg` (dépendances de runtime) — pas `drizzle-kit` (devDependency, absente de l'image de prod). Il est **idempotent** : les migrations déjà enregistrées sont ignorées.
+- Railway fournit `PORT` ; `next start` l'utilise automatiquement. Le builder détecte Bun via `bun.lock`.
+
+> **Sans Railway :** exécutez `bun run db:migrate:deploy` comme étape de release de votre CI/hôte (même effet), puis démarrez l'app.
+
+### 5.2 Bootstrap **unique** de la base `production` (avant le tout premier déploiement)
+
+Les bases actuelles ont été créées via `db:push` : elles ont le **schéma** mais **pas le journal de migration** de drizzle. Sans réconciliation, le tout premier `db:migrate:deploy` tenterait de recréer des objets existants et **échouerait**. À faire **une fois** sur `production`, **avant** le premier déploiement (via `railway run`, qui injecte l'env du service — aucune credential de prod sur votre poste) :
+
+```bash
+# 1. Réconcilier le journal de migration sur la branche production :
+railway run bun run db:baseline
+#    → « Baseline terminé… » : le schéma existait déjà (cas normal, branche clonée depuis dev).
+#    → « Base vide… » : la branche est vide → lancez à la place :
+railway run bun run db:migrate:deploy   # applique tout le schéma depuis zéro
+
+# 2. pgvector (idempotent ; déjà présent si la branche a été clonée depuis dev) :
+#    CREATE EXTENSION IF NOT EXISTS vector;   (via la console SQL Neon sur la branche production)
+
+# 3. Premier administrateur (§4), dans l'env production :
+railway run env ADMIN_EMAIL="vous@afrotiative.com" ADMIN_NAME="Votre Nom" ADMIN_PASSWORD='…' \
+  bun run db:create-admin
+```
+
+Après ce bootstrap unique, chaque déploiement applique **seulement les nouvelles** migrations via le `preDeployCommand`. Vous ne relancez plus jamais `db:baseline`.
+
+> **Note :** le même bootstrap vaut pour la branche `dev` (déjà baseline en local). En développement, régénérez les migrations avec `bun run db:generate` après un changement de schéma, puis `bun run db:migrate` (ou `db:migrate:deploy`). Évitez `db:push` sur les branches que vous déployez — il désynchronise le journal.
+
+### 5.3 Variables d'env à poser dans Railway (Service → Variables)
+
+Toutes celles du §2, avec les valeurs de **production** :
+
+- `DATABASE_URL`, `DIRECT_URL` → branche Neon **`production`**.
+- `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` (= l'URL publique Railway ou votre domaine).
+- `PIPELINE_TRIGGER_SECRET`, `PUBLISH_TRIGGER_SECRET` (deux secrets distincts).
+- `WP_BASE_URL`, `WP_USER`, `WP_APP_PASSWORD` (pour publier).
+- Clés pipeline : `OPENROUTER_API_KEY`, `JINA_API_KEY`, `FIRECRAWL_API_KEY`, `LLM_ORDER`, `EXTRACT_ORDER`, `EMBED_*`…
+- `PRODUCTION_DB_HOST` = le hostname de l'endpoint `production` (garde-fou anti-seed).
+- `NODE_ENV=production` (active aussi le refus de `db:seed`).
+
 ---
 
 ## 6. Les deux tâches cron (le cœur de l'automatisation)

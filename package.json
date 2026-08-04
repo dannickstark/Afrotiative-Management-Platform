@@ -10,6 +10,8 @@
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:deploy": "bun db/migrate.ts",
+    "db:baseline": "bun db/baseline.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "bun db/seed.ts",
     "db:create-admin": "bun db/create-admin.ts"

@@ -57,7 +57,9 @@ Comptes de démo (seed) : `admin@` / `editor@` / `journaliste@afrotiative.com`, 
 | `bun run build` / `bun run start` | build & serveur de production. |
 | `bun test` | 135 tests (sans réseau ni clés). |
 | `bun run typecheck` | `tsc --noEmit`. |
-| `bun run db:migrate` / `db:push` / `db:generate` | migrations Drizzle. |
+| `bun run db:migrate` / `db:push` / `db:generate` | migrations Drizzle (dev). |
+| `bun run db:migrate:deploy` | applique les migrations avec les seules deps de runtime (utilisé au déploiement). |
+| `bun run db:baseline` | réconcilie une base créée via `db:push` avec le journal de migration (one-time). |
 | `CONFIRM_SEED=1 bun run db:seed` | seed de démo (**efface les tables applicatives** ; garde-fous anti-production). |
 | `bun run db:create-admin` | crée **un** admin en production (voir runbook §4). |
 
