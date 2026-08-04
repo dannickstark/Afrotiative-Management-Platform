@@ -9,7 +9,7 @@ import { z } from "zod";
 
 export async function quickApprove(id: string) {
   const user = await requireUser();
-  requirePermission(user.role, "article", "approve");
+  requirePermission(user.role, "article", "publish");
   // Field validation (category required, image credit required when a featured
   // image is set) is enforced inside publishArticle itself — no need to
   // duplicate it here; a failed check surfaces as res.ok === false below with
