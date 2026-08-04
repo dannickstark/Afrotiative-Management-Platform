@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
 import type { RawItem } from "@/lib/rss/parse-feed";
+import type { RunDetail } from "@/lib/queries/runs";
 
 // Drizzle wraps driver errors in DrizzleQueryError, so the pg SQLSTATE lives on `.cause` (not the
 // top-level error) — walk the cause chain to find it. Mirrors lib/pipeline/run.ts's helper; used
@@ -16,6 +17,23 @@ function pgErrorCode(e: unknown): string | undefined {
     cur = (cur as { cause?: unknown }).cause;
   }
   return undefined;
+}
+
+/**
+ * On-demand fetch for the run-detail drawer (SP4 Task 4): the runs list page only loads summary
+ * rows, so RunsView calls this per-click rather than front-loading every run's full step trace.
+ * Read-only (pipeline:read, not :configure) — unlike runPipelineNow/reprocessRawItem above.
+ */
+export async function getRunDetailAction(runId: string): Promise<RunDetail | null> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "read");
+
+  // Dynamic import (kept AFTER the RBAC check above): mirrors runPipelineNow's/reprocessRawItem's
+  // pattern in this file — keeping every value-level import inside pipeline-actions.ts deferred
+  // avoids Turbopack ever needing to resolve the pipeline's jsdom-heavy dependency graph while
+  // statically analyzing this "use server" module at build time.
+  const { getRunDetail } = await import("@/lib/queries/runs");
+  return getRunDetail(runId);
 }
 
 export async function runPipelineNow() {
