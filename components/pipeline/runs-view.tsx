@@ -65,7 +65,10 @@ export function RunsView({ runs }: { runs: RunRow[] }) {
         // Ignore a stale resolution: only apply if this is still the run the user wants shown.
         if (latestReq.current === id) setDetail(d);
       } catch {
-        if (latestReq.current === id) toast.error("Impossible de charger le détail de l'exécution.");
+        if (latestReq.current === id) {
+          toast.error("Impossible de charger le détail de l'exécution.");
+          closeDrawer();
+        }
       }
     });
   }

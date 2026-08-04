@@ -83,7 +83,7 @@ export function RunDetailSheet({
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="sm:max-w-lg">
+      <SheetContent side="right" className="sm:max-w-lg data-[side=right]:sm:max-w-lg">
         <SheetHeader>
           <SheetTitle>Détail de l&apos;exécution</SheetTitle>
           <SheetDescription>
@@ -168,13 +168,16 @@ function RunDetailBody({ run }: { run: RunDetail }) {
                 {feedSteps.map((s) => (
                   <li
                     key={s.id}
-                    className="flex items-center justify-between gap-2 rounded-md border border-border px-2.5 py-1.5 text-sm"
+                    className="flex flex-col gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm"
                   >
-                    <span className="min-w-0 flex-1 truncate">{s.name}</span>
-                    <span className="flex shrink-0 items-center gap-2">
-                      <StatusPill status={s.status} />
-                      <span className="text-xs text-muted-foreground">{formatStepDuration(s.durationMs)}</span>
-                    </span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 flex-1 truncate">{s.name}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <StatusPill status={s.status} />
+                        <span className="text-xs text-muted-foreground">{formatStepDuration(s.durationMs)}</span>
+                      </span>
+                    </div>
+                    {s.status === "failed" && <FailedStepDetail step={s} />}
                   </li>
                 ))}
               </ul>
