@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Afrotiative Media — Back-office rédaction
 
-## Getting Started
+Plateforme interne d'**Afrotiative Media** (média panafricain francophone business & finance). Elle
+automatise la chaîne **RSS → réécriture IA (français) → revue humaine → publication WordPress**, et
+donne à la rédaction le contrôle en application de ses flux, de son équipe, de sa taxonomie et de ses
+intégrations.
 
-First, run the development server:
+> **Barrière de revue humaine (non négociable) :** aucun article n'est publié sans qu'un humain l'ait
+> approuvé. La publication planifiée ne touche que des articles déjà approuvés.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Chaîne de valeur
+
+```
+Flux RSS  →  Extraction  →  Réécriture IA (FR)  →  File de revue  →  Édition humaine  →  Publication WordPress
+(SP3)        Jina/Firecrawl   Vercel AI SDK          /queue           Tiptap /article/[id]   REST API v2 (SP5)
+             /Readability      + embeddings + clustering
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Ce qui est inclus
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Domaine | Surfaces |
+|---|---|
+| **Authentification & rôles** | `/login`, RBAC serveur (Admin / Éditeur / Journaliste) via Better-Auth. |
+| **Revue & édition** | `/dashboard`, `/queue` (file), `/article/[id]` (éditeur Tiptap contraint), `/published`, `/calendar`. |
+| **Pipeline (SP3)** | ingestion RSS, extraction, réécriture IA, embeddings pgvector, clustering sémantique. |
+| **Observabilité (SP4)** | `/runs` — exécutions, étapes, retraitement d'un item, relance d'un run. |
+| **Publication (SP5)** | publier / dépublier / republier WordPress + publication planifiée. |
+| **Réglages (SP2)** | `/settings/{feeds, taxonomy, team, integrations}` — sources, taxonomie miroir, équipe, statut des intégrations. |
+| **Crons** | `POST /api/pipeline/run` (ingestion) · `POST /api/publish/due` (publication planifiée), tous deux bearer-gardés. |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Stack
 
-## Learn More
+Next.js 16 (App Router, RSC + Server Actions) · TypeScript · **Bun** (paquets / tests / scripts ;
+l'app tourne sur Node) · Drizzle ORM + Postgres/Neon (**pgvector**) · Better-Auth · Tiptap v3 ·
+shadcn/ui sur Base UI · Vercel AI SDK (OpenRouter → OmniRoute → mock) · WordPress REST API v2.
 
-To learn more about Next.js, take a look at the following resources:
+## Démarrage rapide (développement)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+bun install
+cp .env.example .env.local        # puis renseigner DATABASE_URL, DIRECT_URL, BETTER_AUTH_SECRET…
+bun run db:migrate                # + activer l'extension pgvector sur la base
+bun run db:seed                   # données de démo (25 articles, 6 flux, 3 comptes) — DEV UNIQUEMENT
+bun run dev                       # http://localhost:3000
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Comptes de démo (seed) : `admin@` / `editor@` / `journaliste@afrotiative.com`, mot de passe `Afrotiative2026!`.
 
-## Deploy on Vercel
+## Commandes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Commande | Effet |
+|---|---|
+| `bun run dev` | serveur de dev (Turbopack). |
+| `bun run build` / `bun run start` | build & serveur de production. |
+| `bun test` | 135 tests (sans réseau ni clés). |
+| `bun run typecheck` | `tsc --noEmit`. |
+| `bun run db:migrate` / `db:push` / `db:generate` | migrations Drizzle. |
+| `bun run db:seed` | seed de démo (**efface les tables applicatives**). |
+| `bun run db:create-admin` | crée **un** admin en production (voir runbook §4). |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Déploiement & exploitation
+
+Voir **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)** — prérequis, variables d'environnement, base de
+données, création du premier admin, les deux tâches cron, checklist de première mise en route et
+dépannage.
+
+## Documentation de conception
+
+Specs et plans par sous-projet dans `docs/superpowers/specs/` et `docs/superpowers/plans/`
+(SP0/SP1 back-office, SP2 réglages, SP3 pipeline, SP4 observabilité, SP5 publication).
