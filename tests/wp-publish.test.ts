@@ -1,10 +1,19 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { buildPostBody, publishArticle, unpublishArticle, republishArticle } from "@/lib/wp/publish";
 import { WordPressChannel } from "@/lib/wp/channel";
+import { can } from "@/lib/rbac";
 import {
   db, articles, articleSources, articleTags, wpCategories, wpTags, distributions, articleRevisions,
 } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
+
+describe("RBAC guard: article:publish (approve/publish, unpublish/republish actions)", () => {
+  it("editor and admin can publish; journalist cannot", () => {
+    expect(can("editor", "article", "publish")).toBe(true);
+    expect(can("admin", "article", "publish")).toBe(true);
+    expect(can("journalist", "article", "publish")).toBe(false);
+  });
+});
 
 describe("buildPostBody", () => {
   it("appends the sources footer + image credit to the article body", () => {

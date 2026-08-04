@@ -1,11 +1,12 @@
 "use server";
-import { db, articles, articleTags, articleRevisions, distributions } from "@/db";
+import { db, articles, articleTags, articleRevisions } from "@/db";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { saveDraftSchema, type SaveDraftInput } from "@/lib/validation";
 import { isLockActive } from "@/lib/lock";
+import { publishArticle } from "@/lib/wp/publish";
 import { z } from "zod";
 
 export async function acquireLock(id: string) {
@@ -67,11 +68,10 @@ export async function approveAndPublish(id: string) {
   if (!a) throw new Error("Article introuvable.");
   if (!a.categoryId) throw new Error("Choisissez une catégorie avant de publier.");
   if (a.featuredImageUrl && !a.imageCredit) throw new Error("Le crédit de l'image est obligatoire.");
-  await db.update(articles).set({ status: "published", publishedAt: new Date(), updatedAt: new Date(), lockedBy: null, lockedAt: null }).where(eq(articles.id, id));
-  await db.insert(distributions).values({ articleId: id, channel: "wordpress", status: "stubbed" });
-  await db.insert(articleRevisions).values({ articleId: id, actorId: user.id, action: "approuvé & publié (simulé)" });
+  const res = await publishArticle(id);
+  if (!res.ok) throw new Error(res.message);
   revalidatePath(`/article/${id}`); revalidatePath("/queue"); revalidatePath("/dashboard");
-  return { stub: true, message: "Publication simulée — WordPress sera branché en SP5." };
+  return res;
 }
 
 const scheduleSchema = z.object({ id: z.string().uuid(), at: z.coerce.date() });

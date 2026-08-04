@@ -8,6 +8,7 @@ import { RichEditor } from "./rich-editor";
 import { ActionBar } from "./action-bar";
 import { LockBanner } from "./lock-banner";
 import { SidePanel } from "./side-panel";
+import { PublishControls } from "./publish-controls";
 import { acquireLock, refreshLock, releaseLock } from "@/lib/actions/article-actions";
 import type { ArticleDetail } from "@/lib/queries/article";
 import type { Role } from "@/lib/auth";
@@ -71,9 +72,7 @@ export function EditorShell({
       {isPublished && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/40 px-4 py-2 text-sm">
           <span>Cet article est publié. Il est en lecture seule.</span>
-          <Button type="button" variant="outline" size="sm" disabled title="Bientôt disponible">
-            Dépublier / Republier
-          </Button>
+          <PublishControls article={article} />
         </div>
       )}
       {!isPublished && lockedOut && <LockBanner holder={holderName ?? "un autre utilisateur"} />}

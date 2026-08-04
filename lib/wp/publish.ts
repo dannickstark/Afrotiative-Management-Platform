@@ -287,7 +287,7 @@ export async function unpublishArticle(articleId: string): Promise<ActionResult>
     await db.insert(articleRevisions).values({ articleId, action: "dépublié de WordPress" });
     return { ok: true, message: "Article dépublié de WordPress." };
   } catch (err) {
-    return { ok: false, message: wpErrorMessage("Le dépubliement WordPress a échoué", err) };
+    return { ok: false, message: wpErrorMessage("La dépublication WordPress a échoué", err) };
   }
 }
 
