@@ -18,12 +18,14 @@ import { cn } from "@/lib/utils";
 
 type RunItem = RunDetail["items"][number];
 
-// Same palette already used for article statuses (components/status-badge.tsx) — reused here per
-// the brief so the two status vocabularies (article vs. pipeline-step) read consistently across
-// the app: success=approved/green, failed=rejected/red, running=in-review/indigo, partial=pending/amber.
+// Palette aligned with the rest of the pipeline UI — the runs list (app/(app)/runs/page.tsx) and
+// dashboard (components/dashboard/summary-cards.tsx) map pipeline `failed` to --status-error (NOT
+// the article-status --status-rejected), so the same run's status can't show two different reds
+// once Task 4 wires this Sheet off the list: success=approved/green, failed=error/red,
+// running=in-review/indigo, partial=pending/amber.
 const STATUS_PILL_STYLE: Record<PipelineStatus, string> = {
   success: "bg-[var(--status-approved)]/15 text-[var(--status-approved)] border-[var(--status-approved)]/30",
-  failed: "bg-[var(--status-rejected)]/15 text-[var(--status-rejected)] border-[var(--status-rejected)]/30",
+  failed: "bg-[var(--status-error)]/15 text-[var(--status-error)] border-[var(--status-error)]/30",
   running: "bg-[var(--status-in-review)]/15 text-[var(--status-in-review)] border-[var(--status-in-review)]/30",
   partial: "bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30",
 };
@@ -240,7 +242,7 @@ function ItemGroup({ item }: { item: RunItem }) {
     <li className="rounded-md border border-border">
       <Collapsible>
         <div className="flex items-center gap-2 px-2.5 py-2">
-          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium text-foreground outline-none">
+          <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-1.5 rounded text-left text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
             <ChevronRight
               className="size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-data-panel-open:rotate-90"
               aria-hidden
@@ -299,13 +301,13 @@ function ItemGroup({ item }: { item: RunItem }) {
 
 function FailedStepDetail({ step }: { step: Step }) {
   return (
-    <div className="rounded-md border border-[var(--status-rejected)]/30 bg-[var(--status-rejected)]/10 px-2.5 py-2">
-      <p className="text-xs font-medium text-[var(--status-rejected)]">
+    <div className="rounded-md border border-[var(--status-error)]/30 bg-[var(--status-error)]/10 px-2.5 py-2">
+      <p className="text-xs font-medium text-[var(--status-error)]">
         {step.errorMessage ?? "Une erreur est survenue."}
       </p>
       {step.errorTechnical && (
         <Collapsible className="mt-1.5">
-          <CollapsibleTrigger className="text-xs font-medium text-muted-foreground underline-offset-2 outline-none hover:underline">
+          <CollapsibleTrigger className="rounded text-xs font-medium text-muted-foreground underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/50">
             Voir les détails techniques
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-1.5">
