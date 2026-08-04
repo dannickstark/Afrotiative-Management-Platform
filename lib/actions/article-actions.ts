@@ -68,7 +68,7 @@ export async function approveAndPublish(id: string) {
   if (!a) throw new Error("Article introuvable.");
   if (!a.categoryId) throw new Error("Choisissez une catégorie avant de publier.");
   if (a.featuredImageUrl && !a.imageCredit) throw new Error("Le crédit de l'image est obligatoire.");
-  const res = await publishArticle(id);
+  const res = await publishArticle(id, user.id);
   if (!res.ok) throw new Error(res.message);
   revalidatePath(`/article/${id}`); revalidatePath("/queue"); revalidatePath("/dashboard");
   return res;

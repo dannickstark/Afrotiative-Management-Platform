@@ -80,6 +80,36 @@ function wpErrorMessage(prefix: string, err: unknown): string {
   return `${prefix} : ${reason}`;
 }
 
+// Lightweight SSRF guard for the featured-image fetch below. featuredImageUrl is article data
+// (LLM-produced or editor-entered) that ends up passed straight to server-side fetch() — without
+// a check, a crafted/careless value could be used to probe internal services (localhost, cloud
+// metadata endpoints, RFC1918 ranges) from the server. Best-effort only (no DNS-rebinding
+// protection), but cheap and matches the fail-soft contract: callers treat a rejected URL exactly
+// like any other image failure.
+const PRIVATE_HOST_PATTERNS: RegExp[] = [
+  /^localhost$/i,
+  /^127\./,
+  /^0\.0\.0\.0$/,
+  /^::1$/,
+  /^10\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+];
+
+export function isFetchableImageUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 [] brackets
+  if (PRIVATE_HOST_PATTERNS.some((re) => re.test(host))) return false;
+  return true;
+}
+
 type Distribution = typeof distributions.$inferSelect;
 
 // The most recent distributions row for (articleId, 'wordpress'), if any — used both to decide
@@ -185,11 +215,40 @@ async function resolveTaxonomy(
   return { categoryId, tagIds };
 }
 
+// Builds the full WordPress post payload (title/content/excerpt/status/categories/tags/
+// featured_media) for an article — shared by publishArticle and republishArticle so both send the
+// SAME shape: republishing re-resolves taxonomy and re-uploads the featured image, so a taxonomy
+// or image correction made after the first publish propagates on the next republish, not just on
+// title/body/excerpt edits.
+async function buildPublishPayload(wp: WordPressClient, article: ArticleForPublish): Promise<WpPostPayload> {
+  const { categoryId, tagIds } = await resolveTaxonomy(wp, article);
+
+  const mediaId = article.featuredImageUrl
+    ? await uploadFeaturedImage(wp, article.featuredImageUrl)
+    : undefined;
+
+  return {
+    title: article.title,
+    content: buildPostBody({
+      bodyHtml: article.bodyHtml,
+      sources: article.sources,
+      imageCredit: article.imageCredit,
+      imageSourceUrl: article.imageSourceUrl,
+    }),
+    excerpt: article.excerpt ?? undefined,
+    status: "publish",
+    categories: [categoryId],
+    tags: tagIds,
+    featured_media: mediaId,
+  };
+}
+
 // Fail-soft featured image: downloads the article's featuredImageUrl and uploads it to WordPress
 // media. ANY failure (network, non-2xx, upload rejected) is swallowed here — the caller publishes
 // the post without featured_media rather than blocking the whole publish over a bad image.
 async function uploadFeaturedImage(wp: WordPressClient, featuredImageUrl: string): Promise<number | undefined> {
   try {
+    if (!isFetchableImageUrl(featuredImageUrl)) throw new Error("URL d'image non autorisée");
     const res = await fetch(featuredImageUrl);
     if (!res.ok) throw new Error(`téléchargement de l'image échoué (${res.status})`);
     const bytes = new Uint8Array(await res.arrayBuffer());
@@ -211,7 +270,7 @@ async function uploadFeaturedImage(wp: WordPressClient, featuredImageUrl: string
 // has been recorded — never before, so a network failure mid-publish can never leave the article
 // half-published. On any failure the distributions row is marked 'failed' and the article is left
 // exactly as it was (still 'approved'), so the operation is safely retryable.
-export async function publishArticle(articleId: string): Promise<PublishResult> {
+export async function publishArticle(articleId: string, actorId?: string | null): Promise<PublishResult> {
   const cfg = getWpConfig();
   if (!cfg) return { ok: false, message: "WordPress non configuré." };
 
@@ -228,37 +287,22 @@ export async function publishArticle(articleId: string): Promise<PublishResult> 
   const existingDist = await latestDistribution(articleId);
 
   try {
-    const { categoryId, tagIds } = await resolveTaxonomy(wp, article);
-
-    const mediaId = article.featuredImageUrl
-      ? await uploadFeaturedImage(wp, article.featuredImageUrl)
-      : undefined;
-
-    const payload: WpPostPayload = {
-      title: article.title,
-      content: buildPostBody({
-        bodyHtml: article.bodyHtml,
-        sources: article.sources,
-        imageCredit: article.imageCredit,
-        imageSourceUrl: article.imageSourceUrl,
-      }),
-      excerpt: article.excerpt ?? undefined,
-      status: "publish",
-      categories: [categoryId],
-      tags: tagIds,
-      featured_media: mediaId,
-    };
+    const payload = await buildPublishPayload(wp, article);
 
     const result = existingDist?.externalId
       ? await wp.updatePost(Number(existingDist.externalId), payload)
       : await wp.createPost(payload);
 
     await upsertDistribution(articleId, existingDist, { status: "sent", externalId: String(result.id) });
+    // scheduledAt is cleared here — ONLY on a successful publish — so the schedule is "consumed":
+    // a taken-down (unpublished) article can never be auto-re-published by publishDueArticles off
+    // a stale past scheduledAt. A FAILED publish must NOT clear it (see the catch block below),
+    // otherwise a still-approved article that failed to publish would silently lose its retry.
     await db
       .update(articles)
-      .set({ status: "published", publishedAt: new Date(), updatedAt: new Date() })
+      .set({ status: "published", publishedAt: new Date(), scheduledAt: null, updatedAt: new Date() })
       .where(eq(articles.id, articleId));
-    await db.insert(articleRevisions).values({ articleId, action: "publié sur WordPress" });
+    await db.insert(articleRevisions).values({ articleId, actorId: actorId ?? null, action: "publié sur WordPress" });
 
     return { ok: true, message: "Publié sur WordPress.", postId: result.id };
   } catch (err) {
@@ -270,7 +314,7 @@ export async function publishArticle(articleId: string): Promise<PublishResult> 
 // Sets the WordPress post to draft and moves the article back to 'approved' (a human can
 // re-publish it later — the distributions row's externalId is preserved so a subsequent
 // publishArticle/republishArticle updates the SAME post rather than creating a new one).
-export async function unpublishArticle(articleId: string): Promise<ActionResult> {
+export async function unpublishArticle(articleId: string, actorId?: string | null): Promise<ActionResult> {
   const cfg = getWpConfig();
   if (!cfg) return { ok: false, message: "WordPress non configuré." };
 
@@ -283,18 +327,24 @@ export async function unpublishArticle(articleId: string): Promise<ActionResult>
   try {
     await wp.setPostStatus(Number(existingDist.externalId), "draft");
     await upsertDistribution(articleId, existingDist, { status: "sent", externalId: existingDist.externalId });
-    await db.update(articles).set({ status: "approved", updatedAt: new Date() }).where(eq(articles.id, articleId));
-    await db.insert(articleRevisions).values({ articleId, action: "dépublié de WordPress" });
+    // Belt-and-suspenders alongside the clear-on-publish-success above: even if scheduledAt were
+    // somehow still set at this point, a take-down must never leave a past schedule in place for
+    // publishDueArticles to pick back up and auto-republish.
+    await db.update(articles).set({ status: "approved", scheduledAt: null, updatedAt: new Date() }).where(eq(articles.id, articleId));
+    await db.insert(articleRevisions).values({ articleId, actorId: actorId ?? null, action: "dépublié de WordPress" });
     return { ok: true, message: "Article dépublié de WordPress." };
   } catch (err) {
     return { ok: false, message: wpErrorMessage("La dépublication WordPress a échoué", err) };
   }
 }
 
-// Pushes the article's current content (title/body/excerpt — rebuilt through buildPostBody, so
-// an edited Sources footer/credit line is reflected) to the SAME WordPress post. The article
-// stays 'published'; publishedAt is left untouched.
-export async function republishArticle(articleId: string): Promise<ActionResult> {
+// Pushes the article's current full payload (title/body/excerpt rebuilt through buildPostBody,
+// PLUS re-resolved category/tags and a re-uploaded featured image — same shape as publishArticle,
+// via the shared buildPublishPayload helper) to the SAME WordPress post. Since the user chose the
+// full republish lifecycle rather than a raw content PATCH, this lets a taxonomy or featured-image
+// correction made after the first publish propagate on republish too. The article stays
+// 'published'; publishedAt is left untouched.
+export async function republishArticle(articleId: string, actorId?: string | null): Promise<ActionResult> {
   const cfg = getWpConfig();
   if (!cfg) return { ok: false, message: "WordPress non configuré." };
 
@@ -308,19 +358,10 @@ export async function republishArticle(articleId: string): Promise<ActionResult>
 
   const wp = new WordPressClient(cfg);
   try {
-    const content = buildPostBody({
-      bodyHtml: article.bodyHtml,
-      sources: article.sources,
-      imageCredit: article.imageCredit,
-      imageSourceUrl: article.imageSourceUrl,
-    });
-    const result = await wp.updatePost(Number(existingDist.externalId), {
-      title: article.title,
-      content,
-      excerpt: article.excerpt ?? undefined,
-    });
+    const payload = await buildPublishPayload(wp, article);
+    const result = await wp.updatePost(Number(existingDist.externalId), payload);
     await upsertDistribution(articleId, existingDist, { status: "sent", externalId: String(result.id) });
-    await db.insert(articleRevisions).values({ articleId, action: "republié sur WordPress" });
+    await db.insert(articleRevisions).values({ articleId, actorId: actorId ?? null, action: "republié sur WordPress" });
     return { ok: true, message: "Article republié sur WordPress." };
   } catch (err) {
     return { ok: false, message: wpErrorMessage("La republication WordPress a échoué", err) };

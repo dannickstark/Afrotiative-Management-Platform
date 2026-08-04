@@ -14,7 +14,7 @@ export async function quickApprove(id: string) {
   // image is set) is enforced inside publishArticle itself — no need to
   // duplicate it here; a failed check surfaces as res.ok === false below with
   // the same French message.
-  const res = await publishArticle(id);
+  const res = await publishArticle(id, user.id);
   if (!res.ok) throw new Error(res.message);
   revalidatePath("/queue"); revalidatePath("/dashboard");
   return res;

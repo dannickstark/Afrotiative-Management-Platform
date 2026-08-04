@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { buildPostBody, publishArticle, unpublishArticle, republishArticle } from "@/lib/wp/publish";
+import { randomUUID } from "node:crypto";
+import { buildPostBody, publishArticle, unpublishArticle, republishArticle, isFetchableImageUrl } from "@/lib/wp/publish";
 import { WordPressChannel } from "@/lib/wp/channel";
 import { can } from "@/lib/rbac";
 import {
-  db, articles, articleSources, articleTags, wpCategories, wpTags, distributions, articleRevisions,
+  db, articles, articleSources, articleTags, wpCategories, wpTags, distributions, articleRevisions, user,
 } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
 
@@ -48,6 +49,39 @@ describe("buildPostBody", () => {
   });
 });
 
+describe("isFetchableImageUrl (SSRF guard on the featured-image fetch)", () => {
+  it("allows a normal https URL", () => {
+    expect(isFetchableImageUrl("https://example.com/photo.jpg")).toBe(true);
+  });
+  it("allows a normal http URL", () => {
+    expect(isFetchableImageUrl("http://example.com/photo.jpg")).toBe(true);
+  });
+  it("rejects loopback/private hosts", () => {
+    for (const url of [
+      "http://localhost/photo.jpg",
+      "http://127.0.0.1/photo.jpg",
+      "http://127.1.2.3/photo.jpg",
+      "http://[::1]/photo.jpg",
+      "http://10.0.0.5/photo.jpg",
+      "http://192.168.1.10/photo.jpg",
+      "http://169.254.169.254/latest/meta-data/", // cloud metadata endpoint
+      "http://172.16.0.1/photo.jpg",
+      "http://172.31.255.255/photo.jpg",
+    ]) {
+      expect(isFetchableImageUrl(url)).toBe(false);
+    }
+  });
+  it("allows a 172.x host outside the private 172.16-31 range", () => {
+    expect(isFetchableImageUrl("http://172.32.0.1/photo.jpg")).toBe(true);
+    expect(isFetchableImageUrl("http://172.15.0.1/photo.jpg")).toBe(true);
+  });
+  it("rejects non-http(s) protocols and malformed URLs", () => {
+    expect(isFetchableImageUrl("file:///etc/passwd")).toBe(false);
+    expect(isFetchableImageUrl("ftp://example.com/photo.jpg")).toBe(false);
+    expect(isFetchableImageUrl("not a url")).toBe(false);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Integration tests (real Neon DB + a Bun.serve FAKE WordPress) for publishArticle /
 // unpublishArticle / republishArticle: idempotent create-vs-update, fail-soft featured image,
@@ -78,6 +112,12 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
   const mediaCalls: Captured[] = [];
 
   const FIXTURE_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  // A normal-looking public https URL (passes the isFetchableImageUrl SSRF guard — Fix 4), unlike
+  // the fake WP server's own `base` (http://localhost:<port>), which the guard now correctly
+  // rejects. The realFetch shim below serves FIXTURE_IMAGE_BYTES for this exact URL without any
+  // real network call, so the featured-image tests stay deterministic and offline.
+  const FIXTURE_IMAGE_URL = "https://cdn.example.test/fixture-image.jpg";
+  let realFetch: typeof fetch;
 
   // Temp fixtures
   let categoryRowId: string;
@@ -88,6 +128,15 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
   beforeAll(async () => {
     for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
     for (const k of ENV_KEYS) delete process.env[k]; // baseline: not configured
+
+    realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === FIXTURE_IMAGE_URL) {
+        return new Response(FIXTURE_IMAGE_BYTES, { headers: { "content-type": "image/jpeg" } });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
 
     server = Bun.serve({
       port: 0,
@@ -164,7 +213,8 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     const [a2] = await db.insert(articles).values({
       title: "Article de test WP publish", bodyHtml: "<p>Contenu principal de test.</p>",
       excerpt: "Extrait de test", status: "approved", categoryId: cat.id,
-      featuredImageUrl: `${base}/fixture-image.jpg`, imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
+      scheduledAt: new Date(Date.now() - 60 * 60 * 1000), // simulates a scheduled publish (1h ago) — must be cleared on success
     }).returning();
     articleId = a2.id;
     await db.insert(articleSources).values({ articleId, mediaName: "Source Test", url: "https://example.com/source" });
@@ -175,12 +225,14 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
 
     const [a3] = await db.insert(articles).values({
       title: "Article de test (échec WP)", bodyHtml: "<p>Contenu.</p>", status: "approved", categoryId: cat.id,
+      scheduledAt: new Date(Date.now() - 60 * 60 * 1000), // must survive a FAILED publish (kept for retry)
     }).returning();
     failArticleId = a3.id;
   });
 
   afterAll(async () => {
     server.stop(true);
+    globalThis.fetch = realFetch;
     await db.delete(distributions).where(inArray(distributions.articleId, [articleId, failArticleId, notConfiguredArticleId]));
     await db.delete(articleRevisions).where(inArray(articleRevisions.articleId, [articleId, failArticleId, notConfiguredArticleId]));
     await db.delete(articleTags).where(eq(articleTags.articleId, articleId));
@@ -230,6 +282,9 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     const [art] = await db.select().from(articles).where(eq(articles.id, articleId));
     expect(art.status).toBe("published");
     expect(art.publishedAt).not.toBeNull();
+    // Fix 1: a successful publish "consumes" the schedule — scheduledAt must be cleared so a
+    // taken-down article can never be auto-republished off a stale past scheduledAt.
+    expect(art.scheduledAt).toBeNull();
 
     expect(createPostCalls).toHaveLength(1);
     const created = createPostCalls[0].body;
@@ -287,7 +342,7 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     expect(dist.status).toBe("sent");
   });
 
-  it("republishArticle pushes the current title/content/excerpt to the SAME post; article stays published", async () => {
+  it("republishArticle pushes the FULL payload (same shape as publishArticle) to the SAME post; article stays published", async () => {
     await db.update(articles).set({ title: "Titre mis à jour" }).where(eq(articles.id, articleId));
 
     const res = await republishArticle(articleId);
@@ -298,8 +353,17 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     expect(lastUpdate.body.title).toBe("Titre mis à jour");
     expect(lastUpdate.body.content).toContain("<p>Contenu principal de test.</p>");
     expect(lastUpdate.body.content.toLowerCase()).toContain("sources"); // rebuilt via buildPostBody
-    // republish's payload is content-only — no status/categories/tags/featured_media keys
-    expect(Object.keys(lastUpdate.body).sort()).toEqual(["content", "excerpt", "title"]);
+    // Fix 3: republish now sends the SAME payload shape as publishArticle — taxonomy/featured-
+    // image corrections propagate on republish too, not just title/body/excerpt edits.
+    expect(lastUpdate.body.status).toBe("publish");
+    expect(Array.isArray(lastUpdate.body.categories)).toBe(true);
+    expect(lastUpdate.body.categories).toHaveLength(1);
+    expect(typeof lastUpdate.body.categories[0]).toBe("number");
+    expect(lastUpdate.body.tags).toHaveLength(2); // re-resolved tag ids
+    expect(typeof lastUpdate.body.featured_media).toBe("number"); // image re-uploaded
+    expect(Object.keys(lastUpdate.body).sort()).toEqual(
+      ["categories", "content", "excerpt", "featured_media", "status", "tags", "title"],
+    );
 
     const [art] = await db.select().from(articles).where(eq(articles.id, articleId));
     expect(art.status).toBe("published");
@@ -315,6 +379,7 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
 
     const [art] = await db.select().from(articles).where(eq(articles.id, articleId));
     expect(art.status).toBe("approved");
+    expect(art.scheduledAt).toBeNull(); // belt-and-suspenders: unpublish also clears any schedule
 
     const [dist] = await db.select().from(distributions)
       .where(and(eq(distributions.articleId, articleId), eq(distributions.channel, "wordpress")));
@@ -332,6 +397,9 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     const [art] = await db.select().from(articles).where(eq(articles.id, failArticleId));
     expect(art.status).toBe("approved");
     expect(art.publishedAt).toBeNull();
+    // Fix 1 (failure side): a FAILED publish must NOT clear scheduledAt — the article stays
+    // approved and due, so publishDueArticles can retry it on the next run.
+    expect(art.scheduledAt).not.toBeNull();
 
     const [dist] = await db.select().from(distributions)
       .where(and(eq(distributions.articleId, failArticleId), eq(distributions.channel, "wordpress")));
@@ -356,7 +424,7 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
   it("publishArticle rejects a featured image without a credit, unchanged", async () => {
     const [noCreditArticle] = await db.insert(articles).values({
       title: "Sans crédit", bodyHtml: "<p>x</p>", status: "approved", categoryId: categoryRowId,
-      featuredImageUrl: `${base}/fixture-image.jpg`, imageCredit: null,
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: null,
     }).returning();
     try {
       const res = await publishArticle(noCreditArticle.id);
@@ -365,6 +433,54 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
       expect(dist).toHaveLength(0);
     } finally {
       await db.delete(articles).where(eq(articles.id, noCreditArticle.id));
+    }
+  });
+
+  it("publishArticle/republishArticle/unpublishArticle record the acting user on the article_revisions row (actorId)", async () => {
+    const actorId = randomUUID();
+    await db.insert(user).values({
+      id: actorId, email: `actor-${actorId}@afrotiative.test`, name: "Actor Test", role: "editor", emailVerified: true,
+    });
+    const [row] = await db.insert(articles).values({
+      title: "Article de test (actorId)", bodyHtml: "<p>Contenu.</p>", status: "approved", categoryId: categoryRowId,
+    }).returning();
+    const id = row.id;
+
+    try {
+      const pub = await publishArticle(id, actorId);
+      expect(pub.ok).toBe(true);
+      const rep = await republishArticle(id, actorId);
+      expect(rep.ok).toBe(true);
+      const unpub = await unpublishArticle(id, actorId);
+      expect(unpub.ok).toBe(true);
+
+      const revisions = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, id));
+      expect(revisions.find((r) => r.action === "publié sur WordPress")?.actorId).toBe(actorId);
+      expect(revisions.find((r) => r.action === "republié sur WordPress")?.actorId).toBe(actorId);
+      expect(revisions.find((r) => r.action === "dépublié de WordPress")?.actorId).toBe(actorId);
+    } finally {
+      await db.delete(distributions).where(eq(distributions.articleId, id));
+      await db.delete(articleRevisions).where(eq(articleRevisions.articleId, id));
+      await db.delete(articles).where(eq(articles.id, id));
+      await db.delete(user).where(eq(user.id, actorId));
+    }
+  });
+
+  it("publishDueArticles-style call with no actor (omitted) records a null actorId — legitimate system action", async () => {
+    const [row] = await db.insert(articles).values({
+      title: "Article de test (sans acteur)", bodyHtml: "<p>Contenu.</p>", status: "approved", categoryId: categoryRowId,
+    }).returning();
+    const id = row.id;
+    try {
+      const res = await publishArticle(id); // no actorId argument — same call shape publishDueArticles uses
+      expect(res.ok).toBe(true);
+      const [revision] = await db.select().from(articleRevisions)
+        .where(and(eq(articleRevisions.articleId, id), eq(articleRevisions.action, "publié sur WordPress")));
+      expect(revision.actorId).toBeNull();
+    } finally {
+      await db.delete(distributions).where(eq(distributions.articleId, id));
+      await db.delete(articleRevisions).where(eq(articleRevisions.articleId, id));
+      await db.delete(articles).where(eq(articles.id, id));
     }
   });
 });

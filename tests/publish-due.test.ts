@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/publish/due/route";
 import { publishDueArticles } from "@/lib/wp/publish-due";
+import { unpublishArticle } from "@/lib/wp/publish";
 import { db, articles, wpCategories, distributions, articleRevisions } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 
@@ -122,6 +123,9 @@ describe("publishDueArticles — due-selection + human-review gate", () => {
     const [due] = await db.select().from(articles).where(eq(articles.id, dueApprovedId));
     expect(due.status).toBe("published");
     expect(due.publishedAt).not.toBeNull();
+    // Fix 1: a successful scheduled publish consumes scheduledAt — cleared so a subsequent
+    // Dépublier can never be undone by a later run re-selecting a stale past schedule.
+    expect(due.scheduledAt).toBeNull();
     const [dueDist] = await db.select().from(distributions).where(eq(distributions.articleId, dueApprovedId));
     expect(dueDist.status).toBe("sent");
 
@@ -136,6 +140,48 @@ describe("publishDueArticles — due-selection + human-review gate", () => {
     expect(pending.publishedAt).toBeNull();
     const pendingDist = await db.select().from(distributions).where(eq(distributions.articleId, duePendingId));
     expect(pendingDist).toHaveLength(0); // publishArticle was never even attempted on it
+  });
+
+  // Regression for the Dépublier take-down bug this fix wave closes: schedule an article (approved,
+  // scheduledAt=T) -> cron publishes it at T -> editor clicks Dépublier (status back to approved) ->
+  // a SECOND publishDueArticles run must NOT re-select and auto-republish it. Before the fix,
+  // scheduledAt was never cleared, so the still-past scheduledAt made the article match the
+  // due-selection WHERE clause again on the next run, silently overriding the take-down.
+  it("an article unpublished after a scheduled publish is NOT re-published by a second publishDueArticles run", async () => {
+    const [row] = await db.insert(articles).values({
+      title: "Article planifié puis dépublié après publication auto",
+      bodyHtml: "<p>Contenu.</p>",
+      status: "approved",
+      categoryId: categoryRowId,
+      scheduledAt: new Date(Date.now() - 60 * 60 * 1000), // 1h ago -> due
+    }).returning();
+    const id = row.id;
+
+    try {
+      const res1 = await publishDueArticles();
+      expect(res1.failed).toBe(0);
+      expect(res1.published).toBeGreaterThanOrEqual(1);
+
+      const [afterPublish] = await db.select().from(articles).where(eq(articles.id, id));
+      expect(afterPublish.status).toBe("published");
+      expect(afterPublish.scheduledAt).toBeNull(); // Fix 1: schedule consumed on success
+
+      const unpubRes = await unpublishArticle(id);
+      expect(unpubRes.ok).toBe(true);
+      const [afterUnpublish] = await db.select().from(articles).where(eq(articles.id, id));
+      expect(afterUnpublish.status).toBe("approved");
+      expect(afterUnpublish.scheduledAt).toBeNull(); // belt-and-suspenders clear on unpublish too
+
+      await publishDueArticles(); // second run — must be a no-op for this article
+
+      const [afterSecondRun] = await db.select().from(articles).where(eq(articles.id, id));
+      expect(afterSecondRun.status).toBe("approved"); // NOT re-published — the take-down held
+      expect(afterSecondRun.publishedAt).not.toBeNull(); // publishedAt from the first publish, untouched
+    } finally {
+      await db.delete(distributions).where(eq(distributions.articleId, id));
+      await db.delete(articleRevisions).where(eq(articleRevisions.articleId, id));
+      await db.delete(articles).where(eq(articles.id, id));
+    }
   });
 });
 

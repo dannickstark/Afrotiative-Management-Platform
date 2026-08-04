@@ -7,7 +7,7 @@ import { unpublishArticle, republishArticle } from "@/lib/wp/publish";
 export async function unpublishArticleAction(id: string) {
   const u = await requireUser();
   requirePermission(u.role, "article", "publish");
-  const res = await unpublishArticle(id);
+  const res = await unpublishArticle(id, u.id);
   revalidatePath(`/article/${id}`);
   revalidatePath("/queue");
   revalidatePath("/published");
@@ -18,7 +18,7 @@ export async function unpublishArticleAction(id: string) {
 export async function republishArticleAction(id: string) {
   const u = await requireUser();
   requirePermission(u.role, "article", "publish");
-  const res = await republishArticle(id);
+  const res = await republishArticle(id, u.id);
   revalidatePath(`/article/${id}`);
   revalidatePath("/dashboard");
   return res;
