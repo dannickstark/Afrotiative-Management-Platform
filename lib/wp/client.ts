@@ -27,6 +27,36 @@ export type WpPostPayload = {
 
 export type WpPostResult = { id: number; link: string };
 
+// WordPress returns term names HTML-entity-encoded (e.g. "Bourse &amp; Marchés",
+// "Fusions &amp; Acquisitions", curly apostrophe "&#8217;") while our input names — from the
+// LLM/DB — are plain UTF-8. Decoding the WP-returned name before the case-insensitive compare
+// prevents resolve-or-create from either creating a duplicate term or hitting a `term_exists`
+// 400 on the POST. French finance taxonomy triggers this constantly (ampersands, apostrophes,
+// accents). Native/no-dependency: covers the named entities WP commonly emits plus generic
+// decimal (&#NNN;) and hex (&#xHH;) numeric references.
+export function decodeWpEntities(s: string): string {
+  return s
+    .replace(/&amp;|&#0*38;/gi, "&")
+    .replace(/&quot;|&#0*34;/gi, '"')
+    .replace(/&#0*39;|&#8217;|&#8216;|&apos;/gi, "'")
+    .replace(/&lt;|&#0*60;/gi, "<")
+    .replace(/&gt;|&#0*62;/gi, ">")
+    .replace(/&#8211;/g, "–")
+    .replace(/&#8212;/g, "—")
+    .replace(/&hellip;|&#8230;/gi, "…")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
+}
+
+// A filename is interpolated into a quoted Content-Disposition header; a `"` (or CR/LF/other
+// control char) in an externally-derived name would break the header or allow header injection.
+// Task 2 passes filenames derived from remote content, so sanitize before interpolation: replace
+// `"` and `\` with `_`, and strip C0/DEL control characters entirely.
+function sanitizeFilename(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/["\\]/g, "_").replace(/[\x00-\x1f\x7f]/g, "");
+}
+
 // Thin typed wrapper around the WordPress REST API v2 (wp-json/wp/v2). All requests carry
 // the site's Application Password Basic-Auth header; any non-2xx response is surfaced as a
 // WordPressError (French message, HTTP status, raw response body) so callers (Tasks 2-5) can
@@ -57,7 +87,8 @@ export class WordPressClient {
 
   private async resolveOrCreate(kind: "categories" | "tags", name: string): Promise<number> {
     const list = await this.req<WpTerm[]>(`/${kind}?search=${encodeURIComponent(name)}&per_page=100`);
-    const existing = list.find((t) => t.name.toLowerCase() === name.toLowerCase());
+    const target = name.toLowerCase();
+    const existing = list.find((t) => decodeWpEntities(t.name).toLowerCase() === target);
     if (existing) return existing.id;
     const created = await this.req<WpTerm>(`/${kind}`, {
       method: "POST",
@@ -89,7 +120,7 @@ export class WordPressClient {
     const json = await this.req<{ id: number; source_url: string }>("/media", {
       method: "POST",
       headers: {
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": `attachment; filename="${sanitizeFilename(filename)}"`,
         "Content-Type": mime,
       },
       body,

@@ -1,15 +1,68 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { WordPressClient, WordPressError } from "@/lib/wp/client";
+import { WordPressClient, WordPressError, decodeWpEntities } from "@/lib/wp/client";
+
+describe("decodeWpEntities", () => {
+  it("decodes named, decimal, and hex HTML entities WP emits in term names", () => {
+    expect(decodeWpEntities("Bourse &amp; Marchés")).toBe("Bourse & Marchés");
+    expect(decodeWpEntities("Fusions &amp; Acquisitions")).toBe("Fusions & Acquisitions");
+    expect(decodeWpEntities("L&#8217;introduction")).toBe("L'introduction"); // curly apostrophe → '
+    expect(decodeWpEntities("A &#38; B")).toBe("A & B"); // decimal &#38; → &
+    expect(decodeWpEntities("A &#x26; B")).toBe("A & B"); // hex &#x26; → &
+    expect(decodeWpEntities("plain text")).toBe("plain text"); // no entities → unchanged
+  });
+});
+
+// Each captured request records the method, path, query, auth header, the full header set, and
+// (when present) the raw request body as BOTH bytes and parsed JSON. Tests assert on these so a
+// regression in the request SHAPE — JSON-wrapping the media bytes, dropping Content-Disposition,
+// a wrong Content-Type, a malformed post/term JSON body, a double-create — fails loudly instead
+// of sliding past canned responses.
+type Captured = {
+  method: string;
+  path: string;
+  search: string;
+  auth: string | null;
+  headers: Record<string, string>;
+  bodyBytes?: Uint8Array;
+  json?: any;
+};
 
 let server: any;
 let base: string;
-const calls: any[] = [];
+const calls: Captured[] = [];
+
+async function capture(req: Request, url: URL): Promise<Captured> {
+  const headers: Record<string, string> = {};
+  req.headers.forEach((v, k) => (headers[k] = v));
+  const c: Captured = {
+    method: req.method,
+    path: url.pathname,
+    search: url.search,
+    auth: req.headers.get("authorization"),
+    headers,
+  };
+  if (req.method === "POST") {
+    const buf = new Uint8Array(await req.arrayBuffer());
+    c.bodyBytes = buf;
+    const ct = req.headers.get("content-type") || "";
+    if (ct.includes("application/json")) {
+      try {
+        c.json = JSON.parse(new TextDecoder().decode(buf));
+      } catch {
+        /* not JSON — leave undefined */
+      }
+    }
+  }
+  return c;
+}
+
 beforeAll(() => {
   server = Bun.serve({
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
-      calls.push({ method: req.method, path: url.pathname, search: url.search, auth: req.headers.get("authorization") });
+      const c = await capture(req, url);
+      calls.push(c);
 
       if (url.pathname.endsWith("/users/me")) {
         // A distinct fake auth header simulates an invalid Application Password.
@@ -18,17 +71,19 @@ beforeAll(() => {
       }
 
       if (url.pathname.endsWith("/tags") && req.method === "GET") return Response.json([]); // none exist
-      if (url.pathname.endsWith("/tags") && req.method === "POST") return Response.json({ id: 42, name: "BRVM" });
+      if (url.pathname.endsWith("/tags") && req.method === "POST") return Response.json({ id: 42, name: c.json?.name });
 
       if (url.pathname.endsWith("/categories") && req.method === "GET") {
         const q = url.searchParams.get("search") || "";
         if (q === "BOOM") return new Response("Erreur interne", { status: 500 });
         if (q.toLowerCase() === "existing") return Response.json([{ id: 5, name: "Existing" }]);
+        // WordPress returns entity-encoded term names; the client must decode before matching.
+        if (q.toLowerCase() === "fusions & acquisitions")
+          return Response.json([{ id: 8, name: "Fusions &amp; Acquisitions" }]);
         return Response.json([]);
       }
       if (url.pathname.endsWith("/categories") && req.method === "POST") {
-        const body = (await req.json()) as { name: string };
-        return Response.json({ id: 55, name: body.name });
+        return Response.json({ id: 55, name: c.json?.name });
       }
 
       if (url.pathname.endsWith("/media") && req.method === "POST")
@@ -57,61 +112,112 @@ function client() {
 }
 
 describe("WordPressClient", () => {
-  it("resolveOrCreateTag creates when absent and returns id", async () => {
+  it("resolveOrCreateTag creates when absent, POSTing {name}, and returns id", async () => {
     expect(await client().resolveOrCreateTag("BRVM")).toBe(42);
+    const post = calls.at(-1)!;
+    expect(post.method).toBe("POST");
+    expect(post.path.endsWith("/tags")).toBe(true);
+    // Body must be exactly {name} JSON — not a wrapped/extra-field envelope.
+    expect(post.json).toEqual({ name: "BRVM" });
   });
 
-  it("resolveOrCreateCategory returns the existing id on an exact case-insensitive match", async () => {
+  it("resolveOrCreateCategory returns the existing id on an exact case-insensitive match WITHOUT posting", async () => {
+    const before = calls.length;
     expect(await client().resolveOrCreateCategory("existing")).toBe(5);
+    // Exactly one call (the GET search) — no POST-create fired.
+    const made = calls.slice(before);
+    expect(made).toHaveLength(1);
+    expect(made[0].method).toBe("GET");
+  });
+
+  it("resolveOrCreateCategory decodes HTML entities in WP-returned names before matching (no double-create)", async () => {
+    const before = calls.length;
+    // WP returns "Fusions &amp; Acquisitions"; input is plain "Fusions & Acquisitions".
+    expect(await client().resolveOrCreateCategory("Fusions & Acquisitions")).toBe(8);
+    const made = calls.slice(before);
+    expect(made).toHaveLength(1); // GET only — the decoded name matched, so no POST
+    expect(made.every((m) => m.method === "GET")).toBe(true);
   });
 
   it("resolveOrCreateCategory creates when absent and returns the new id", async () => {
     expect(await client().resolveOrCreateCategory("Nouvelle Catégorie")).toBe(55);
+    const post = calls.at(-1)!;
+    expect(post.method).toBe("POST");
+    expect(post.json).toEqual({ name: "Nouvelle Catégorie" });
   });
 
-  it("uploadMedia posts binary and returns attachment id + sourceUrl", async () => {
-    const r = await client().uploadMedia(new Uint8Array([1, 2, 3]), "img.jpg", "image/jpeg");
+  it("uploadMedia posts the RAW BYTES (not JSON) with the right Content-Disposition + Content-Type", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+    const r = await client().uploadMedia(bytes, "chart.png", "image/png");
     expect(r.id).toBe(99);
     expect(r.sourceUrl).toBe(`${base}/img.jpg`);
+
+    const post = calls.at(-1)!;
+    expect(post.path.endsWith("/media")).toBe(true);
+    expect(post.headers["content-disposition"]).toBe('attachment; filename="chart.png"');
+    expect(post.headers["content-type"]).toBe("image/png");
+    // The body is the raw bytes verbatim — same length and same content, NOT a JSON envelope.
+    expect(post.bodyBytes).toBeDefined();
+    expect(Array.from(post.bodyBytes!)).toEqual([1, 2, 3, 4, 5]);
+    expect(post.json).toBeUndefined();
   });
 
-  it("createPost returns the new post id and link", async () => {
-    const r = await client().createPost({
+  it("uploadMedia sanitizes quotes/control chars in the filename so the header can't be broken", async () => {
+    await client().uploadMedia(new Uint8Array([9]), 'a"b\tc.png', "image/png");
+    const post = calls.at(-1)!;
+    // `"` → `_`, tab (control char) stripped → header stays well-formed and quoted.
+    expect(post.headers["content-disposition"]).toBe('attachment; filename="a_bc.png"');
+  });
+
+  it("createPost sends the full post JSON body and returns id + link", async () => {
+    const payload = {
       title: "T",
       content: "<p>x</p>",
-      status: "publish",
+      status: "publish" as const,
       categories: [3],
       tags: [42],
       featured_media: 99,
       excerpt: "e",
-    });
+    };
+    const r = await client().createPost(payload);
     expect(r.id).toBe(7);
     expect(r.link).toBe(`${base}/?p=7`);
+
+    const post = calls.at(-1)!;
+    expect(post.path.endsWith("/posts")).toBe(true);
+    expect(post.headers["content-type"]).toContain("application/json");
+    expect(post.json).toEqual(payload);
   });
 
-  it("updatePost POSTs to /posts/{id} and returns id + link", async () => {
-    const r = await client().updatePost(123, { title: "Updated" });
+  it("updatePost POSTs to /posts/{id} (path includes the id) with the partial JSON body", async () => {
+    const r = await client().updatePost(123, { title: "Updated", status: "draft" });
     expect(r.id).toBe(123);
     expect(r.link).toBe(`${base}/?p=123`);
+
+    const post = calls.at(-1)!;
+    expect(post.method).toBe("POST");
+    expect(post.path.endsWith("/posts/123")).toBe(true);
+    expect(post.json).toEqual({ title: "Updated", status: "draft" });
   });
 
   it("setPostStatus('trash') sends DELETE /posts/{id}", async () => {
     await client().setPostStatus(123, "trash");
-    const last = calls.at(-1);
+    const last = calls.at(-1)!;
     expect(last.method).toBe("DELETE");
     expect(last.path.endsWith("/posts/123")).toBe(true);
   });
 
   it("setPostStatus('draft') POSTs {status} to /posts/{id}", async () => {
     await client().setPostStatus(123, "draft");
-    const last = calls.at(-1);
+    const last = calls.at(-1)!;
     expect(last.method).toBe("POST");
     expect(last.path.endsWith("/posts/123")).toBe(true);
+    expect(last.json).toEqual({ status: "draft" });
   });
 
   it("every request carries the configured Authorization header", async () => {
     await client().testConnection();
-    const last = calls.at(-1);
+    const last = calls.at(-1)!;
     expect(last.auth).toBe("Basic eA==");
   });
 
