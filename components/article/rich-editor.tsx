@@ -8,11 +8,24 @@ import { EditorToolbar } from "./editor-toolbar";
 // `immediatelyRender: false` avoids Tiptap v3's SSR hydration-mismatch warning
 // under Next.js (the editor mounts empty on the server, then hydrates content
 // on the client).
+//
+// italic/strike/underline are disabled explicitly: StarterKit v3 registers all
+// three by default, each with a keyboard shortcut (Cmd+I, Cmd+U, Cmd+Shift+S)
+// and markdown input rules (*x*, ~~x~~) — so without disabling them a user
+// could still produce those marks despite no toolbar button. link:false is
+// also passed because StarterKit v3 bundles its own Link extension; leaving it
+// on would duplicate the explicit @tiptap/extension-link below (Tiptap logs a
+// "Duplicate extension names" warning and the duplicate can defeat
+// openOnClick:false).
 export function RichEditor({ value, onChange, editable }: { value: string; onChange: (html: string) => void; editable: boolean }) {
   const editor = useEditor({
     editable, immediatelyRender: false,
     extensions: [
-      StarterKit.configure({ heading: { levels: [2, 3] }, blockquote: false, codeBlock: false, code: false, horizontalRule: false }),
+      StarterKit.configure({
+        heading: { levels: [2, 3] },
+        blockquote: false, codeBlock: false, code: false, horizontalRule: false,
+        italic: false, strike: false, underline: false, link: false,
+      }),
       Link.configure({ openOnClick: false }),
     ],
     content: value,
