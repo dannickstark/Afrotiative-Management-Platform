@@ -4,6 +4,7 @@ import {
 import { and, eq, desc } from "drizzle-orm";
 import { getWpConfig } from "./config";
 import { WordPressClient, WordPressError, type WpPostPayload } from "./client";
+import { isSafePublicHttpUrl } from "@/lib/url-guard";
 
 export type PostSource = { mediaName: string; url: string };
 
@@ -85,30 +86,10 @@ function wpErrorMessage(prefix: string, err: unknown): string {
 // a check, a crafted/careless value could be used to probe internal services (localhost, cloud
 // metadata endpoints, RFC1918 ranges) from the server. Best-effort only (no DNS-rebinding
 // protection), but cheap and matches the fail-soft contract: callers treat a rejected URL exactly
-// like any other image failure.
-const PRIVATE_HOST_PATTERNS: RegExp[] = [
-  /^localhost$/i,
-  /^127\./,
-  /^0\.0\.0\.0$/,
-  /^::1$/,
-  /^10\./,
-  /^192\.168\./,
-  /^169\.254\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-];
-
-export function isFetchableImageUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, ""); // strip IPv6 [] brackets
-  if (PRIVATE_HOST_PATTERNS.some((re) => re.test(host))) return false;
-  return true;
-}
+// like any other image failure. Delegates to the shared lib/url-guard.ts predicate — also used by
+// testFeed (lib/actions/feed-actions.ts) — kept as a local re-export so existing imports/tests of
+// `isFetchableImageUrl` from this module keep working unchanged.
+export const isFetchableImageUrl = isSafePublicHttpUrl;
 
 type Distribution = typeof distributions.$inferSelect;
 

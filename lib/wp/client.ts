@@ -81,11 +81,46 @@ export class WordPressClient {
   }
 
   async getCategories(): Promise<WpTerm[]> {
-    return this.req<WpTerm[]>("/categories?per_page=100");
+    return this.getAllTerms("categories");
   }
 
   async getTags(): Promise<WpTerm[]> {
-    return this.req<WpTerm[]>("/tags?per_page=100");
+    return this.getAllTerms("tags");
+  }
+
+  // WordPress's list endpoints cap at per_page=100 and paginate the rest — a single
+  // `?per_page=100` request silently drops any term beyond the first 100, which
+  // syncTaxonomyFromWordPress would then report as a successful (but incomplete) sync for any
+  // newsroom with a large taxonomy. Loops pages, accumulating results, until there's no more to
+  // fetch. Prefers the `X-WP-TotalPages` response header (exact) when WP sends it — falls back to
+  // "this page came back short" otherwise, which is reliable EXCEPT in the edge case where the
+  // term count is an exact multiple of 100 (that heuristic alone would fetch one extra, empty
+  // page; WP just returns `[]` for it rather than erroring, so the fallback still terminates
+  // correctly, just with one harmless extra request).
+  private async getAllTerms(kind: "categories" | "tags"): Promise<WpTerm[]> {
+    const perPage = 100;
+    const all: WpTerm[] = [];
+    for (let page = 1; ; page++) {
+      const res = await fetch(
+        `${this.config.baseUrl}/wp-json/wp/v2/${kind}?per_page=${perPage}&page=${page}`,
+        { headers: { Authorization: this.config.authHeader } },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new WordPressError(`Échec de la requête WordPress (${res.status}) sur /${kind}.`, res.status, body);
+      }
+      const batch = (await res.json()) as WpTerm[];
+      all.push(...batch);
+
+      const totalPagesHeader = res.headers.get("X-WP-TotalPages");
+      const totalPages = totalPagesHeader ? Number(totalPagesHeader) : NaN;
+      if (Number.isFinite(totalPages) && totalPages > 0) {
+        if (page >= totalPages) break;
+      } else if (batch.length < perPage) {
+        break;
+      }
+    }
+    return all;
   }
 
   private async resolveOrCreate(kind: "categories" | "tags", name: string): Promise<number> {

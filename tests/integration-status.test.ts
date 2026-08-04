@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "bun:test";
+import { eq } from "drizzle-orm";
 import { can } from "@/lib/rbac";
 import { getIntegrationStatus } from "@/lib/queries/settings";
+import { db, articles, distributions } from "@/db";
 
 describe("integration test guard", () => {
   it("only admin can test integrations", () => {
@@ -66,6 +68,36 @@ describe("getIntegrationStatus", () => {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
+    }
+  });
+
+  // Fix 2: wordpress.lastSuccessAt must be channel-scoped. Before SP6 adds other distribution
+  // channels, `channel` is always "wordpress" in practice, so this regression was latent — this
+  // proves it directly by inserting a 'sent' row on a DIFFERENT channel, timestamped in the far
+  // future so it would win any unscoped "most recent sent" query, and asserting the WordPress
+  // card's lastSuccessAt is completely unaffected by it. Self-cleaning: only touches a temp
+  // article + its own temp distribution row, never a seeded one.
+  it("wordpress.lastSuccessAt ignores a 'sent' row on a non-wordpress channel, even the most recent one", async () => {
+    const [tempArticle] = await db.insert(articles).values({
+      title: "Article temporaire (test channel-scope lastSuccessAt)", bodyHtml: "<p>x</p>", status: "approved",
+    }).returning();
+    let distId: string | null = null;
+    try {
+      const before = await getIntegrationStatus();
+
+      const [inserted] = await db.insert(distributions).values({
+        articleId: tempArticle.id,
+        channel: "some-other-channel",
+        status: "sent",
+        at: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365), // 1 year out — would win any unscoped query
+      }).returning();
+      distId = inserted.id;
+
+      const after = await getIntegrationStatus();
+      expect(after.wordpress.lastSuccessAt?.getTime() ?? null).toEqual(before.wordpress.lastSuccessAt?.getTime() ?? null);
+    } finally {
+      if (distId) await db.delete(distributions).where(eq(distributions.id, distId));
+      await db.delete(articles).where(eq(articles.id, tempArticle.id));
     }
   });
 });

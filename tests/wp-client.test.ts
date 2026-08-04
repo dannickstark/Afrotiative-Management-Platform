@@ -243,3 +243,77 @@ describe("WordPressClient", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fix 1: getCategories()/getTags() must paginate past WordPress's per_page=100 cap instead of
+// silently truncating a >100-term taxonomy. A separate fake WP server (distinct port/state from
+// the one above) simulates a >100-term taxonomy split across 2 pages for BOTH lookup paths the
+// client can use to detect "no more pages": the X-WP-TotalPages response header (categories,
+// below) and the fallback "this page came back short" heuristic when that header is absent (tags,
+// below) — proving both terminate correctly and return the FULL accumulated list, in original
+// {id, name} shape, with no 3rd "just in case" page requested.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("getCategories/getTags pagination (Fix 1 — no silent 100-term cap)", () => {
+  let pagServer: any;
+  let pagBase: string;
+  const requested: { path: string; page: string | null }[] = [];
+
+  function termPage(prefix: string, startId: number, count: number) {
+    return Array.from({ length: count }, (_, i) => ({ id: startId + i, name: `${prefix} ${startId + i}` }));
+  }
+
+  beforeAll(() => {
+    pagServer = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        const page = url.searchParams.get("page");
+        requested.push({ path: url.pathname, page });
+
+        // /categories: 130 terms across 2 pages (100 + 30) — WITH X-WP-TotalPages: exercises the
+        // exact, header-driven termination path.
+        if (url.pathname.endsWith("/categories")) {
+          if (page === "1") return Response.json(termPage("Cat", 1, 100), { headers: { "X-WP-TotalPages": "2" } });
+          if (page === "2") return Response.json(termPage("Cat", 101, 30), { headers: { "X-WP-TotalPages": "2" } });
+          return new Response("unexpected extra page requested", { status: 400 });
+        }
+
+        // /tags: 120 terms across 2 pages (100 + 20) — NO X-WP-TotalPages header: exercises the
+        // "short page" fallback heuristic.
+        if (url.pathname.endsWith("/tags")) {
+          if (page === "1") return Response.json(termPage("Tag", 1, 100));
+          if (page === "2") return Response.json(termPage("Tag", 101, 20));
+          return new Response("unexpected extra page requested", { status: 400 });
+        }
+
+        return new Response("not found", { status: 404 });
+      },
+    });
+    pagBase = `http://localhost:${pagServer.port}`;
+  });
+  afterAll(() => pagServer.stop(true));
+
+  function pagClient() {
+    return new WordPressClient({ baseUrl: pagBase, user: "bot", appPassword: "x", authHeader: "Basic eA==" });
+  }
+
+  it("getCategories returns all 130 terms across 2 pages (X-WP-TotalPages path), requesting exactly pages 1 and 2", async () => {
+    requested.length = 0;
+    const cats = await pagClient().getCategories();
+    expect(cats).toHaveLength(130);
+    expect(cats[0]).toEqual({ id: 1, name: "Cat 1" });
+    expect(cats.at(-1)).toEqual({ id: 130, name: "Cat 130" });
+    const pages = requested.filter((r) => r.path.endsWith("/categories")).map((r) => r.page);
+    expect(pages).toEqual(["1", "2"]); // no 3rd page probed once X-WP-TotalPages says 2
+  });
+
+  it("getTags returns all 120 terms across 2 pages (short-page fallback), requesting exactly pages 1 and 2", async () => {
+    requested.length = 0;
+    const tags = await pagClient().getTags();
+    expect(tags).toHaveLength(120);
+    expect(tags[0]).toEqual({ id: 1, name: "Tag 1" });
+    expect(tags.at(-1)).toEqual({ id: 120, name: "Tag 120" });
+    const pages = requested.filter((r) => r.path.endsWith("/tags")).map((r) => r.page);
+    expect(pages).toEqual(["1", "2"]); // page 2 came back short (20 < 100) -> loop stopped there
+  });
+});

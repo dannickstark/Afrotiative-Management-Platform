@@ -1,5 +1,5 @@
 import { db, feeds, user, wpCategories, wpTags, distributions, pipelineRuns } from "@/db";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getWpConfig } from "@/lib/wp/config";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
 
@@ -30,8 +30,11 @@ export async function getTaxonomy() {
 
 export async function getIntegrationStatus() {
   const cfg = getPipelineConfig();
+  // Channel-scoped: once SP6 adds other distribution channels, a non-WordPress "sent" row must
+  // never surface as the WordPress card's last successful publication.
   const [lastPub] = await db.select({ at: distributions.at }).from(distributions)
-    .where(eq(distributions.status, "sent")).orderBy(desc(distributions.at)).limit(1);
+    .where(and(eq(distributions.channel, "wordpress"), eq(distributions.status, "sent")))
+    .orderBy(desc(distributions.at)).limit(1);
   const [lastRun] = await db.select({ at: pipelineRuns.startedAt, status: pipelineRuns.status })
     .from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(1);
   return {

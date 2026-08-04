@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { feedSchema, type FeedInput } from "@/lib/validation";
+import { isSafePublicHttpUrl } from "@/lib/url-guard";
 
 // feedSchema/validateFeedInput live in lib/validation.ts, not here — see the comment there for
 // why (a file-level "use server" module may only export async functions).
@@ -43,8 +44,16 @@ export async function deleteFeed(id: string) {
 
 // Lets an editor validate a feed BEFORE activating it: parses the URL through the same
 // rss-parser path the pipeline uses, without writing anything to feeds/raw_items.
+//
+// url is admin-entered but fetched server-side with the app's own credentials/network access —
+// an authenticated SSRF surface (an editor could point it at localhost/an internal service/cloud
+// metadata endpoint). Reject non-http(s) schemes and private/loopback/link-local hosts BEFORE
+// calling parseFeed (which fetches it), same guard as the WordPress featured-image fetch.
 export async function testFeed(url: string) {
   await guard();
+  if (!isSafePublicHttpUrl(url)) {
+    return { ok: false as const, message: "URL non autorisée." };
+  }
   try {
     const { parseFeed } = await import("@/lib/rss/parse-feed");
     const items = await parseFeed(url);
