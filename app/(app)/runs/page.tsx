@@ -21,7 +21,6 @@ export default async function RunsPage() {
     status: pipelineRuns.status,
     feedsRead: pipelineRuns.feedsRead,
     newItems: pipelineRuns.newItems,
-    published: pipelineRuns.published,
     startedAt: pipelineRuns.startedAt,
     // NOTE: correlate against the literal "pipeline_runs.id" text, not an interpolated
     // ${pipelineRuns.id} column reference — drizzle only qualifies interpolated columns with
@@ -56,7 +55,6 @@ export default async function RunsPage() {
                   <TableHead>Déclencheur</TableHead>
                   <TableHead className="text-right">Flux lus</TableHead>
                   <TableHead className="text-right">Nouveaux</TableHead>
-                  <TableHead className="text-right">Publiés</TableHead>
                   <TableHead>Statut</TableHead>
                 </TableRow>
               </TableHeader>
@@ -67,7 +65,6 @@ export default async function RunsPage() {
                     <TableCell>{TRIGGER_LABEL[r.triggeredBy] ?? r.triggeredBy}</TableCell>
                     <TableCell className="text-right">{r.feedsRead}</TableCell>
                     <TableCell className="text-right">{r.newItems}</TableCell>
-                    <TableCell className="text-right">{r.published}</TableCell>
                     <TableCell>
                       <span className={STATUS_STYLE[r.status]}>{pipelineStatusLabel(r.status)}</span>
                       {r.failedSteps > 0 && (
