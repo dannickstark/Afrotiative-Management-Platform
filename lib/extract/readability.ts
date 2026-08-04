@@ -25,7 +25,10 @@ export function readabilityFromHtml(html: string, url: string): Extracted {
 }
 
 export async function readabilityExtract(url: string): Promise<Extracted> {
-  const res = await fetch(url, { headers: { "user-agent": "AfrotiativeBot/1.0" } });
+  const res = await fetch(url, {
+    headers: { "user-agent": "AfrotiativeBot/1.0" },
+    signal: AbortSignal.timeout(15000),
+  });
   const html = await res.text();
   return readabilityFromHtml(html, url);
 }
