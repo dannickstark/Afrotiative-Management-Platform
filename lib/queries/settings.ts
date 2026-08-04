@@ -3,6 +3,8 @@ import { desc, eq } from "drizzle-orm";
 import { getWpConfig } from "@/lib/wp/config";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
 
+export type Feed = Awaited<ReturnType<typeof getFeeds>>[number];
+
 export async function getFeeds() {
   return db.select().from(feeds).orderBy(feeds.name);
 }
