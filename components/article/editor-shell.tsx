@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RichEditor } from "./rich-editor";
 import { ActionBar } from "./action-bar";
 import { LockBanner } from "./lock-banner";
+import { SidePanel } from "./side-panel";
 import { acquireLock, refreshLock, releaseLock } from "@/lib/actions/article-actions";
 import type { ArticleDetail } from "@/lib/queries/article";
 import type { Role } from "@/lib/auth";
@@ -15,26 +15,26 @@ import type { Role } from "@/lib/auth";
 const HEARTBEAT_MS = 60_000;
 
 // Two-column editor shell. Owns ALL of the article's editable form state
-// (title, body, excerpt, category, tags, image fields) so that Task 13's real
-// SidePanel can be dropped into the right column and consume/mutate this same
-// state — for now the right column is a read-only placeholder.
+// (title, body, excerpt, category, tags, image fields) so that the SidePanel
+// in the right column can consume/mutate this same state.
 export function EditorShell({
-  article, lockedByOther,
+  article, lockedByOther, wpTagNames,
 }: {
   article: ArticleDetail;
   role: Role; // accepted for prop-contract parity with the page; RoleGate reads the live session client-side instead
   lockedByOther: boolean;
+  wpTagNames: string[];
 }) {
   const isPublished = article.status === "published";
 
   const [title, setTitle] = useState(article.title);
   const [bodyHtml, setBodyHtml] = useState(article.bodyHtml);
-  const [excerpt] = useState(article.excerpt ?? ""); // never null — saveDraftSchema.excerpt is optional but not nullable
-  const [categoryId] = useState<string | null>(article.categoryId);
-  const [tags] = useState(article.tags.map((t) => ({ tagName: t.tagName, isNew: t.isNew })));
-  const [featuredImageUrl] = useState<string | null>(article.featuredImageUrl);
-  const [imageCredit] = useState<string | null>(article.imageCredit);
-  const [imageSourceUrl] = useState<string | null>(article.imageSourceUrl);
+  const [excerpt, setExcerpt] = useState(article.excerpt ?? ""); // never null — saveDraftSchema.excerpt is optional but not nullable
+  const [categoryId, setCategoryId] = useState<string | null>(article.categoryId);
+  const [tags, setTags] = useState(article.tags.map((t) => ({ tagName: t.tagName, isNew: t.isNew })));
+  const [featuredImageUrl, setFeaturedImageUrl] = useState<string | null>(article.featuredImageUrl);
+  const [imageCredit, setImageCredit] = useState<string | null>(article.imageCredit);
+  const [imageSourceUrl, setImageSourceUrl] = useState<string | null>(article.imageSourceUrl);
 
   // Seeded from the server-computed guard for a flash-free first paint;
   // reconciled with the authoritative result of acquireLock() right after mount.
@@ -110,26 +110,23 @@ export function EditorShell({
           <RichEditor value={bodyHtml} onChange={setBodyHtml} editable={!readOnly} />
         </div>
 
-        {/* TEMPORARY placeholder — Task 13 replaces this with the real, editable
-            SidePanel (category, tags, image fields) consuming the state above. */}
-        <Card className="w-full shrink-0 lg:w-80">
-          <CardHeader>
-            <CardTitle className="text-sm text-muted-foreground">Panneau latéral (Task 13)</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            <div>
-              <p className="text-xs text-muted-foreground">Catégorie</p>
-              <p>{article.categoryName ?? "Non définie"}</p>
-            </div>
-            {featuredImageUrl && (
-              <div>
-                <p className="mb-1 text-xs text-muted-foreground">Image à la une</p>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={featuredImageUrl} alt="" className="aspect-video w-full rounded-md border object-cover" />
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <SidePanel
+          article={article}
+          image={{ featuredImageUrl, imageCredit, imageSourceUrl }}
+          onImageChange={(fields) => {
+            setFeaturedImageUrl(fields.featuredImageUrl);
+            setImageCredit(fields.imageCredit);
+            setImageSourceUrl(fields.imageSourceUrl);
+          }}
+          categoryId={categoryId}
+          onCategoryChange={setCategoryId}
+          tags={tags}
+          onTagsChange={setTags}
+          wpTagNames={wpTagNames}
+          excerpt={excerpt}
+          onExcerptChange={setExcerpt}
+          readOnly={readOnly}
+        />
       </div>
 
       <ActionBar
