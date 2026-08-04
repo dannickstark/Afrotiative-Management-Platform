@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/publish/due/route";
-import { publishDueArticles } from "@/lib/actions/publish-actions";
+import { publishDueArticles } from "@/lib/wp/publish-due";
 import { db, articles, wpCategories, distributions, articleRevisions } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 

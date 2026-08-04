@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { publishDueArticles } from "@/lib/actions/publish-actions";
+import { publishDueArticles } from "@/lib/wp/publish-due";
 
 // Cron trigger for scheduled auto-publish. Bearer-secret gated: with no PUBLISH_TRIGGER_SECRET
 // configured OR a non-matching Authorization header this is ALWAYS 401 — never a silent open
