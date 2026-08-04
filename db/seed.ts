@@ -6,12 +6,43 @@ import {
 import { createCredentialUser } from "@/lib/create-user";
 import { inArray } from "drizzle-orm";
 
+// db:seed WIPES every application table before re-seeding demo data. With separate Neon
+// branches (dev / production), that is a loaded gun: run it against the wrong DATABASE_URL
+// and you erase production. This guard makes the target explicit and requires opt-in.
+//   - refuses outright under NODE_ENV=production,
+//   - refuses if the target host matches PRODUCTION_DB_HOST (set that in your prod env),
+//   - otherwise requires CONFIRM_SEED=1 and always prints the target host (creds masked).
+function assertSafeToWipe() {
+  const raw = process.env.DATABASE_URL ?? "";
+  let host = "(inconnu)";
+  try { host = new URL(raw).host; } catch { /* leave as unknown */ }
+  console.log(`db:seed → cible : ${host}`);
+
+  if (process.env.NODE_ENV === "production") {
+    console.error("Refus : db:seed est destructif et NODE_ENV=production. Jamais sur la production.");
+    process.exit(1);
+  }
+  const prodHost = process.env.PRODUCTION_DB_HOST?.trim();
+  if (prodHost && host.includes(prodHost)) {
+    console.error(`Refus : la cible (${host}) correspond à PRODUCTION_DB_HOST. Jamais sur la production.`);
+    process.exit(1);
+  }
+  if (process.env.CONFIRM_SEED !== "1") {
+    console.error(
+      `Refus : db:seed EFFACE toutes les tables de ${host}.\n` +
+        "Confirmez avec : CONFIRM_SEED=1 bun run db:seed",
+    );
+    process.exit(1);
+  }
+}
+
 const CATS = ["Économie", "Finance", "Marchés", "Startups & Tech", "Énergie",
   "Politique économique", "Entreprises", "International"];
 const TAGS = ["BRVM", "FCFA", "BCEAO", "pétrole", "fintech", "inflation", "BAD",
   "zone franc", "mobile money", "or", "cacao", "Nigeria", "Cameroun", "UEMOA", "dette"];
 
 async function main() {
+  assertSafeToWipe();
   // wipe app tables (keep migrations)
   await db.delete(distributions); await db.delete(pipelineSteps); await db.delete(pipelineRuns);
   await db.delete(articleRevisions); await db.delete(articleTags); await db.delete(articleSources);

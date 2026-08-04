@@ -54,13 +54,40 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 
 ## 3. Mise en place de la base de données
 
+### 3.1 Deux branches Neon : `dev` et `production`
+
+La sélection de la branche est **entièrement pilotée par l'environnement** — aucun code à changer. Le runtime lit `DATABASE_URL` (pooled) ; les migrations lisent `DIRECT_URL` (direct). Il suffit que chaque environnement charge la bonne connexion :
+
+| Environnement | Charge | Pointe vers |
+|---|---|---|
+| **Local** (`bun run dev`) | `.env.local` (gitignoré, jamais déployé) | branche **`dev`** |
+| **Live** (hôte déployé) | variables d'env du gestionnaire de secrets de l'hôte | branche **`production`** |
+
+Règles :
+- Les identifiants de **`production`** ne vivent **que** dans le gestionnaire de secrets de l'hôte — **jamais** dans un fichier commité **ni dans `.env.local`** (sinon une commande destructive locale viserait la production).
+- `.env.local` contient **uniquement** la branche `dev`. Comme il est gitignoré, il n'est jamais déployé ; sur l'hôte, les vraies variables d'env priment.
+- Posez `PRODUCTION_DB_HOST` (le hostname de l'endpoint `production`, ex. `ep-xxx.neon.tech`) dans l'env de l'hôte : le script de seed refusera alors de viser cette base (garde-fou anti-écrasement).
+
+### 3.2 Migrations & extension
+
 ```bash
 bun install
 bun run db:migrate        # applique les migrations drizzle (utilise DIRECT_URL)
 ```
 
-- **pgvector** : sur Neon, activez l'extension une fois (`CREATE EXTENSION IF NOT EXISTS vector;`) — les migrations posent l'index HNSW sur `article_embeddings`.
-- **Ne pas** lancer `bun run db:seed` en production : il **efface les tables applicatives** et crée des comptes de démo avec un mot de passe partagé. Le seed est réservé au développement / à la démo.
+- **pgvector** : sur chaque branche Neon, activez l'extension une fois (`CREATE EXTENSION IF NOT EXISTS vector;`) — les migrations posent l'index HNSW sur `article_embeddings`.
+- **Migrer la `production`** : exécutez `bun run db:migrate` **dans l'environnement de déploiement** (l'hôte fournit alors `DIRECT_URL` = branche `production`), typiquement comme étape de build/release — pas depuis votre poste avec des creds de prod dans `.env.local`.
+
+### 3.3 Seed — développement uniquement (destructif)
+
+`bun run db:seed` **efface toutes les tables applicatives** puis recrée des données de démo (comptes à mot de passe partagé). Réservé au développement, jamais à la production. Garde-fous intégrés :
+- refus sous `NODE_ENV=production` ;
+- refus si la cible correspond à `PRODUCTION_DB_HOST` ;
+- sinon, exige une confirmation explicite et affiche toujours le hostname cible :
+
+```bash
+CONFIRM_SEED=1 bun run db:seed    # affiche « db:seed → cible : ep-…neon.tech » avant d'effacer
+```
 
 ---
 

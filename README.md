@@ -38,13 +38,16 @@ shadcn/ui sur Base UI · Vercel AI SDK (OpenRouter → OmniRoute → mock) · Wo
 
 ```bash
 bun install
-cp .env.example .env.local        # puis renseigner DATABASE_URL, DIRECT_URL, BETTER_AUTH_SECRET…
+cp .env.example .env.local        # DATABASE_URL/DIRECT_URL = branche Neon « dev » ; BETTER_AUTH_SECRET…
 bun run db:migrate                # + activer l'extension pgvector sur la base
-bun run db:seed                   # données de démo (25 articles, 6 flux, 3 comptes) — DEV UNIQUEMENT
+CONFIRM_SEED=1 bun run db:seed     # données de démo (25 articles, 6 flux, 3 comptes) — DEV UNIQUEMENT, destructif
 bun run dev                       # http://localhost:3000
 ```
 
 Comptes de démo (seed) : `admin@` / `editor@` / `journaliste@afrotiative.com`, mot de passe `Afrotiative2026!`.
+
+> **Branches Neon :** `.env.local` (gitignoré) pointe sur la branche **`dev`** ; la branche **`production`** ne se
+> configure que dans les variables d'env de l'hôte déployé. Détails et garde-fous : [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) §3.
 
 ## Commandes
 
@@ -55,7 +58,7 @@ Comptes de démo (seed) : `admin@` / `editor@` / `journaliste@afrotiative.com`, 
 | `bun test` | 135 tests (sans réseau ni clés). |
 | `bun run typecheck` | `tsc --noEmit`. |
 | `bun run db:migrate` / `db:push` / `db:generate` | migrations Drizzle. |
-| `bun run db:seed` | seed de démo (**efface les tables applicatives**). |
+| `CONFIRM_SEED=1 bun run db:seed` | seed de démo (**efface les tables applicatives** ; garde-fous anti-production). |
 | `bun run db:create-admin` | crée **un** admin en production (voir runbook §4). |
 
 ## Déploiement & exploitation
