@@ -1,6 +1,7 @@
 import {
-  pgTable, pgEnum, text, boolean, timestamp, integer, jsonb, uuid, vector, index,
+  pgTable, pgEnum, text, boolean, timestamp, integer, jsonb, uuid, vector, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ---- enums ----
 export const articleStatus = pgEnum("article_status", [
@@ -128,6 +129,9 @@ export const articles = pgTable("articles", {
   clusterId: uuid("cluster_id").references(() => clusters.id),
   confidenceFlags: jsonb("confidence_flags").$type<{
     categoryUncertain?: boolean; imageMissing?: boolean; clusterUncertain?: boolean;
+    // Set by the pipeline when a provider outage forced a mock LLM/embedding fallback, so the
+    // review queue can visibly flag the article as produced under degraded conditions.
+    aiDegraded?: boolean;
   }>().notNull().default({}),
   lockedBy: text("locked_by").references(() => user.id),
   lockedAt: timestamp("locked_at"),
@@ -177,7 +181,13 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   published: integer("published").notNull().default(0),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   finishedAt: timestamp("finished_at"),
-});
+}, (t) => [
+  // DB-level overlap interlock: at most one run may be 'running' at any time. A concurrent
+  // runPipeline that races past the hasRunningRun() app check will hit a unique violation on
+  // its opening insert and back off (returns status "skipped"). runPipeline's try/finally
+  // always moves the row to a terminal status, so this can never dead-lock the slot.
+  uniqueIndex("pipeline_runs_one_running").on(t.status).where(sql`${t.status} = 'running'`),
+]);
 
 export const pipelineSteps = pgTable("pipeline_steps", {
   id: uuid("id").primaryKey().defaultRandom(),

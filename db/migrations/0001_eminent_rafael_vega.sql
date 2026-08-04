@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "pipeline_runs_one_running" ON "pipeline_runs" USING btree ("status") WHERE "pipeline_runs"."status" = 'running';

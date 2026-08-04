@@ -50,18 +50,41 @@ export async function stageItem(
   };
 
   try {
-    const ex = await timed("Extraction du contenu", () => extract(item.url));
+    // Extraction total failure is a HARD abort, not a degraded-success: if every provider fell
+    // through (via "none") or the resulting text is effectively empty, generating an article
+    // from it would hallucinate content from nothing. Throw so the step is recorded FAILED and
+    // the item is aborted (articleId: null) rather than staged as garbage.
+    const ex = await timed("Extraction du contenu", async () => {
+      const r = await extract(item.url);
+      const effectiveText = (r.text || item.contentSnippet).trim();
+      if (r.via === "none" || effectiveText.length < 80) {
+        throw new Error("Aucun contenu n'a pu être extrait de la source.");
+      }
+      return r;
+    });
     const text = ex.text || item.contentSnippet;
 
-    const { vector } = await timed("Calcul de l'embedding", () => embed(`${item.title}\n${text}`));
+    const emb = await timed("Calcul de l'embedding", () => embed(`${item.title}\n${text}`));
+    const vector = emb.vector;
 
     const cluster = await timed("Regroupement (clustering)", () => decideCluster(vector));
 
-    const { draft } = await timed("Génération IA", () => generateArticle({
+    const gen = await timed("Génération IA", () => generateArticle({
       sources: [{ mediaName, url: item.url, text }],
       candidateImages: ex.images,
       categories: categoryNames,
     }));
+    const draft = gen.draft;
+
+    // A provider outage forces embed()/generateArticle() onto their mock fallbacks. Rather than
+    // let a degraded run look identical to a healthy one, flag the article so human reviewers see
+    // it wasn't produced under normal conditions. Mock embeddings also make clustering meaningless.
+    const confidence: NonNullable<typeof draft.confidence> & { aiDegraded?: boolean } = { ...draft.confidence };
+    if (gen.via === "mock") confidence.aiDegraded = true;
+    if (emb.via === "mock") { confidence.aiDegraded = true; confidence.clusterUncertain = true; }
+    if (gen.via === "mock" || emb.via === "mock") {
+      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) pour ${item.url}`);
+    }
 
     const articleId = await timed("Dépôt en revue", async () => {
       // Read-only lookup — no write dependency, so it can run outside the transaction below.
@@ -89,7 +112,7 @@ export async function stageItem(
           imageCredit: draft.imageCredit,
           imageSourceUrl: draft.imageSourceUrl,
           clusterId,
-          confidenceFlags: draft.confidence,
+          confidenceFlags: confidence,
           generatedAt: new Date(),
         }).returning({ id: articles.id });
 

@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, articles, articleSources, articleEmbeddings, clusters } from "@/db";
-import { eq } from "drizzle-orm";
+import { db, articles, articleSources, articleEmbeddings, clusters, feeds, pipelineRuns } from "@/db";
+import { eq, sql } from "drizzle-orm";
 import { stageItem } from "@/lib/pipeline/stages";
+import { runPipeline } from "@/lib/pipeline/run";
+import { hasRunningRun } from "@/lib/pipeline/overlap";
 import { contentHash, type RawItem } from "@/lib/rss/parse-feed";
 
 const TITLE = "La BRVM franchit un nouveau record historique";
@@ -11,45 +13,48 @@ const FIXTURE_HTML = `<html><head><title>Ignoré</title></head><body><article>
   <p>${BODY_SENTENCE.repeat(15)}</p>
 </article></body></html>`;
 
-// End-to-end (real Neon DB) but network-free: a tiny local Bun.serve fixture stands in for the
-// source article, and every external provider is forced onto its credential-free fallback
-// (readability for extraction, mock for embeddings + LLM generation) so the test never makes a
-// real network call. Same env-var-deletion pattern already used in tests/extract-chain.test.ts
-// and tests/ai-fallback.test.ts.
-describe("stageItem (end-to-end, network-free)", () => {
-  const original = {
-    JINA_API_KEY: process.env.JINA_API_KEY,
-    FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY,
-    EMBED_API_KEY: process.env.EMBED_API_KEY,
-    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
-    OMNIROUTE_API_KEY: process.env.OMNIROUTE_API_KEY,
-    ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-    GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-  };
+// The set of provider credentials deleted for the duration of a network-free test, so
+// extract()/embed()/generateArticle() fall onto their readability/mock fallbacks instead of
+// calling real APIs (this project's .env.local has live keys). Same pattern already used in
+// tests/extract-chain.test.ts and tests/ai-fallback.test.ts.
+const PROVIDER_KEYS = [
+  "JINA_API_KEY", "FIRECRAWL_API_KEY", "EMBED_API_KEY", "OPENROUTER_API_KEY",
+  "OMNIROUTE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
+] as const;
 
+function snapshotEnv(keys: readonly string[]): Record<string, string | undefined> {
+  return Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+}
+function restoreEnv(snap: Record<string, string | undefined>): void {
+  for (const [k, v] of Object.entries(snap)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// End-to-end (real Neon DB) but network-free: a tiny local Bun.serve fixture stands in for the
+// source article, and every external provider is forced onto its credential-free fallback so no
+// real network call is made (only loopback traffic to the fixture server).
+describe("stageItem (end-to-end, network-free)", () => {
+  const original = snapshotEnv(PROVIDER_KEYS);
   let server: ReturnType<typeof Bun.serve>;
   let articleUrl: string;
   let createdArticleId: string | null = null;
   let createdClusterId: string | null = null;
 
   beforeAll(() => {
-    for (const k of Object.keys(original)) delete process.env[k as keyof typeof original];
+    for (const k of PROVIDER_KEYS) delete process.env[k];
     server = Bun.serve({ port: 0, fetch: () => new Response(FIXTURE_HTML, { headers: { "content-type": "text/html" } }) });
     articleUrl = `http://localhost:${server.port}/article`;
   });
 
   afterAll(async () => {
     server.stop(true);
-    for (const [k, v] of Object.entries(original)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
+    restoreEnv(original);
     // FK order: article first (cascades article_sources/article_embeddings/article_tags).
     if (createdArticleId) await db.delete(articles).where(eq(articles.id, createdArticleId));
     if (createdClusterId) {
-      // Only remove the cluster if nothing else still references it — decideCluster could in
-      // principle have attached to a pre-existing cluster rather than creating a fresh one.
       const stillUsed = await db.select({ id: articles.id }).from(articles).where(eq(articles.clusterId, createdClusterId)).limit(1);
       if (stillUsed.length === 0) await db.delete(clusters).where(eq(clusters.id, createdClusterId));
     }
@@ -90,5 +95,132 @@ describe("stageItem (end-to-end, network-free)", () => {
     const embeddingRows = await db.select().from(articleEmbeddings).where(eq(articleEmbeddings.articleId, articleId!));
     expect(embeddingRows.length).toBe(1);
     expect(embeddingRows[0].embedding?.length).toBe(1024);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Verifies the db.transaction() rollback in stageItem's "Dépôt en revue" step: a failure while
+// writing the article's rows must leave NO orphaned article/cluster behind. We inject the failure
+// realistically — EMBED_DIMENSIONS=512 makes the mock embedder produce a 512-dim vector, which the
+// article_embeddings insert (a vector(1024) column) rejects with a dimension mismatch. That insert
+// runs AFTER the cluster + article + source inserts inside the same transaction, so a correct
+// rollback must undo all of them. (Separate describe so the first suite's afterAll has already
+// deleted its 1024-dim embedding — otherwise decideCluster would hit the mismatch first, before
+// the transaction is ever entered, and we wouldn't be exercising the rollback path.)
+describe("stageItem transaction rollback (no orphaned rows on mid-transaction failure)", () => {
+  const original = snapshotEnv([...PROVIDER_KEYS, "EMBED_DIMENSIONS"]);
+  let server: ReturnType<typeof Bun.serve>;
+  let articleUrl: string;
+
+  beforeAll(() => {
+    for (const k of PROVIDER_KEYS) delete process.env[k];
+    process.env.EMBED_DIMENSIONS = "512"; // wrong dim → article_embeddings insert fails inside the tx
+    server = Bun.serve({ port: 0, fetch: () => new Response(FIXTURE_HTML, { headers: { "content-type": "text/html" } }) });
+    articleUrl = `http://localhost:${server.port}/article`;
+  });
+
+  afterAll(() => {
+    server.stop(true);
+    restoreEnv(original);
+  });
+
+  it("rolls back the article + cluster when the embedding insert fails inside the transaction", async () => {
+    const beforeArticles = await db.$count(articles);
+    const beforeClusters = await db.$count(clusters);
+
+    const item: RawItem = {
+      guid: "test:pipeline-run:rollback",
+      url: articleUrl,
+      title: TITLE,
+      contentSnippet: "La bourse régionale progresse fortement.",
+      isoDate: new Date().toISOString(),
+      contentHash: contentHash(TITLE, "rollback-variant"),
+    };
+
+    const { articleId, steps } = await stageItem(item, "Test Media", ["Économie", "Marchés"]);
+
+    // Aborted, and the abort happened at the transactional write step (not earlier), proving we
+    // actually entered and rolled back the transaction.
+    expect(articleId).toBeNull();
+    const failed = steps.find((s) => s.status === "failed");
+    expect(failed?.name).toBe("Dépôt en revue");
+
+    // The decisive assertion: no rows leaked past the rollback.
+    expect(await db.$count(articles)).toBe(beforeArticles);
+    expect(await db.$count(clusters)).toBe(beforeClusters);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Overlap guard (both layers).
+describe("runPipeline overlap guard", () => {
+  let manualRunId: string | null = null;
+
+  afterAll(async () => {
+    if (manualRunId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, manualRunId));
+  });
+
+  it("returns 'skipped' (app check) and the DB partial unique index blocks a 2nd running row", async () => {
+    const [run] = await db.insert(pipelineRuns).values({ triggeredBy: "scheduled", status: "running" }).returning({ id: pipelineRuns.id });
+    manualRunId = run.id;
+
+    expect(await hasRunningRun()).toBe(true);
+
+    // App-level backstop: runPipeline bails out before opening a second run.
+    const res = await runPipeline({ triggeredBy: "manual" });
+    expect(res).toEqual({ runId: null, status: "skipped", produced: 0 });
+
+    // DB-level interlock: a direct second "running" insert violates pipeline_runs_one_running.
+    // Drizzle wraps the pg error in DrizzleQueryError, so the SQLSTATE is on `.cause`.
+    let code: string | undefined;
+    try {
+      await db.insert(pipelineRuns).values({ triggeredBy: "manual", status: "running" });
+    } catch (e) {
+      code = (e as { code?: string }).code ?? (e as { cause?: { code?: string } }).cause?.code;
+    }
+    expect(code).toBe("23505");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Always-finalize: even when a feed can't be read, the run row must reach a terminal status (never
+// stuck "running") and the overlap slot must be freed. Uses a connection-refused feed URL so
+// parseFeed fails deterministically offline (no external network).
+describe("runPipeline always finalizes the run row", () => {
+  let feedId: string;
+  let runId: string | null = null;
+
+  beforeAll(async () => {
+    const [f] = await db.insert(feeds).values({
+      name: "Flux injoignable (test)", feedUrl: "http://127.0.0.1:1/rss", active: true,
+    }).returning({ id: feeds.id });
+    feedId = f.id;
+  });
+
+  afterAll(async () => {
+    if (runId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, runId)); // cascades pipeline_steps
+    await db.delete(feeds).where(eq(feeds.id, feedId));
+  });
+
+  it("finalizes to 'failed' with finishedAt set and frees the running slot when a feed can't be read", async () => {
+    expect(await hasRunningRun()).toBe(false);
+
+    const res = await runPipeline({ triggeredBy: "manual", feedIds: [feedId] });
+    runId = res.runId;
+
+    expect(res.runId).not.toBeNull();
+    expect(res.status).toBe("failed"); // the only feed failed to parse → allFeedsFailed
+    expect(res.produced).toBe(0);
+
+    const [row] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, res.runId!));
+    expect(row.status).toBe("failed");
+    expect(row.finishedAt).not.toBeNull(); // run row never left "running"
+
+    // A failed feed still records its own failed step for the operator.
+    const steps = await db.execute(sql`select 1 from pipeline_steps where run_id = ${res.runId!} and status = 'failed'`);
+    expect(steps.rows.length).toBeGreaterThan(0);
+
+    // Slot is free again — the next run is not blocked.
+    expect(await hasRunningRun()).toBe(false);
   });
 });
