@@ -42,12 +42,14 @@ describe("decideCluster (pgvector integration)", () => {
   it("attaches to the existing cluster for a near-identical embedding", async () => {
     const result = await decideCluster(near);
     expect(result.clusterId).toBe(clusterId);
+    expect(result.isNew).toBe(false);
     expect(result.bestScore).toBeGreaterThanOrEqual(0.83);
   });
 
   it("proposes a new cluster for an unrelated embedding", async () => {
     const result = await decideCluster(far);
     expect(result.clusterId).toBeNull();
+    expect(result.isNew).toBe(true);
     expect(result.bestScore).toBeLessThan(0.83);
   });
 });

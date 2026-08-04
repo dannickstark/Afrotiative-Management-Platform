@@ -9,7 +9,7 @@ export function chooseCluster(bestScore: number, threshold: number): "attach" | 
 type NearestRow = { cluster_id: string; score: number | string };
 
 // nearest existing article embedding within the recency window, by cosine distance (pgvector <=>)
-export async function decideCluster(embedding: number[]): Promise<{ clusterId: string | null; bestScore: number }> {
+export async function decideCluster(embedding: number[]): Promise<{ clusterId: string | null; isNew: boolean; bestScore: number }> {
   const cfg = getPipelineConfig();
   const since = new Date(Date.now() - cfg.windowHours * 3600_000);
   const vec = `[${embedding.join(",")}]`;
@@ -20,6 +20,6 @@ export async function decideCluster(embedding: number[]): Promise<{ clusterId: s
     order by e.embedding <=> ${vec}::vector asc limit 1`);
   const top = result.rows[0];
   const bestScore = top ? Number(top.score) : 0;
-  if (top && chooseCluster(bestScore, cfg.clusterThreshold) === "attach") return { clusterId: top.cluster_id, bestScore };
-  return { clusterId: null, bestScore };
+  if (top && chooseCluster(bestScore, cfg.clusterThreshold) === "attach") return { clusterId: top.cluster_id, isNew: false, bestScore };
+  return { clusterId: null, isNew: true, bestScore };
 }
