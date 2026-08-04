@@ -11,4 +11,11 @@ describe("buildArticleSchema", () => {
       tags: ["BRVM"], featuredImageUrl: null, imageCredit: null, imageSourceUrl: null,
       confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false } }).success).toBe(true);
   });
+
+  it("accepts any category string when categoryNames is empty (z.string() branch)", () => {
+    const s = buildArticleSchema([]);
+    expect(s.safeParse({ title: "Titre long", bodyHtml: "<p>x</p>", excerpt: "e", category: "N'importe quoi",
+      tags: [], featuredImageUrl: null, imageCredit: null, imageSourceUrl: null,
+      confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false } }).success).toBe(true);
+  });
 });

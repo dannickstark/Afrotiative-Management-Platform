@@ -1,0 +1,145 @@
+import { describe, it, expect, mock, spyOn, beforeEach } from "bun:test";
+import type { ArticleDraft } from "@/lib/ai/schema";
+
+// --- Mutable controls, reset per test; the module mocks below delegate to these. ---
+let buildModelImpl: (name: string, cfg: unknown) => unknown = () => null;
+let generateObjectImpl: (opts: { model: { name: string } }) => Promise<{ object: ArticleDraft }> =
+  async () => { throw new Error("generateObjectImpl not set"); };
+
+// Network-free: replace only the provider factory and the AI SDK (nothing else in the
+// suite imports these, so replacing them wholesale cannot leak into other test files).
+// The config is NOT module-mocked — Bun shares one module registry across the whole
+// `bun test` run, so a partial mock of pipeline-config would break other files that need
+// parsePipelineConfig. Instead we drive cfg.llmOrder via the REAL getPipelineConfig through
+// process.env.LLM_ORDER; buildModel is mocked, so provider-credential gating is irrelevant.
+// mockGenerateArticle + schema also remain REAL so the terminal-mock path is exercised for real.
+mock.module("@/lib/ai/providers", () => ({
+  buildModel: (name: string, cfg: unknown) => buildModelImpl(name, cfg),
+}));
+mock.module("ai", () => ({
+  generateObject: (opts: { model: { name: string } }) => generateObjectImpl(opts),
+}));
+
+// Imported AFTER the mocks are registered so its static imports resolve to the mocks.
+const { generateArticle } = await import("@/lib/ai/generate-article");
+
+function setOrder(order: string[]): void {
+  process.env.LLM_ORDER = order.join(",");
+}
+
+const goodDraft = (over: Partial<ArticleDraft> = {}): ArticleDraft => ({
+  title: "Titre suffisamment long",
+  bodyHtml: "<p>corps</p>",
+  excerpt: "extrait",
+  category: "Économie",
+  tags: ["BRVM"],
+  featuredImageUrl: null,
+  imageCredit: null,
+  imageSourceUrl: null,
+  confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false },
+  ...over,
+});
+
+const baseInput = {
+  sources: [{ mediaName: "Ecofin", url: "https://x", text: "La BRVM progresse fortement cette semaine." }],
+  candidateImages: [] as string[],
+  categories: ["Économie", "Marchés"],
+};
+
+describe("generateArticle fallback chain", () => {
+  const originalOrder = process.env.LLM_ORDER;
+  beforeEach(() => {
+    // Silence the observability console.warn emitted on provider failure.
+    spyOn(console, "warn").mockImplementation(() => {});
+    buildModelImpl = () => null;
+    generateObjectImpl = async () => { throw new Error("generateObjectImpl not set"); };
+    if (originalOrder === undefined) delete process.env.LLM_ORDER;
+    else process.env.LLM_ORDER = originalOrder;
+  });
+
+  it("skips an unconfigured provider (buildModel→null) and uses the next configured one", async () => {
+    setOrder(["openrouter", "omniroute"]);
+    buildModelImpl = (name) => (name === "openrouter" ? null : { name });
+    const seen: string[] = [];
+    generateObjectImpl = async (opts) => { seen.push(opts.model.name); return { object: goodDraft({ category: "Marchés" }) }; };
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("omniroute");
+    expect(seen).toEqual(["omniroute"]); // generateObject never invoked for the null provider
+    expect(r.draft.category).toBe("Marchés");
+  });
+
+  it("falls through to the next provider when generateObject throws", async () => {
+    setOrder(["openrouter", "omniroute"]);
+    buildModelImpl = (name) => ({ name });
+    generateObjectImpl = async (opts) => {
+      if (opts.model.name === "openrouter") throw new Error("quota exceeded");
+      return { object: goodDraft({ category: "Marchés" }) };
+    };
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("omniroute");
+    expect(r.draft.category).toBe("Marchés");
+  });
+
+  it("returns the deterministic mock with via='mock' when every provider fails", async () => {
+    setOrder(["openrouter", "omniroute"]);
+    buildModelImpl = (name) => ({ name });
+    generateObjectImpl = async () => { throw new Error("provider down"); };
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("mock");
+    expect(r.draft.title.startsWith("[MOCK]")).toBe(true);
+    expect(r.draft.category).toBe("Économie"); // mock uses categories[0]
+    expect(r.draft.confidence.categoryUncertain).toBe(true); // mock is always low-confidence
+  });
+
+  it("returns via=<provider name> and that provider's object on success", async () => {
+    setOrder(["openrouter", "omniroute"]);
+    buildModelImpl = (name) => ({ name });
+    generateObjectImpl = async () => ({ object: goodDraft({ title: "Article réel produit par le modèle" }) });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("openrouter");
+    expect(r.draft.title).toBe("Article réel produit par le modèle");
+  });
+
+  it("sanitizeDraft nulls a featuredImageUrl that is not a supplied candidate (and its image fields)", async () => {
+    setOrder(["openrouter"]);
+    buildModelImpl = (name) => ({ name });
+    generateObjectImpl = async () => ({
+      object: goodDraft({
+        featuredImageUrl: "https://not-a-candidate.example/x.jpg",
+        imageCredit: "Quelqu'un",
+        imageSourceUrl: "https://src.example",
+        confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false },
+      }),
+    });
+
+    const r = await generateArticle({ ...baseInput, candidateImages: [] });
+    expect(r.draft.featuredImageUrl).toBeNull();
+    expect(r.draft.imageCredit).toBeNull();
+    expect(r.draft.imageSourceUrl).toBeNull();
+    expect(r.draft.confidence.imageMissing).toBe(true);
+  });
+
+  it("sanitizeDraft keeps a featuredImageUrl that IS a supplied candidate", async () => {
+    const cand = "https://cdn.example/img.jpg";
+    setOrder(["openrouter"]);
+    buildModelImpl = (name) => ({ name });
+    generateObjectImpl = async () => ({
+      object: goodDraft({
+        featuredImageUrl: cand,
+        imageCredit: "Ecofin",
+        imageSourceUrl: "https://src.example",
+        confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false },
+      }),
+    });
+
+    const r = await generateArticle({ ...baseInput, candidateImages: [cand] });
+    expect(r.draft.featuredImageUrl).toBe(cand);
+    expect(r.draft.imageCredit).toBe("Ecofin");
+    expect(r.draft.imageSourceUrl).toBe("https://src.example");
+    expect(r.draft.confidence.imageMissing).toBe(false);
+  });
+});
