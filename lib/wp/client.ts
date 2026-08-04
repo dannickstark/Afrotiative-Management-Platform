@@ -11,7 +11,10 @@ export class WordPressError extends Error {
   }
 }
 
-export type WpTerm = { id: number; name: string };
+// `count` is additive (Task 4 / taxonomy sync): WordPress's term list/search endpoints already
+// return it (number of posts tagged with the term) — existing callers (resolveOrCreate) never
+// read it, so this widening is backward compatible.
+export type WpTerm = { id: number; name: string; count?: number };
 
 export type WpPostStatus = "publish" | "draft" | "pending" | "future" | "private";
 

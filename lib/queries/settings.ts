@@ -18,6 +18,8 @@ export async function getMembers() {
   }).from(user).orderBy(user.createdAt);
 }
 
+export type Taxonomy = Awaited<ReturnType<typeof getTaxonomy>>;
+
 export async function getTaxonomy() {
   const [categories, tags] = await Promise.all([
     db.select().from(wpCategories).orderBy(wpCategories.name),
