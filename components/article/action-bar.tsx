@@ -36,13 +36,20 @@ export function ActionBar({
   const disabled = readOnly || isPending;
   const displayTitle = title.trim() || "Sans titre";
 
+  // Shared with Approve/Schedule below so they always act on the live form
+  // state rather than the last-persisted DB row (see handleApprovePublish /
+  // handleSchedule).
+  function saveCurrent() {
+    return saveDraft({
+      id: articleId, title, bodyHtml, excerpt, categoryId, tags,
+      featuredImageUrl, imageCredit, imageSourceUrl,
+    });
+  }
+
   function handleSave() {
     startTransition(async () => {
       try {
-        await saveDraft({
-          id: articleId, title, bodyHtml, excerpt, categoryId, tags,
-          featuredImageUrl, imageCredit, imageSourceUrl,
-        });
+        await saveCurrent();
         toast.success(`« ${displayTitle} » enregistré.`);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Échec de l'enregistrement.");
@@ -75,6 +82,10 @@ export function ActionBar({
   function handleApprovePublish() {
     startTransition(async () => {
       try {
+        // Persist the side panel's in-memory edits first: approveAndPublish
+        // re-reads the DB row for its category/image-credit checks, so an
+        // unsaved category pick would otherwise still fail validation.
+        await saveCurrent();
         const res = await approveAndPublish(articleId);
         toast.success(res.message);
         router.push("/queue");
@@ -88,6 +99,9 @@ export function ActionBar({
     if (!scheduleAt) return;
     startTransition(async () => {
       try {
+        // Same reasoning as handleApprovePublish: save the live form state
+        // before scheduling so it acts on what's on screen, not the last save.
+        await saveCurrent();
         await schedule({ id: articleId, at: new Date(scheduleAt) });
         toast.success(`« ${displayTitle} » planifié pour le ${new Date(scheduleAt).toLocaleString("fr-FR")}.`);
         setScheduleOpen(false);
