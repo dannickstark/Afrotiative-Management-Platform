@@ -9,6 +9,8 @@ export async function getFeeds() {
   return db.select().from(feeds).orderBy(feeds.name);
 }
 
+export type Member = Awaited<ReturnType<typeof getMembers>>[number];
+
 export async function getMembers() {
   return db.select({
     id: user.id, name: user.name, email: user.email, role: user.role,

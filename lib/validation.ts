@@ -35,3 +35,23 @@ export function validateFeedInput(input: unknown) {
     ? { ok: true as const, data: r.data }
     : { ok: false as const, message: r.error.issues[0]?.message ?? "Entrée invalide" };
 }
+
+export const roleEnum = z.enum(["admin", "editor", "journalist"]);
+
+export const memberSchema = z.object({
+  email: z.string().email("Email invalide"),
+  name: z.string().min(2, "Nom trop court"),
+  role: roleEnum,
+});
+export type MemberInput = z.infer<typeof memberSchema>;
+
+// Same reasoning as validateFeedInput above: kept out of lib/actions/team-actions.ts because that
+// file needs a file-level "use server" directive (so components/settings/add-member-dialog.tsx, a
+// Client Component, can import addMember/setMemberRole/etc. directly), and Next.js 16 only allows
+// async-function exports from such a file.
+export function validateMemberInput(input: unknown) {
+  const r = memberSchema.safeParse(input);
+  return r.success
+    ? { ok: true as const, data: r.data }
+    : { ok: false as const, message: r.error.issues[0]?.message ?? "Entrée invalide" };
+}
