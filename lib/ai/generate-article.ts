@@ -23,14 +23,17 @@ function prompt(input: GenerateInput): string {
 
 // Post-generation guard applied UNIFORMLY (real provider result AND mock): a featuredImageUrl
 // that is not one of the supplied candidateImages is forced to null (Zod's `.url()` cannot catch
-// this — it only validates URL syntax), along with its dependent image fields.
+// this — it only validates URL syntax), along with its dependent image fields. The schema's image
+// fields are `.nullish()` (providers often omit them outright), so the `?? null` coercions below
+// also collapse `undefined` to `null` — the persisted/returned draft never carries `undefined` on
+// these fields, keeping the DB insert in stages.ts clean.
 function sanitizeDraft(draft: ArticleDraft, candidateImages: string[]): ArticleDraft {
   const img = draft.featuredImageUrl && candidateImages.includes(draft.featuredImageUrl) ? draft.featuredImageUrl : null;
   return {
     ...draft,
     featuredImageUrl: img,
-    imageCredit: img ? draft.imageCredit : null,
-    imageSourceUrl: img ? draft.imageSourceUrl : null,
+    imageCredit: img ? (draft.imageCredit ?? null) : null,
+    imageSourceUrl: img ? (draft.imageSourceUrl ?? null) : null,
     confidence: { ...draft.confidence, imageMissing: img ? draft.confidence.imageMissing : true },
   };
 }

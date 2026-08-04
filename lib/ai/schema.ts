@@ -14,9 +14,14 @@ export function buildArticleSchema(categoryNames: string[]) {
     excerpt: z.string(),
     category,
     tags: z.array(z.string()).max(8),
-    featuredImageUrl: z.string().url().nullable(),
-    imageCredit: z.string().nullable(),
-    imageSourceUrl: z.string().url().nullable(),
+    // .nullish() (= .nullable().optional()) rather than .nullable(): real providers
+    // (OpenRouter/OpenAI structured output) frequently OMIT these keys entirely instead of
+    // sending null when there's no image, and a merely-.nullable() field still requires the
+    // key to be present, so omission fails validation and needlessly falls through to the
+    // mock. sanitizeDraft() in generate-article.ts normalizes undefined to null before persist.
+    featuredImageUrl: z.string().url().nullish(),
+    imageCredit: z.string().nullish(),
+    imageSourceUrl: z.string().url().nullish(),
     confidence: confidenceSchema,
   });
 }

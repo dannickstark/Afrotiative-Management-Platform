@@ -123,6 +123,64 @@ describe("generateArticle fallback chain", () => {
     expect(r.draft.confidence.imageMissing).toBe(true);
   });
 
+  it("sanitizeDraft persists null (never undefined) when the provider OMITS the image fields entirely", async () => {
+    // Simulates a real provider (OpenRouter/OpenAI structured output) that omits
+    // featuredImageUrl/imageCredit/imageSourceUrl rather than sending null — the schema's
+    // `.nullish()` fields let this validate, and sanitizeDraft must still normalize the
+    // persisted draft to `null`, never leave `undefined` on it (clean DB insert in stages.ts).
+    setOrder(["openrouter"]);
+    buildModelImpl = (name) => ({ name });
+    const omittedImageDraft = {
+      title: "Titre suffisamment long",
+      bodyHtml: "<p>corps</p>",
+      excerpt: "extrait",
+      category: "Économie",
+      tags: ["BRVM"],
+      // featuredImageUrl, imageCredit, imageSourceUrl intentionally absent from this object
+      confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false },
+    } as unknown as ArticleDraft;
+    generateObjectImpl = async () => ({ object: omittedImageDraft });
+
+    const r = await generateArticle({ ...baseInput, candidateImages: [] });
+    expect(r.via).toBe("openrouter");
+    expect(r.draft.featuredImageUrl).toBeNull();
+    expect(r.draft.imageCredit).toBeNull();
+    expect(r.draft.imageSourceUrl).toBeNull();
+    // Explicitly assert `undefined` never leaks through — toBeNull() alone would also pass for
+    // undefined in some matcher setups, so also check the key is present with value null.
+    expect("featuredImageUrl" in r.draft && r.draft.featuredImageUrl === null).toBe(true);
+    expect("imageCredit" in r.draft && r.draft.imageCredit === null).toBe(true);
+    expect("imageSourceUrl" in r.draft && r.draft.imageSourceUrl === null).toBe(true);
+    expect(r.draft.confidence.imageMissing).toBe(true);
+  });
+
+  it("sanitizeDraft persists null (never undefined) for imageSourceUrl when the provider sets an image+credit but omits the source URL", async () => {
+    // The exact real-world shape reported: model picks a candidate image and sets imageCredit,
+    // but omits imageSourceUrl outright instead of sending null.
+    const cand = "https://cdn.example/img.jpg";
+    setOrder(["openrouter"]);
+    buildModelImpl = (name) => ({ name });
+    const partialImageDraft = {
+      title: "Titre suffisamment long",
+      bodyHtml: "<p>corps</p>",
+      excerpt: "extrait",
+      category: "Économie",
+      tags: ["BRVM"],
+      featuredImageUrl: cand,
+      imageCredit: "Ecofin",
+      // imageSourceUrl intentionally absent
+      confidence: { categoryUncertain: false, imageMissing: false, clusterUncertain: false },
+    } as unknown as ArticleDraft;
+    generateObjectImpl = async () => ({ object: partialImageDraft });
+
+    const r = await generateArticle({ ...baseInput, candidateImages: [cand] });
+    expect(r.via).toBe("openrouter");
+    expect(r.draft.featuredImageUrl).toBe(cand);
+    expect(r.draft.imageCredit).toBe("Ecofin");
+    expect(r.draft.imageSourceUrl).toBeNull();
+    expect("imageSourceUrl" in r.draft && r.draft.imageSourceUrl === null).toBe(true);
+  });
+
   it("sanitizeDraft keeps a featuredImageUrl that IS a supplied candidate", async () => {
     const cand = "https://cdn.example/img.jpg";
     setOrder(["openrouter"]);
