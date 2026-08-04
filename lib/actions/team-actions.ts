@@ -63,11 +63,16 @@ export async function disableMember(userId: string) {
   const me = await guard();
   if (userId === me.id) return { ok: false as const, message: "Vous ne pouvez pas désactiver votre propre compte." };
 
-  await db.update(user).set({ banned: true }).where(eq(user.id, userId));
-  // A ban only blocks *future* Better-Auth sign-ins — it doesn't invalidate sessions already
-  // issued. Delete this user's session rows too, so a disabled member is logged out immediately
-  // rather than staying signed in until their session naturally expires.
-  await db.delete(session).where(eq(session.userId, userId));
+  // Atomic: ban + session revoke must both land or neither. A ban only blocks *future*
+  // Better-Auth sign-ins — it doesn't invalidate sessions already issued (getSession() doesn't
+  // re-check `banned` on an existing session). Deleting this user's session rows is what enforces
+  // the brief's "immediate logout" guarantee, so if the process were interrupted between the two
+  // writes the user could stay logged in for up to the 7-day session lifetime. Wrapping both in a
+  // single transaction closes that gap (same db.transaction() pattern as lib/pipeline/stages.ts).
+  await db.transaction(async (tx) => {
+    await tx.update(user).set({ banned: true }).where(eq(user.id, userId));
+    await tx.delete(session).where(eq(session.userId, userId));
+  });
 
   revalidatePath("/settings/team");
   return { ok: true as const };
