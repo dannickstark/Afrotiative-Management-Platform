@@ -18,6 +18,9 @@ type StepRow = {
   durationMs: number | null;
   errorMessage?: string;
   errorTechnical?: string;
+  // Attributes a step to the raw_items row it was produced for, so the run-detail view can group
+  // steps by item. null for feed-/run-level steps (RSS read, feed failure, cap-reached).
+  rawItemId?: string | null;
 };
 
 // Drizzle wraps driver errors in DrizzleQueryError, so the pg SQLSTATE lives on `.cause` (not the
@@ -126,14 +129,14 @@ export async function runPipeline(opts: { triggeredBy: RunTrigger; feedIds?: str
         // where it would skip finalization and strand the run "running".
         try {
           if (await isSeen(feed.id, item)) continue; // duplicate — not an attempted staging
-          await recordRawItem(feed.id, item);
+          const rawItemId = await recordRawItem(feed.id, item);
           newItems++;
 
           const { articleId, steps } = await stageItem(item, feed.name, categoryNames);
           for (const s of steps) {
             stepRows.push({
               runId, name: s.name, status: s.status, durationMs: s.durationMs,
-              errorMessage: s.errorMessage, errorTechnical: s.errorTechnical,
+              errorMessage: s.errorMessage, errorTechnical: s.errorTechnical, rawItemId,
             });
           }
           if (articleId) produced++;

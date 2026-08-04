@@ -197,6 +197,9 @@ export const pipelineSteps = pgTable("pipeline_steps", {
   durationMs: integer("duration_ms"),
   errorMessage: text("error_message"),   // human-readable
   errorTechnical: text("error_technical"), // stack/detail behind "voir détails"
+  // Per-item attribution for the run-detail view: null for feed-/run-level steps (RSS read, feed
+  // failure, cap-reached); set to the raw_items.id for steps produced while staging one item.
+  rawItemId: uuid("raw_item_id").references(() => rawItems.id, { onDelete: "set null" }),
 });
 
 // ---- distributions (pluggable publish targets) ----

@@ -15,6 +15,13 @@
       "when": 1785832641389,
       "tag": "0001_eminent_rafael_vega",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785843252871,
+      "tag": "0002_tearful_deadpool",
+      "breakpoints": true
     }
   ]
 }
