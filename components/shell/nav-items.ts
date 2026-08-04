@@ -7,6 +7,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/queue", label: "File de revue", icon: Inbox, badgeKey: "pending" },
   { href: "/calendar", label: "Calendrier", icon: Calendar },
   { href: "/published", label: "Articles publiés", icon: Newspaper },
-  { href: "/runs", label: "Exécutions", icon: Activity },
+  { href: "/runs", label: "Exécutions", icon: Activity, roles: ["admin", "editor"] },
   { href: "/settings/feeds", label: "Réglages", icon: Settings, roles: ["admin", "editor"] },
 ];

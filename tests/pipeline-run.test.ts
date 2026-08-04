@@ -224,3 +224,40 @@ describe("runPipeline always finalizes the run row", () => {
     expect(await hasRunningRun()).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stale-run reaper: a hard process kill (route maxDuration timeout, deploy, OOM) skips
+// runPipeline's try/finally, leaving a pipeline_runs row stuck "running" forever — after which
+// hasRunningRun() would always be true and the pipeline_runs_one_running unique index would
+// block every future run with no recovery. hasRunningRun() must reclaim (finalize to "failed")
+// any "running" row older than RUN_STALE_MINUTES (default 15) before answering. Network-free:
+// only touches the real Neon DB, no external HTTP.
+describe("hasRunningRun reclaims stale running rows", () => {
+  let staleRunId: string | null = null;
+
+  afterAll(async () => {
+    if (staleRunId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, staleRunId));
+  });
+
+  it("finalizes a 'running' row older than the stale threshold to 'failed', freeing the slot", async () => {
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "scheduled",
+      status: "running",
+      startedAt: new Date(Date.now() - 30 * 60_000), // 30 min ago — past the 15-min default threshold
+    }).returning({ id: pipelineRuns.id });
+    staleRunId = run.id;
+
+    // Precondition: the raw row really is "running" before the reclaim runs.
+    const [before] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, staleRunId));
+    expect(before.status).toBe("running");
+    expect(before.finishedAt).toBeNull();
+
+    // hasRunningRun() reclaims stale rows first, then answers — a stale row must not count as
+    // "genuinely running", so this must return false even though a "running" row exists.
+    expect(await hasRunningRun()).toBe(false);
+
+    const [after] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, staleRunId));
+    expect(after.status).toBe("failed");
+    expect(after.finishedAt).not.toBeNull();
+  });
+});

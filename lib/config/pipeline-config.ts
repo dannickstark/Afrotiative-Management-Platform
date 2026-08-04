@@ -27,6 +27,11 @@ export function parsePipelineConfig(env: Record<string, string | undefined>) {
     maxItemsPerRun: num(env.MAX_ITEMS_PER_RUN, 20),
     windowHours: num(env.CLUSTER_WINDOW_HOURS, 72),
     triggerSecret: env.PIPELINE_TRIGGER_SECRET,
+    // A "running" pipeline_runs row older than this is presumed abandoned by a hard process
+    // kill (route maxDuration timeout, a deploy, OOM) that skipped runPipeline's try/finally —
+    // reclaimStaleRuns() finalizes it to "failed" so the pipeline_runs_one_running unique index
+    // doesn't block every future run forever. Default is well above the route's 5-minute cap.
+    runStaleMinutes: num(env.RUN_STALE_MINUTES, 15),
   };
 }
 

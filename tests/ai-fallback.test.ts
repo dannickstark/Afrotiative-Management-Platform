@@ -1,5 +1,23 @@
-import { describe, it, expect, mock, spyOn, beforeEach } from "bun:test";
+import { describe, it, expect, mock, spyOn, beforeEach, afterAll } from "bun:test";
 import type { ArticleDraft } from "@/lib/ai/schema";
+
+// Capture the REAL implementations BEFORE mock.module() below swaps the registry. This is what
+// lets afterAll (below) genuinely restore them: empirically, Bun 1.3.14's mock.restore() does
+// NOT undo mock.module() — it only resets spyOn()-created mocks, so a module mocked via
+// mock.module() stays mocked for the rest of the `bun test` process even after mock.restore().
+// Left unaddressed, that leaks into every other file that imports these modules afterwards —
+// notably tests/pipeline-run.test.ts's "network-free E2E" stageItem test, whose generateArticle()
+// call would then resolve these stubs (via the last values buildModelImpl/generateObjectImpl were
+// left at) instead of exercising the real generate→mock fallback path.
+// NOTE: destructure the function VALUES here, don't keep the namespace objects. Per Bun's own
+// mock.module docs, "If the module is already loaded, exports are overwritten with the return
+// value of factory" — i.e. mock.module() mutates the SAME exports object in place rather than
+// swapping in a new one. Holding onto `await import(...)` 's namespace object and reading
+// `.buildModel` off it later (in afterAll) would therefore yield the MOCKED function, not the
+// original — destructuring right here copies the real function reference into a plain variable
+// that mock.module() can no longer touch.
+const { buildModel: realBuildModel } = await import("@/lib/ai/providers");
+const { generateObject: realGenerateObject } = await import("ai");
 
 // --- Mutable controls, reset per test; the module mocks below delegate to these. ---
 let buildModelImpl: (name: string, cfg: unknown) => unknown = () => null;
@@ -13,6 +31,11 @@ let generateObjectImpl: (opts: { model: { name: string } }) => Promise<{ object:
 // parsePipelineConfig. Instead we drive cfg.llmOrder via the REAL getPipelineConfig through
 // process.env.LLM_ORDER; buildModel is mocked, so provider-credential gating is irrelevant.
 // mockGenerateArticle + schema also remain REAL so the terminal-mock path is exercised for real.
+//
+// Both factories are a stable indirection (they always call through buildModelImpl /
+// generateObjectImpl, never inline the test-of-the-moment logic), so repointing those two
+// variables at the real functions in afterAll (below) genuinely restores real behavior for every
+// current AND future importer — without needing Bun to support "un-mocking" a module.
 mock.module("@/lib/ai/providers", () => ({
   buildModel: (name: string, cfg: unknown) => buildModelImpl(name, cfg),
 }));
@@ -53,6 +76,22 @@ describe("generateArticle fallback chain", () => {
     spyOn(console, "warn").mockImplementation(() => {});
     buildModelImpl = () => null;
     generateObjectImpl = async () => { throw new Error("generateObjectImpl not set"); };
+    if (originalOrder === undefined) delete process.env.LLM_ORDER;
+    else process.env.LLM_ORDER = originalOrder;
+  });
+
+  // Bun shares ONE module registry across the whole `bun test` run, so the mock.module("ai", …)
+  // and mock.module("@/lib/ai/providers", …) stubs registered above the describe block would
+  // otherwise leak into every other test file that imports those modules afterwards — notably
+  // tests/pipeline-run.test.ts's "network-free E2E" stageItem test, whose generateArticle() call
+  // would then resolve these leaked stubs instead of exercising the real generate→mock fallback
+  // path. mock.restore() only undoes the spyOn(console, "warn") mock (module mocks are not
+  // restorable in this Bun version) — so real restoration comes from repointing the
+  // buildModelImpl/generateObjectImpl indirection at the real functions captured above.
+  afterAll(() => {
+    mock.restore();
+    buildModelImpl = realBuildModel as unknown as typeof buildModelImpl;
+    generateObjectImpl = realGenerateObject as unknown as typeof generateObjectImpl;
     if (originalOrder === undefined) delete process.env.LLM_ORDER;
     else process.env.LLM_ORDER = originalOrder;
   });

@@ -4,6 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { RunNow } from "@/components/pipeline/run-now";
 import { formatDate, pipelineStatusLabel, type PipelineStatus } from "@/lib/format";
+import { requireUser } from "@/lib/session";
+import { requirePermission } from "@/lib/rbac";
 
 const TRIGGER_LABEL: Record<string, string> = { manual: "Manuel", scheduled: "Programmé" };
 
@@ -15,6 +17,9 @@ const STATUS_STYLE: Record<PipelineStatus, string> = {
 };
 
 export default async function RunsPage() {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "read");
+
   const rows = await db.select({
     id: pipelineRuns.id,
     triggeredBy: pipelineRuns.triggeredBy,
