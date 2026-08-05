@@ -82,19 +82,10 @@ export async function getActiveRun() {
 export type ActiveRun = NonNullable<Awaited<ReturnType<typeof getActiveRun>>>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SP7 — runs list client-side filter bar.
-//
-// Pure so it's unit-testable without a DOM/DB (mirrors groupSteps above): the runs-view.tsx client
-// component just calls this from a useMemo over the ~50 already-loaded rows, no re-fetch involved.
-// Generic over the minimal shape it needs so it isn't coupled to runs-view.tsx's full RunRow type.
-export function filterRuns<T extends { status: string; triggeredBy: string }>(
-  rows: readonly T[],
-  filters: { status: string; trigger: string },
-): T[] {
-  return rows.filter((r) =>
-    (filters.status === "all" || r.status === filters.status)
-    && (filters.trigger === "all" || r.triggeredBy === filters.trigger));
-}
+// SP7 — runs list client-side filter bar. The pure helper itself lives in ./runs-filter (a DB-free
+// module) so the "use client" runs-view.tsx can import it without dragging `@/db`/`pg` into the
+// browser bundle; re-exported here so server code and tests keep importing it from this module.
+export { filterRuns } from "./runs-filter";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SP7 — history trends strip (components/pipeline/run-trends.tsx), derived entirely from existing

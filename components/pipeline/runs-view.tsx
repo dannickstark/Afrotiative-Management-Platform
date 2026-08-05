@@ -11,7 +11,8 @@ import {
   formatDate, formatRunDuration, pipelineStatusLabel, PIPELINE_STATUS_LABEL, type PipelineStatus,
 } from "@/lib/format";
 import { getRunDetailAction } from "@/lib/actions/pipeline-actions";
-import { filterRuns, type RunDetail, type ActiveRun, type RunTrendsSummary, type TrendDay } from "@/lib/queries/runs";
+import { filterRuns } from "@/lib/queries/runs-filter";
+import type { RunDetail, ActiveRun, RunTrendsSummary, TrendDay } from "@/lib/queries/runs";
 
 // SP7: "reprocess" (a single failed item relaunched from the run-detail drawer, see
 // lib/actions/pipeline-actions.ts's reprocessRawItem) previously fell through to the bare DB value
