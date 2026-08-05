@@ -127,6 +127,11 @@ export const articles = pgTable("articles", {
   aiAuthor: boolean("ai_author").notNull().default(true),
   createdBy: text("created_by").references(() => user.id),
   clusterId: uuid("cluster_id").references(() => clusters.id),
+  // 0-100 quality score from lib/pipeline/score.ts (corroboration, cluster cohesion,
+  // completeness, image presence, confidence penalties — see that file for the weighting).
+  // Nullable: null until computed. SP4 Task 6 wires this into stageItem's insert; SP6's
+  // auto-publish gate reads it against pipelineSettings.scoreThreshold.
+  score: integer("score"),
   confidenceFlags: jsonb("confidence_flags").$type<{
     categoryUncertain?: boolean; imageMissing?: boolean; clusterUncertain?: boolean;
     // Set by the pipeline when a provider outage forced a mock LLM/embedding fallback, so the
