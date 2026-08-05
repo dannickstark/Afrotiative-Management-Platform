@@ -19,7 +19,9 @@ import type { RawItem } from "@/lib/rss/parse-feed";
 const STORY_GROUP_CAP = 6;
 
 export type RunTrigger = "manual" | "scheduled";
-export type RunStatus = "success" | "partial" | "failed" | "skipped";
+// SP5 Task 3 adds "cancelled" — a run stopped mid-flight via cancelRun(), distinct from the
+// computed success/partial/failed tally (which is never used when the run was cancelled).
+export type RunStatus = "success" | "partial" | "failed" | "skipped" | "cancelled";
 export type RunResult = { runId: string | null; status: RunStatus; produced: number };
 
 // Drizzle wraps driver errors in DrizzleQueryError, so the pg SQLSTATE lives on `.cause` (not the
@@ -68,6 +70,22 @@ async function setProgress(runId: string, fields: Partial<{
   currentStage: string | null; currentItem: string | null; feedsRead: number;
 }>): Promise<void> {
   try { await db.update(pipelineRuns).set(fields).where(eq(pipelineRuns.id, runId)); } catch { /* observability only */ }
+}
+
+// SP5 Task 3 — cooperative cancel check: a FRESH re-read of this run's cancel_requested flag,
+// never a closed-over local. The flag is flipped out-of-process by the cancelRun() action while
+// executeRun is already mid-flight (a detached promise), so the only way executeRun can learn
+// about it is by polling the row at safe boundaries. Best-effort like setProgress: a transient
+// read failure must never abort (or falsely cancel) an otherwise healthy run, so it degrades to
+// "not cancelled" rather than throwing.
+async function isCancelRequested(runId: string): Promise<boolean> {
+  try {
+    const [row] = await db.select({ cancelRequested: pipelineRuns.cancelRequested })
+      .from(pipelineRuns).where(eq(pipelineRuns.id, runId));
+    return row?.cancelRequested ?? false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -125,6 +143,10 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
   let feedsRead = 0, feedsFailed = 0, newItems = 0, produced = 0, itemFailures = 0, overCap = 0;
   let capHit = false, targetFeedsLength = 0;
   let status: RunStatus = "failed";
+  // SP5 Task 3: set the moment a cooperative cancel check observes cancel_requested=true. Declared
+  // here (not inside the try) so the `finally` below can see it and write the terminal status
+  // "cancelled" instead of the computed success/partial/failed tally.
+  let cancelled = false;
 
   try {
     // Inside the try (not before it): if getPipelineSettings() ever throws, the finally below must
@@ -191,9 +213,21 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
 
     await setProgress(runId, { phase: "processing_items", totalItems: groups.length, processedItems: 0 });
 
+    // SP5 Task 3 — cooperative cancel check (a): safe boundary right after phase 1 (read + collect
+    // + group), before phase 2 begins processing stories.
+    cancelled = await isCancelRequested(runId);
+
     // ---- Phase 2: process each STORY (group) — synthesize ONE multi-source article per group ----
     let processed = 0;
     for (const group of groups) {
+      if (cancelled) break;
+      // SP5 Task 3 — cooperative cancel check (b): safe boundary at the top of each story
+      // iteration, so a cancelRun() issued mid-phase-2 (between two stories) stops further
+      // processing. Already-produced articles from earlier stories in this run stay as-is
+      // (they're "pending"); this story's own members were never recordRawItem()'d, so — like
+      // every other unprocessed story — they resurface as fresh candidates on the next run.
+      if (await isCancelRequested(runId)) { cancelled = true; break; }
+
       const primary = group.members[0];
       await setProgress(runId, { currentItem: primary.item.title, currentStage: null });
 
@@ -366,18 +400,32 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       });
     }
 
-    // Status tally:
-    //  - failed  = every feed failed to parse, OR items were attempted and NONE succeeded.
-    //  - partial = some feeds/items failed (or the cap was hit) but at least one item was produced.
-    //  - success = no failures at all — including a quiet run where every item was a duplicate
-    //              (itemsAttempted === 0), which must read as success, not failed.
-    const itemsAttempted = produced + itemFailures;
-    const allFeedsFailed = targetFeedsLength > 0 && feedsFailed === targetFeedsLength;
-    const allItemsFailed = itemsAttempted > 0 && produced === 0;
-    status =
-      allFeedsFailed || allItemsFailed ? "failed"
-      : feedsFailed > 0 || itemFailures > 0 || capHit ? "partial"
-      : "success";
+    if (cancelled) {
+      // SP5 Task 3: a neutral, best-effort observability step — recorded here (still inside the
+      // outer try) rather than in the `finally`, so a failure to insert it can never interfere with
+      // finalization. "partial" (not "failed"): a cancel is a deliberate admin action, not an error.
+      // Already-produced articles from stories processed before the cancel stay as they are
+      // (they're "pending" — the human-review barrier is untouched); this run's remaining/unstarted
+      // stories were never recordRawItem()'d, so they resurface as fresh candidates next run.
+      await insertStep({
+        runId, name: "Exécution annulée par l'utilisateur", status: "partial", durationMs: null,
+        errorMessage:
+          `L'exécution a été annulée par l'utilisateur après le traitement de ${processed} histoire(s) sur ${groups.length}.`,
+      });
+    } else {
+      // Status tally:
+      //  - failed  = every feed failed to parse, OR items were attempted and NONE succeeded.
+      //  - partial = some feeds/items failed (or the cap was hit) but at least one item was produced.
+      //  - success = no failures at all — including a quiet run where every item was a duplicate
+      //              (itemsAttempted === 0), which must read as success, not failed.
+      const itemsAttempted = produced + itemFailures;
+      const allFeedsFailed = targetFeedsLength > 0 && feedsFailed === targetFeedsLength;
+      const allItemsFailed = itemsAttempted > 0 && produced === 0;
+      status =
+        allFeedsFailed || allItemsFailed ? "failed"
+        : feedsFailed > 0 || itemFailures > 0 || capHit ? "partial"
+        : "success";
+    }
   } catch (e) {
     // Catastrophic error outside the per-feed/per-item guards (e.g. the feeds/category query).
     status = "failed";
@@ -386,8 +434,14 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       errorMessage: `L'exécution du pipeline a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
     });
   } finally {
+    // SP5 Task 3: a cancelled run ALWAYS finalizes to the "cancelled" terminal status — never the
+    // computed success/partial/failed tally — even if something unexpected threw after the cancel
+    // was observed (the outer `catch` above would otherwise have left `status` as "failed").
+    if (cancelled) status = "cancelled";
     // Always land a terminal status AND clear the live pointer so a late poll can't show a stale
-    // stage — this is what guarantees the row never stays "running".
+    // stage — this is what guarantees the row never stays "running" (or, for a cancelled run,
+    // "paused"-adjacent/parked: finishedAt below frees the pipeline_runs_one_running interlock slot
+    // exactly like any other terminal status).
     await db.update(pipelineRuns).set({
       status, feedsRead, newItems, published: 0, finishedAt: new Date(),
       phase: "finalizing", currentStage: null, currentItem: null,

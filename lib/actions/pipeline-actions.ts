@@ -72,6 +72,36 @@ export async function getActiveRunAction(): Promise<ActiveRun | null> {
 }
 
 /**
+ * SP5 Task 3 (Stop): sets cancel_requested=true on the given run IF it is currently active
+ * (running OR paused — i.e. finished_at IS NULL). executeRun (lib/pipeline/run.ts) is a detached
+ * promise, so this is the only way to signal it — it polls cancel_requested at safe boundaries
+ * (after phase 1 / before phase 2, and at the top of each story iteration) and, once observed,
+ * finalizes the run to the terminal "cancelled" status instead of the computed success/partial/
+ * failed tally. No-ops with a friendly French message if the run is already terminal (or doesn't
+ * exist) — never throws for that case.
+ */
+export async function cancelRun(runId: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "configure");
+
+  // Dynamic import (kept AFTER the RBAC check above): mirrors this file's other actions — keeps
+  // pipeline-adjacent value-level imports out of this "use server" module's static graph.
+  const { db, pipelineRuns } = await import("@/db");
+  const { and, eq, isNull } = await import("drizzle-orm");
+
+  const updated = await db.update(pipelineRuns)
+    .set({ cancelRequested: true })
+    .where(and(eq(pipelineRuns.id, runId), isNull(pipelineRuns.finishedAt)))
+    .returning({ id: pipelineRuns.id });
+
+  if (updated.length === 0) return { ok: false as const, message: "L'exécution est déjà terminée." };
+
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/runs");
+  return { ok: true as const };
+}
+
+/**
  * Retries one stored raw_items row through the stage chain WITHOUT dedup: unlike the normal
  * ingestion path (isSeen/recordRawItem in lib/pipeline/dedup.ts), this operates directly on the
  * already-recorded row, so a previously-failed or previously-published item can be re-run on
