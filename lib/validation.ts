@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Cron } from "croner";
 
 export const saveDraftSchema = z.object({
   id: z.string().uuid(),
@@ -56,11 +57,20 @@ export function validateMemberInput(input: unknown) {
     : { ok: false as const, message: r.error.issues[0]?.message ?? "Entrée invalide" };
 }
 
-// Light 5-field cron validator (SP1 only stores scheduleCron; SP2 wires it to an in-app
-// scheduler). Each field: digits, "*", "/", "-", "," — good enough to catch typos without
-// pulling in a full cron-parsing dependency for a field that isn't executed yet.
-const CRON_FIELD = "[\\d*/,-]+";
-const CRON_5_FIELD_RE = new RegExp(`^${CRON_FIELD}(\\s+${CRON_FIELD}){4}$`);
+// Cron validator backed by croner (SP2 wires scheduleCron to an in-app scheduler — see
+// lib/pipeline/scheduler.ts, which parses this same string with `new Cron(...)`). Validating with
+// the actual library the scheduler uses — rather than a hand-rolled regex — means a value that
+// passes here is guaranteed to be schedulable; `paused: true` builds the Cron purely to run its
+// parser without starting a timer. `new Cron` throws (rather than returning a result) on a bad
+// pattern, hence the try/catch.
+function isValidCron(v: string): boolean {
+  try {
+    new Cron(v, { paused: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Lives in lib/validation.ts (not lib/actions/pipeline-settings-actions.ts) for the same reason as
 // feedSchema/memberSchema above: that file needs a file-level "use server" directive, and Next.js
@@ -73,9 +83,9 @@ export const pipelineSettingsSchema = z.object({
   autoPublishEnabled: z.boolean(),
   autoPublishMinSources: z.number().int().positive("Doit être un entier positif"),
   webSearchEnabled: z.boolean(),
-  scheduleCron: z.string().optional().refine(
-    (v) => !v || CRON_5_FIELD_RE.test(v),
-    "Cron invalide (5 champs requis, ex. « 0 */2 * * * »)",
+  scheduleCron: z.string().optional().nullable().refine(
+    (v) => !v || !v.trim() || isValidCron(v.trim()),
+    "Cron invalide (ex. « 0 */2 * * * »)",
   ),
 });
 export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;

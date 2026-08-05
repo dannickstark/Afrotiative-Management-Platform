@@ -37,4 +37,13 @@ export async function updatePipelineSettings(input: PipelineSettingsInput) {
   await db.insert(pipelineSettings).values({ id: 1, ...values })
     .onConflictDoUpdate({ target: pipelineSettings.id, set: values });
   revalidatePath("/settings/pipeline");
+
+  // Best-effort: apply a scheduleCron change live in this running process, without a restart.
+  // Must never fail the settings save itself — the save already succeeded above.
+  try {
+    const { reloadSchedule } = await import("@/lib/pipeline/scheduler");
+    await reloadSchedule();
+  } catch (e) {
+    console.error("[scheduler] rechargement après mise à jour des réglages échoué:", e);
+  }
 }
