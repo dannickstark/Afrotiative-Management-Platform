@@ -22,7 +22,10 @@ describe("triggerScheduledRun", () => {
     runningId = run.id;
 
     const before = await db.$count(pipelineRuns);
-    await triggerScheduledRun();
+    // Also asserts the contract that triggerScheduledRun never rejects (croner fires it off its
+    // own timer, so a rejection would be an unlabeled unhandled rejection) — its body is fully
+    // try/caught around the [scheduler] logging convention.
+    await expect(triggerScheduledRun()).resolves.toBeUndefined();
     const after = await db.$count(pipelineRuns);
 
     // No new row was opened.
