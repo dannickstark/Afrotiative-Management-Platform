@@ -1,218 +1,174 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, mock, spyOn } from "bun:test";
-import { db, pipelineSettings } from "@/db";
-import { eq } from "drizzle-orm";
-import type { PipelineSettings } from "@/lib/queries/settings";
+import { describe, it, expect, spyOn } from "bun:test";
+import { resolveWebSearch, type SearchProvider, type SearchResult } from "@/lib/search";
+import { parseBraveResponse } from "@/lib/search/brave";
+import { parseExaResponse } from "@/lib/search/exa";
 
-// Capture the REAL brave + exa + settings exports BEFORE mock.module() below swaps the registry,
-// and DESTRUCTURE each function into its own plain const. This matters: Bun's mock.module()
-// mutates the SAME module-namespace object in place (documented at length in
-// tests/ai-fallback.test.ts), so re-reading `realBrave.braveSearch` AFTER mocking would yield the
-// WRAPPER, not the original — and since the wrapper delegates to braveSearchImpl, feeding the
-// wrapper back into that indirection (in beforeEach) is infinite recursion. Destructured consts
-// are copies that mock.module() can no longer touch, so they stay the genuine originals for the
-// whole file.
-const realBrave = await import("@/lib/search/brave");
-const { braveSearch: realBraveSearch, parseBraveResponse } = realBrave;
-const realExa = await import("@/lib/search/exa");
-const { exaSearch: realExaSearch, parseExaResponse } = realExa;
-const realSettingsModule = await import("@/lib/queries/settings");
-const {
-  getPipelineSettings: realGetPipelineSettings,
-  getFeeds, getMembers, getTaxonomy, getIntegrationStatus,
-} = realSettingsModule;
+// These chain tests exercise the FULLY-INJECTABLE core resolveWebSearch(loadSettings, order,
+// providers, env, query, limit) with plain fakes — NO mock.module, NO process.env manipulation,
+// NO DB. That matters: Bun's mock.module() is global and cannot intercept a module another test
+// file already imported, so an earlier draft that mocked @/lib/search/brave|exa|queries/settings
+// failed order-dependently (green alone, red after tests/pipeline-web-search.test.ts imported the
+// real modules first). Injecting every dependency as an argument makes these tests immune to file
+// execution order. searchRelated()'s public signature is unchanged; it's now a thin wrapper that
+// wires the real getPipelineSettings / searchOrder / PROVIDERS / process.env into this same core.
 
-// Mutable indirections the module mocks below always delegate to — swapped per-test to simulate a
-// provider failure / a settings-read rejection, reset to the real implementations by default.
-let braveSearchImpl: typeof realBraveSearch = realBraveSearch;
-let exaSearchImpl: typeof realExaSearch = realExaSearch;
-let getPipelineSettingsImpl: typeof realGetPipelineSettings = realGetPipelineSettings;
-
-// Call counters so fallback tests can assert a provider WAS/WASN'T invoked, not just what it
-// returned (e.g. "Brave key only → Exa not called" needs a positive assertion that exaSearchImpl
-// never ran).
-let braveCalls = 0;
-let exaCalls = 0;
-
-mock.module("@/lib/search/brave", () => ({
-  braveSearch: (...args: Parameters<typeof realBraveSearch>) => { braveCalls++; return braveSearchImpl(...args); },
-  parseBraveResponse,
-}));
-
-mock.module("@/lib/search/exa", () => ({
-  exaSearch: (...args: Parameters<typeof realExaSearch>) => { exaCalls++; return exaSearchImpl(...args); },
-  parseExaResponse,
-}));
-
-// List every export explicitly (NOT `...realSettingsModule`) so getFeeds/getTaxonomy/… stay the
-// real functions for any other test file that imports them, while getPipelineSettings routes
-// through the mutable indirection. Spreading the namespace here is what deadlocked an earlier
-// draft — the spread re-materialized the wrapper back onto the indirection.
-mock.module("@/lib/queries/settings", () => ({
-  getFeeds, getMembers, getTaxonomy, getIntegrationStatus,
-  getPipelineSettings: (...args: Parameters<typeof realGetPipelineSettings>) => getPipelineSettingsImpl(...args),
-}));
-
-// Imported AFTER the mocks are registered so its internal `./brave`, `./exa`, and
-// `@/lib/queries/settings` imports resolve to the stubs.
-const { searchRelated } = await import("@/lib/search");
-
-// pipeline_settings row id=1 is a shared, app-wide singleton (possibly holding a real
-// admin-configured value) — snapshot once before this file's tests run and restore exactly
-// (present with original values, or absent) once at the very end. Same pattern as
-// tests/pipeline-settings.test.ts.
-let snapshot: PipelineSettings | null = null;
-
-beforeAll(async () => {
-  const [row] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));
-  snapshot = row ?? null;
-});
-
-afterAll(async () => {
-  await db.delete(pipelineSettings).where(eq(pipelineSettings.id, 1));
-  if (snapshot) await db.insert(pipelineSettings).values(snapshot);
-  mock.restore();
-  braveSearchImpl = realBraveSearch;
-  exaSearchImpl = realExaSearch;
-  getPipelineSettingsImpl = realGetPipelineSettings;
-});
-
-async function setWebSearchEnabled(enabled: boolean): Promise<void> {
-  await db.delete(pipelineSettings).where(eq(pipelineSettings.id, 1));
-  await db.insert(pipelineSettings).values({ id: 1, webSearchEnabled: enabled });
+// A fake provider whose .search returns canned results (or throws), recording whether it was
+// called so "the next provider was NOT reached" is a positive assertion, not an inference.
+function fakeProvider(
+  name: string,
+  envKey: string,
+  behavior: (query: string, apiKey: string, limit: number) => Promise<SearchResult[]>,
+): SearchProvider & { calls: number; lastLimit?: number } {
+  const p = {
+    name, envKey, calls: 0, lastLimit: undefined as number | undefined,
+    async search(query: string, apiKey: string, limit: number) {
+      p.calls++; p.lastLimit = limit;
+      return behavior(query, apiKey, limit);
+    },
+  };
+  return p;
 }
 
-// test-setup.ts already strips every `*_API_KEY` env var (including BRAVE_SEARCH_API_KEY and
-// EXA_API_KEY) before the suite runs; snapshot/restore explicitly anyway so this file is
-// self-contained and order-independent with respect to any other file.
-const ORIGINAL_BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY;
-const ORIGINAL_EXA_KEY = process.env.EXA_API_KEY;
-const ORIGINAL_SEARCH_ORDER = process.env.SEARCH_ORDER;
+const settingsOn = async () => ({ webSearchEnabled: true });
+const settingsOff = async () => ({ webSearchEnabled: false });
 
-beforeEach(() => {
-  braveSearchImpl = realBraveSearch;
-  exaSearchImpl = realExaSearch;
-  getPipelineSettingsImpl = realGetPipelineSettings;
-  braveCalls = 0;
-  exaCalls = 0;
-});
-afterEach(() => {
-  if (ORIGINAL_BRAVE_KEY === undefined) delete process.env.BRAVE_SEARCH_API_KEY;
-  else process.env.BRAVE_SEARCH_API_KEY = ORIGINAL_BRAVE_KEY;
-  if (ORIGINAL_EXA_KEY === undefined) delete process.env.EXA_API_KEY;
-  else process.env.EXA_API_KEY = ORIGINAL_EXA_KEY;
-  if (ORIGINAL_SEARCH_ORDER === undefined) delete process.env.SEARCH_ORDER;
-  else process.env.SEARCH_ORDER = ORIGINAL_SEARCH_ORDER;
-});
+describe("resolveWebSearch — provider chain (injectable, network-free)", () => {
+  it("returns [] when webSearchEnabled is false, without consulting any provider", async () => {
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => [{ title: "x", url: "https://x", snippet: "" }]);
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => [{ title: "y", url: "https://y", snippet: "" }]);
 
-describe("searchRelated (network-free)", () => {
-  it("returns [] when webSearchEnabled is false, regardless of configured keys", async () => {
-    await setWebSearchEnabled(false);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key-should-never-be-used";
-    process.env.EXA_API_KEY = "fake-key-should-never-be-used";
+    const results = await resolveWebSearch(
+      settingsOff, ["brave", "exa"], [brave, exa],
+      { BRAVE_SEARCH_API_KEY: "k", EXA_API_KEY: "k" }, "BRVM", 3,
+    );
 
-    const results = await searchRelated("BRVM");
     expect(results).toEqual([]);
+    expect(brave.calls).toBe(0);
+    expect(exa.calls).toBe(0);
   });
 
   it("returns [] when enabled but no provider key is configured", async () => {
-    await setWebSearchEnabled(true);
-    delete process.env.BRAVE_SEARCH_API_KEY;
-    delete process.env.EXA_API_KEY;
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => { throw new Error("ne doit pas être appelé"); });
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => { throw new Error("ne doit pas être appelé"); });
 
-    const results = await searchRelated("BRVM");
+    const results = await resolveWebSearch(settingsOn, ["brave", "exa"], [brave, exa], {}, "BRVM", 3);
+
     expect(results).toEqual([]);
-    expect(braveCalls).toBe(0);
-    expect(exaCalls).toBe(0);
+    expect(brave.calls).toBe(0);
+    expect(exa.calls).toBe(0);
   });
 
   it("Brave key only, braveSearch succeeds → returns Brave's results, Exa is never called", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    delete process.env.EXA_API_KEY;
     const braveResults = [{ title: "Brave hit", url: "https://brave.example", snippet: "..." }];
-    braveSearchImpl = async () => braveResults;
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => braveResults);
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => [{ title: "Exa", url: "https://exa", snippet: "" }]);
 
-    const results = await searchRelated("BRVM");
+    const results = await resolveWebSearch(
+      settingsOn, ["brave", "exa"], [brave, exa], { BRAVE_SEARCH_API_KEY: "k" }, "BRVM", 3,
+    );
 
     expect(results).toEqual(braveResults);
-    expect(braveCalls).toBe(1);
-    expect(exaCalls).toBe(0);
+    expect(brave.calls).toBe(1);
+    expect(exa.calls).toBe(0);
+  });
+
+  it("returns Brave's result even when it is an empty array (first success wins, Exa not tried)", async () => {
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => []);
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => [{ title: "Exa", url: "https://exa", snippet: "" }]);
+
+    const results = await resolveWebSearch(
+      settingsOn, ["brave", "exa"], [brave, exa], { BRAVE_SEARCH_API_KEY: "k", EXA_API_KEY: "k" }, "BRVM", 3,
+    );
+
+    expect(results).toEqual([]);
+    expect(brave.calls).toBe(1);
+    expect(exa.calls).toBe(0);
   });
 
   it("falls back to Exa when Brave throws (simulated 429/quota) and both keys are set", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    process.env.EXA_API_KEY = "fake-key";
-    braveSearchImpl = async () => { throw new Error("429 quota exceeded (simulé)"); };
     const exaResults = [{ title: "Exa hit", url: "https://exa.example", snippet: "..." }];
-    exaSearchImpl = async () => exaResults;
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => { throw new Error("429 quota exceeded (simulé)"); });
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => exaResults);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
-    const results = await searchRelated("BRVM");
+    const results = await resolveWebSearch(
+      settingsOn, ["brave", "exa"], [brave, exa], { BRAVE_SEARCH_API_KEY: "k", EXA_API_KEY: "k" }, "BRVM", 3,
+    );
 
     expect(results).toEqual(exaResults);
-    expect(braveCalls).toBe(1);
-    expect(exaCalls).toBe(1);
+    expect(brave.calls).toBe(1);
+    expect(exa.calls).toBe(1);
     expect(String(warnSpy.mock.calls[0]?.[0])).toContain("[search]");
     warnSpy.mockRestore();
   });
 
-  it("Exa key only (no Brave key) → uses Exa directly", async () => {
-    await setWebSearchEnabled(true);
-    delete process.env.BRAVE_SEARCH_API_KEY;
-    process.env.EXA_API_KEY = "fake-key";
+  it("Exa key only (no Brave key) → skips Brave silently and uses Exa", async () => {
     const exaResults = [{ title: "Exa only", url: "https://exa.example", snippet: "..." }];
-    exaSearchImpl = async () => exaResults;
-
-    const results = await searchRelated("BRVM");
-
-    expect(results).toEqual(exaResults);
-    expect(braveCalls).toBe(0);
-    expect(exaCalls).toBe(1);
-  });
-
-  it("respects SEARCH_ORDER=exa,brave — tries Exa first even though Brave is also configured", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    process.env.EXA_API_KEY = "fake-key";
-    process.env.SEARCH_ORDER = "exa,brave";
-    const exaResults = [{ title: "Exa first", url: "https://exa.example", snippet: "..." }];
-    exaSearchImpl = async () => exaResults;
-    braveSearchImpl = async () => { throw new Error("ne devrait jamais être appelé"); };
-
-    const results = await searchRelated("BRVM");
-
-    expect(results).toEqual(exaResults);
-    expect(exaCalls).toBe(1);
-    expect(braveCalls).toBe(0);
-  });
-
-  it("never throws — both providers throw → returns [] (chain exhausted)", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    process.env.EXA_API_KEY = "fake-key";
-    braveSearchImpl = async () => { throw new Error("panne Brave simulée"); };
-    exaSearchImpl = async () => { throw new Error("panne Exa simulée"); };
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => { throw new Error("ne doit pas être appelé"); });
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => exaResults);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
-    const results = await searchRelated("sujet quelconque");
+    const results = await resolveWebSearch(
+      settingsOn, ["brave", "exa"], [brave, exa], { EXA_API_KEY: "k" }, "BRVM", 3,
+    );
+
+    expect(results).toEqual(exaResults);
+    expect(brave.calls).toBe(0); // no key → not attempted
+    expect(exa.calls).toBe(1);
+    expect(warnSpy).not.toHaveBeenCalled(); // a skipped (keyless) provider logs nothing
+    warnSpy.mockRestore();
+  });
+
+  it("respects order = ['exa','brave'] — tries Exa first even though Brave is also configured", async () => {
+    const exaResults = [{ title: "Exa first", url: "https://exa.example", snippet: "..." }];
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => { throw new Error("ne devrait jamais être appelé"); });
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => exaResults);
+
+    const results = await resolveWebSearch(
+      settingsOn, ["exa", "brave"], [brave, exa], { BRAVE_SEARCH_API_KEY: "k", EXA_API_KEY: "k" }, "BRVM", 3,
+    );
+
+    expect(results).toEqual(exaResults);
+    expect(exa.calls).toBe(1);
+    expect(brave.calls).toBe(0);
+  });
+
+  it("ignores an unknown provider name in the order and continues to a known one", async () => {
+    const exaResults = [{ title: "Exa", url: "https://exa.example", snippet: "" }];
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => exaResults);
+
+    const results = await resolveWebSearch(
+      settingsOn, ["bing", "exa"], [exa], { EXA_API_KEY: "k" }, "BRVM", 3,
+    );
+
+    expect(results).toEqual(exaResults);
+    expect(exa.calls).toBe(1);
+  });
+
+  it("never throws — both providers throw → returns [] (chain exhausted), one warning each", async () => {
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => { throw new Error("panne Brave simulée"); });
+    const exa = fakeProvider("exa", "EXA_API_KEY", async () => { throw new Error("panne Exa simulée"); });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    const results = await resolveWebSearch(
+      settingsOn, ["brave", "exa"], [brave, exa], { BRAVE_SEARCH_API_KEY: "k", EXA_API_KEY: "k" }, "sujet", 3,
+    );
 
     expect(results).toEqual([]);
-    expect(braveCalls).toBe(1);
-    expect(exaCalls).toBe(1);
+    expect(brave.calls).toBe(1);
+    expect(exa.calls).toBe(1);
     expect(warnSpy).toHaveBeenCalledTimes(2);
     for (const call of warnSpy.mock.calls) expect(String(call[0])).toContain("[search]");
     warnSpy.mockRestore();
   });
 
-  it("never throws — swallows a Brave provider error, logs a French [search] warning, and returns [] when no other provider is configured", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    delete process.env.EXA_API_KEY;
-    braveSearchImpl = async () => { throw new Error("panne réseau simulée"); };
+  it("never throws — a single Brave failure with no other provider configured → [] + one warning", async () => {
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => { throw new Error("panne réseau simulée"); });
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
-    const results = await searchRelated("sujet quelconque");
+    const results = await resolveWebSearch(
+      settingsOn, ["brave", "exa"], [brave], { BRAVE_SEARCH_API_KEY: "k" }, "sujet", 3,
+    );
 
     expect(results).toEqual([]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -220,40 +176,30 @@ describe("searchRelated (network-free)", () => {
     warnSpy.mockRestore();
   });
 
-  it("never throws — swallows a getPipelineSettings() DB rejection and returns [] (transient Neon blip)", async () => {
-    // The settings read hits Neon (and may run a seed-insert) — a transient DB failure there must
-    // degrade to [] just like a provider failure, since SP4 Task 6 calls searchRelated from inside
-    // the per-story runner loop. Set the key so we'd otherwise proceed past the gates to the DB read.
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    getPipelineSettingsImpl = async () => { throw new Error("Neon indisponible (simulé)"); };
+  it("never throws — swallows a loadSettings() rejection and returns [] (transient Neon blip)", async () => {
+    const loadSettings = async () => { throw new Error("Neon indisponible (simulé)"); };
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => [{ title: "x", url: "https://x", snippet: "" }]);
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
-    const results = await searchRelated("sujet quelconque");
+    const results = await resolveWebSearch(
+      loadSettings, ["brave", "exa"], [brave], { BRAVE_SEARCH_API_KEY: "k" }, "sujet", 3,
+    );
 
     expect(results).toEqual([]);
+    expect(brave.calls).toBe(0); // never reached the provider loop
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(String(warnSpy.mock.calls[0]?.[0])).toContain("[search]");
     warnSpy.mockRestore();
   });
 
-  it("respects the opts.limit passed through to the provider", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    let seenLimit: number | undefined;
-    braveSearchImpl = async (_q, _k, limit) => { seenLimit = limit; return []; };
+  it("passes the given limit through verbatim to the chosen provider", async () => {
+    const brave = fakeProvider("brave", "BRAVE_SEARCH_API_KEY", async () => []);
 
-    await searchRelated("BRVM", { limit: 5 });
-    expect(seenLimit).toBe(5);
-  });
+    await resolveWebSearch(settingsOn, ["brave"], [brave], { BRAVE_SEARCH_API_KEY: "k" }, "BRVM", 5);
+    expect(brave.lastLimit).toBe(5);
 
-  it("defaults to a small result cap (3) when no limit is given", async () => {
-    await setWebSearchEnabled(true);
-    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
-    let seenLimit: number | undefined;
-    braveSearchImpl = async (_q, _k, limit) => { seenLimit = limit; return []; };
-
-    await searchRelated("BRVM");
-    expect(seenLimit).toBe(3);
+    await resolveWebSearch(settingsOn, ["brave"], [brave], { BRAVE_SEARCH_API_KEY: "k" }, "BRVM", 3);
+    expect(brave.lastLimit).toBe(3);
   });
 });
 

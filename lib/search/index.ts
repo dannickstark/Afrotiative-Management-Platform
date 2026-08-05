@@ -5,18 +5,72 @@ import { exaSearch } from "./exa";
 
 export type SearchResult = { title: string; url: string; snippet: string };
 
+// A web-search provider: a name (matched against searchOrder / SEARCH_ORDER), the env var that
+// gates it, and its thin, throwing `search()` implementation (mirrors lib/search/brave.ts /
+// lib/search/exa.ts).
+export type SearchProvider = {
+  name: string;
+  envKey: string;
+  search: (query: string, apiKey: string, limit: number) => Promise<SearchResult[]>;
+};
+
 const DEFAULT_LIMIT = 3;
 const MAX_LIMIT = 10; // hard cap regardless of what a caller asks for
 
-// Registry of known web-search providers, keyed by the name used in pipeline-config's
-// `searchOrder` (env SEARCH_ORDER, default "brave,exa"). Each entry pairs the env var that gates
-// it with its thin, throwing `*Search` implementation (mirrors lib/search/brave.ts /
-// lib/search/exa.ts). A name in searchOrder that isn't a key here is silently ignored — lets an
-// operator list a not-yet-built provider without breaking the chain.
-const PROVIDERS: Record<string, { envKey: string; run: (query: string, apiKey: string, limit: number) => Promise<SearchResult[]> }> = {
-  brave: { envKey: "BRAVE_SEARCH_API_KEY", run: braveSearch },
-  exa: { envKey: "EXA_API_KEY", run: exaSearch },
-};
+// The REAL provider chain, tried in `searchOrder` (env SEARCH_ORDER, default "brave,exa"). Kept as
+// a module constant so searchRelated() stays a thin wrapper; resolveWebSearch() below takes the
+// list as an argument instead, so tests inject plain fakes without mock.module (which Bun cannot
+// apply to a module another test file already imported — the source of an order-dependent test
+// failure otherwise).
+const PROVIDERS: SearchProvider[] = [
+  { name: "brave", envKey: "BRAVE_SEARCH_API_KEY", search: braveSearch },
+  { name: "exa", envKey: "EXA_API_KEY", search: exaSearch },
+];
+
+// Fully-injectable core of the web-search provider chain — every dependency (the settings loader,
+// the provider order, the provider list, and the env map) is an argument, so it's deterministically
+// unit-testable with plain fakes and no global mocking. searchRelated() below is the thin
+// production wiring.
+//
+// Semantics (see searchRelated's doc): gated on webSearchEnabled; providers tried IN ORDER; a
+// provider missing its key is skipped silently; a provider that throws is logged (French,
+// "[search]"-prefixed) and the NEXT is tried; the FIRST provider that resolves — even with an
+// empty array — wins. Every configured provider failing, or none configured, falls through to [].
+// NEVER throws: any error escaping the loop (including the settings read) degrades to [].
+export async function resolveWebSearch(
+  loadSettings: () => Promise<{ webSearchEnabled: boolean }>,
+  order: string[],
+  providers: SearchProvider[],
+  env: Record<string, string | undefined>,
+  query: string,
+  limit: number,
+): Promise<SearchResult[]> {
+  try {
+    const settings = await loadSettings();
+    if (!settings.webSearchEnabled) return [];
+
+    for (const name of order) {
+      const provider = providers.find((p) => p.name === name);
+      if (!provider) continue; // unknown provider name in the order — ignore
+
+      const apiKey = env[provider.envKey];
+      if (!apiKey) continue; // not configured — skip without attempting or logging
+
+      // INNER try/catch per provider: a single provider's failure (quota/429/402, auth, network,
+      // timeout) must not abort the chain — log and fall through to the next candidate instead.
+      try {
+        return await provider.search(query, apiKey, limit);
+      } catch (e) {
+        console.warn(`[search] fournisseur « ${name} » indisponible, essai du suivant : ${(e as Error).message}`);
+      }
+    }
+
+    return []; // chain exhausted: nothing configured, or every configured provider failed
+  } catch (e) {
+    console.warn(`[search] la recherche web a échoué : ${(e as Error).message}`);
+    return [];
+  }
+}
 
 // Pluggable, OPTIONAL web-search provider CHAIN used to augment a story's sources with external
 // coverage (SP4 Task 6 wires the actual fetch/extract of the result URLs via the SSRF-safe
@@ -33,38 +87,8 @@ const PROVIDERS: Record<string, { envKey: string; run: (query: string, apiKey: s
 // NEVER throws — like the pipeline's other best-effort providers (lib/embeddings, lib/extract),
 // any error escaping the chain (including the settings read itself) is logged (French,
 // "[search]"-prefixed) and swallowed so a flaky/rate-limited search API can never fail a pipeline
-// run.
+// run. Thin wrapper over resolveWebSearch() with the real dependencies wired in.
 export async function searchRelated(query: string, opts?: { limit?: number }): Promise<SearchResult[]> {
   const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
-
-  // ONE try/catch around the ENTIRE body — the settings read included. getPipelineSettings() hits
-  // Neon (and may run a seed-insert on first use), so a transient DB blip can reject here just as
-  // easily as a provider's fetch can; both must degrade to [] rather than propagate, since SP4
-  // Task 6 calls this from inside the per-story runner loop where an unhandled rejection has real
-  // blast radius. (run.ts / scheduler.ts likewise treat getPipelineSettings() as throwable.)
-  try {
-    const settings = await getPipelineSettings();
-    if (!settings.webSearchEnabled) return [];
-
-    for (const name of getPipelineConfig().searchOrder) {
-      const provider = PROVIDERS[name];
-      if (!provider) continue; // unknown provider name in SEARCH_ORDER — ignore
-
-      const apiKey = process.env[provider.envKey];
-      if (!apiKey) continue; // not configured — skip without attempting or logging
-
-      // INNER try/catch per provider: a single provider's failure must not abort the chain — log
-      // and fall through to the next candidate instead.
-      try {
-        return await provider.run(query, apiKey, limit);
-      } catch (e) {
-        console.warn(`[search] fournisseur « ${name} » indisponible, essai du suivant : ${(e as Error).message}`);
-      }
-    }
-
-    return []; // chain exhausted: nothing configured, or every configured provider failed
-  } catch (e) {
-    console.warn(`[search] la recherche web a échoué : ${(e as Error).message}`);
-    return [];
-  }
+  return resolveWebSearch(getPipelineSettings, getPipelineConfig().searchOrder, PROVIDERS, process.env, query, limit);
 }
