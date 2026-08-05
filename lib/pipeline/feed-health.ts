@@ -14,6 +14,11 @@ export type FeedFetchOutcome = "success" | "failure";
 
 export type FeedHealth = "healthy" | "degraded" | "failing" | "idle";
 
+// Consecutive-failure count at which a feed is considered "failing" / gone dark. Shared by
+// deriveFeedHealth (the health label) AND updateFeedHealth's feed_dark alert trigger (SP9), so the
+// two can never desync — a feed reads "failing" exactly when the alert fires.
+export const FAILING_THRESHOLD = 3;
+
 // The minimal subset of a `feeds` row deriveFeedHealth needs. `Feed` (lib/queries/settings.ts) is
 // a structural superset of this, so a real row satisfies it directly — kept minimal here so pure
 // unit tests (tests/feed-health.test.ts) can build fixtures without a real DB row.
@@ -43,7 +48,7 @@ export type FeedHealthInput = {
  */
 export function deriveFeedHealth(feed: FeedHealthInput): FeedHealth {
   if (!feed.active || feed.lastFetchStatus === "never") return "idle";
-  if (feed.lastFetchStatus === "error" || feed.consecutiveFailures >= 3) return "failing";
+  if (feed.lastFetchStatus === "error" || feed.consecutiveFailures >= FAILING_THRESHOLD) return "failing";
   if (feed.consecutiveFailures >= 1 || feed.itemsCaptured7d === 0) return "degraded";
   return "healthy";
 }
@@ -100,12 +105,12 @@ export async function updateFeedHealth(feedId: string, feedName: string, outcome
     // Best-effort (createAlert() itself never throws — wrapped here anyway, defensively, since
     // this function's own callers already wrap the whole updateFeedHealth call in their own
     // try/catch per the SP8/SP9a constraint that a health-update failure must never fail the run).
-    if (row?.consecutiveFailures === 3) {
+    if (row?.consecutiveFailures === FAILING_THRESHOLD) {
       try {
         await createAlert({
           type: "feed_dark",
           title: "Flux muet",
-          detail: `Le flux « ${feedName} » a échoué 3 fois de suite.`,
+          detail: `Le flux « ${feedName} » a échoué ${FAILING_THRESHOLD} fois de suite.`,
           entityId: feedId,
         });
       } catch { /* best-effort — never fail the caller */ }
