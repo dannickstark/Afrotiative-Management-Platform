@@ -19,3 +19,14 @@ export async function getUnreadAlertCount(): Promise<number> {
 export async function getRecentAlerts(limit = 20): Promise<Alert[]> {
   return db.select().from(alerts).orderBy(desc(alerts.createdAt)).limit(limit);
 }
+
+/**
+ * Most recent UNREAD alerts, newest first — feeds the dashboard banner's list. Deliberately
+ * separate from getRecentAlerts (which returns read+unread for the bell): the banner must show the
+ * same unread set that getUnreadAlertCount() counts, so both surfaces agree. Filtering
+ * getRecentAlerts()'s top-N to `!read` client-side would diverge from the badge once more than N
+ * total alerts exist and some of the recent N are already read (SP9b Finding 2).
+ */
+export async function getUnreadAlerts(limit = 20): Promise<Alert[]> {
+  return db.select().from(alerts).where(eq(alerts.read, false)).orderBy(desc(alerts.createdAt)).limit(limit);
+}

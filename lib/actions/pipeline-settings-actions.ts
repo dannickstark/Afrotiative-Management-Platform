@@ -1,12 +1,14 @@
 "use server";
-import { db, pipelineSettings } from "@/db";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { pipelineSettingsSchema, type PipelineSettingsInput } from "@/lib/validation";
+import { persistPipelineSettings } from "@/lib/pipeline/settings-write";
 
 // pipelineSettingsSchema lives in lib/validation.ts, not here — see the comment there for why (a
-// file-level "use server" module may only export async functions).
+// file-level "use server" module may only export async functions). The upsert itself lives in
+// lib/pipeline/settings-write.ts (persistPipelineSettings) so the actual DB write is unit-testable
+// without a request context — see that file's comment.
 
 async function guard() {
   const user = await requireUser();
@@ -21,21 +23,7 @@ export async function updatePipelineSettings(input: PipelineSettingsInput) {
   // error <p> + toast. Surface a clean French message instead; the form's catch renders err.message.
   const parsed = pipelineSettingsSchema.safeParse(input);
   if (!parsed.success) throw new Error("Réglages invalides.");
-  const data = parsed.data;
-  const scheduleCron = data.scheduleCron?.trim() ? data.scheduleCron.trim() : null;
-  const values = {
-    maxItemsPerRun: data.maxItemsPerRun,
-    perOperationTimeoutMs: data.perOperationTimeoutMs,
-    clusterThreshold: data.clusterThreshold,
-    scoreThreshold: data.scoreThreshold,
-    autoPublishEnabled: data.autoPublishEnabled,
-    autoPublishMinSources: data.autoPublishMinSources,
-    webSearchEnabled: data.webSearchEnabled,
-    scheduleCron,
-    updatedAt: new Date(),
-  };
-  await db.insert(pipelineSettings).values({ id: 1, ...values })
-    .onConflictDoUpdate({ target: pipelineSettings.id, set: values });
+  await persistPipelineSettings(parsed.data);
   revalidatePath("/settings/pipeline");
 
   // Best-effort: apply a scheduleCron change live in this running process, without a restart.

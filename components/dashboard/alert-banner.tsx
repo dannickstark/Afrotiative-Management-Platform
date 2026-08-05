@@ -17,14 +17,16 @@ const ALERT_HREF: Record<AlertType, string> = {
 };
 
 /**
- * SP9b — dismissible summary of unread alerts on /dashboard. `alerts` is server-fetched (page.tsx
- * calls getRecentAlerts and filters to unread) and passed straight down; dismissing is a local,
- * session-only "hide" (mirrors a lot of banner patterns — it does NOT call markAllAlertsRead, so
- * the alerts stay unread/still show in the bell until actually opened or explicitly cleared there).
+ * SP9b — dismissible summary of unread alerts on /dashboard. `count` is the true total unread count
+ * (getUnreadAlertCount, the SAME source as the bell badge — so the two can never disagree), while
+ * `alerts` is the capped list of unread rows to preview (getUnreadAlerts, newest first). Both are
+ * server-fetched in page.tsx and passed straight down. Dismissing is a local, session-only "hide"
+ * (it does NOT call markAllAlertsRead, so the alerts stay unread / still show in the bell until
+ * actually opened or explicitly cleared there).
  */
-export function AlertBanner({ alerts }: { alerts: Alert[] }) {
+export function AlertBanner({ count, alerts }: { count: number; alerts: Alert[] }) {
   const [dismissed, setDismissed] = useState(false);
-  if (dismissed || alerts.length === 0) return null;
+  if (dismissed || count === 0) return null;
 
   return (
     <Card className="border-[var(--status-error)]/30 bg-[var(--status-error)]/5">
@@ -32,7 +34,7 @@ export function AlertBanner({ alerts }: { alerts: Alert[] }) {
         <AlertTriangle className="mt-0.5 size-5 shrink-0 text-[var(--status-error)]" aria-hidden />
         <div className="min-w-0 flex-1 space-y-1.5">
           <p className="text-sm font-medium">
-            {alerts.length} alerte{alerts.length > 1 ? "s" : ""} non lue{alerts.length > 1 ? "s" : ""}
+            {count} alerte{count > 1 ? "s" : ""} non lue{count > 1 ? "s" : ""}
           </p>
           <ul className="space-y-1">
             {alerts.slice(0, 3).map((alert) => {

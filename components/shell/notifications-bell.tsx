@@ -53,13 +53,15 @@ export function NotificationsBell({ unreadCount, alerts }: { unreadCount: number
 
   function handleOpenAlert(alert: Alert) {
     if (alert.read) return;
+    // Fire-and-forget: the <Link> handles navigation and markAlertRead's own revalidatePath
+    // (lib/actions/alert-actions.ts) already refreshes the current route — no manual router.refresh()
+    // here (SP9b Finding 3: a redundant refresh racing the navigation).
     startTransition(async () => {
       try {
         await markAlertRead(alert.id);
       } catch {
         /* best-effort — see comment above */
       }
-      router.refresh();
     });
   }
 
