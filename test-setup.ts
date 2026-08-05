@@ -34,3 +34,21 @@ for (const k of EXPLICIT_PROVIDER_KEYS) delete process.env[k];
 for (const k of Object.keys(process.env)) {
   if (/_API_KEY$/i.test(k)) delete process.env[k];
 }
+
+// Reap stray ACTIVE pipeline runs before the suite runs. Overlapping `bun test` invocations against
+// the shared Neon dev DB — or a test that was interrupted mid-run — can leave a `running`/`paused`
+// row (finished_at NULL) that holds the single pipeline_runs_one_running interlock slot, which then
+// makes openRun()/runPipeline() return null/"skipped" in unrelated later tests (a false failure).
+// The RUN_STALE_MINUTES reaper only reclaims after 15 min; a real in-flight test run finalizes in
+// seconds, so any active row older than 2 minutes at suite start is definitely a stray. Best-effort:
+// a DB error here must never block the suite (DB-touching tests will fail with a clear error anyway).
+if (process.env.DATABASE_URL) {
+  try {
+    const { Pool } = await import("pg");
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    await pool.query(
+      "update pipeline_runs set status = 'failed', finished_at = now() where finished_at is null and started_at < now() - interval '2 minutes'",
+    );
+    await pool.end();
+  } catch { /* DB unreachable / table absent — leave it; the affected tests surface a clear error */ }
+}

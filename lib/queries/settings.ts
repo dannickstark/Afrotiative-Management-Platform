@@ -2,11 +2,20 @@ import { db, feeds, user, wpCategories, wpTags, distributions, pipelineRuns, pip
 import { and, desc, eq } from "drizzle-orm";
 import { getWpConfig } from "@/lib/wp/config";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { deriveFeedHealth } from "@/lib/pipeline/feed-health";
 
 export type Feed = Awaited<ReturnType<typeof getFeeds>>[number];
 
+// SP8 — each row gets a `health` field (deriveFeedHealth's pure state, computed HERE server-side)
+// on top of the raw columns (which already include lastFetchAt/lastFetchStatus/itemsCaptured7d/
+// consecutiveFailures — a plain `select()` picks up every column, incl. the new
+// consecutive_failures added by this same story's migration, with no explicit column list to
+// update). Computed in this server-only query module — not in the "use client" feeds-table.tsx —
+// so that component never needs a runtime import of lib/pipeline/feed-health.ts (which pulls in
+// the DB client via updateFeedHealth); it only imports FeedHealth as a type.
 export async function getFeeds() {
-  return db.select().from(feeds).orderBy(feeds.name);
+  const rows = await db.select().from(feeds).orderBy(feeds.name);
+  return rows.map((row) => ({ ...row, health: deriveFeedHealth(row) }));
 }
 
 export type Member = Awaited<ReturnType<typeof getMembers>>[number];

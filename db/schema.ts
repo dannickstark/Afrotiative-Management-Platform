@@ -109,6 +109,12 @@ export const feeds = pgTable("feeds", {
   lastFetchAt: timestamp("last_fetch_at"),
   lastFetchStatus: feedFetchStatus("last_fetch_status").notNull().default("never"),
   itemsCaptured7d: integer("items_captured_7d").notNull().default(0),
+  // ---- SP8: failure-streak tracking ----
+  // Consecutive FAILED parse attempts, maintained by lib/pipeline/feed-health.ts's
+  // updateFeedHealth() (called from executeRun's phase-1 feed-read loop, lib/pipeline/run.ts):
+  // reset to 0 on a successful read, incremented atomically on a failed one. Feeds
+  // deriveFeedHealth's "failing" (>=3) / "degraded" (1-2) thresholds.
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

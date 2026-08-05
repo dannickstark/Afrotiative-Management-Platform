@@ -7,6 +7,7 @@ import { withTimeout } from "./timeout";
 import { extract, extractExternal, hasExternalExtractor } from "@/lib/extract";
 import { embed, cosine } from "@/lib/embeddings";
 import { hasRunningRun } from "./overlap";
+import { updateFeedHealth } from "./feed-health";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import { searchRelated } from "@/lib/search";
 import type { RawItem } from "@/lib/rss/parse-feed";
@@ -144,6 +145,12 @@ export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: numb
  * pipeline_steps row and the run continues — a single failure never aborts the whole run.
  * Hitting the item cap is recorded explicitly (never a silent truncation).
  *
+ * SP8 — each feed's health row (lastFetchAt/lastFetchStatus/consecutiveFailures/itemsCaptured7d)
+ * is best-effort updated (lib/pipeline/feed-health.ts's updateFeedHealth) right after ITS OWN
+ * parse outcome is known, inside phase 1's per-feed try/catch. Because phase 1 only runs on a
+ * fresh (non-resume) call, feed health is updated ONLY on the initial run of a paused/resumed
+ * pipeline, never again on the resume call itself — see the resume-path note below.
+ *
  * SP5 Task 4 — resume path: when `opts.resumeStories` is passed (by resumeRun(), after a prior
  * call to this same function paused), phase 1 (feed read + grouping) is SKIPPED ENTIRELY — the
  * checkpoint's remaining stories become this call's phase-2 groups directly. total_items and the
@@ -226,12 +233,21 @@ export async function executeRun(
           feedsRead++;
           await insertStep({ runId, name: `Lecture du flux « ${feed.name} »`, status: "success", durationMs: Date.now() - t0 });
           await setProgress(runId, { feedsRead });
+          // SP8 — best-effort feed-health update (never fails the run): recorded here, inside this
+          // feed's own try, right after its parse outcome (success) is known. See
+          // lib/pipeline/feed-health.ts's updateFeedHealth doc comment for exactly what it writes
+          // and the itemsCaptured7d one-run-lag caveat. Note: the resume path (opts.resumeStories)
+          // skips phase 1 entirely, so feed health is only ever updated on the INITIAL run, never
+          // on a resume — acceptable per the SP8 plan (a resumed run reads no new feeds anyway).
+          try { await updateFeedHealth(feed.id, "success"); } catch { /* best-effort — never fail the run */ }
         } catch (e) {
           feedsFailed++;
           await insertStep({
             runId, name: `Lecture du flux « ${feed.name} »`, status: "failed", durationMs: Date.now() - t0,
             errorMessage: `La lecture du flux « ${feed.name} » a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
           });
+          // SP8 — same best-effort feed-health update, on the failure path (see note above).
+          try { await updateFeedHealth(feed.id, "failure"); } catch { /* best-effort — never fail the run */ }
           continue;
         }
         for (const item of items) {
