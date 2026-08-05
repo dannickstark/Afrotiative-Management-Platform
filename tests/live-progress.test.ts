@@ -108,10 +108,16 @@ import { reclaimStaleRuns } from "@/lib/pipeline/overlap";
 // "Fixture cap%" feeds and their raw_items. Running this before AND after the suite makes it
 // order- and rerun-independent, without disturbing the per-test `finally` cleanup below.
 async function healFixtureResidue(): Promise<void> {
-  await reclaimStaleRuns(); // finalizes any stale (>threshold) running row to "failed"
-  // A *recent* stray running row won't be old enough for reclaimStaleRuns; delete it so the
-  // one-running slot is free. Serial DB tests (see bunfig.toml) mean no legit run is active here.
-  await db.delete(pipelineRuns).where(eq(pipelineRuns.status, "running"));
+  await reclaimStaleRuns(); // finalizes any genuinely stale (>threshold) running row to "failed"
+  // A *recent* stray fixture run (from a timed-out prior run of the two-phase test) isn't old
+  // enough for reclaimStaleRuns to catch, yet its still-"running" row holds the one-running slot.
+  // Delete it — but ONLY runs this fixture owns, never a real in-flight run or another test's
+  // deliberate running row. A fixture run is identifiable by the feed-read step it inserts at the
+  // very start of phase 1 (long before the slow phase-2 staging), whose name references the
+  // "Fixture cap …" feed. Deleting those run rows cascades their pipeline_steps.
+  const strayRunIds = await db.select({ id: pipelineSteps.runId }).from(pipelineSteps)
+    .where(like(pipelineSteps.name, "Lecture du flux « Fixture cap%"));
+  if (strayRunIds.length) await db.delete(pipelineRuns).where(inArray(pipelineRuns.id, strayRunIds.map((r) => r.id)));
   const strays = await db.select({ id: feeds.id }).from(feeds).where(like(feeds.name, "Fixture cap%"));
   for (const s of strays) {
     await db.delete(rawItems).where(eq(rawItems.feedId, s.id));
