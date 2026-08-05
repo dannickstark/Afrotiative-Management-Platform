@@ -188,6 +188,12 @@ export async function executeRun(
       // SP5 Task 4 resume path — SKIP phase 1 (no feed read, no grouping): the checkpoint's
       // remaining stories become this call's phase-2 groups directly.
       groups = opts.resumeStories.map((members) => ({ members }));
+      // SP5 Task 4 review C1 (reaper-safe resume): insert a fresh step IMMEDIATELY, before the
+      // first story's extraction, so reclaimStaleRuns() (which runs on every getActiveRun poll,
+      // ~1.5s) sees recent pipeline_steps activity for this run and never reaps it mid-resume.
+      // resumeRun also refreshes started_at on the flip; the two together close the reaper window
+      // (activity-based AND age-based) so a run parked longer than runStaleMinutes resumes safely.
+      await insertStep({ runId, name: "Reprise de l'exécution", status: "success", durationMs: null });
       // feedsRead/newItems are DB-persisted stats the `finally` below unconditionally overwrites —
       // seed them from the row so a resumed run's finalize doesn't regress stats accumulated
       // before the pause (this call itself reads zero feeds and may record zero NEW items if the
@@ -262,10 +268,19 @@ export async function executeRun(
     // SP5 Task 3/4 — cooperative cancel+pause check (a): safe boundary right after phase 1 (read +
     // collect + group) OR immediately on resume, before phase 2 begins processing stories. Cancel
     // takes precedence over pause when both are somehow set.
+    //
+    // SP5 Task 4 review C2 — only PAUSE if there is remaining work (groups.length > 0). Pausing a
+    // zero-work run (a quiet run where every candidate was a duplicate, or every feed failed) would
+    // park it forever: the checkpoint would be empty, so resumeRun refuses it, cancelRun's flag has
+    // no in-flight executeRun to observe it (fixed separately, but still), and the reaper skips
+    // paused — the run would hold the single active slot with no way to release it. A zero-work run
+    // must instead finalize NORMALLY (the tally below → typically "success" for an all-duplicate
+    // run), freeing the slot. Cancel has no such guard: a cancel of a zero-work run finalizes
+    // terminally (finished_at set) regardless, so it never strands the slot.
     {
       const flags = await checkControlFlags(runId);
       if (flags.cancelled) cancelled = true;
-      else if (flags.paused) { paused = true; remainingStories = groups.map((g) => g.members); }
+      else if (flags.paused && groups.length > 0) { paused = true; remainingStories = groups.map((g) => g.members); }
     }
 
     // ---- Phase 2: process each STORY (group) — synthesize ONE multi-source article per group ----

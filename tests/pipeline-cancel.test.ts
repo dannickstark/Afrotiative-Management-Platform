@@ -257,15 +257,16 @@ describe("cancelRun authz", () => {
 // context unavailable under plain `bun test` — verified empirically (throws "`headers` was called
 // outside a request scope"), same constraint documented in tests/reprocess.test.ts and
 // tests/feed-actions.test.ts for their own RBAC-guarded actions. So this exercises the EXACT
-// drizzle predicate cancelRun runs — `update … set cancel_requested=true where id=? and
-// finished_at is null` — proving it flips the flag on an active (running OR paused) run and is a
-// true no-op (0 rows touched, flag untouched) on an already-terminal one.
+// drizzle predicates cancelRun runs. SP5 Task 4 review I4/C2 split cancelRun into two status-guarded
+// branches: a PAUSED target is FINALIZED directly (there is no in-flight executeRun to observe a
+// flag), a RUNNING target gets cancel_requested=true (cooperative, Task 3). Both are true no-ops on
+// an already-terminal row.
 describe("cancelRun's DB mechanism (real Neon, network-free)", () => {
-  it("sets cancel_requested=true on an active 'running' run", async () => {
+  it("sets cancel_requested=true on an active 'running' run (cooperative branch)", async () => {
     const [run] = await db.insert(pipelineRuns).values({ triggeredBy: "manual", status: "running" }).returning({ id: pipelineRuns.id });
     try {
       const updated = await db.update(pipelineRuns).set({ cancelRequested: true })
-        .where(and(eq(pipelineRuns.id, run.id), isNull(pipelineRuns.finishedAt)))
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "running"), isNull(pipelineRuns.finishedAt)))
         .returning({ id: pipelineRuns.id });
       expect(updated.length).toBe(1);
 
@@ -276,29 +277,51 @@ describe("cancelRun's DB mechanism (real Neon, network-free)", () => {
     }
   });
 
-  it("also sets the flag on a 'paused' run — Stop must work on running OR paused (both finished_at IS NULL)", async () => {
-    const [run] = await db.insert(pipelineRuns).values({ triggeredBy: "manual", status: "paused" }).returning({ id: pipelineRuns.id });
+  it("FINALIZES a 'paused' run directly (Stop on a paused run) — SP5 Task 4 review I4/C2", async () => {
+    // A paused run has no in-flight executeRun to observe a cooperative flag, so cancelRun's paused
+    // branch finalizes it directly (status='cancelled' + finished_at, clearing checkpoint/flags) —
+    // this is the exact status-guarded UPDATE cancelRun now runs for a paused target. Freeing the
+    // interlock slot is what lets Task 5's Stop button work on a paused run (and recovers any
+    // stranded paused run).
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "manual", status: "paused", pauseRequested: true, checkpoint: { stories: [] },
+    }).returning({ id: pipelineRuns.id });
     try {
-      const updated = await db.update(pipelineRuns).set({ cancelRequested: true })
-        .where(and(eq(pipelineRuns.id, run.id), isNull(pipelineRuns.finishedAt)))
+      const finalized = await db.update(pipelineRuns)
+        .set({ status: "cancelled", finishedAt: new Date(), checkpoint: null, pauseRequested: false, cancelRequested: false })
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
         .returning({ id: pipelineRuns.id });
-      expect(updated.length).toBe(1);
+      expect(finalized.length).toBe(1);
+
+      const [row] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+      expect(row.status).toBe("cancelled");
+      expect(row.finishedAt).not.toBeNull(); // terminal — interlock slot freed
+      expect(row.checkpoint).toBeNull();
+      expect(row.pauseRequested).toBe(false);
     } finally {
       await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
     }
   });
 
-  it("no-ops (0 rows touched) on an already-terminal run — cancel_requested stays false", async () => {
+  it("no-ops (0 rows touched) on an already-terminal run — both branches miss", async () => {
     const [run] = await db.insert(pipelineRuns).values({
       triggeredBy: "manual", status: "success", finishedAt: new Date(),
     }).returning({ id: pipelineRuns.id });
     try {
-      const updated = await db.update(pipelineRuns).set({ cancelRequested: true })
-        .where(and(eq(pipelineRuns.id, run.id), isNull(pipelineRuns.finishedAt)))
+      // Paused branch: WHERE status='paused' → 0 rows on a 'success' row.
+      const finalizedPaused = await db.update(pipelineRuns)
+        .set({ status: "cancelled", finishedAt: new Date(), checkpoint: null, pauseRequested: false, cancelRequested: false })
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
         .returning({ id: pipelineRuns.id });
-      expect(updated.length).toBe(0); // matches cancelRun's { ok: false, message: "L'exécution est déjà terminée." } path
+      expect(finalizedPaused.length).toBe(0);
+      // Running branch: WHERE status='running' AND finished_at IS NULL → 0 rows too.
+      const flagged = await db.update(pipelineRuns).set({ cancelRequested: true })
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "running"), isNull(pipelineRuns.finishedAt)))
+        .returning({ id: pipelineRuns.id });
+      expect(flagged.length).toBe(0); // matches cancelRun's { ok: false, message: "L'exécution est déjà terminée." } path
 
       const [row] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+      expect(row.status).toBe("success"); // untouched
       expect(row.cancelRequested).toBe(false); // untouched
     } finally {
       await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));

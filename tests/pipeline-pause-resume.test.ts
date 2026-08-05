@@ -6,7 +6,7 @@ import {
 import { and, eq, inArray, isNull, like } from "drizzle-orm";
 import { can } from "@/lib/rbac";
 import { openRun, executeRun } from "@/lib/pipeline/run";
-import { hasRunningRun } from "@/lib/pipeline/overlap";
+import { hasRunningRun, reclaimStaleRuns } from "@/lib/pipeline/overlap";
 import { getActiveRun } from "@/lib/queries/runs";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,6 +177,11 @@ describe("executeRun cooperative pause — checkpoint (a): before phase 2 begins
       expect(producedSources.length).toBe(1);
       const [producedArticle] = await db.select().from(articles).where(eq(articles.id, producedSources[0].articleId));
       expect(producedArticle.status).toBe("pending"); // human-review barrier intact
+
+      // SP5 Task 4 review C1: the resume path inserts an immediate "Reprise de l'exécution" step
+      // (fresh activity so reclaimStaleRuns can't reap a just-resumed run before its first extraction).
+      const steps2 = await db.select().from(pipelineSteps).where(eq(pipelineSteps.runId, runId!));
+      expect(steps2.some((s) => s.name === "Reprise de l'exécution")).toBe(true);
 
       // Interlock freed now that the run is genuinely terminal.
       expect(await hasRunningRun()).toBe(false);
@@ -447,6 +452,172 @@ describe("resumeRun's DB mechanism (real Neon, network-free)", () => {
       await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
     }
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SP5 Task 4 REVIEW fixes (C1 reaper-safe resume, C2 zero-work strand, I4 cancel-paused, I3 atomic
+// resume). These exercise the exact drizzle mechanisms the reviewed actions run (the actions
+// themselves can't be invoked under plain `bun test` — requireUser() → next/headers).
+describe("SP5 Task 4 review — pause/resume invariant fixes", () => {
+  // C1 — a paused run older than runStaleMinutes, once resumed (status→running + started_at
+  // REFRESHED, as resumeRun's atomic flip does), must NOT be reaped by reclaimStaleRuns(). Before
+  // the fix it kept its old started_at and had no fresh step, so the reaper (which runs on every
+  // getActiveRun poll) matched it and freed the interlock slot mid-resume.
+  it("C1: a just-resumed run with a refreshed started_at is not reaped by reclaimStaleRuns()", async () => {
+    const checkpoint: RunCheckpoint = {
+      stories: [[{
+        feedId: "feed-c1", feedName: "Flux C1",
+        item: { guid: "g-c1", url: "https://example.com/c1", title: "T", contentSnippet: "S", isoDate: null, contentHash: "h-c1" },
+      }]],
+    };
+    // Paused, started 24h ago (well past the 15-min default stale cutoff), no steps at all.
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "manual", status: "paused", startedAt: new Date(Date.now() - 24 * 60 * 60_000), checkpoint,
+    }).returning({ id: pipelineRuns.id });
+    try {
+      // resumeRun's atomic, status-guarded claim: flips to running AND refreshes started_at.
+      const claimed = await db.update(pipelineRuns)
+        .set({ status: "running", startedAt: new Date(), pauseRequested: false, checkpoint: null })
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
+        .returning({ id: pipelineRuns.id });
+      expect(claimed.length).toBe(1);
+
+      // The reaper runs on every getActiveRun/hasRunningRun poll — it must leave this run alone
+      // because started_at is now recent (even with zero steps yet).
+      await reclaimStaleRuns();
+
+      const [after] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+      expect(after.status).toBe("running");   // NOT reaped to "failed"
+      expect(after.finishedAt).toBeNull();     // slot still held by the live resume
+    } finally {
+      await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+    }
+  });
+
+  // I3 — two concurrent resumeRun calls both pass the SELECT gate, but only the FIRST atomic
+  // status-guarded flip matches a 'paused' row; the second sees 0 rows and no-ops (so only one
+  // executeRun fires → no duplicate articles).
+  it("I3: a second concurrent resume claim finds 0 rows (only one executeRun fires)", async () => {
+    const checkpoint: RunCheckpoint = {
+      stories: [[{
+        feedId: "feed-i3", feedName: "Flux I3",
+        item: { guid: "g-i3", url: "https://example.com/i3", title: "T", contentSnippet: "S", isoDate: null, contentHash: "h-i3" },
+      }]],
+    };
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "manual", status: "paused", checkpoint,
+    }).returning({ id: pipelineRuns.id });
+    try {
+      const flip = () => db.update(pipelineRuns)
+        .set({ status: "running", startedAt: new Date(), pauseRequested: false, checkpoint: null })
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
+        .returning({ id: pipelineRuns.id });
+      const first = await flip();
+      const second = await flip();
+      expect(first.length).toBe(1);  // winner claims the resume
+      expect(second.length).toBe(0); // loser no-ops — would NOT fire a duplicate executeRun
+    } finally {
+      await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+    }
+  });
+
+  // I4/C2 recovery — cancelRun's paused branch finalizes a paused run directly (terminal 'cancelled'
+  // + finished_at, clearing checkpoint/flags), freeing the interlock slot so a genuinely new run can
+  // open right after. This is what makes Stop work on a paused run and recovers a stranded one.
+  it("I4/C2: cancelling a paused run finalizes it and frees the interlock slot", async () => {
+    const checkpoint: RunCheckpoint = {
+      stories: [[{
+        feedId: "feed-i4", feedName: "Flux I4",
+        item: { guid: "g-i4", url: "https://example.com/i4", title: "T", contentSnippet: "S", isoDate: null, contentHash: "h-i4" },
+      }]],
+    };
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "manual", status: "paused", pauseRequested: true, checkpoint,
+    }).returning({ id: pipelineRuns.id });
+    let secondRunId: string | null = null;
+    try {
+      expect(await hasRunningRun()).toBe(true); // paused holds the slot
+
+      // cancelRun's paused branch.
+      const finalized = await db.update(pipelineRuns)
+        .set({ status: "cancelled", finishedAt: new Date(), checkpoint: null, pauseRequested: false, cancelRequested: false })
+        .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
+        .returning({ id: pipelineRuns.id });
+      expect(finalized.length).toBe(1);
+
+      const [row] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+      expect(row.status).toBe("cancelled");
+      expect(row.finishedAt).not.toBeNull();
+      expect(row.checkpoint).toBeNull();
+
+      // Slot freed — a brand-new run can open right after.
+      expect(await hasRunningRun()).toBe(false);
+      secondRunId = await openRun({ triggeredBy: "manual" });
+      expect(secondRunId).not.toBeNull();
+    } finally {
+      if (secondRunId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, secondRunId));
+      await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+    }
+  });
+});
+
+// C2 — a zero-work run (every candidate a duplicate / feed empty) with pause_requested set must
+// NOT enter the paused state (an empty checkpoint would strand the slot forever). It finalizes
+// NORMALLY instead. Fixture: an EMPTY RSS feed (zero items → zero candidates → zero groups).
+describe("SP5 Task 4 review C2 — pausing a zero-work run finalizes normally (does not park)", () => {
+  const envSnap = snapshotEnv(PROVIDER_KEYS);
+  let rss: ReturnType<typeof Bun.serve>;
+  let feedId: string;
+
+  beforeAll(async () => {
+    for (const k of PROVIDER_KEYS) delete process.env[k];
+    rss = Bun.serve({
+      port: 0,
+      fetch: () => new Response(
+        `<?xml version="1.0"?><rss version="2.0"><channel><title>Fixture vide</title></channel></rss>`,
+        { headers: { "content-type": "application/xml" } },
+      ),
+    });
+    const [f] = await db.insert(feeds).values({ name: "Fixture vide", feedUrl: `http://localhost:${rss.port}/feed`, active: true }).returning({ id: feeds.id });
+    feedId = f.id;
+  });
+
+  afterAll(async () => {
+    rss.stop(true);
+    restoreEnv(envSnap);
+    await db.delete(rawItems).where(eq(rawItems.feedId, feedId));
+    await db.delete(feeds).where(eq(feeds.id, feedId));
+  });
+
+  it("finalizes to a terminal status (NOT 'paused'), sets finished_at, writes no checkpoint, frees the slot", async () => {
+    let runId: string | null = null;
+    try {
+      runId = await openRun({ triggeredBy: "manual", feedsTotal: 1 });
+      expect(runId).not.toBeNull();
+
+      // Pause requested BEFORE executeRun — but there is zero remaining work, so boundary (a) must
+      // decline to park and let the run finalize normally.
+      await db.update(pipelineRuns).set({ pauseRequested: true }).where(eq(pipelineRuns.id, runId!));
+
+      const res = await executeRun(runId!, { feedIds: [feedId] });
+      expect(res.status).not.toBe("paused"); // NOT parked
+      expect(res.status).toBe("success");    // quiet run (no candidates, feed read OK) → success
+
+      const [row] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId!));
+      expect(row.status).toBe("success");
+      expect(row.finishedAt).not.toBeNull(); // terminal — slot freed
+      expect(row.checkpoint).toBeNull();     // no checkpoint written
+      expect(row.totalItems).toBe(0);        // zero groups
+
+      // No "Exécution mise en pause" step (it never paused).
+      const steps = await db.select().from(pipelineSteps).where(eq(pipelineSteps.runId, runId!));
+      expect(steps.some((s) => s.name === "Exécution mise en pause")).toBe(false);
+
+      expect(await hasRunningRun()).toBe(false); // interlock freed, not stranded
+    } finally {
+      if (runId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, runId));
+    }
+  }, 20000);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
