@@ -12,7 +12,9 @@ import { getPipelineSettings } from "@/lib/queries/settings";
 import { createAlert } from "@/lib/alerts/notify";
 import { searchRelated } from "@/lib/search";
 import type { RawItem } from "@/lib/rss/parse-feed";
-import type { RunCheckpoint } from "@/db";
+import type { RunCheckpoint, RunParams } from "@/db";
+import { isWithinRecency, narrowByRecency } from "./recency";
+import { cutoffDate } from "./run-params";
 
 // A same-story group can in principle grow past any sane article/prompt size (a viral story might
 // match dozens of candidates in one run) — cap how many of its members actually become
@@ -100,12 +102,13 @@ async function checkControlFlags(runId: string): Promise<{ cancelled: boolean; p
  * is already active (either the app-level hasRunningRun() check, or the pipeline_runs_one_running
  * partial unique index losing a race on insert — both cases back off cleanly, never crash).
  */
-export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: number }): Promise<string | null> {
+export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: number; params?: RunParams }): Promise<string | null> {
   if (await hasRunningRun()) return null;
   try {
     const [run] = await db.insert(pipelineRuns).values({
       triggeredBy: opts.triggeredBy, status: "running",
       phase: "reading_feeds", feedsTotal: opts.feedsTotal ?? null, processedItems: 0,
+      params: opts.params ?? null,
     }).returning({ id: pipelineRuns.id });
     return run.id;
   } catch (e) {
@@ -163,7 +166,7 @@ export async function executeRun(
   runId: string,
   opts: { feedIds?: string[]; resumeStories?: RunCheckpoint["stories"] } = {},
 ): Promise<RunResult> {
-  let feedsRead = 0, feedsFailed = 0, newItems = 0, produced = 0, itemFailures = 0, overCap = 0;
+  let feedsRead = 0, feedsFailed = 0, newItems = 0, produced = 0, itemFailures = 0, overCap = 0, tooOld = 0;
   let capHit = false, targetFeedsLength = 0;
   let status: RunStatus = "failed";
   // SP5 Task 3: set the moment a cooperative cancel check observes cancel_requested=true. Declared
@@ -184,6 +187,14 @@ export async function executeRun(
     // getPipelineConfig() stays for provider/secret/order config elsewhere in the pipeline.
     const settings = await getPipelineSettings();
     const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
+
+    // Params live on the run row (resolved at trigger). Read once; drives feed targeting, the item
+    // cap, and the recency cutoff. Null for legacy rows / direct executeRun callers → no cutoff,
+    // opts.feedIds fallback, settings.maxItemsPerRun.
+    const [runRow] = await db.select({ params: pipelineRuns.params }).from(pipelineRuns).where(eq(pipelineRuns.id, runId));
+    const params = runRow?.params ?? null;
+    const cutoff = params ? cutoffDate(params) : null;
+    const maxItems = params?.maxItems ?? settings.maxItemsPerRun;
 
     type Candidate = { item: RawItem; feedId: string; feedName: string };
     type Group = { members: Candidate[] };
@@ -215,8 +226,9 @@ export async function executeRun(
       newItems = prior?.newItems ?? 0;
       await setProgress(runId, { phase: "processing_items" }); // deliberately no totalItems/processedItems here
     } else {
-      const targetFeeds = opts.feedIds !== undefined
-        ? (opts.feedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, opts.feedIds)) : [])
+      const paramFeedIds = params?.feedIds ?? opts.feedIds;
+      const targetFeeds = paramFeedIds != null
+        ? (paramFeedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, paramFeedIds)) : [])
         : await db.select().from(feeds).where(eq(feeds.active, true));
       targetFeedsLength = targetFeeds.length;
 
@@ -252,13 +264,19 @@ export async function executeRun(
           continue;
         }
         for (const item of items) {
-          if (seenHashes.has(item.contentHash)) continue;      // duplicate within this run's batch
-          if (await isSeen(feed.id, item)) continue;           // recorded by a previous run
+          if (!isWithinRecency(item.isoDate, cutoff)) { tooOld++; continue; }  // published before cutoff
+          if (seenHashes.has(item.contentHash)) continue;                       // duplicate within this run
+          if (await isSeen(feed.id, item)) continue;                            // already processed by a prior run
           seenHashes.add(item.contentHash);
-          if (candidates.length >= settings.maxItemsPerRun) { capHit = true; overCap++; continue; }
-          candidates.push({ item, feedId: feed.id, feedName: feed.name });
+          candidates.push({ item, feedId: feed.id, feedName: feed.name });      // NO cap here — narrowed below
         }
       }
+
+      // Apply the cap AFTER all filtering: keep the most-recent maxItems (undated = oldest). This
+      // replaces the old running counter, which dropped items by feed-read order rather than recency.
+      const narrowed = narrowByRecency(candidates, (c) => c.item.isoDate, maxItems);
+      if (narrowed.dropped.length > 0) { capHit = true; overCap = narrowed.dropped.length; }
+      const kept = narrowed.kept;
 
       // ---- Story grouping (SP4 Task 6a): greedily group candidates by cosine similarity of their
       // lightweight (title+snippet) embedding to each existing group's FIRST member. A hash-based
@@ -268,7 +286,7 @@ export async function executeRun(
       // same-story duplicates. groupVectors is parallel to builtGroups (index i = its join target).
       const builtGroups: Group[] = [];
       const groupVectors: number[][] = [];
-      for (const c of candidates) {
+      for (const c of kept) {   // was: for (const c of candidates)
         const { vector } = await embed(`${c.item.title}\n${c.item.contentSnippet}`);
         let joinedIndex = -1;
         for (let i = 0; i < builtGroups.length; i++) {
@@ -489,8 +507,15 @@ export async function executeRun(
       await insertStep({
         runId, name: "Limite d'éléments atteinte", status: "partial", durationMs: null,
         errorMessage:
-          `La limite de ${settings.maxItemsPerRun} nouveaux éléments par exécution a été atteinte : `
+          `La limite de ${maxItems} nouveaux éléments par exécution a été atteinte : `
           + `${overCap} élément(s) supplémentaire(s) au-delà de la limite n'ont pas été traités ; ils seront repris lors d'une prochaine exécution.`,
+      });
+    }
+    // No silent truncation: items skipped for being older than the recency cutoff get their own step.
+    if (tooOld > 0) {
+      await insertStep({
+        runId, name: "Éléments trop anciens ignorés", status: "partial", durationMs: null,
+        errorMessage: `${tooOld} élément(s) antérieur(s) à la date de récence configurée ont été ignorés (non traités).`,
       });
     }
 
