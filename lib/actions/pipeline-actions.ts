@@ -21,13 +21,13 @@ function pgErrorCode(e: unknown): string | undefined {
 /**
  * On-demand fetch for the run-detail drawer (SP4 Task 4): the runs list page only loads summary
  * rows, so RunsView calls this per-click rather than front-loading every run's full step trace.
- * Read-only (pipeline:read, not :configure) — unlike runPipelineNow/reprocessRawItem above.
+ * Read-only (pipeline:read, not :configure) — unlike startPipelineRun/reprocessRawItem below.
  */
 export async function getRunDetailAction(runId: string): Promise<RunDetail | null> {
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "read");
 
-  // Dynamic import (kept AFTER the RBAC check above): mirrors runPipelineNow's/reprocessRawItem's
+  // Dynamic import (kept AFTER the RBAC check above): mirrors startPipelineRun's/reprocessRawItem's
   // pattern in this file — keeping every value-level import inside pipeline-actions.ts deferred
   // avoids Turbopack ever needing to resolve the pipeline's jsdom-heavy dependency graph while
   // statically analyzing this "use server" module at build time.
@@ -45,8 +45,8 @@ export async function startPipelineRun(): Promise<{ ok: true; runId: string } | 
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "configure");
 
-  // Dynamic import (kept AFTER the RBAC check above): mirrors the former runPipelineNow's/
-  // reprocessRawItem's pattern in this file — see reprocessRawItem's comment below for why.
+  // Dynamic import (kept AFTER the RBAC check above): mirrors reprocessRawItem's pattern in this
+  // file — see reprocessRawItem's comment below for why.
   const { openRun, executeRun } = await import("@/lib/pipeline/run");
   const { db, feeds } = await import("@/db");
   const { eq } = await import("drizzle-orm");
@@ -81,9 +81,9 @@ export async function reprocessRawItem(
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "configure");
 
-  // Dynamic import (kept AFTER the RBAC check above): see runPipelineNow's comment — stageItem
-  // transitively pulls in the jsdom-heavy extraction chain, which breaks `bun run build` under
-  // Turbopack if statically imported at the top of this "use server" module.
+  // Dynamic import (kept AFTER the RBAC check above): see startPipelineRun's comment above —
+  // stageItem transitively pulls in the jsdom-heavy extraction chain, which breaks `bun run build`
+  // under Turbopack if statically imported at the top of this "use server" module.
   const { db, rawItems, feeds, wpCategories, pipelineRuns, pipelineSteps } = await import("@/db");
   const { eq } = await import("drizzle-orm");
   const { hasRunningRun } = await import("@/lib/pipeline/overlap");

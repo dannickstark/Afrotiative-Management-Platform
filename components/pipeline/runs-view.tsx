@@ -1,14 +1,13 @@
 "use client";
-import { useEffect, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { RunNow } from "@/components/pipeline/run-now";
+import { LiveRunPanel } from "@/components/pipeline/live-run-panel";
 import { RunDetailSheet } from "@/components/pipeline/run-detail-sheet";
 import { formatDate, pipelineStatusLabel, type PipelineStatus } from "@/lib/format";
 import { getRunDetailAction } from "@/lib/actions/pipeline-actions";
-import type { RunDetail } from "@/lib/queries/runs";
+import type { RunDetail, ActiveRun } from "@/lib/queries/runs";
 
 const TRIGGER_LABEL: Record<string, string> = { manual: "Manuel", scheduled: "Programmé" };
 
@@ -29,8 +28,7 @@ export type RunRow = {
   failedSteps: number;
 };
 
-export function RunsView({ runs }: { runs: RunRow[] }) {
-  const router = useRouter();
+export function RunsView({ runs, initialActive }: { runs: RunRow[]; initialActive: ActiveRun | null }) {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -39,18 +37,6 @@ export function RunsView({ runs }: { runs: RunRow[] }) {
   // rather than clobbering B's detail. Set to null on close so a resolution after close can't
   // repopulate a dismissed drawer.
   const latestReq = useRef<string | null>(null);
-
-  const hasRunning = runs.some((r) => r.status === "running");
-
-  // Auto-refresh while a run is in flight so the list (and thus the auto-refresh condition
-  // itself) picks up the eventual success/failed/partial transition without a manual reload.
-  // router.refresh() re-runs the RSC page query, which produces a fresh `runs` prop — no interval
-  // is scheduled once nothing is running, so this settles on its own once the run finishes.
-  useEffect(() => {
-    if (!hasRunning) return;
-    const t = setInterval(() => router.refresh(), 4000);
-    return () => clearInterval(t);
-  }, [hasRunning, router]);
 
   function handleRowClick(id: string) {
     latestReq.current = id;
@@ -83,8 +69,9 @@ export function RunsView({ runs }: { runs: RunRow[] }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Exécutions du pipeline</h1>
-        <RunNow />
       </div>
+
+      <LiveRunPanel initialActive={initialActive} lastRun={runs[0] ?? null} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Dernières exécutions</CardTitle></CardHeader>
