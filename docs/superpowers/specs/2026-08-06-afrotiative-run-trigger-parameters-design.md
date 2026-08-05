@@ -26,7 +26,8 @@ Objectif : permettre à l'utilisateur de **régler quelques paramètres avant de
 | **Paramètres retenus** | (1) **Coupure de récence** (ne pas traiter les articles trop anciens), (2) **sélection des flux/sources**, (3) **nombre max de nouveaux éléments** pour cette exécution. |
 | **Paramètres écartés** (YAGNI) | Bascule « recherche web » par exécution ; override « publication automatique » par exécution ; mode **prévisualisation** (dry-run). Non retenus pour cette itération. |
 | **Forme de la coupure de récence** | **Les deux** : une valeur **relative** (« derniers N h ») sert de **défaut dans les réglages** ; au déclenchement, l'utilisateur peut choisir une valeur relative **ou** une date/heure **absolue** (« depuis le … »). |
-| **Éléments sans date de publication fiable** | **Inclus.** Beaucoup de flux RSS omettent/malforment `pubDate` ; la coupure n'exclut que les éléments qu'on peut **prouver** trop anciens. Favorise le rappel (ne pas rater une vraie actualité). |
+| **Éléments sans date de publication fiable** | **Inclus** par la coupure. Beaucoup de flux RSS omettent/malforment `pubDate` ; la coupure n'exclut que les éléments qu'on peut **prouver** trop anciens. Favorise le rappel (ne pas rater une vraie actualité). |
+| **Application du plafond `maxItems`** | **Après tout le filtrage** (récence + déjà-traités), jamais pendant la collecte. S'il reste plus de `maxItems` candidats, on **narrow** en gardant les **plus récents** (top-X). Les éléments **sans date** rangent comme **les plus anciens** (écartés en premier lors du narrowing). Corrige le plafond « compteur courant » actuel, qui écarte selon l'ordre de lecture des flux plutôt que par récence. |
 | **Persistance des paramètres** | Résolus au déclenchement puis **stockés en `jsonb` sur la ligne `pipeline_runs`** ; `executeRun` les **lit depuis la ligne**. Source unique de vérité, survit à pause/reprise, visible dans l'historique. |
 | **Exécutions planifiées** | Héritent des **défauts des réglages** (tous les flux actifs, max par défaut, récence par défaut). ⚠️ Conséquence assumée : une fois un défaut de récence défini, **les exécutions planifiées filtrent aussi** les éléments trop anciens. |
 | **Défaut de récence à la livraison** | **`NULL` = aucune limite** (opt-in). Rétrocompatible : le comportement actuel (aucun filtre de date) est préservé tant qu'un admin ne définit pas de valeur. |
@@ -135,18 +136,23 @@ startPipelineRun(input: RunParamsInput): Promise<{ ok: true; runId: string } | {
 
 ---
 
-## 7. Câblage du pipeline (phase 1)
+## 7. Câblage du pipeline (phase 1) — **filtrer d'abord, plafonner ensuite**
 
-Dans la boucle par flux de la **phase 1** de `executeRun` (`lib/pipeline/run.ts`), pour chaque `item` d'un flux, **avant** la déduplication et le plafond :
+Principe (précisé au brainstorming) : le plafond `maxItems` s'applique **après** tout le filtrage, **jamais pendant** la collecte. On retire d'abord le maximum d'éléments (trop anciens + déjà traités), puis, s'il en reste plus que `maxItems`, on **narrow** en gardant les **plus récents**. Aujourd'hui le plafond est un **compteur courant appliqué dans l'ordre de lecture des flux** : une fois le compteur plein, les éléments des flux lus plus tard sont écartés **même s'ils sont plus récents** que des éléments déjà retenus de flux antérieurs — c'est précisément ce que ce changement corrige.
 
-- **Récence** : si une coupure est active (`cutoffAt` défini) **et** `item.isoDate` est présent **et** `Date(item.isoDate) < cutoffAt` → **ignorer** (trop ancien), incrémenter un compteur. Si `item.isoDate` est **null** → **inclure** (politique retenue).
-- **Nombre max** : le test du plafond utilise `params.maxItems` au lieu de `settings.maxItemsPerRun`.
-- **Ciblage des flux** : déjà géré en amont par les flux cibles (`feedIds`).
+**Séquence dans `executeRun` (`lib/pipeline/run.ts`) :**
 
-Un helper **pur et testable** porte la logique de date :
+1. **Collecte (boucle par flux)** — pour chaque `item`, **sans aucun plafond** :
+   - **Récence (coupure)** : si `cutoffAt` défini **et** `item.isoDate` présent **et** `Date(item.isoDate) < cutoffAt` → **ignorer** (trop ancien), incrémenter `tooOld`. `isoDate` **null/illisible** → **inclure** (politique retenue).
+   - **Dédup intra-lot** (`seenHashes`) puis **déjà-traité** (`isSeen` — élément enregistré par une exécution précédente dans `raw_items`) → **écarter**. *(Ce filtre existe déjà et se produit avant tout plafond ; le changement ne touche que l'étape de narrowing ci-dessous.)*
+   - Sinon → **candidat** (accumulé sur tous les flux, sans limite).
+2. **Narrowing (après la boucle, avant le regroupement/embedding)** — si `candidats.length > maxItems`, trier par date **du plus récent au plus ancien** et garder les `maxItems` premiers. Les éléments **sans date** rangent comme **les plus anciens** (donc écartés en premier quand on doit plafonner ; ils sont traités dès qu'il reste de la place sous le plafond). Le reste est **écarté** (compté `overCap`). Le narrowing **avant** l'embedding garantit qu'on n'embed jamais plus de `maxItems` éléments.
+3. **Ciblage des flux** : déjà géré en amont par les flux cibles (`feedIds`).
+
+Deux helpers **purs et testables** (`lib/pipeline/recency.ts`, sans DB/DOM, comme `filterRuns`/`summarizeRunsWindow`) :
 
 ```ts
-// lib/pipeline/recency.ts (nouveau) — pur, sans DB/DOM (comme filterRuns/summarizeRunsWindow)
+// Coupure de récence : true = garder l'élément.
 export function isWithinRecency(isoDate: string | null, cutoffAt: Date | null): boolean {
   if (!cutoffAt) return true;            // aucune coupure
   if (!isoDate) return true;             // sans date → inclus (politique retenue)
@@ -154,9 +160,20 @@ export function isWithinRecency(isoDate: string | null, cutoffAt: Date | null): 
   if (Number.isNaN(t)) return true;      // date illisible → traitée comme « sans date » → inclus
   return t >= cutoffAt.getTime();
 }
+
+// Narrowing par récence : garde les `maxItems` plus récents (sans date = plus anciens → écartés en
+// premier). Tri stable : à date égale, l'ordre d'entrée est préservé. Retourne gardés + écartés.
+export function narrowByRecency<T>(
+  items: readonly T[], isoDateOf: (t: T) => string | null, maxItems: number,
+): { kept: T[]; dropped: T[] } {
+  if (items.length <= maxItems) return { kept: [...items], dropped: [] };
+  const key = (t: T) => { const d = Date.parse(isoDateOf(t) ?? ""); return Number.isNaN(d) ? -Infinity : d; };
+  const sorted = [...items].sort((a, b) => key(b) - key(a));   // plus récent d'abord
+  return { kept: sorted.slice(0, maxItems), dropped: sorted.slice(maxItems) };
+}
 ```
 
-**Pas de troncature silencieuse** (comme l'étape « Limite d'éléments atteinte » existante) : si des éléments ont été ignorés pour récence, insérer une étape `pipeline_steps` visible, par ex. *« N élément(s) ignoré(s) : publiés avant le {cutoff} »*, statut `partial`. Les éléments ignorés ne sont **pas** enregistrés (`recordRawItem`) ni marqués vus : élargir la coupure plus tard les fait **réapparaître** comme candidats (même logique que les éléments au-delà du plafond).
+**Pas de troncature silencieuse** (comme l'étape « Limite d'éléments atteinte » existante) : `tooOld > 0` et `overCap > 0` produisent chacun une étape `pipeline_steps` visible (`partial`). Les éléments ignorés (récence **ou** narrowing) ne sont **pas** enregistrés (`recordRawItem`) ni marqués vus : ils **réapparaissent** comme candidats à une prochaine exécution (un élément plafonné aujourd'hui parce que trop d'actualités plus récentes sont arrivées sera reconsidéré ensuite).
 
 ---
 

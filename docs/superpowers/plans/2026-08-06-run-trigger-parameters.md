@@ -15,21 +15,24 @@
 - **Migrations are additive and backward-compatible.** `default_max_item_age_hours` defaults to **NULL = no cutoff**, so shipping this changes no behavior until an admin sets a value.
 - **Undated items are included** by the recency filter (only items provably older than the cutoff are skipped).
 - **Pure helpers take injected time** (`now`/`cutoffAt` as parameters), never call `Date.now()` internally — matches `mergeDailyTrends`/`summarizeRunsWindow`/`filterRuns` in `lib/queries/runs.ts`. This keeps them unit-testable with no DB/DOM.
-- **No silent truncation.** Items skipped for recency get a visible `pipeline_steps` row, mirroring the existing "Limite d'éléments atteinte" step.
+- **No silent truncation.** Items skipped for recency **or** dropped by the cap get a visible `pipeline_steps` row, mirroring the existing "Limite d'éléments atteinte" step.
+- **Cap applies after filtering.** `maxItems` is never a running counter during collection — collect all survivors (recency cutoff + dedup + already-processed), then keep the most-recent `maxItems` (undated = oldest). Narrow before the embedding/grouping loop so embedding stays bounded by `maxItems`.
 - **Tests run against the real Neon dev DB** (see `test-setup.ts`); provider keys are stripped so extraction/embedding/LLM fall to mock/readability fallbacks. Run schema migrations before DB-touching tests: `bun run db:generate && bun run db:migrate`.
 - **`import type` for cross-boundary types.** Client components and light modules must import server/DB types as `import type` (the `pg` bundle lesson) — never a value import that pulls `@/db`.
 - Per `AGENTS.md`: this is a modified Next.js; when touching Next-specific conventions, consult `node_modules/next/dist/docs/` rather than assuming.
 
 ---
 
-### Task 1: Pure recency filter helper
+### Task 1: Pure recency helpers (filter + narrow)
 
 **Files:**
 - Create: `lib/pipeline/recency.ts`
 - Test: `tests/run-params.test.ts`
 
 **Interfaces:**
-- Produces: `isWithinRecency(isoDate: string | null, cutoffAt: Date | null): boolean` — `true` = keep the item.
+- Produces:
+  - `isWithinRecency(isoDate: string | null, cutoffAt: Date | null): boolean` — `true` = keep the item (cutoff filter).
+  - `narrowByRecency<T>(items: readonly T[], isoDateOf: (t: T) => string | null, maxItems: number): { kept: T[]; dropped: T[] }` — keeps the `maxItems` most-recent items; **undated items rank as oldest** (dropped first); stable at equal timestamps.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -59,6 +62,32 @@ describe("isWithinRecency", () => {
     expect(isWithinRecency("1999-01-01T00:00:00.000Z", null)).toBe(true);
   });
 });
+
+describe("narrowByRecency", () => {
+  const iso = (t: { id?: string; isoDate: string | null }) => t.isoDate;
+  it("returns all items when at or under the cap", () => {
+    const items = [{ isoDate: "2026-08-05T00:00:00.000Z" }, { isoDate: null }];
+    const r = narrowByRecency(items, iso, 2);
+    expect(r.kept).toEqual(items);
+    expect(r.dropped).toEqual([]);
+  });
+  it("keeps the most-recent maxItems and drops the older rest (input unsorted)", () => {
+    const a = { id: "a", isoDate: "2026-08-06T00:00:00.000Z" };
+    const b = { id: "b", isoDate: "2026-08-05T00:00:00.000Z" };
+    const c = { id: "c", isoDate: "2026-08-04T00:00:00.000Z" };
+    const r = narrowByRecency([b, a, c], iso, 2);
+    expect(r.kept.map((x) => x.id)).toEqual(["a", "b"]);
+    expect(r.dropped.map((x) => x.id)).toEqual(["c"]);
+  });
+  it("ranks undated items as oldest (dropped first), stable among themselves", () => {
+    const a = { id: "a", isoDate: "2026-08-06T00:00:00.000Z" };
+    const d1 = { id: "d1", isoDate: null };
+    const d2 = { id: "d2", isoDate: null };
+    const r = narrowByRecency([d1, a, d2], iso, 1);
+    expect(r.kept.map((x) => x.id)).toEqual(["a"]);
+    expect(r.dropped.map((x) => x.id)).toEqual(["d1", "d2"]);
+  });
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -71,9 +100,10 @@ Expected: FAIL — cannot resolve `@/lib/pipeline/recency`.
 Create `lib/pipeline/recency.ts`:
 
 ```ts
-// Pure recency predicate for phase-1 candidate filtering (no DB/DOM, time injected). Returns true
-// when an item should be KEPT. Undated / unparseable-date items are kept (undated-include policy):
-// the cutoff only excludes items we can prove are older than it.
+// Pure recency helpers for phase-1 candidate handling (no DB/DOM, time injected).
+
+// Cutoff filter — returns true when an item should be KEPT. Undated / unparseable-date items are
+// kept (undated-include policy): the cutoff only excludes items we can prove are older than it.
 export function isWithinRecency(isoDate: string | null, cutoffAt: Date | null): boolean {
   if (!cutoffAt) return true;         // no cutoff configured
   if (!isoDate) return true;          // no publish date → include
@@ -81,18 +111,32 @@ export function isWithinRecency(isoDate: string | null, cutoffAt: Date | null): 
   if (Number.isNaN(t)) return true;   // unparseable date → treat as undated → include
   return t >= cutoffAt.getTime();
 }
+
+// Cap narrowing — applied AFTER all filtering. Keeps the `maxItems` most-recent items; undated (or
+// unparseable) items rank as OLDEST (sort key -Infinity), so they're dropped first when over the
+// cap but still kept when there's room. Array.sort is stable, so equal keys keep input order.
+export function narrowByRecency<T>(
+  items: readonly T[],
+  isoDateOf: (t: T) => string | null,
+  maxItems: number,
+): { kept: T[]; dropped: T[] } {
+  if (items.length <= maxItems) return { kept: [...items], dropped: [] };
+  const key = (t: T) => { const d = Date.parse(isoDateOf(t) ?? ""); return Number.isNaN(d) ? -Infinity : d; };
+  const sorted = [...items].sort((a, b) => key(b) - key(a));  // most-recent first
+  return { kept: sorted.slice(0, maxItems), dropped: sorted.slice(maxItems) };
+}
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/run-params.test.ts`
-Expected: PASS (5 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add lib/pipeline/recency.ts tests/run-params.test.ts
-git commit -m "feat(pipeline): pure isWithinRecency helper for run recency filtering"
+git commit -m "feat(pipeline): pure recency helpers — isWithinRecency (cutoff) + narrowByRecency (cap)"
 ```
 
 ---
@@ -443,8 +487,10 @@ git commit -m "feat(pipeline): resolveRunParams + cutoffDate (defaulting + cutof
 - Test: `tests/run-recency-e2e.test.ts`
 
 **Interfaces:**
-- Consumes: `isWithinRecency` (Task 1), `cutoffDate` (Task 4), `RunParams` (Task 2).
+- Consumes: `isWithinRecency`, `narrowByRecency` (Task 1), `cutoffDate` (Task 4), `RunParams` (Task 2).
 - Produces: `openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: number; params?: RunParams }): Promise<string | null>` — `executeRun` reads `run.params` from the row.
+
+**Cap semantics (per the follow-up decision):** `maxItems` is applied **after** all filtering (recency cutoff + dedup + already-processed), never as a running counter during collection. Collect every survivor across all feeds, then `narrowByRecency` keeps the most-recent `maxItems` (undated = oldest) **before** the grouping/embedding loop.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -551,7 +597,7 @@ Change the checkpoint type import (~line 15) and add the two helpers below it:
 
 ```ts
 import type { RunCheckpoint, RunParams } from "@/db";
-import { isWithinRecency } from "./recency";
+import { isWithinRecency, narrowByRecency } from "./recency";
 import { cutoffDate } from "./run-params";
 ```
 
@@ -605,17 +651,32 @@ Replace the `targetFeeds` selection in the non-resume branch (~line 218–221) w
         : await db.select().from(feeds).where(eq(feeds.active, true));
 ```
 
-In the per-item candidate loop (~line 254–260), add the recency skip at the top and use `maxItems` for the cap:
+In the per-item candidate loop (~line 254–260), add the recency skip at the top and **remove the in-loop cap** — collection now gathers every survivor (filtering only), and the cap is applied after the feed loop:
 
 ```ts
         for (const item of items) {
           if (!isWithinRecency(item.isoDate, cutoff)) { tooOld++; continue; }  // published before cutoff
-          if (seenHashes.has(item.contentHash)) continue;
-          if (await isSeen(feed.id, item)) continue;
+          if (seenHashes.has(item.contentHash)) continue;                       // duplicate within this run
+          if (await isSeen(feed.id, item)) continue;                            // already processed by a prior run
           seenHashes.add(item.contentHash);
-          if (candidates.length >= maxItems) { capHit = true; overCap++; continue; }
-          candidates.push({ item, feedId: feed.id, feedName: feed.name });
+          candidates.push({ item, feedId: feed.id, feedName: feed.name });      // NO cap here — narrowed below
         }
+```
+
+Then, **after the per-feed `for (const feed of targetFeeds)` loop closes** and **before** the story-grouping loop (the `builtGroups`/`groupVectors` block, ~line 269), narrow to `maxItems` by recency:
+
+```ts
+      // Apply the cap AFTER all filtering: keep the most-recent maxItems (undated = oldest). This
+      // replaces the old running counter, which dropped items by feed-read order rather than recency.
+      const narrowed = narrowByRecency(candidates, (c) => c.item.isoDate, maxItems);
+      if (narrowed.dropped.length > 0) { capHit = true; overCap = narrowed.dropped.length; }
+      const kept = narrowed.kept;
+```
+
+Change the story-grouping loop header (~line 271) to iterate the narrowed set:
+
+```ts
+      for (const c of kept) {   // was: for (const c of candidates)
 ```
 
 - [ ] **Step 6: Emit the "too old" observability step and fix the cap message**
@@ -644,8 +705,10 @@ In the cap-hit block (~line 488), change `settings.maxItemsPerRun` → `maxItems
 
 Run: `bun test tests/run-recency-e2e.test.ts`
 Expected: PASS. Then regression-check the pipeline suite:
-Run: `bun test tests/pipeline-run.test.ts tests/pipeline-grouping.test.ts tests/pipeline-pause-resume.test.ts`
-Expected: PASS (existing callers unaffected — `params` null → old behavior).
+Run: `bun test tests/pipeline-run.test.ts tests/pipeline-grouping.test.ts tests/pipeline-pause-resume.test.ts tests/live-progress.test.ts`
+Expected: PASS (existing callers unaffected — `params` null → no cutoff, `opts.feedIds` fallback).
+
+⚠️ **Cap-semantics note:** `tests/live-progress.test.ts` contains a "two-phase-cap" test. The cap still fires `capHit`/`overCap` and its visible step, so a test asserting **counts** (cap step present, N processed, N over cap) still passes. If it asserts **which specific items** were kept, update it — narrowing now keeps the most-recent `maxItems` rather than the first-read ones. Adjust the fixture's expected kept-set accordingly (prefer asserting counts + the cap step, which is what the behavior guarantees).
 
 - [ ] **Step 8: Commit**
 
@@ -1206,6 +1269,7 @@ git status
 - Recency cutoff (relative default + absolute override, undated-include) → Tasks 1, 4, 5, 7. ✅
 - Feed selection → Tasks 5 (targeting), 8 (UI). ✅
 - Max new items → Tasks 5 (cap), 8 (UI). ✅
+- Cap applied **after** filtering, narrowing to the most-recent `maxItems` (undated = oldest) → Tasks 1 (`narrowByRecency`), 5 (wiring, replaces the running counter). ✅
 - Settings defaults (`default_max_item_age_hours`, NULL ship default) → Tasks 2, 7. ✅
 - Params persisted as jsonb on `pipeline_runs`; `executeRun` reads them → Tasks 2, 5. ✅
 - Scheduled runs inherit defaults → Task 6 (`runPipeline`). ✅
