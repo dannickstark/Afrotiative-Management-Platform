@@ -223,9 +223,10 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
         }
 
         // ONE "Extraction du contenu" step for the WHOLE story (exact name → maps to the stepper's
-        // Extraction node), attributed to primaryRawItemId. It times every member's extraction and
-        // is marked failed only if NO member yielded usable text — a single dead link in a
-        // multi-source story just yields one fewer source, never a failed story.
+        // Extraction node), attributed to primaryRawItemId. It times ONLY member (feed-source)
+        // extraction — web augmentation, when it runs, is a SEPARATE "Recherche web" step — and is
+        // marked failed only if NO member yielded usable text: a single dead link in a multi-source
+        // story just yields one fewer source, never a failed story.
         await setProgress(runId, { currentStage: "Extraction du contenu" });
         const t0 = Date.now();
         const sources: SourceInput[] = [];
@@ -242,78 +243,88 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
             lastExtractError = e as Error;
           }
         }
-
-        // SP4 Task 6b — best-effort web-search augmentation. Runs BEFORE the member-extraction
-        // success/failure branch below so external coverage can top up (or, in principle, rescue)
-        // a story regardless of how many member sources yielded usable text. Entirely opt-in
-        // (settings.webSearchEnabled) and SSRF-safe: web-result URLs are UNTRUSTED (arbitrary
-        // internet, picked by a third-party search API, never a feed we chose to follow), so they
-        // are ONLY ever extracted via extractExternal() (jina reader / firecrawl — external infra,
-        // no SSRF surface from our server) — never the direct-fetch readability path. Nothing here
-        // can fail the story or the run: searchRelated() never throws by contract, every per-hit
-        // extraction is individually try/caught, and the whole block is wrapped so even an
-        // unexpected throw only marks this ONE observability step "failed" instead of aborting
-        // the group (member sources gathered above are untouched either way).
-        if (settings.webSearchEnabled) {
-          if (!hasExternalExtractor()) {
-            console.warn(
-              `[pipeline] recherche web ignorée pour « ${primary.item.title} » : aucun extracteur externe ` +
-              `(Jina/Firecrawl) n'est configuré — les URLs web ne sont jamais récupérées directement (protection SSRF).`
-            );
-          } else {
-            const tWeb = Date.now();
-            let webAdded = 0;
-            try {
-              const memberUrls = new Set(inSources.map((m) => m.item.url));
-              const remainingCap = STORY_GROUP_CAP - sources.length;
-              if (remainingCap > 0) {
-                const hits = await searchRelated(primary.item.title, { limit: 3 });
-                for (const hit of hits) {
-                  if (sources.length >= STORY_GROUP_CAP) break;
-                  // Skip a web URL already covered by a member (or an earlier hit this same
-                  // loop) — stageSources also dedupes by URL, but skipping here keeps the
-                  // "N source(s) web ajoutée(s)" count below accurate.
-                  if (memberUrls.has(hit.url) || sources.some((s) => s.url === hit.url)) continue;
-                  try {
-                    const r = await extractExternal(hit.url);
-                    // Unlike a member's fallback to its RSS contentSnippet (a trusted feed's own
-                    // description), a web hit's `snippet` is just a search-engine blurb — NOT a
-                    // stand-in for the article's real content. A failed/empty extraction must
-                    // skip this source outright rather than stage the search snippet as if it
-                    // were extracted text.
-                    const text = r.text.trim();
-                    if (text.length > 0) {
-                      sources.push({ mediaName: hostOf(hit.url) || hit.title, url: hit.url, text, images: r.images });
-                      webAdded++;
-                    }
-                  } catch {
-                    // Best-effort: a failed web fetch/extract just skips this one source.
-                  }
-                }
-              }
-              await insertStep({
-                runId, name: "Recherche web", status: "success", durationMs: Date.now() - tWeb,
-                errorMessage: `${webAdded} source(s) web ajoutée(s).`, rawItemId: primaryRawItemId,
-              });
-            } catch (e) {
-              await insertStep({
-                runId, name: "Recherche web", status: "failed", durationMs: Date.now() - tWeb,
-                errorMessage: `La recherche web a échoué : ${(e as Error).message}`,
-                errorTechnical: (e as Error).stack, rawItemId: primaryRawItemId,
-              });
-            }
-          }
-        }
+        // Captured HERE — before the optional web block — so the "Extraction du contenu" step's
+        // duration reflects ONLY feed-source extraction (what admins expect that step to mean in
+        // the run-detail sheet), not the extra latency of the "Recherche web" step.
+        const memberExtractionMs = Date.now() - t0;
 
         if (sources.length === 0) {
+          // Every member's extraction failed → the story fails exactly as in 6a. Web search is
+          // ENRICHMENT/corroboration of an already-sourced story, NOT a rescue path: a story whose
+          // feed sources all failed must fail, so web augmentation is deliberately NOT attempted
+          // here (it lives in the else-branch below, gated on ≥1 usable member source).
           itemFailures++;
           await insertStep({
-            runId, name: "Extraction du contenu", status: "failed", durationMs: Date.now() - t0,
+            runId, name: "Extraction du contenu", status: "failed", durationMs: memberExtractionMs,
             errorMessage: `Aucune source exploitable pour le groupe « ${primary.item.title} ».`,
             errorTechnical: lastExtractError?.stack, rawItemId: primaryRawItemId,
           });
         } else {
-          await insertStep({ runId, name: "Extraction du contenu", status: "success", durationMs: Date.now() - t0, rawItemId: primaryRawItemId });
+          await insertStep({ runId, name: "Extraction du contenu", status: "success", durationMs: memberExtractionMs, rawItemId: primaryRawItemId });
+
+          // SP4 Task 6b — best-effort web-search ENRICHMENT of an ALREADY-sourced story. Reached
+          // ONLY once ≥1 member yielded usable text (this is the else branch of the extraction
+          // decision), so web coverage corroborates/tops up real feed sources and never rescues a
+          // story whose feed sources all failed. Entirely opt-in (settings.webSearchEnabled) and
+          // SSRF-safe: web-result URLs are UNTRUSTED (arbitrary internet, picked by a third-party
+          // search API, never a feed we chose to follow), so they are ONLY ever extracted via
+          // extractExternal() (jina reader / firecrawl — external infra, no SSRF surface from our
+          // server) — never the direct-fetch readability path. Nothing here can fail the story or
+          // the run: searchRelated() never throws by contract, every per-hit extraction is
+          // individually try/caught, and the whole block is wrapped so even an unexpected throw
+          // only marks this ONE observability step "failed" instead of aborting the group (the
+          // member sources gathered above are untouched either way).
+          if (settings.webSearchEnabled) {
+            if (!hasExternalExtractor()) {
+              console.warn(
+                `[pipeline] recherche web ignorée pour « ${primary.item.title} » : aucun extracteur externe ` +
+                `(Jina/Firecrawl) n'est configuré — les URLs web ne sont jamais récupérées directement (protection SSRF).`
+              );
+            } else {
+              const tWeb = Date.now();
+              let webAdded = 0;
+              try {
+                const memberUrls = new Set(inSources.map((m) => m.item.url));
+                const remainingCap = STORY_GROUP_CAP - sources.length;
+                if (remainingCap > 0) {
+                  const hits = await searchRelated(primary.item.title, { limit: 3 });
+                  for (const hit of hits) {
+                    if (sources.length >= STORY_GROUP_CAP) break;
+                    // Skip a web URL already covered by a member (or an earlier hit this same
+                    // loop) — stageSources also dedupes by URL, but skipping here keeps the
+                    // "N source(s) web ajoutée(s)" count below accurate.
+                    if (memberUrls.has(hit.url) || sources.some((s) => s.url === hit.url)) continue;
+                    try {
+                      const r = await extractExternal(hit.url);
+                      // Unlike a member's fallback to its RSS contentSnippet (a trusted feed's own
+                      // description), a web hit's `snippet` is just a search-engine blurb — NOT a
+                      // stand-in for the article's real content. A failed/empty extraction must
+                      // skip this source outright rather than stage the search snippet as if it
+                      // were extracted text.
+                      const text = r.text.trim();
+                      if (text.length > 0) {
+                        sources.push({ mediaName: hostOf(hit.url) || hit.title, url: hit.url, text, images: r.images });
+                        webAdded++;
+                      }
+                    } catch {
+                      // Best-effort: a failed web fetch/extract just skips this one source.
+                    }
+                  }
+                }
+                await insertStep({
+                  runId, name: "Recherche web", status: "success", durationMs: Date.now() - tWeb,
+                  errorMessage: `${webAdded} source(s) web ajoutée(s).`, rawItemId: primaryRawItemId,
+                });
+              } catch (e) {
+                await insertStep({
+                  runId, name: "Recherche web", status: "failed", durationMs: Date.now() - tWeb,
+                  errorMessage: `La recherche web a échoué : ${(e as Error).message}`,
+                  errorTechnical: (e as Error).stack, rawItemId: primaryRawItemId,
+                });
+              }
+            }
+          }
+
           const { articleId } = await stageSources(sources, categoryNames, {
             onStageStart: (name) => setProgress(runId, { currentStage: name }),
             onStageEnd: (step) => insertStep({

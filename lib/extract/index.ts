@@ -69,13 +69,19 @@ export function extractExternal(url: string): Promise<ExtractResult> {
 }
 
 // Whether at least one external-fetching provider (jina reader or firecrawl — providers that
-// fetch from THEIR OWN infrastructure, never ours) is configured. The runner checks this BEFORE
-// even calling searchRelated(): with neither configured, extractExternal() would just return
-// `via:"none"` for every single hit, so this lets the caller skip web augmentation entirely and
-// log ONE clear reason instead of silently no-op'ing per hit.
+// fetch from THEIR OWN infrastructure, never ours) is BOTH configured (has a key) AND enabled in
+// the extraction order. The runner checks this BEFORE even calling searchRelated(): if no external
+// provider will actually run, extractExternal() would just return `via:"none"` for every single
+// hit (a wasted Brave call + per-hit no-op), so this lets the caller skip web augmentation
+// entirely and log ONE clear reason instead. Requiring extractOrder membership — not just the key
+// — matters because keys can be set while EXTRACT_ORDER deliberately excludes those providers
+// (e.g. an operator pinning EXTRACT_ORDER="readability"): extractExternal() filters the order to
+// jina/firecrawl, so a provider absent from the order never runs even with a key present.
 export function hasExternalExtractor(): boolean {
   const cfg = getPipelineConfig();
-  return !!(cfg.jina || cfg.firecrawl);
+  const jinaReady = !!cfg.jina && cfg.extractOrder.includes("jina");
+  const firecrawlReady = !!cfg.firecrawl && cfg.extractOrder.includes("firecrawl");
+  return jinaReady || firecrawlReady;
 }
 
 async function backfillImages(url: string): Promise<string[]> {

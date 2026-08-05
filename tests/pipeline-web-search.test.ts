@@ -113,14 +113,17 @@ describe("executeRun — web-search augmentation (SP4 Task 6b)", () => {
     await db.insert(pipelineSettings).values({ id: 1, webSearchEnabled: enabled, maxItemsPerRun: 20, clusterThreshold: 0.83 });
   }
 
-  async function makeFeed(label: string, itemUrl: string, itemTitle: string) {
+  async function makeFeed(label: string, itemUrl: string, itemTitle: string, description = `Résumé de l'article pour ${label}.`) {
+    // description="" gives the RSS item an EMPTY contentSnippet — scenario (f) uses this so a
+    // member whose extraction also yields empty text has NO snippet to fall back on, making the
+    // member (and thus the whole story) genuinely source-less.
     const rss = Bun.serve({
       port: 0,
       fetch: () => new Response(
         `<?xml version="1.0"?><rss version="2.0"><channel><title>Fixture ${label}</title>
          <item><title>${itemTitle}</title><link>${itemUrl}</link>
          <guid>test:web-search:${label}:${RUN_TAG}</guid>
-         <description>Résumé de l'article pour ${label}.</description></item>
+         <description>${description}</description></item>
          </channel></rss>`,
         { headers: { "content-type": "application/xml" } },
       ),
@@ -306,6 +309,48 @@ describe("executeRun — web-search augmentation (SP4 Task 6b)", () => {
       stop();
     }
   }, 20000);
+
+  it("(f) web cannot rescue a zero-member story: when ALL members' extraction fails, the story FAILS even with web hits available", async () => {
+    // Member extraction is engineered to yield NO usable text: jina returns a too-short body (→
+    // throws), firecrawl is unconfigured, and the readability fallback direct-fetches the member
+    // URL to an EMPTY document — combined with an empty RSS description (no snippet fallback), the
+    // member contributes zero sources. A valid Brave hit IS available, proving the failure is the
+    // corrected semantics (web is enrichment, not rescue), not merely "no hit to add".
+    const MEMBER_URL = `https://member-f-${RUN_TAG}.example.com/article`;
+    const WEB_HIT_URL = `https://web-hit-f-${RUN_TAG}.example.com/coverage`;
+    fetchCalls = [];
+    jinaShouldFailFor = new Set([MEMBER_URL]); // member's jina extraction throws (too-short body)
+    braveHits = [{ title: "Couverture externe F", url: WEB_HIT_URL, description: "Un extrait qui NE doit PAS sauver l'histoire." }];
+    await setWebSearchEnabled(true);
+    const { feedId, stop } = await makeFeed("f", MEMBER_URL, "Une histoire régionale majeure F", ""); // empty description → empty snippet
+    let runId: string | null = null;
+    try {
+      runId = await openRun({ triggeredBy: "manual", feedsTotal: 1 });
+      const res = await executeRun(runId!, { feedIds: [feedId] });
+
+      // The story failed — web did NOT rescue it.
+      expect(res.status).toBe("failed");
+      expect(res.produced).toBe(0);
+
+      // No article was staged from web coverage alone.
+      const srcs = await db.select().from(articleSources).where(inArray(articleSources.url, [MEMBER_URL, WEB_HIT_URL]));
+      expect(srcs.length).toBe(0);
+
+      const steps = await db.select().from(pipelineSteps).where(eq(pipelineSteps.runId, runId!));
+      // The extraction step is FAILED, exactly as in 6a for a source-less story.
+      const extractStep = steps.find((s) => s.name === "Extraction du contenu");
+      expect(extractStep?.status).toBe("failed");
+      // Web augmentation was never even attempted for the zero-member story.
+      expect(steps.some((s) => s.name === "Recherche web")).toBe(false);
+      // searchRelated() was never reached — Brave was not called, and the web hit URL was never
+      // fetched (not even via the jina reader).
+      expect(fetchCalls.some((u) => u.startsWith(BRAVE_PREFIX))).toBe(false);
+      expect(fetchCalls).not.toContain(`${JINA_READER_PREFIX}${WEB_HIT_URL}`);
+    } finally {
+      await cleanupStory(runId, feedId, [MEMBER_URL, WEB_HIT_URL]);
+      stop();
+    }
+  }, 20000);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,7 +413,13 @@ describe("extract externalOnly / extractExternal — SSRF guard (SP4 Task 6b)", 
 });
 
 describe("hasExternalExtractor (SP4 Task 6b)", () => {
-  const original = { JINA_API_KEY: process.env.JINA_API_KEY, FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY };
+  const original = {
+    JINA_API_KEY: process.env.JINA_API_KEY,
+    FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY,
+    EXTRACT_ORDER: process.env.EXTRACT_ORDER,
+  };
+
+  beforeAll(() => { process.env.EXTRACT_ORDER = "jina,firecrawl,readability"; });
 
   afterAll(() => {
     for (const [k, v] of Object.entries(original)) {
@@ -377,7 +428,7 @@ describe("hasExternalExtractor (SP4 Task 6b)", () => {
     }
   });
 
-  it("is false when neither jina nor firecrawl is configured, true when either alone is", () => {
+  it("is false when neither jina nor firecrawl is configured, true when either alone is (both in EXTRACT_ORDER)", () => {
     delete process.env.JINA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     expect(hasExternalExtractor()).toBe(false);
@@ -387,6 +438,24 @@ describe("hasExternalExtractor (SP4 Task 6b)", () => {
 
     delete process.env.JINA_API_KEY;
     process.env.FIRECRAWL_API_KEY = "k";
+    expect(hasExternalExtractor()).toBe(true);
+  });
+
+  it("is false when keys are set but EXTRACT_ORDER excludes both external providers (FINDING 3)", () => {
+    // Keys present, but the operator pinned EXTRACT_ORDER to readability only → extractExternal()
+    // would filter the order down to nothing and no-op per hit. hasExternalExtractor() must return
+    // false so the runner skips web augmentation cleanly instead of wasting a Brave call.
+    process.env.JINA_API_KEY = "k";
+    process.env.FIRECRAWL_API_KEY = "k";
+    process.env.EXTRACT_ORDER = "readability";
+    expect(hasExternalExtractor()).toBe(false);
+
+    // A partial order (only jina enabled) with both keys set → true via the enabled provider.
+    process.env.EXTRACT_ORDER = "jina,readability";
+    expect(hasExternalExtractor()).toBe(true);
+
+    // Only firecrawl enabled → true.
+    process.env.EXTRACT_ORDER = "readability,firecrawl";
     expect(hasExternalExtractor()).toBe(true);
   });
 });
