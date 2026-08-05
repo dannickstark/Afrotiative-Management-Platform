@@ -246,6 +246,11 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
             if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images });
           } catch (e) {
             lastExtractError = e as Error;
+            // Best-effort skip (SP5 Task 2 review, Finding 3): a member whose extraction failed OR
+            // timed out contributes no source but doesn't fail the story (unless it was the ONLY
+            // member — see the sources.length === 0 branch below). Leave an operator trace, mirroring
+            // the degradation warn in stages.ts, so a silently-dropped source is at least visible in logs.
+            console.warn(`[pipeline] source ignorée (extraction échouée/expirée) : ${m.item.url} — ${(e as Error).message}`);
           }
         }
         // Captured HERE — before the optional web block — so the "Extraction du contenu" step's

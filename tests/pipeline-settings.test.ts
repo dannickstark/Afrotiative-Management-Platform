@@ -115,6 +115,17 @@ describe("pipelineSettingsSchema validation", () => {
   it("rejects a malformed cron string", () => {
     expect(pipelineSettingsSchema.safeParse({ ...VALID, scheduleCron: "not a cron" }).success).toBe(false);
   });
+  // SP5 Task 2 review, Finding 1 — the per-operation timeout floor closes the phantom-commit
+  // window around the "Dépôt en revue" DB transaction (a timeout below commit latency could report
+  // the stage failed while the write still lands).
+  it("rejects a perOperationTimeoutMs below the 5 s floor", () => {
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, perOperationTimeoutMs: 100 }).success).toBe(false);
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, perOperationTimeoutMs: 4999 }).success).toBe(false);
+  });
+  it("accepts a perOperationTimeoutMs at or above the 5 s floor", () => {
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, perOperationTimeoutMs: 5000 }).success).toBe(true);
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, perOperationTimeoutMs: 300000 }).success).toBe(true);
+  });
 });
 
 describe("updatePipelineSettings authz", () => {

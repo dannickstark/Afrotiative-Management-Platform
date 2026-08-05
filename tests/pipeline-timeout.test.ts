@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, spyOn } from "bun:test";
 import { withTimeout } from "@/lib/pipeline/timeout";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,12 +32,29 @@ describe("withTimeout", () => {
     await expect(withTimeout(p3, NaN, "Test")).resolves.toBe("slow-ish-3");
   });
 
-  it("clears its timer so a resolved promise leaves no dangling handle", async () => {
-    // Not directly observable via an assertion, but exercises the finally-clearTimeout path with a
-    // timeout value large enough that, if NOT cleared, would keep this test process alive far
-    // longer than the test itself takes to run.
-    const p = new Promise<string>((resolve) => setTimeout(() => resolve("done"), 5));
-    await expect(withTimeout(p, 60000, "Test")).resolves.toBe("done");
+  it("calls clearTimeout on the resolve path (no dangling handle)", async () => {
+    // Real regression guard (SP5 Task 2 review, Finding 2): spy on clearTimeout and assert the
+    // finally block actually clears the timer — with a 60 s timeout, a leaked handle would
+    // otherwise keep the event loop alive far past this fast-resolving promise.
+    const spy = spyOn(globalThis, "clearTimeout");
+    try {
+      const p = new Promise<string>((resolve) => setTimeout(() => resolve("done"), 5));
+      await expect(withTimeout(p, 60000, "Test")).resolves.toBe("done");
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("calls clearTimeout on the timeout path too (the timer that already fired is still cleared)", async () => {
+    const spy = spyOn(globalThis, "clearTimeout");
+    try {
+      const hung = new Promise<never>(() => {});
+      await expect(withTimeout(hung, 20, "Test")).rejects.toThrow("a dépassé le délai");
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

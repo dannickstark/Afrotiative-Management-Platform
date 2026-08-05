@@ -77,7 +77,13 @@ function isValidCron(v: string): boolean {
 // only allows async-function exports from such a module.
 export const pipelineSettingsSchema = z.object({
   maxItemsPerRun: z.number().int().positive("Doit être un entier positif"),
-  perOperationTimeoutMs: z.number().int().positive("Doit être un entier positif"),
+  // Floor at 5 s (SP5 Task 2 review, Finding 1): the per-operation timeout wraps "Dépôt en revue",
+  // whose fn() is the article-writing DB transaction. withTimeout can only stop WAITING on a
+  // promise, never cancel it — so a timeout below real DB-commit latency could report the stage
+  // failed (articleId: null) while the transaction still commits moments later (a "phantom" pending
+  // article the caller never learns about). 5 s comfortably exceeds any Neon commit, closing that
+  // window, while still allowing a tight timeout for genuinely stuck provider calls.
+  perOperationTimeoutMs: z.number().int().min(5000, "Le délai par opération doit être d'au moins 5 secondes."),
   clusterThreshold: z.number().min(0, "Doit être entre 0 et 1").max(1, "Doit être entre 0 et 1"),
   scoreThreshold: z.number().int().min(0, "Doit être entre 0 et 100").max(100, "Doit être entre 0 et 100"),
   autoPublishEnabled: z.boolean(),
