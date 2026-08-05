@@ -114,6 +114,9 @@ export const pipelineSettingsSchema = z.object({
     (v) => !v || !v.trim() || isValidRecipientsList(v),
     "Emails invalides (séparés par des virgules)",
   ),
+  // Default recency cutoff (hours). Nullable = "no limit". `.default(null)` keeps existing callers
+  // that don't send the field valid (mirrors alertEmailEnabled's default-for-compat pattern).
+  defaultMaxItemAgeHours: z.number().int().positive("Doit être un entier positif").max(720, "Maximum 720 heures (30 jours)").nullable().default(null),
 });
 export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;
 
