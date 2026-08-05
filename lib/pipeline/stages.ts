@@ -6,6 +6,8 @@ import { extract } from "@/lib/extract";
 import { embed } from "@/lib/embeddings";
 import { decideCluster } from "./cluster";
 import { generateArticle } from "@/lib/ai";
+import { sanitizeArticleHtml } from "@/lib/sanitize";
+import { computeArticleScore } from "./score";
 import type { RawItem } from "@/lib/rss/parse-feed";
 
 export type StepRec = {
@@ -21,83 +23,116 @@ export type StageHooks = {
   onStageEnd?: (step: StepRec) => void | Promise<void>;
 };
 
+// One already-extracted piece of source content to synthesize into (part of) ONE article — SP4
+// Task 6a's corpus cross-check unit. `images` are that source's OWN candidate images (e.g.
+// ExtractResult.images from lib/extract); stageSources aggregates them across every source of a
+// story before handing candidateImages to generateArticle. Optional because not every caller
+// tracks per-source images.
+export type SourceInput = { mediaName: string; url: string; text: string; images?: string[] };
+
 // The transaction handle type db.transaction() hands its callback — used so insertTags can
 // participate in the same transaction as the article/sources/embedding inserts below.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+// Shared step-timing helper: runs `fn`, appends a StepRec to `steps` (success or failed) and
+// fires the hooks around it, then rethrows on failure so the caller's own try/catch decides what
+// happens next (stageSources/stageItem both abort — articleId: null — on any stage failure).
+async function timedStep<T>(
+  steps: StepRec[],
+  hooks: StageHooks,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await hooks.onStageStart?.(name);
+  const t0 = Date.now();
+  try {
+    const r = await fn();
+    const step: StepRec = { name, status: "success", durationMs: Date.now() - t0 };
+    steps.push(step);
+    await hooks.onStageEnd?.(step);
+    return r;
+  } catch (e) {
+    const step: StepRec = {
+      name, status: "failed", durationMs: Date.now() - t0,
+      errorMessage: humanError(name, e as Error), errorTechnical: (e as Error).stack,
+    };
+    steps.push(step);
+    await hooks.onStageEnd?.(step);
+    throw e;
+  }
+}
+
 /**
- * Stages one RSS item into a `pending` article awaiting human review.
- * Pipeline: extraction → embedding → clustering → génération IA → dépôt en revue.
+ * Stages N already-extracted sources — all belonging to the SAME story — into ONE `pending`
+ * article awaiting human review. This is the SP4 Task 6a core: corpus cross-check synthesis.
+ * Extraction itself is NOT this function's job (the caller — executeRun's per-group loop, or
+ * stageItem below for the single-item path — already has `text` in hand for every source).
+ * Pipeline: génération IA (cross-checks every source) → sanitize → embedding → clustering
+ * (cross-run, for scoring/observability) → score → dépôt en revue.
+ *
+ * ORDER NOTE (vs. the pre-Task-6 single-source stageItem): embedding/clustering used to run on
+ * the RAW source text BEFORE generation, because with exactly one source that text WAS the
+ * article's content. With N sources there's no single coherent "pre-generation" text to embed —
+ * so this embeds the GENERATED title+body instead, which requires generateArticle to run first.
+ * That changes the pipeline_steps chronological ORDER (Génération IA now precedes Calcul de
+ * l'embedding/Regroupement) but not the 4 step NAMES, which stay exactly what live.ts's
+ * ITEM_STAGES expects (Extraction du contenu is the 5th, run by the caller — see stageItem).
+ *
  * Human-review gate (non-negotiable): the created article always has status "pending" and
- * aiAuthor=true — this function never publishes anything.
- * A failure at any stage aborts the item (articleId: null) and returns whatever steps ran so
- * far; it never throws, so the caller (runPipeline) can always move on to the next item.
+ * aiAuthor=true — this function never publishes anything. A failure at any stage aborts
+ * (articleId: null) and returns whatever steps ran so far; it never throws, so the caller can
+ * always move on to the next story/item.
  */
-export async function stageItem(
-  item: RawItem,
-  mediaName: string,
+export async function stageSources(
+  sources: SourceInput[],
   categoryNames: string[],
   hooks: StageHooks = {},
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
-  const timed = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
-    await hooks.onStageStart?.(name);
-    const t0 = Date.now();
-    try {
-      const r = await fn();
-      const step: StepRec = { name, status: "success", durationMs: Date.now() - t0 };
-      steps.push(step);
-      await hooks.onStageEnd?.(step);
-      return r;
-    } catch (e) {
-      const step: StepRec = {
-        name, status: "failed", durationMs: Date.now() - t0,
-        errorMessage: humanError(name, e as Error), errorTechnical: (e as Error).stack,
-      };
-      steps.push(step);
-      await hooks.onStageEnd?.(step);
-      throw e;
-    }
-  };
+  if (sources.length === 0) return { articleId: null, steps };
 
   try {
-    // Extraction total failure is a HARD abort, not a degraded-success: if every provider fell
-    // through (via "none") or the resulting text is effectively empty, generating an article
-    // from it would hallucinate content from nothing. Throw so the step is recorded FAILED and
-    // the item is aborted (articleId: null) rather than staged as garbage.
-    const ex = await timed("Extraction du contenu", async () => {
-      const r = await extract(item.url);
-      const effectiveText = (r.text || item.contentSnippet).trim();
-      if (r.via === "none" || effectiveText.length < 80) {
-        throw new Error("Aucun contenu n'a pu être extrait de la source.");
-      }
-      return r;
-    });
-    const text = ex.text || item.contentSnippet;
+    const candidateImages = [...new Set(sources.flatMap((s) => s.images ?? []))];
 
-    const emb = await timed("Calcul de l'embedding", () => embed(`${item.title}\n${text}`));
-    const vector = emb.vector;
-
-    const cluster = await timed("Regroupement (clustering)", () => decideCluster(vector));
-
-    const gen = await timed("Génération IA", () => generateArticle({
-      sources: [{ mediaName, url: item.url, text }],
-      candidateImages: ex.images,
+    const gen = await timedStep(steps, hooks, "Génération IA", () => generateArticle({
+      sources: sources.map(({ mediaName, url, text }) => ({ mediaName, url, text })),
+      candidateImages,
       categories: categoryNames,
     }));
     const draft = gen.draft;
 
-    // A provider outage forces embed()/generateArticle() onto their mock fallbacks. Rather than
+    // SP4 Task 2's sanitizer, wired here (closing that task's deferral): the AI-generated
+    // bodyHtml is sanitized BEFORE it is ever embedded or persisted — a provider (or its mock
+    // fallback) can echo unsafe-looking markup straight out of scraped source text, so this must
+    // run before the DB insert, not after.
+    const sanitized = sanitizeArticleHtml(draft.bodyHtml);
+
+    const emb = await timedStep(steps, hooks, "Calcul de l'embedding", () => embed(`${draft.title}\n${sanitized}`));
+    const vector = emb.vector;
+
+    const cluster = await timedStep(steps, hooks, "Regroupement (clustering)", () => decideCluster(vector));
+
+    // A provider outage forces generateArticle()/embed() onto their mock fallbacks. Rather than
     // let a degraded run look identical to a healthy one, flag the article so human reviewers see
     // it wasn't produced under normal conditions. Mock embeddings also make clustering meaningless.
     const confidence: NonNullable<typeof draft.confidence> & { aiDegraded?: boolean } = { ...draft.confidence };
     if (gen.via === "mock") confidence.aiDegraded = true;
     if (emb.via === "mock") { confidence.aiDegraded = true; confidence.clusterUncertain = true; }
     if (gen.via === "mock" || emb.via === "mock") {
-      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) pour ${item.url}`);
+      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) — ${sources.length} source(s)`);
     }
 
-    const articleId = await timed("Dépôt en revue", async () => {
+    // SP4 Task 4's scorer: corroboration (sourceCount — the cross-check payoff), cluster
+    // cohesion (bestScore), completeness/image/category signals, minus confidence penalties.
+    const score = computeArticleScore({
+      sourceCount: sources.length,
+      bestScore: cluster.bestScore,
+      bodyHtml: sanitized,
+      hasImage: !!draft.featuredImageUrl,
+      confidence,
+    });
+
+    const articleId = await timedStep(steps, hooks, "Dépôt en revue", async () => {
       // Read-only lookup — no write dependency, so it can run outside the transaction below.
       const catId = await resolveCategoryId(draft.category, categoryNames);
 
@@ -114,10 +149,7 @@ export async function stageItem(
 
         const [a] = await tx.insert(articles).values({
           title: draft.title,
-          // NOT sanitized here (SP4 Task 2 wired sanitizeArticleHtml only into the human-edit
-          // save path, lib/actions/article-actions.ts saveDraft — see lib/sanitize.ts). Wiring
-          // this AI-generated bodyHtml through the sanitizer is deferred to SP4 Task 6.
-          bodyHtml: draft.bodyHtml,
+          bodyHtml: sanitized,
           excerpt: draft.excerpt,
           status: "pending",
           aiAuthor: true,
@@ -126,11 +158,16 @@ export async function stageItem(
           imageCredit: draft.imageCredit,
           imageSourceUrl: draft.imageSourceUrl,
           clusterId,
+          score,
           confidenceFlags: confidence,
           generatedAt: new Date(),
         }).returning({ id: articles.id });
 
-        await tx.insert(articleSources).values({ articleId: a.id, mediaName, url: item.url });
+        // ONE article_sources row PER source — this is the multi-source synthesis payoff: a
+        // 2-source story yields 2 rows here (and therefore 2 references in the published post).
+        await tx.insert(articleSources).values(
+          sources.map((s) => ({ articleId: a.id, mediaName: s.mediaName, url: s.url }))
+        );
         await tx.insert(articleEmbeddings).values({ articleId: a.id, embedding: vector });
         await insertTags(tx, a.id, draft.tags);
 
@@ -139,6 +176,48 @@ export async function stageItem(
     });
 
     return { articleId, steps };
+  } catch {
+    return { articleId: null, steps };
+  }
+}
+
+/**
+ * Thin wrapper around stageSources() for the single-item path — kept for reprocessRawItem
+ * (lib/actions/pipeline-actions.ts) and its tests, which retry ONE already-recorded raw_items row
+ * outside the grouping runner. Extracts that one item's content itself (same hard-abort-on-total-
+ * extraction-failure behavior as before Task 6a: if every extraction provider fails outright, the
+ * item is aborted rather than staged from a bare RSS snippet — there is no second source to fall
+ * back on for a lone item, unlike the group path in executeRun) then delegates génération IA
+ * through dépôt en revue to stageSources with exactly one source.
+ */
+export async function stageItem(
+  item: RawItem,
+  mediaName: string,
+  categoryNames: string[],
+  hooks: StageHooks = {},
+): Promise<{ articleId: string | null; steps: StepRec[] }> {
+  const steps: StepRec[] = [];
+  try {
+    // Extraction total failure is a HARD abort, not a degraded-success: if every provider fell
+    // through (via "none") or the resulting text is effectively empty, generating an article
+    // from it would hallucinate content from nothing. Throw so the step is recorded FAILED and
+    // the item is aborted (articleId: null) rather than staged as garbage.
+    const ex = await timedStep(steps, hooks, "Extraction du contenu", async () => {
+      const r = await extract(item.url);
+      const effectiveText = (r.text || item.contentSnippet).trim();
+      if (r.via === "none" || effectiveText.length < 80) {
+        throw new Error("Aucun contenu n'a pu être extrait de la source.");
+      }
+      return r;
+    });
+    const text = ex.text || item.contentSnippet;
+
+    const result = await stageSources(
+      [{ mediaName, url: item.url, text, images: ex.images }],
+      categoryNames,
+      hooks,
+    );
+    return { articleId: result.articleId, steps: [...steps, ...result.steps] };
   } catch {
     return { articleId: null, steps };
   }

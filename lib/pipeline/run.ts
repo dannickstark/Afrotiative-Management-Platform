@@ -2,10 +2,19 @@ import { db, feeds, pipelineRuns, pipelineSteps, wpCategories } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 import { parseFeed } from "@/lib/rss/parse-feed";
 import { isSeen, recordRawItem } from "./dedup";
-import { stageItem } from "./stages";
+import { stageSources, type SourceInput } from "./stages";
+import { extract } from "@/lib/extract";
+import { embed, cosine } from "@/lib/embeddings";
 import { hasRunningRun } from "./overlap";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import type { RawItem } from "@/lib/rss/parse-feed";
+
+// A same-story group can in principle grow past any sane article/prompt size (a viral story might
+// match dozens of candidates in one run) — cap how many of its members actually become
+// article_sources rows. Members beyond the cap are still recordRawItem()'d (marked seen, per the
+// dedup-tension fix below) but are never extracted/synthesized — "capped as sources, not dropped
+// from dedup".
+const STORY_GROUP_CAP = 6;
 
 export type RunTrigger = "manual" | "scheduled";
 export type RunStatus = "success" | "partial" | "failed" | "skipped";
@@ -77,13 +86,28 @@ export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: numb
  *
  * Phase 1 (reading_feeds): reads EVERY target feed — even past the item cap — so feed-health
  * signals (feedsRead) and totalItems are exact. Collects NEW candidates (dedup'd by isSeen() and
- * an intra-batch hash set) without recording them yet.
- * Phase 2 (processing_items): for each candidate up to the cap — record it (this is the ONLY
- * place recordRawItem() is called, so "seen" is committed exactly for what we process; items
- * beyond the cap are never recorded and are retried on the next run), then stage it with live
- * hooks that persist current_stage and each step as they happen.
+ * an intra-batch hash set) without recording them yet. The item cap (maxItemsPerRun) is enforced
+ * HERE, on candidates — unchanged from before Task 6a; grouping (below) happens strictly AFTER
+ * the cap, so the cap bounds how much work a run can do, not how many stories it produces.
  *
- * A feed that fails to parse, or an item that fails at any stage, is recorded as a failed
+ * Grouping (SP4 Task 6a — corpus cross-check, no web search): each candidate is embedded on its
+ * lightweight RSS metadata (title + snippet — cheap, no extraction/network fetch yet) and greedily
+ * joined to an existing group when its cosine similarity to that group's FIRST member reaches
+ * settings.clusterThreshold, else it starts a new group. This is a PURE in-memory JS cosine over
+ * two same-dimension vectors — never a pgvector round-trip — because it's comparing THIS run's
+ * candidates against each other, not against the persisted article corpus (that's decideCluster's
+ * job, still used per-story below for cross-run cluster assignment/scoring).
+ *
+ * Phase 2 (processing_items): one STORY (group) per processed unit — total_items/processed_items
+ * count GROUPS, not raw candidates. For every group: record EVERY member (recordRawItem) — this is
+ * the dedup-tension fix: a candidate merged into a multi-source story is marked seen exactly once,
+ * here, so it can never resurface as its own separate article on a later run — then extract each
+ * member's content (up to STORY_GROUP_CAP; extra members are still recorded/seen but excluded from
+ * extraction/synthesis) and hand the resulting sources to ONE stageSources() call, which
+ * synthesizes ONE multi-source article. Live progress hooks still persist current_stage/each step
+ * as they happen; current_item is the group's primary (first member's) title.
+ *
+ * A feed that fails to parse, or a group that fails at any stage, is recorded as a failed
  * pipeline_steps row and the run continues — a single failure never aborts the whole run.
  * Hitting the item cap is recorded explicitly (never a silent truncation).
  */
@@ -136,28 +160,95 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       }
     }
 
-    await setProgress(runId, { phase: "processing_items", totalItems: candidates.length, processedItems: 0 });
-
-    // ---- Phase 2: process collected candidates ----
-    let processed = 0;
+    // ---- Story grouping (SP4 Task 6a): greedily group candidates by cosine similarity of their
+    // lightweight (title+snippet) embedding to each existing group's FIRST member. A hash-based
+    // mock embedder (no embed provider configured) produces uncorrelated vectors for ANY differing
+    // input, so in practice — and by design in tests — only genuinely identical/near-identical
+    // metadata joins a group under the mock fallback; a real semantic embedder groups true
+    // same-story duplicates. groupVectors is parallel to groups (index i = groups[i]'s join target).
+    type Group = { members: Candidate[] };
+    const groups: Group[] = [];
+    const groupVectors: number[][] = [];
     for (const c of candidates) {
-      await setProgress(runId, { currentItem: c.item.title, currentStage: null });
+      const { vector } = await embed(`${c.item.title}\n${c.item.contentSnippet}`);
+      let joinedIndex = -1;
+      for (let i = 0; i < groups.length; i++) {
+        if (cosine(vector, groupVectors[i]) >= settings.clusterThreshold) { joinedIndex = i; break; }
+      }
+      if (joinedIndex >= 0) groups[joinedIndex].members.push(c);
+      else { groups.push({ members: [c] }); groupVectors.push(vector); }
+    }
+
+    await setProgress(runId, { phase: "processing_items", totalItems: groups.length, processedItems: 0 });
+
+    // ---- Phase 2: process each STORY (group) — synthesize ONE multi-source article per group ----
+    let processed = 0;
+    for (const group of groups) {
+      const primary = group.members[0];
+      await setProgress(runId, { currentItem: primary.item.title, currentStage: null });
+
+      const inSources = group.members.slice(0, STORY_GROUP_CAP);
+      const overflow = group.members.slice(STORY_GROUP_CAP);
+
       try {
-        const rawItemId = await recordRawItem(c.feedId, c.item);
-        newItems++;
-        const { articleId } = await stageItem(c.item, c.feedName, categoryNames, {
-          onStageStart: (name) => setProgress(runId, { currentStage: name }),
-          onStageEnd: (step) => insertStep({
-            runId, name: step.name, status: step.status, durationMs: step.durationMs,
-            errorMessage: step.errorMessage, errorTechnical: step.errorTechnical, rawItemId,
-          }),
-        });
-        if (articleId) produced++; else itemFailures++;
+        const sources: SourceInput[] = [];
+        let primaryRawItemId: string | null = null;
+
+        // Every in-cap member is recorded (marked seen) AND extracted — this is the dedup-tension
+        // fix: whether a member ends up contributing a source or not, it is recordRawItem()'d here,
+        // so it can never be re-collected as a fresh candidate on a later run.
+        for (const m of inSources) {
+          const rawItemId = await recordRawItem(m.feedId, m.item);
+          newItems++;
+          if (primaryRawItemId === null) primaryRawItemId = rawItemId;
+
+          await setProgress(runId, { currentStage: "Extraction du contenu" });
+          const t0 = Date.now();
+          try {
+            const r = await extract(m.item.url);
+            const text = (r.text || m.item.contentSnippet).trim();
+            await insertStep({ runId, name: "Extraction du contenu", status: "success", durationMs: Date.now() - t0, rawItemId });
+            // Non-empty text only — falls back to the RSS snippet when extraction yields nothing
+            // (r.via === "none" or empty body); a member with no usable text at all contributes no
+            // source (rather than an empty article_sources row) but is still recorded above.
+            if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images });
+          } catch (e) {
+            await insertStep({
+              runId, name: "Extraction du contenu", status: "failed", durationMs: Date.now() - t0,
+              errorMessage: `L'extraction du contenu (${m.item.url}) a échoué : ${(e as Error).message}`,
+              errorTechnical: (e as Error).stack, rawItemId,
+            });
+          }
+        }
+        // Members beyond STORY_GROUP_CAP: still recorded/seen (dedup fix applies to every match),
+        // but never extracted — "capped as sources, not dropped from dedup".
+        for (const m of overflow) {
+          await recordRawItem(m.feedId, m.item);
+          newItems++;
+        }
+
+        if (sources.length === 0) {
+          itemFailures++;
+          await insertStep({
+            runId, name: "Traitement du groupe", status: "failed", durationMs: null,
+            errorMessage: `Aucune source exploitable pour le groupe « ${primary.item.title} ».`,
+          });
+        } else {
+          const { articleId } = await stageSources(sources, categoryNames, {
+            onStageStart: (name) => setProgress(runId, { currentStage: name }),
+            onStageEnd: (step) => insertStep({
+              runId, name: step.name, status: step.status, durationMs: step.durationMs,
+              errorMessage: step.errorMessage, errorTechnical: step.errorTechnical, rawItemId: primaryRawItemId,
+            }),
+          });
+          if (articleId) produced++; else itemFailures++;
+        }
       } catch (e) {
         itemFailures++;
         await insertStep({
-          runId, name: "Traitement de l'élément", status: "failed", durationMs: null,
-          errorMessage: `Le traitement d'un élément (${c.item.url}) a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
+          runId, name: "Traitement du groupe", status: "failed", durationMs: null,
+          errorMessage: `Le traitement d'un groupe (« ${primary.item.title} ») a échoué : ${(e as Error).message}`,
+          errorTechnical: (e as Error).stack,
         });
       }
       processed++;

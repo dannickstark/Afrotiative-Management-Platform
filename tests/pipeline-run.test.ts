@@ -74,8 +74,11 @@ describe("stageItem (end-to-end, network-free)", () => {
 
     expect(articleId).not.toBeNull();
     createdArticleId = articleId;
+    // SP4 Task 6a reordered stageSources's internal steps: génération now runs BEFORE embedding/
+    // clustering (it embeds the GENERATED title+body, which requires a draft to exist first —
+    // see the ORDER NOTE on stageSources in lib/pipeline/stages.ts), not after as before Task 6a.
     expect(steps.map((s) => s.name)).toEqual([
-      "Extraction du contenu", "Calcul de l'embedding", "Regroupement (clustering)", "Génération IA", "Dépôt en revue",
+      "Extraction du contenu", "Génération IA", "Calcul de l'embedding", "Regroupement (clustering)", "Dépôt en revue",
     ]);
     expect(steps.every((s) => s.status === "success")).toBe(true);
     expect(steps.every((s) => s.durationMs >= 0)).toBe(true);
