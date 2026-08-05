@@ -52,14 +52,17 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
   }, [polling, router]);
 
   const handleStart = useCallback(() => {
-    startTransition(() => {
-      startPipelineRun()
-        .then((r) => {
-          if (!r.ok) { toast.error(r.message); return; }
-          watchedRef.current = r.runId;
-          setPolling(true); // effect will pick up the live state on the next poll
-        })
-        .catch(() => toast.error("Une erreur inattendue est survenue."));
+    // Async transition callback so React 19 tracks the in-flight action and keeps `isStarting`
+    // true until it resolves — a sync callback that returns a floating promise flips the pending
+    // flag back in the same tick, re-enabling the button before the first poll and defeating
+    // double-submit protection.
+    startTransition(async () => {
+      try {
+        const r = await startPipelineRun();
+        if (!r.ok) { toast.error(r.message); return; }
+        watchedRef.current = r.runId;
+        setPolling(true); // effect will pick up the live state on the next poll
+      } catch { toast.error("Une erreur inattendue est survenue."); }
     });
   }, []);
 
@@ -93,9 +96,10 @@ function RunningView({ active }: { active: ActiveRun }) {
   const startedMs = new Date(run.startedAt).getTime();
   const elapsed = Date.now() - startedMs;
   const etaMs = computeEta({ startedAtMs: startedMs, nowMs: Date.now(), processedItems: run.processedItems, totalItems: run.totalItems });
-  // The item currently being processed = last item group that matches current_item, else the last group.
-  const currentGroup = items.find((i) => i.title === run.currentItem) ?? items[items.length - 1];
-  const stepperNodes = currentGroup ? deriveStepperNodes(currentGroup.steps, run.currentStage) : deriveStepperNodes([], run.currentStage);
+  // Processing is sequential and `items` is ordered by step arrival, so the in-flight item is the
+  // LAST group. Select by position (collision-safe) — `run.currentItem` is used only for the
+  // display title below, since titles can collide (two untitled items → same "(élément inconnu)").
+  const currentGroup = items[items.length - 1];
   const failures = items.filter((i) => i.hasFailure).length + feedSteps.filter((s) => s.status === "failed").length;
 
   return (
@@ -104,7 +108,7 @@ function RunningView({ active }: { active: ActiveRun }) {
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <div className="font-semibold">Exécution en cours</div>
-            <div className="text-xs text-muted-foreground">Déclenchement manuel · démarrée {new Intl.DateTimeFormat("fr-FR", { timeStyle: "medium" }).format(startedMs)}</div>
+            <div className="text-xs text-muted-foreground">{TRIGGER_LABEL[run.triggeredBy] ?? run.triggeredBy} · démarrée {new Intl.DateTimeFormat("fr-FR", { timeStyle: "medium" }).format(startedMs)}</div>
           </div>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-in-review)]/25 bg-[var(--status-in-review)]/10 px-2.5 py-1 text-xs font-semibold text-[var(--status-in-review)]">
             <span className="size-1.5 animate-pulse rounded-full bg-current" /> En cours
@@ -122,11 +126,11 @@ function RunningView({ active }: { active: ActiveRun }) {
         {run.phase === "processing_items" && currentGroup && (
           <div className="rounded-lg border border-border bg-muted/30 p-3">
             <div className="mb-2 truncate text-xs text-muted-foreground">Élément en cours : <b className="text-foreground">{run.currentItem ?? currentGroup.title}</b></div>
-            <Stepper nodes={stepperNodes} />
+            <Stepper nodes={deriveStepperNodes(currentGroup.steps, run.currentStage)} />
           </div>
         )}
 
-        <LiveJournal feedSteps={feedSteps} items={items} currentTitle={run.currentItem} />
+        <LiveJournal feedSteps={feedSteps} items={items} currentRawItemId={currentGroup?.rawItemId} />
       </CardContent>
     </Card>
   );
@@ -153,9 +157,10 @@ function Stepper({ nodes }: { nodes: ReturnType<typeof deriveStepperNodes> }) {
   );
 }
 
-function LiveJournal({ feedSteps, items, currentTitle }: { feedSteps: ActiveRun["feedSteps"]; items: ActiveRun["items"]; currentTitle: string | null }) {
+function LiveJournal({ feedSteps, items, currentRawItemId }: { feedSteps: ActiveRun["feedSteps"]; items: ActiveRun["items"]; currentRawItemId: string | undefined }) {
   // Completed item groups (exclude the one still in flight) + feed steps, newest-ish first.
-  const done = items.filter((i) => i.title !== currentTitle);
+  // Exclude by stable rawItemId, not title — titles collide (untitled items share a placeholder).
+  const done = items.filter((i) => i.rawItemId !== currentRawItemId);
   return (
     <div>
       <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Journal en direct · {done.length} terminé{done.length > 1 ? "s" : ""}</div>
@@ -181,4 +186,10 @@ function LiveJournal({ feedSteps, items, currentTitle }: { feedSteps: ActiveRun[
 const STATUS_TEXT: Record<PipelineStatus, string> = {
   running: "text-[var(--status-in-review)]", success: "text-[var(--status-approved)]",
   partial: "text-[var(--status-pending)]", failed: "text-[var(--status-error)]",
+};
+
+const TRIGGER_LABEL: Record<string, string> = {
+  manual: "Déclenchement manuel",
+  scheduled: "Planification automatique",
+  reprocess: "Retraitement d'un élément",
 };
