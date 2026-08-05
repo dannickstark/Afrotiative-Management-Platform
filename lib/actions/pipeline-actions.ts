@@ -210,8 +210,14 @@ export async function resumeRun(runId: string): Promise<{ ok: true } | { ok: fal
   await db.insert(pipelineSteps).values({ runId, name: "Reprise de l'exécution", status: "success", durationMs: null });
 
   // Atomic, status-guarded claim — deliberately does NOT refresh started_at (see doc comment above).
+  // Also resets phase→'processing_items' in the SAME statement: on pause, executeRun's finalize path
+  // left phase='finalizing' (lib/pipeline/run.ts). If we flip status→running while phase is still the
+  // stale 'finalizing', a live-panel poll landing in the window BEFORE the detached executeRun does
+  // its own setProgress(phase:'processing_items') would see status=running + phase=finalizing →
+  // deriveHeader's finalizing branch → a "flash" of 100%/"Finalisation" on a run that just resumed
+  // and has real work left. Setting phase here closes that window atomically with the status flip.
   const claimed = await db.update(pipelineRuns)
-    .set({ status: "running", pauseRequested: false, checkpoint: null })
+    .set({ status: "running", pauseRequested: false, checkpoint: null, phase: "processing_items" })
     .where(and(eq(pipelineRuns.id, runId), eq(pipelineRuns.status, "paused")))
     .returning({ id: pipelineRuns.id });
   if (claimed.length === 0) {

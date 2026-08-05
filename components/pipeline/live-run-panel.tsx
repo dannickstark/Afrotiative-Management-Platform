@@ -21,6 +21,12 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
   const [polling, setPolling] = useState<boolean>(initialActive != null);
   const [isStarting, startTransition] = useTransition();
   const watchedRef = useRef<string | null>(initialActive?.run.id ?? null);
+  // SP5 Task 5: set to a run's id by RunningView's Stop handler the moment IT successfully cancels
+  // that run, so the terminal poll below can suppress its own "Exécution annulée." toast for the
+  // very run this session just cancelled (the handler already toasted immediately on click) — one
+  // Stop click → exactly one toast. A cancel by ANOTHER admin session leaves this null, so the
+  // terminal path still owns the toast in that case.
+  const justCancelledRef = useRef<string | null>(null);
   // Re-render every second so elapsed/ETA tick even between polls.
   const [, setTick] = useState(0);
 
@@ -43,12 +49,16 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
           const st = (detail?.run.status ?? "success") as PipelineStatus;
           if (st === "failed") toast.error("Exécution terminée — échec. Voir le détail.");
           else if (st === "partial") toast.warning("Exécution terminée — succès partiel.");
-          // SP5 Task 5: a Stop finalizes to 'cancelled' — the panel's poll observes it here (the
-          // active run becomes null) exactly like any other terminal status, regardless of whether
-          // this browser session is the one that clicked Stop (handleStop below already toasts
-          // "Exécution annulée." immediately on click — this is the async confirmation once the run
-          // row has actually finalized, same relationship as the other terminal toasts here).
-          else if (st === "cancelled") toast.warning("Exécution annulée.");
+          // SP5 Task 5: a Stop finalizes to 'cancelled' — the poll observes it here (active run → null),
+          // possibly seconds after the click for a RUNNING run (cooperative cancel lands at a safe
+          // boundary). If THIS session initiated the cancel, RunningView's handler already toasted
+          // "Exécution annulée." immediately on click and stamped justCancelledRef — so skip the
+          // duplicate here (and clear the stamp). A cancel by another admin session leaves the ref
+          // unset, so this path still surfaces the toast for them.
+          else if (st === "cancelled") {
+            if (justCancelledRef.current === finishedId) justCancelledRef.current = null;
+            else toast.warning("Exécution annulée.");
+          }
           else toast.success("Exécution terminée avec succès.");
         } catch { /* ignore */ }
       }
@@ -72,7 +82,7 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
     });
   }, []);
 
-  if (active) return <RunningView active={active} />;
+  if (active) return <RunningView active={active} onCancelInitiated={(id) => { justCancelledRef.current = id; }} />;
   return <IdleView lastRun={lastRun} onStart={handleStart} starting={isStarting} />;
 }
 
@@ -96,7 +106,7 @@ function IdleView({ lastRun, onStart, starting }: { lastRun: RunRow | null; onSt
   );
 }
 
-function RunningView({ active }: { active: ActiveRun }) {
+function RunningView({ active, onCancelInitiated }: { active: ActiveRun; onCancelInitiated: (runId: string) => void }) {
   const { run, feedSteps, items } = active;
   // SP5 Task 5: getActiveRun (lib/queries/runs.ts) returns a run that's either "running" or
   // "paused" — RunningView handles both (the panel's idle/done states are untouched; a paused run
@@ -149,10 +159,13 @@ function RunningView({ active }: { active: ActiveRun }) {
       try {
         const r = await cancelRun(run.id);
         if (!r.ok) { toast.error(r.message); return; }
+        // Stamp BEFORE toasting so the terminal poll (which may fire before this callback returns for
+        // an already-finalized paused run) suppresses its duplicate — see justCancelledRef above.
+        onCancelInitiated(run.id);
         toast.success("Exécution annulée.");
       } catch { toast.error("Une erreur inattendue est survenue."); }
     });
-  }, [run.id]);
+  }, [run.id, onCancelInitiated]);
 
   return (
     <Card>

@@ -50,8 +50,11 @@ function formatStepDuration(ms: number | null): string {
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
 }
 
-function formatRunDuration(startedAt: Date | string, finishedAt: Date | string | null): string {
-  if (!finishedAt) return "en cours";
+// A run with no finished_at is not finalized: normally "running" (→ "en cours"), but SP5 Task 5
+// also makes "paused" rows reachable in the runs list/detail (they intentionally leave finished_at
+// null while parked) — so a paused run must read "en pause", not the misleading "en cours".
+function formatRunDuration(startedAt: Date | string, finishedAt: Date | string | null, status: string): string {
+  if (!finishedAt) return status === "paused" ? "en pause" : "en cours";
   const ms = Math.max(0, new Date(finishedAt).getTime() - new Date(startedAt).getTime());
   const totalSec = Math.round(ms / 1000);
   if (totalSec < 60) return `${totalSec} s`;
@@ -138,7 +141,7 @@ function RunDetailBody({ run }: { run: RunDetail }) {
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Durée</dt>
-          <dd className="font-medium text-foreground">{formatRunDuration(r.startedAt, r.finishedAt)}</dd>
+          <dd className="font-medium text-foreground">{formatRunDuration(r.startedAt, r.finishedAt, r.status)}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Flux lus</dt>
