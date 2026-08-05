@@ -14,7 +14,7 @@ import { searchRelated } from "@/lib/search";
 import type { RawItem } from "@/lib/rss/parse-feed";
 import type { RunCheckpoint, RunParams } from "@/db";
 import { isWithinRecency, narrowByRecency } from "./recency";
-import { cutoffDate } from "./run-params";
+import { cutoffDate, resolveRunParams } from "./run-params";
 
 // A same-story group can in principle grow past any sane article/prompt size (a viral story might
 // match dozens of candidates in one run) — cap how many of its members actually become
@@ -624,7 +624,15 @@ export async function executeRun(
  * guarantee), just composed from openRun + executeRun under the hood.
  */
 export async function runPipeline(opts: { triggeredBy: RunTrigger; feedIds?: string[] }): Promise<RunResult> {
-  const runId = await openRun({ triggeredBy: opts.triggeredBy });
+  // Resolve params from settings so scheduled/programmatic runs persist the same shape as manual
+  // ones (and inherit the recency default). feedIds from opts, if given, becomes the feed subset.
+  const settings = await getPipelineSettings();
+  const params = resolveRunParams(
+    opts.feedIds !== undefined ? { feedIds: opts.feedIds } : undefined,
+    { defaultMaxItemAgeHours: settings.defaultMaxItemAgeHours, maxItemsPerRun: settings.maxItemsPerRun },
+    new Date(),
+  );
+  const runId = await openRun({ triggeredBy: opts.triggeredBy, params });
   if (!runId) return { runId: null, status: "skipped", produced: 0 };
-  return executeRun(runId, { feedIds: opts.feedIds });
+  return executeRun(runId);
 }
