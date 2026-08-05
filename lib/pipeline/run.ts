@@ -3,10 +3,11 @@ import { eq, inArray } from "drizzle-orm";
 import { parseFeed } from "@/lib/rss/parse-feed";
 import { isSeen, recordRawItem } from "./dedup";
 import { stageSources, type SourceInput } from "./stages";
-import { extract } from "@/lib/extract";
+import { extract, extractExternal, hasExternalExtractor } from "@/lib/extract";
 import { embed, cosine } from "@/lib/embeddings";
 import { hasRunningRun } from "./overlap";
 import { getPipelineSettings } from "@/lib/queries/settings";
+import { searchRelated } from "@/lib/search";
 import type { RawItem } from "@/lib/rss/parse-feed";
 
 // A same-story group can in principle grow past any sane article/prompt size (a viral story might
@@ -36,6 +37,14 @@ function pgErrorCode(e: unknown): string | undefined {
 // when a second run tries to open a "running" row while one already exists.
 function isUniqueViolation(e: unknown): boolean {
   return pgErrorCode(e) === "23505";
+}
+
+// Best-effort human-readable label for a web-search source when no feed name applies — the
+// hostname (without a leading "www.") reads better in the references list than a raw URL. Falls
+// back to the search hit's own title if the URL doesn't parse (defensive; searchRelated's hits
+// always carry a real HTTP(S) URL, but this is cheap insurance against a malformed one).
+function hostOf(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
 // Best-effort single-step insert (observability only — never block the run). Steps are now
@@ -231,6 +240,68 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
             if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images });
           } catch (e) {
             lastExtractError = e as Error;
+          }
+        }
+
+        // SP4 Task 6b — best-effort web-search augmentation. Runs BEFORE the member-extraction
+        // success/failure branch below so external coverage can top up (or, in principle, rescue)
+        // a story regardless of how many member sources yielded usable text. Entirely opt-in
+        // (settings.webSearchEnabled) and SSRF-safe: web-result URLs are UNTRUSTED (arbitrary
+        // internet, picked by a third-party search API, never a feed we chose to follow), so they
+        // are ONLY ever extracted via extractExternal() (jina reader / firecrawl — external infra,
+        // no SSRF surface from our server) — never the direct-fetch readability path. Nothing here
+        // can fail the story or the run: searchRelated() never throws by contract, every per-hit
+        // extraction is individually try/caught, and the whole block is wrapped so even an
+        // unexpected throw only marks this ONE observability step "failed" instead of aborting
+        // the group (member sources gathered above are untouched either way).
+        if (settings.webSearchEnabled) {
+          if (!hasExternalExtractor()) {
+            console.warn(
+              `[pipeline] recherche web ignorée pour « ${primary.item.title} » : aucun extracteur externe ` +
+              `(Jina/Firecrawl) n'est configuré — les URLs web ne sont jamais récupérées directement (protection SSRF).`
+            );
+          } else {
+            const tWeb = Date.now();
+            let webAdded = 0;
+            try {
+              const memberUrls = new Set(inSources.map((m) => m.item.url));
+              const remainingCap = STORY_GROUP_CAP - sources.length;
+              if (remainingCap > 0) {
+                const hits = await searchRelated(primary.item.title, { limit: 3 });
+                for (const hit of hits) {
+                  if (sources.length >= STORY_GROUP_CAP) break;
+                  // Skip a web URL already covered by a member (or an earlier hit this same
+                  // loop) — stageSources also dedupes by URL, but skipping here keeps the
+                  // "N source(s) web ajoutée(s)" count below accurate.
+                  if (memberUrls.has(hit.url) || sources.some((s) => s.url === hit.url)) continue;
+                  try {
+                    const r = await extractExternal(hit.url);
+                    // Unlike a member's fallback to its RSS contentSnippet (a trusted feed's own
+                    // description), a web hit's `snippet` is just a search-engine blurb — NOT a
+                    // stand-in for the article's real content. A failed/empty extraction must
+                    // skip this source outright rather than stage the search snippet as if it
+                    // were extracted text.
+                    const text = r.text.trim();
+                    if (text.length > 0) {
+                      sources.push({ mediaName: hostOf(hit.url) || hit.title, url: hit.url, text, images: r.images });
+                      webAdded++;
+                    }
+                  } catch {
+                    // Best-effort: a failed web fetch/extract just skips this one source.
+                  }
+                }
+              }
+              await insertStep({
+                runId, name: "Recherche web", status: "success", durationMs: Date.now() - tWeb,
+                errorMessage: `${webAdded} source(s) web ajoutée(s).`, rawItemId: primaryRawItemId,
+              });
+            } catch (e) {
+              await insertStep({
+                runId, name: "Recherche web", status: "failed", durationMs: Date.now() - tWeb,
+                errorMessage: `La recherche web a échoué : ${(e as Error).message}`,
+                errorTechnical: (e as Error).stack, rawItemId: primaryRawItemId,
+              });
+            }
           }
         }
 
