@@ -100,6 +100,7 @@ describe("stageItem live hooks", () => {
 
 import { openRun, executeRun } from "@/lib/pipeline/run";
 import { reclaimStaleRuns } from "@/lib/pipeline/overlap";
+import { getActiveRun } from "@/lib/queries/runs";
 
 // Self-heal any residue a PRIOR aborted run of this suite may have left. A bun-test TIMEOUT (unlike
 // a JS throw) abandons the test promise WITHOUT running the per-test `finally`, which can strand a
@@ -205,4 +206,44 @@ describe("executeRun two-phase progress + cap", () => {
       await db.delete(feeds).where(eq(feeds.id, f.id));
     }
   }, 20000);
+});
+
+describe("getActiveRun", () => {
+  let runId: string | null = null;
+  afterAll(async () => { if (runId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, runId)); });
+
+  it("returns null when nothing is running", async () => {
+    // (assumes no run is active in the dev DB at this point in the suite)
+    expect(await getActiveRun()).toBeNull();
+  });
+
+  it("returns the running run with progress fields and grouped steps", async () => {
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "manual", status: "running", phase: "processing_items",
+      feedsTotal: 1, totalItems: 3, processedItems: 1, currentStage: "Génération IA", currentItem: "« X »",
+    }).returning({ id: pipelineRuns.id });
+    runId = run.id;
+    await db.insert(pipelineSteps).values([
+      { runId, name: "Lecture du flux « A »", status: "success", durationMs: 5 },
+      { runId, name: "Extraction du contenu", status: "success", durationMs: 7, rawItemId: null },
+    ]);
+
+    const active = await getActiveRun();
+    expect(active).not.toBeNull();
+    expect(active!.run.id).toBe(runId);
+    expect(active!.run.currentStage).toBe("Génération IA");
+    expect(active!.run.processedItems).toBe(1);
+    expect(active!.feedSteps.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("openRun overlap", () => {
+  it("returns null when a run is already active", async () => {
+    const [run] = await db.insert(pipelineRuns).values({ triggeredBy: "scheduled", status: "running" }).returning({ id: pipelineRuns.id });
+    try {
+      expect(await openRun({ triggeredBy: "manual" })).toBeNull();
+    } finally {
+      await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
+    }
+  });
 });
