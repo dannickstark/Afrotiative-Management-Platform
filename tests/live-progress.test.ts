@@ -1,6 +1,6 @@
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
-import { db, pipelineRuns, pipelineSteps, articles, clusters } from "@/db";
-import { eq } from "drizzle-orm";
+import { db, pipelineRuns, pipelineSteps, articles, clusters, feeds, rawItems, articleSources } from "@/db";
+import { eq, inArray, like } from "drizzle-orm";
 
 describe("pipeline_runs progress columns + pipeline_steps.at (migration 0003)", () => {
   let runId: string | null = null;
@@ -88,4 +88,85 @@ describe("stageItem live hooks", () => {
     expect(starts).toEqual([...ITEM_STAGES]);
     expect(ends).toEqual([...ITEM_STAGES]);
   });
+});
+
+import { openRun, executeRun } from "@/lib/pipeline/run";
+
+// A feed fixture that serves an RSS document with N distinct items pointing at a local article
+// server. Exposes `articleBase` (not just `rssUrl`) so tests can find + clean up every article
+// staged from it via article_sources.url LIKE `${articleBase}%`.
+function rssServer(itemCount: number) {
+  const article = Bun.serve({ port: 0, fetch: () => new Response(HTML, { headers: { "content-type": "text/html" } }) });
+  const items = Array.from({ length: itemCount }, (_, i) => `
+    <item><title>${T} #${i}</title><link>http://localhost:${article.port}/a${i}</link>
+    <guid>test:exec:${i}:${Math.random()}</guid><description>Bourse ${i}</description></item>`).join("");
+  const rss = Bun.serve({ port: 0, fetch: () => new Response(
+    `<?xml version="1.0"?><rss version="2.0"><channel><title>Fixture</title>${items}</channel></rss>`,
+    { headers: { "content-type": "application/xml" } }) });
+  return {
+    rssUrl: `http://localhost:${rss.port}/feed`,
+    articleBase: `http://localhost:${article.port}`,
+    stop: () => { article.stop(true); rss.stop(true); },
+  };
+}
+
+describe("executeRun two-phase progress + cap", () => {
+  const snap = Object.fromEntries(PROVIDER_KEYS.map((k) => [k, process.env[k]]));
+  beforeAll(() => { for (const k of PROVIDER_KEYS) delete process.env[k]; });
+  afterAll(() => { for (const [k, v] of Object.entries(snap)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+
+  it("reads all feeds, caps recorded items, records ONLY what it processes, and lands progress fields", async () => {
+    process.env.MAX_ITEMS_PER_RUN = "2";
+    const fx = rssServer(4); // 4 new items, cap 2 — two full stageItem passes, so allow more than the 5s default.
+    const [f] = await db.insert(feeds).values({ name: "Fixture cap", feedUrl: fx.rssUrl, active: true }).returning({ id: feeds.id });
+    let runId: string | null = null;
+    try {
+      runId = await openRun({ triggeredBy: "manual", feedsTotal: 1 });
+      expect(runId).not.toBeNull();
+      const res = await executeRun(runId!, { feedIds: [f.id] });
+
+      expect(res.status).toBe("partial");           // cap hit → partial
+      const [row] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, runId!));
+      expect(row.phase).toBe("finalizing");
+      expect(row.totalItems).toBe(2);               // exact denominator after phase 1
+      expect(row.processedItems).toBe(2);
+      expect(row.currentStage).toBeNull();          // pointer cleared on finalize
+      expect(row.finishedAt).not.toBeNull();
+
+      const steps = await db.select().from(pipelineSteps).where(eq(pipelineSteps.runId, runId!));
+      expect(steps.some((s) => s.name === "Limite d'éléments atteinte")).toBe(true);
+      expect(steps.some((s) => s.name.startsWith("Lecture du flux"))).toBe(true);
+
+      // "record only what we process": exactly 2 raw_items for this feed, not 4.
+      const recorded = await db.select().from(rawItems).where(eq(rawItems.feedId, f.id));
+      expect(recorded.length).toBe(2);
+    } finally {
+      delete process.env.MAX_ITEMS_PER_RUN;
+      fx.stop();
+
+      // Full FK-safe cleanup — this test must leave the DB exactly as it found it.
+      // (1) Find articles staged from this fixture's article server, capture their clusterIds,
+      //     then delete the articles (cascades article_sources/article_embeddings/article_tags).
+      const sources = await db.select({ articleId: articleSources.articleId })
+        .from(articleSources).where(like(articleSources.url, `${fx.articleBase}%`));
+      const articleIds = sources.map((s) => s.articleId);
+      let clusterIds: string[] = [];
+      if (articleIds.length > 0) {
+        const staged = await db.select({ clusterId: articles.clusterId }).from(articles).where(inArray(articles.id, articleIds));
+        clusterIds = staged.map((a) => a.clusterId).filter((c): c is string => c !== null);
+        await db.delete(articles).where(inArray(articles.id, articleIds));
+      }
+      // (2) Delete now-orphaned clusters (no article references them anymore).
+      for (const clusterId of clusterIds) {
+        const stillUsed = await db.select({ id: articles.id }).from(articles).where(eq(articles.clusterId, clusterId)).limit(1);
+        if (stillUsed.length === 0) await db.delete(clusters).where(eq(clusters.id, clusterId));
+      }
+      // (3) raw_items recorded for the fixture feed.
+      await db.delete(rawItems).where(eq(rawItems.feedId, f.id));
+      // (4) the run row (cascades pipeline_steps).
+      if (runId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, runId));
+      // (5) the feed itself.
+      await db.delete(feeds).where(eq(feeds.id, f.id));
+    }
+  }, 20000);
 });
