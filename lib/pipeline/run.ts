@@ -9,6 +9,7 @@ import { embed, cosine } from "@/lib/embeddings";
 import { hasRunningRun } from "./overlap";
 import { updateFeedHealth } from "./feed-health";
 import { getPipelineSettings } from "@/lib/queries/settings";
+import { createAlert } from "@/lib/alerts/notify";
 import { searchRelated } from "@/lib/search";
 import type { RawItem } from "@/lib/rss/parse-feed";
 import type { RunCheckpoint } from "@/db";
@@ -239,7 +240,7 @@ export async function executeRun(
           // and the itemsCaptured7d one-run-lag caveat. Note: the resume path (opts.resumeStories)
           // skips phase 1 entirely, so feed health is only ever updated on the INITIAL run, never
           // on a resume — acceptable per the SP8 plan (a resumed run reads no new feeds anyway).
-          try { await updateFeedHealth(feed.id, "success"); } catch { /* best-effort — never fail the run */ }
+          try { await updateFeedHealth(feed.id, feed.name, "success"); } catch { /* best-effort — never fail the run */ }
         } catch (e) {
           feedsFailed++;
           await insertStep({
@@ -247,7 +248,7 @@ export async function executeRun(
             errorMessage: `La lecture du flux « ${feed.name} » a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
           });
           // SP8 — same best-effort feed-health update, on the failure path (see note above).
-          try { await updateFeedHealth(feed.id, "failure"); } catch { /* best-effort — never fail the run */ }
+          try { await updateFeedHealth(feed.id, feed.name, "failure"); } catch { /* best-effort — never fail the run */ }
           continue;
         }
         for (const item of items) {
@@ -565,6 +566,26 @@ export async function executeRun(
         status, feedsRead, newItems, published: 0, finishedAt: new Date(),
         phase: "finalizing", currentStage: null, currentItem: null,
       }).where(eq(pipelineRuns.id, runId));
+
+      // SP9a — best-effort run_failed alert: exactly ONE per finalize, only on a genuine terminal
+      // 'failed' status — never 'partial'/'cancelled'/'success' (nor 'paused', which never reaches
+      // this branch at all — see the `if (paused && !cancelled)` branch above). createAlert() never
+      // throws by its own contract, but this call is wrapped defensively anyway per the SP9a
+      // constraint that alerting must never affect finalization — which, by this point, has
+      // ALREADY landed via the update just above, so even a hypothetical throw here couldn't
+      // un-finalize the row.
+      if (status === "failed") {
+        try {
+          await createAlert({
+            type: "run_failed",
+            title: "Exécution du pipeline échouée",
+            detail:
+              `${feedsFailed} flux en échec (sur ${feedsRead + feedsFailed} lu(s)), `
+              + `${itemFailures} histoire(s) en échec (sur ${itemFailures + produced} traitée(s)).`,
+            entityId: runId,
+          });
+        } catch { /* best-effort — must never affect an already-finalized run */ }
+      }
     }
   }
 

@@ -284,8 +284,35 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   autoPublishMinSources: integer("auto_publish_min_sources").notNull().default(2), // wired in SP6
   webSearchEnabled: boolean("web_search_enabled").notNull().default(false), // wired in SP4
   scheduleCron: text("schedule_cron"), // null = no in-app schedule — wired in SP2
+  // ---- SP9a: optional email notification for alerts (default OFF, no-op without RESEND_API_KEY) ----
+  alertEmailEnabled: boolean("alert_email_enabled").notNull().default(false),
+  alertEmailRecipients: text("alert_email_recipients"), // comma-separated emails; null/empty = none
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ---- alerts (SP9a — best-effort run_failed / feed_dark notifications) ----
+// Written ONLY by lib/alerts/notify.ts's createAlert(), called from two best-effort sites:
+// lib/pipeline/run.ts's executeRun finalize (type "run_failed", on a genuine terminal 'failed'
+// status — never partial/cancelled/success/paused) and lib/pipeline/feed-health.ts's
+// updateFeedHealth (type "feed_dark", on the failure-streak TRANSITION to the failing threshold,
+// 3 — not on every subsequent failed read past it). `type` is plain TEXT, deliberately not a pg
+// enum: this table's migration stays a trivial additive CREATE TABLE with no ALTER TYPE ADD VALUE
+// landmine (see the pipeline_runs_one_running comment above for why that's unsafe inside drizzle's
+// single-transaction migrate() on a fresh DB) — a TS union (AlertType, lib/alerts/notify.ts) already
+// gives compile-time safety at the one write site.
+// `entityId` is intentionally NOT a foreign key: it points at either a pipeline_runs.id or a
+// feeds.id depending on `type`, and this table must keep alerting for a run/feed that itself gets
+// deleted later (history, not a live join) — nullable for a hypothetical future alert with no
+// single associated entity.
+export const alerts = pgTable("alerts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  type: text("type").notNull(), // 'run_failed' | 'feed_dark' — see lib/alerts/notify.ts's AlertType
+  title: text("title").notNull(), // French, short — e.g. "Exécution du pipeline échouée"
+  detail: text("detail").notNull(), // French, one-sentence specifics (counts / feed name)
+  entityId: uuid("entity_id"), // the run or feed id this alert is about
+  read: boolean("read").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [index("alerts_read_created_idx").on(t.read, t.createdAt)]);
 
 // ---- distributions (pluggable publish targets) ----
 export const distributions = pgTable("distributions", {

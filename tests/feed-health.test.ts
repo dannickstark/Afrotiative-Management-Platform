@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, feeds, rawItems, pipelineRuns } from "@/db";
-import { eq } from "drizzle-orm";
+import { db, feeds, rawItems, pipelineRuns, alerts } from "@/db";
+import { and, eq } from "drizzle-orm";
 import { deriveFeedHealth, updateFeedHealth, type FeedHealthInput } from "@/lib/pipeline/feed-health";
 import { openRun, executeRun } from "@/lib/pipeline/run";
 
@@ -48,10 +48,11 @@ describe("deriveFeedHealth (pure)", () => {
 // 7-day-window recompute precisely (a row just inside the window counts, one just outside doesn't).
 describe("updateFeedHealth (direct DB writes)", () => {
   let feedId: string;
+  const FEED_NAME = "Fixture feed-health direct (test)";
 
   beforeAll(async () => {
     const [f] = await db.insert(feeds).values({
-      name: "Fixture feed-health direct (test)", feedUrl: "http://example.invalid/rss", active: true,
+      name: FEED_NAME, feedUrl: "http://example.invalid/rss", active: true,
     }).returning({ id: feeds.id });
     feedId = f.id;
   });
@@ -62,14 +63,14 @@ describe("updateFeedHealth (direct DB writes)", () => {
   });
 
   it("failure: sets lastFetchStatus='error', a recent lastFetchAt, and increments consecutiveFailures across repeated calls", async () => {
-    await updateFeedHealth(feedId, "failure");
+    await updateFeedHealth(feedId, FEED_NAME, "failure");
     let [row] = await db.select().from(feeds).where(eq(feeds.id, feedId));
     expect(row.lastFetchStatus).toBe("error");
     expect(row.consecutiveFailures).toBe(1);
     expect(row.lastFetchAt).not.toBeNull();
     expect(Date.now() - new Date(row.lastFetchAt!).getTime()).toBeLessThan(5000);
 
-    await updateFeedHealth(feedId, "failure");
+    await updateFeedHealth(feedId, FEED_NAME, "failure");
     [row] = await db.select().from(feeds).where(eq(feeds.id, feedId));
     expect(row.consecutiveFailures).toBe(2); // streak — 2nd consecutive failure
   });
@@ -85,7 +86,7 @@ describe("updateFeedHealth (direct DB writes)", () => {
       { feedId, guid: "sp8:old:1", url: "http://example.invalid/4", contentHash: "sp8-hash-4", fetchedAt: eightDaysAgo },
     ]);
 
-    await updateFeedHealth(feedId, "success");
+    await updateFeedHealth(feedId, FEED_NAME, "success");
 
     const [row] = await db.select().from(feeds).where(eq(feeds.id, feedId));
     expect(row.lastFetchStatus).toBe("ok");
@@ -93,6 +94,68 @@ describe("updateFeedHealth (direct DB writes)", () => {
     expect(row.itemsCaptured7d).toBe(3); // only the 3 recent rows — the 8-day-old one is excluded
     expect(row.lastFetchAt).not.toBeNull();
     expect(Date.now() - new Date(row.lastFetchAt!).getTime()).toBeLessThan(5000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SP9a — feed_dark alert trigger: updateFeedHealth's failure path must fire createAlert() exactly
+// on the TRANSITION into the failing threshold (consecutiveFailures === 3), never again for a
+// further failure past it (4th/5th), and again on a FRESH episode after a recovery (success) resets
+// the streak to 0. Real Neon dev DB, network-free (createAlert's own email step is gated off:
+// alertEmailEnabled defaults to false on the shared pipeline_settings singleton, and RESEND_API_KEY
+// is never set in the test environment — see test-setup.ts's blanket `*_API_KEY` sweep).
+describe("updateFeedHealth fires a feed_dark alert on the failure-streak transition to 3 (SP9a)", () => {
+  let feedId: string;
+  const FEED_NAME = "Fixture feed-dark alert (test)";
+
+  beforeAll(async () => {
+    const [f] = await db.insert(feeds).values({
+      name: FEED_NAME, feedUrl: "http://example.invalid/rss-dark", active: true,
+    }).returning({ id: feeds.id });
+    feedId = f.id;
+  });
+
+  afterAll(async () => {
+    await db.delete(alerts).where(eq(alerts.entityId, feedId));
+    await db.delete(rawItems).where(eq(rawItems.feedId, feedId));
+    await db.delete(feeds).where(eq(feeds.id, feedId));
+  });
+
+  async function feedDarkAlertCount(): Promise<number> {
+    return db.$count(alerts, and(eq(alerts.entityId, feedId), eq(alerts.type, "feed_dark")));
+  }
+
+  it("creates exactly ONE feed_dark alert at streak 3, none at streak 4/5, then a NEW one on a fresh episode", async () => {
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // streak 1
+    expect(await feedDarkAlertCount()).toBe(0);
+
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // streak 2
+    expect(await feedDarkAlertCount()).toBe(0);
+
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // streak 3 — the transition
+    expect(await feedDarkAlertCount()).toBe(1);
+
+    const [alert] = await db.select().from(alerts)
+      .where(and(eq(alerts.entityId, feedId), eq(alerts.type, "feed_dark")));
+    expect(alert.title).toBe("Flux muet");
+    expect(alert.detail).toContain(FEED_NAME);
+    expect(alert.detail).toContain("3 fois de suite");
+    expect(alert.read).toBe(false);
+
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // streak 4 — no new alert
+    expect(await feedDarkAlertCount()).toBe(1);
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // streak 5 — no new alert
+    expect(await feedDarkAlertCount()).toBe(1);
+
+    await updateFeedHealth(feedId, FEED_NAME, "success"); // recovery — streak reset to 0
+    const [afterRecovery] = await db.select().from(feeds).where(eq(feeds.id, feedId));
+    expect(afterRecovery.consecutiveFailures).toBe(0);
+
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // 1 (fresh episode)
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // 2
+    expect(await feedDarkAlertCount()).toBe(1); // still just the first episode's alert
+    await updateFeedHealth(feedId, FEED_NAME, "failure"); // 3 — fresh episode's transition
+    expect(await feedDarkAlertCount()).toBe(2);
   });
 });
 

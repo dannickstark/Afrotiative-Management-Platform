@@ -72,6 +72,14 @@ function isValidCron(v: string): boolean {
   }
 }
 
+// SP9a — basic email shape check (deliberately not RFC-5322-exhaustive: this only gates a
+// comma-separated recipients list an admin types into a settings field, not user-facing signup).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidRecipientsList(v: string): boolean {
+  return v.split(",").every((part) => EMAIL_RE.test(part.trim()));
+}
+
 // Lives in lib/validation.ts (not lib/actions/pipeline-settings-actions.ts) for the same reason as
 // feedSchema/memberSchema above: that file needs a file-level "use server" directive, and Next.js
 // only allows async-function exports from such a module.
@@ -92,6 +100,19 @@ export const pipelineSettingsSchema = z.object({
   scheduleCron: z.string().optional().nullable().refine(
     (v) => !v || !v.trim() || isValidCron(v.trim()),
     "Cron invalide (ex. « 0 */2 * * * »)",
+  ),
+  // SP9a — optional email notification for alerts (default OFF). `.default(false)` (not a bare
+  // `z.boolean()`) deliberately: PipelineSettingsForm's payload (SP9b builds its UI) doesn't send
+  // this field yet, and a required boolean here would break that EXISTING client-side
+  // `pipelineSettingsSchema.safeParse(payload)` call the moment this schema change lands — the
+  // default keeps every current caller valid while still guaranteeing a real boolean in the
+  // parsed output.
+  alertEmailEnabled: z.boolean().default(false),
+  // Comma-separated emails; empty/absent is always allowed (alerts stay in-app-only). Each
+  // non-blank part must look like an email — a single malformed entry rejects the whole string.
+  alertEmailRecipients: z.string().optional().nullable().refine(
+    (v) => !v || !v.trim() || isValidRecipientsList(v),
+    "Emails invalides (séparés par des virgules)",
   ),
 });
 export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;

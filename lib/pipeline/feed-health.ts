@@ -1,5 +1,6 @@
 import { db, feeds, rawItems } from "@/db";
 import { and, eq, gte, sql } from "drizzle-orm";
+import { createAlert } from "@/lib/alerts/notify";
 
 // ---- SP8: real feed-health tracking ----
 // feeds.lastFetchAt / lastFetchStatus / itemsCaptured7d already existed and were already DISPLAYED
@@ -70,8 +71,17 @@ const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
  * `consecutiveFailures` ATOMICALLY in SQL (`consecutive_failures + 1`, not read-then-write) so a
  * concurrent update can't lose an increment. `itemsCaptured7d` is left untouched — a failed read
  * captured nothing new to recompute from.
+ *
+ * SP9a — `feedName` is required so the failure path can compose the `feed_dark` alert's French
+ * detail ("Le flux « {name} » a échoué 3 fois de suite.") without a second round-trip: every call
+ * site (executeRun's phase-1 feed-read loop) already holds the full `feeds` row in scope.
+ * On the failure path, the UPDATE uses `RETURNING consecutive_failures` to read back the
+ * POST-increment value in the SAME statement (no separate read, no race with a concurrent
+ * increment) and fires createAlert() exactly when that value === 3 — the TRANSITION into the
+ * failing threshold, not every read past it (so a 4th/5th consecutive failure raises no further
+ * alert), and again on any FRESH episode after a recovery resets the streak to 0.
  */
-export async function updateFeedHealth(feedId: string, outcome: FeedFetchOutcome): Promise<void> {
+export async function updateFeedHealth(feedId: string, feedName: string, outcome: FeedFetchOutcome): Promise<void> {
   const now = new Date();
   if (outcome === "success") {
     const itemsCaptured7d = await db.$count(
@@ -82,9 +92,23 @@ export async function updateFeedHealth(feedId: string, outcome: FeedFetchOutcome
       lastFetchAt: now, lastFetchStatus: "ok", consecutiveFailures: 0, itemsCaptured7d,
     }).where(eq(feeds.id, feedId));
   } else {
-    await db.update(feeds).set({
+    const [row] = await db.update(feeds).set({
       lastFetchAt: now, lastFetchStatus: "error",
       consecutiveFailures: sql`${feeds.consecutiveFailures} + 1`,
-    }).where(eq(feeds.id, feedId));
+    }).where(eq(feeds.id, feedId)).returning({ consecutiveFailures: feeds.consecutiveFailures });
+
+    // Best-effort (createAlert() itself never throws — wrapped here anyway, defensively, since
+    // this function's own callers already wrap the whole updateFeedHealth call in their own
+    // try/catch per the SP8/SP9a constraint that a health-update failure must never fail the run).
+    if (row?.consecutiveFailures === 3) {
+      try {
+        await createAlert({
+          type: "feed_dark",
+          title: "Flux muet",
+          detail: `Le flux « ${feedName} » a échoué 3 fois de suite.`,
+          entityId: feedId,
+        });
+      } catch { /* best-effort — never fail the caller */ }
+    }
   }
 }

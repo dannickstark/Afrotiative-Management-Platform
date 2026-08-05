@@ -126,6 +126,35 @@ describe("pipelineSettingsSchema validation", () => {
     expect(pipelineSettingsSchema.safeParse({ ...VALID, perOperationTimeoutMs: 5000 }).success).toBe(true);
     expect(pipelineSettingsSchema.safeParse({ ...VALID, perOperationTimeoutMs: 300000 }).success).toBe(true);
   });
+
+  // SP9a — alertEmailEnabled/alertEmailRecipients. alertEmailEnabled is `.default(false)` (not a
+  // bare z.boolean()) specifically so VALID above — which predates SP9a and omits both fields
+  // entirely — keeps validating: PipelineSettingsForm's payload doesn't send these yet either
+  // (SP9b builds that UI), so a required boolean here would break the EXISTING client-side
+  // safeParse call the moment this schema change landed.
+  it("defaults alertEmailEnabled to false and leaves alertEmailRecipients undefined when both are omitted", () => {
+    const r = pipelineSettingsSchema.safeParse(VALID);
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.alertEmailEnabled).toBe(false);
+      expect(r.data.alertEmailRecipients).toBeUndefined();
+    }
+  });
+  it("accepts alertEmailEnabled=true with a valid comma-separated recipients list", () => {
+    expect(pipelineSettingsSchema.safeParse({
+      ...VALID, alertEmailEnabled: true, alertEmailRecipients: "a@example.com, b@example.com",
+    }).success).toBe(true);
+  });
+  it("accepts an empty alertEmailRecipients string (alerts stay in-app-only)", () => {
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, alertEmailRecipients: "" }).success).toBe(true);
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, alertEmailRecipients: null }).success).toBe(true);
+  });
+  it("rejects a malformed recipient email (single entry, or one bad entry in a list)", () => {
+    expect(pipelineSettingsSchema.safeParse({ ...VALID, alertEmailRecipients: "not-an-email" }).success).toBe(false);
+    expect(pipelineSettingsSchema.safeParse({
+      ...VALID, alertEmailRecipients: "a@example.com, not-an-email",
+    }).success).toBe(false);
+  });
 });
 
 describe("updatePipelineSettings authz", () => {
