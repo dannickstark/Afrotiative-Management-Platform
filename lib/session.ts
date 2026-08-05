@@ -6,7 +6,14 @@ export async function getSession() {
   return auth.api.getSession({ headers: await headers() });
 }
 
-export type SessionUser = { id: string; name: string; email: string; role: Role; banned: boolean };
+export type SessionUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  banned: boolean;
+  image: string | null;
+};
 
 export async function requireUser(): Promise<SessionUser> {
   const s = await getSession();

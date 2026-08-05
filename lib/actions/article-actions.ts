@@ -7,6 +7,7 @@ import { requirePermission } from "@/lib/rbac";
 import { saveDraftSchema, type SaveDraftInput } from "@/lib/validation";
 import { isLockActive } from "@/lib/lock";
 import { publishArticle } from "@/lib/wp/publish";
+import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { z } from "zod";
 
 export async function acquireLock(id: string) {
@@ -30,8 +31,12 @@ export async function saveDraft(input: SaveDraftInput) {
   const user = await requireUser();
   requirePermission(user.role, "article", "edit");
   const data = saveDraftSchema.parse(input);
+  // Human-edit save path: the TipTap editor's HTML is untrusted client input, so it's sanitized
+  // here before it ever reaches the DB (script/style/iframe/img/on* stripped, links get a forced
+  // rel). The pipeline's own AI-generated bodyHtml is sanitized separately — see SP4 Task 6.
+  const bodyHtml = sanitizeArticleHtml(data.bodyHtml);
   await db.update(articles).set({
-    title: data.title, bodyHtml: data.bodyHtml, excerpt: data.excerpt,
+    title: data.title, bodyHtml, excerpt: data.excerpt,
     categoryId: data.categoryId, featuredImageUrl: data.featuredImageUrl,
     imageCredit: data.imageCredit, imageSourceUrl: data.imageSourceUrl, updatedAt: new Date(),
   }).where(eq(articles.id, data.id));

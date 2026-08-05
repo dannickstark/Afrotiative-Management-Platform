@@ -1,12 +1,21 @@
-import { db, feeds, user, wpCategories, wpTags, distributions, pipelineRuns } from "@/db";
+import { db, feeds, user, wpCategories, wpTags, distributions, pipelineRuns, pipelineSettings } from "@/db";
 import { and, desc, eq } from "drizzle-orm";
 import { getWpConfig } from "@/lib/wp/config";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { deriveFeedHealth } from "@/lib/pipeline/feed-health";
 
 export type Feed = Awaited<ReturnType<typeof getFeeds>>[number];
 
+// SP8 — each row gets a `health` field (deriveFeedHealth's pure state, computed HERE server-side)
+// on top of the raw columns (which already include lastFetchAt/lastFetchStatus/itemsCaptured7d/
+// consecutiveFailures — a plain `select()` picks up every column, incl. the new
+// consecutive_failures added by this same story's migration, with no explicit column list to
+// update). Computed in this server-only query module — not in the "use client" feeds-table.tsx —
+// so that component never needs a runtime import of lib/pipeline/feed-health.ts (which pulls in
+// the DB client via updateFeedHealth); it only imports FeedHealth as a type.
 export async function getFeeds() {
-  return db.select().from(feeds).orderBy(feeds.name);
+  const rows = await db.select().from(feeds).orderBy(feeds.name);
+  return rows.map((row) => ({ ...row, health: deriveFeedHealth(row) }));
 }
 
 export type Member = Awaited<ReturnType<typeof getMembers>>[number];
@@ -45,4 +54,24 @@ export async function getIntegrationStatus() {
     firecrawl: { configured: !!cfg.firecrawl },
     lastRun: lastRun ?? null,
   };
+}
+
+export type PipelineSettings = typeof pipelineSettings.$inferSelect;
+
+// DB source of truth for run-behavior knobs (maxItemsPerRun, clusterThreshold, auto-publish,
+// schedule, …) — getPipelineConfig() (sync, env) stays authoritative for providers/secrets/order.
+// Row id=1 is a fixed singleton, seeded once from the current env defaults so an existing
+// MAX_ITEMS_PER_RUN/CLUSTER_THRESHOLD env is honored as the initial value; after that the DB row
+// is authoritative and env is ignored. Idempotent: a second call after the row exists (or after a
+// concurrent seed race loses via onConflictDoNothing) just reads the row back.
+export async function getPipelineSettings(): Promise<PipelineSettings> {
+  const [row] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));
+  if (row) return row;
+  const cfg = getPipelineConfig();
+  const [created] = await db.insert(pipelineSettings).values({
+    id: 1, maxItemsPerRun: cfg.maxItemsPerRun, clusterThreshold: cfg.clusterThreshold,
+  }).onConflictDoNothing().returning();
+  if (created) return created;
+  const [again] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));
+  return again;
 }

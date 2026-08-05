@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
-import { db, pipelineRuns, pipelineSteps, articles, clusters, feeds, rawItems, articleSources } from "@/db";
+import { db, pipelineRuns, pipelineSteps, articles, clusters, feeds, rawItems, articleSources, pipelineSettings } from "@/db";
 import { eq, inArray, like } from "drizzle-orm";
 
 // File-scoped self-heal: a bun-test TIMEOUT in the two-phase cap test below abandons the test
@@ -79,7 +79,7 @@ describe("stageItem live hooks", () => {
     }
   });
 
-  it("fires onStageStart before each stage and onStageEnd after, in ITEM_STAGES order", async () => {
+  it("fires onStageStart before each stage and onStageEnd after, in the ACTUAL execution order (ITEM_STAGES names, SP4 Task 6a order)", async () => {
     const item: RawItem = { guid: "test:hooks", url, title: T, contentSnippet: "La bourse progresse.", isoDate: null, contentHash: contentHash(T, "hooks") };
     const starts: string[] = [];
     const ends: string[] = [];
@@ -93,6 +93,11 @@ describe("stageItem live hooks", () => {
       const [article] = await db.select({ clusterId: articles.clusterId }).from(articles).where(eq(articles.id, articleId));
       clusterId = article?.clusterId ?? null;
     }
+    // SP4 Task 6a's stageSources embeds the GENERATED title+body (not the raw source text), so
+    // génération runs BEFORE embedding/clustering — see the ORDER NOTE on stageSources in
+    // lib/pipeline/stages.ts. ITEM_STAGES was reordered to this exact chronological order, so the
+    // hooks fire in ITEM_STAGES order (both the SET of names and their sequence now match it).
+    expect(new Set(starts)).toEqual(new Set(ITEM_STAGES));
     expect(starts).toEqual([...ITEM_STAGES]);
     expect(ends).toEqual([...ITEM_STAGES]);
   });
@@ -153,7 +158,12 @@ describe("executeRun two-phase progress + cap", () => {
   });
 
   it("reads all feeds, caps recorded items, records ONLY what it processes, and lands progress fields", async () => {
-    process.env.MAX_ITEMS_PER_RUN = "2";
+    // The cap now comes from the DB-backed pipeline_settings singleton (SP1's executeRun wiring),
+    // not the env var — drive it via row id=1. It's a shared row (a real admin-configured value
+    // may exist), so snapshot before mutating and restore exactly (present or absent) in `finally`.
+    const [settingsSnapshot] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));
+    await db.insert(pipelineSettings).values({ id: 1, maxItemsPerRun: 2 })
+      .onConflictDoUpdate({ target: pipelineSettings.id, set: { maxItemsPerRun: 2 } });
     const fx = rssServer(4); // 4 new items, cap 2 — two full stageItem passes, so allow more than the 5s default.
     const [f] = await db.insert(feeds).values({ name: "Fixture cap", feedUrl: fx.rssUrl, active: true }).returning({ id: feeds.id });
     let runId: string | null = null;
@@ -178,7 +188,8 @@ describe("executeRun two-phase progress + cap", () => {
       const recorded = await db.select().from(rawItems).where(eq(rawItems.feedId, f.id));
       expect(recorded.length).toBe(2);
     } finally {
-      delete process.env.MAX_ITEMS_PER_RUN;
+      await db.delete(pipelineSettings).where(eq(pipelineSettings.id, 1));
+      if (settingsSnapshot) await db.insert(pipelineSettings).values(settingsSnapshot);
       fx.stop();
 
       // Full FK-safe cleanup — this test must leave the DB exactly as it found it.

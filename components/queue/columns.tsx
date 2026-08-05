@@ -3,6 +3,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { ImageOff } from "lucide-react";
 import type { QueueRow } from "@/lib/queries/queue";
 import { StatusBadge } from "@/components/status-badge";
+import { Badge } from "@/components/ui/badge";
 import { ConfidenceBadge } from "./confidence-badge";
 import { RowActions } from "./row-actions";
 import { relativeDate, type ArticleStatus } from "@/lib/format";
@@ -35,6 +36,12 @@ export const columns: ColumnDef<QueueRow>[] = [
       if (!filterValue) return true;
       const count = row.getValue<number>(columnId);
       return filterValue === "single" ? count <= 1 : count > 1;
+    } },
+  // Read-only quality signal from lib/pipeline/score.ts. Null until SP4 Task 6 wires scoring
+  // into stageItem — show nothing rather than a placeholder for un-scored (pre-Task-6) articles.
+  { accessorKey: "score", header: "Score", cell: ({ getValue }) => {
+      const score = getValue() as number | null;
+      return score === null ? null : <Badge variant="outline">Score {score}</Badge>;
     } },
   { accessorKey: "generatedAt", header: "Généré", cell: ({ getValue }) => relativeDate(getValue() as Date) },
   { accessorKey: "status", header: "Statut", filterFn: "equalsString",

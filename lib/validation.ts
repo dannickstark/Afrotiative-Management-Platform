@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Cron } from "croner";
 
 export const saveDraftSchema = z.object({
   id: z.string().uuid(),
@@ -55,3 +56,63 @@ export function validateMemberInput(input: unknown) {
     ? { ok: true as const, data: r.data }
     : { ok: false as const, message: r.error.issues[0]?.message ?? "Entrée invalide" };
 }
+
+// Cron validator backed by croner (SP2 wires scheduleCron to an in-app scheduler — see
+// lib/pipeline/scheduler.ts, which parses this same string with `new Cron(...)`). Validating with
+// the actual library the scheduler uses — rather than a hand-rolled regex — means a value that
+// passes here is guaranteed to be schedulable; `paused: true` builds the Cron purely to run its
+// parser without starting a timer. `new Cron` throws (rather than returning a result) on a bad
+// pattern, hence the try/catch.
+function isValidCron(v: string): boolean {
+  try {
+    new Cron(v, { paused: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// SP9a — basic email shape check (deliberately not RFC-5322-exhaustive: this only gates a
+// comma-separated recipients list an admin types into a settings field, not user-facing signup).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidRecipientsList(v: string): boolean {
+  return v.split(",").every((part) => EMAIL_RE.test(part.trim()));
+}
+
+// Lives in lib/validation.ts (not lib/actions/pipeline-settings-actions.ts) for the same reason as
+// feedSchema/memberSchema above: that file needs a file-level "use server" directive, and Next.js
+// only allows async-function exports from such a module.
+export const pipelineSettingsSchema = z.object({
+  maxItemsPerRun: z.number().int().positive("Doit être un entier positif"),
+  // Floor at 5 s (SP5 Task 2 review, Finding 1): the per-operation timeout wraps "Dépôt en revue",
+  // whose fn() is the article-writing DB transaction. withTimeout can only stop WAITING on a
+  // promise, never cancel it — so a timeout below real DB-commit latency could report the stage
+  // failed (articleId: null) while the transaction still commits moments later (a "phantom" pending
+  // article the caller never learns about). 5 s comfortably exceeds any Neon commit, closing that
+  // window, while still allowing a tight timeout for genuinely stuck provider calls.
+  perOperationTimeoutMs: z.number().int().min(5000, "Le délai par opération doit être d'au moins 5 secondes."),
+  clusterThreshold: z.number().min(0, "Doit être entre 0 et 1").max(1, "Doit être entre 0 et 1"),
+  scoreThreshold: z.number().int().min(0, "Doit être entre 0 et 100").max(100, "Doit être entre 0 et 100"),
+  autoPublishEnabled: z.boolean(),
+  autoPublishMinSources: z.number().int().positive("Doit être un entier positif"),
+  webSearchEnabled: z.boolean(),
+  scheduleCron: z.string().optional().nullable().refine(
+    (v) => !v || !v.trim() || isValidCron(v.trim()),
+    "Cron invalide (ex. « 0 */2 * * * »)",
+  ),
+  // SP9a — optional email notification for alerts (default OFF). `.default(false)` (not a bare
+  // `z.boolean()`) deliberately: PipelineSettingsForm's payload (SP9b builds its UI) doesn't send
+  // this field yet, and a required boolean here would break that EXISTING client-side
+  // `pipelineSettingsSchema.safeParse(payload)` call the moment this schema change lands — the
+  // default keeps every current caller valid while still guaranteeing a real boolean in the
+  // parsed output.
+  alertEmailEnabled: z.boolean().default(false),
+  // Comma-separated emails; empty/absent is always allowed (alerts stay in-app-only). Each
+  // non-blank part must look like an email — a single malformed entry rejects the whole string.
+  alertEmailRecipients: z.string().optional().nullable().refine(
+    (v) => !v || !v.trim() || isValidRecipientsList(v),
+    "Emails invalides (séparés par des virgules)",
+  ),
+});
+export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;

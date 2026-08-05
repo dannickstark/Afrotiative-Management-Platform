@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RoleGate } from "@/components/role-gate";
-import { pipelineStatusLabel, formatDate, type PipelineStatus } from "@/lib/format";
+import { pipelineStatusLabel, formatDate, formatRunDuration, type PipelineStatus } from "@/lib/format";
 import { startPipelineRun, reprocessRawItem } from "@/lib/actions/pipeline-actions";
 import type { RunDetail, Step } from "@/lib/queries/runs";
 import { cn } from "@/lib/utils";
@@ -28,6 +28,9 @@ const STATUS_PILL_STYLE: Record<PipelineStatus, string> = {
   failed: "bg-[var(--status-error)]/15 text-[var(--status-error)] border-[var(--status-error)]/30",
   running: "bg-[var(--status-in-review)]/15 text-[var(--status-in-review)] border-[var(--status-in-review)]/30",
   partial: "bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30",
+  // SP5: cancelled (Stop) / paused (Pause) — button wiring lives in live-run-panel.tsx (Task 5).
+  cancelled: "bg-[var(--status-rejected)]/15 text-[var(--status-rejected)] border-[var(--status-rejected)]/30",
+  paused: "bg-[var(--status-draft)]/15 text-[var(--status-draft)] border-[var(--status-draft)]/30",
 };
 
 // Step.status is typed as `string` (it's an unvalidated DB column read), so guard against an
@@ -45,14 +48,6 @@ function StatusPill({ status, className }: { status: string; className?: string 
 function formatStepDuration(ms: number | null): string {
   if (ms == null) return "—";
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
-}
-
-function formatRunDuration(startedAt: Date | string, finishedAt: Date | string | null): string {
-  if (!finishedAt) return "en cours";
-  const ms = Math.max(0, new Date(finishedAt).getTime() - new Date(startedAt).getTime());
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec} s`;
-  return `${Math.floor(totalSec / 60)} min ${totalSec % 60} s`;
 }
 
 const TRIGGERED_BY_LABEL: Record<string, string> = {
@@ -135,7 +130,7 @@ function RunDetailBody({ run }: { run: RunDetail }) {
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Durée</dt>
-          <dd className="font-medium text-foreground">{formatRunDuration(r.startedAt, r.finishedAt)}</dd>
+          <dd className="font-medium text-foreground">{formatRunDuration(r.startedAt, r.finishedAt, r.status)}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Flux lus</dt>

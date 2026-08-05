@@ -11,9 +11,12 @@ import { publishArticle } from "@/lib/wp/publish";
 //
 // HUMAN-REVIEW GATE: the WHERE clause selects ONLY status='approved' — never 'pending'/'draft'/
 // 'in_review', even if such a row somehow carries a past scheduledAt. An article only ever reaches
-// 'approved' via the human review flow (SP4), so this query can never auto-publish something a
-// human hasn't signed off on. Per-article try/catch: one article's failure (network, WP error,
-// missing category, etc.) tallies as 'failed' and does not stop the rest of the batch.
+// 'approved' via the human review flow (SP4) OR gated auto-approval (SP6, default off, audited via
+// article_revisions — see lib/pipeline/auto-publish.ts and stages.ts's persistArticle), so this
+// query can never auto-publish something neither a human nor that explicit, admin-configured
+// exception has signed off on. This function itself is UNCHANGED by SP6: it still only ever reads
+// status='approved', never anything else. Per-article try/catch: one article's failure (network,
+// WP error, missing category, etc.) tallies as 'failed' and does not stop the rest of the batch.
 export async function publishDueArticles(): Promise<{ published: number; failed: number }> {
   const due = await db
     .select({ id: articles.id })

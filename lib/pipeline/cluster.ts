@@ -13,12 +13,24 @@ export async function decideCluster(embedding: number[]): Promise<{ clusterId: s
   const cfg = getPipelineConfig();
   const since = new Date(Date.now() - cfg.windowHours * 3600_000);
   const vec = `[${embedding.join(",")}]`;
-  const result = await db.execute<NearestRow>(sql`
-    select a.cluster_id as cluster_id, 1 - (e.embedding <=> ${vec}::vector) as score
-    from ${articleEmbeddings} e join ${articles} a on a.id = e.article_id
-    where a.generated_at >= ${since} and a.cluster_id is not null
-    order by e.embedding <=> ${vec}::vector asc limit 1`);
-  const top = result.rows[0];
+  // Best-effort clustering: a failed similarity query must NEVER abort staging. In particular, if
+  // the table holds an embedding of a different dimension than this vector (e.g. a stray row, or a
+  // misconfigured EMBED_DIMENSIONS), pgvector's `<=>` raises "different vector dimensions" — treat
+  // any such failure as "no similar cluster found" (start a new cluster) instead of throwing. Under
+  // normal operation every embedding is the same configured dimension, so this is a safety net, not
+  // a hot path; it also keeps clustering resilient to transient DB errors.
+  let top: NearestRow | undefined;
+  try {
+    const result = await db.execute<NearestRow>(sql`
+      select a.cluster_id as cluster_id, 1 - (e.embedding <=> ${vec}::vector) as score
+      from ${articleEmbeddings} e join ${articles} a on a.id = e.article_id
+      where a.generated_at >= ${since} and a.cluster_id is not null
+      order by e.embedding <=> ${vec}::vector asc limit 1`);
+    top = result.rows[0];
+  } catch (e) {
+    console.warn(`[pipeline] requête de clustering échouée — article traité comme nouveau cluster : ${(e as Error).message}`);
+    return { clusterId: null, isNew: true, bestScore: 0 };
+  }
   const bestScore = top ? Number(top.score) : 0;
   if (top && chooseCluster(bestScore, cfg.clusterThreshold) === "attach") return { clusterId: top.cluster_id, isNew: false, bestScore };
   return { clusterId: null, isNew: true, bestScore };

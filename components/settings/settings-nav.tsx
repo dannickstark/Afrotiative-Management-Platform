@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Rss, Tags, Users, Plug } from "lucide-react";
+import { Rss, Tags, Users, Plug, SlidersHorizontal } from "lucide-react";
 import type { Role } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +12,7 @@ const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { href: "/settings/taxonomy", label: "Catégories & Tags", icon: Tags, roles: ["admin", "editor"] },
   { href: "/settings/team", label: "Équipe", icon: Users, roles: ["admin"] },
   { href: "/settings/integrations", label: "Intégrations", icon: Plug, roles: ["admin"] },
+  { href: "/settings/pipeline", label: "Pipeline", icon: SlidersHorizontal, roles: ["admin"] },
 ];
 
 export function SettingsNav({ role }: { role: Role }) {

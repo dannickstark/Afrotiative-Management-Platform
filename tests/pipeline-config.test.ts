@@ -19,5 +19,10 @@ describe("parsePipelineConfig", () => {
     const c = parsePipelineConfig({});
     expect(c.extractOrder).toContain("readability");
     expect(c.openrouter).toBeUndefined();
+    expect(c.searchOrder).toEqual(["brave", "exa"]);
+  });
+  it("parses SEARCH_ORDER like the other *_ORDER lists", () => {
+    const c = parsePipelineConfig({ SEARCH_ORDER: "exa,brave" });
+    expect(c.searchOrder).toEqual(["exa", "brave"]);
   });
 });
