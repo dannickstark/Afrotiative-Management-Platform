@@ -1,5 +1,5 @@
 import { db, pipelineRuns, pipelineSteps } from "@/db";
-import { and, eq, isNull, lt, notExists, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, notExists, sql } from "drizzle-orm";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
 
 // Overlap guard: callers (manual-trigger action / scheduled endpoint) MUST check this
@@ -25,6 +25,11 @@ import { getPipelineConfig } from "@/lib/config/pipeline-config";
 // concurrently. executeRun inserts a pipeline_steps row every few seconds while it's alive, so
 // recent step activity is the real liveness signal: only reclaim a row that is BOTH past the age
 // cutoff AND has produced no pipeline_steps activity since that same cutoff.
+//
+// SP5: this reaper still targets ONLY "running" rows, by age+activity, exactly as above. A
+// "paused" run must NEVER be reaped here — pause is an intentional parked state (the admin chose
+// to stop polling it, not a crash), or it would be silently and permanently unresumable. Stopping
+// a parked run is an explicit user action (cancelRun), not this reaper's job.
 export async function reclaimStaleRuns(): Promise<void> {
   const cfg = getPipelineConfig();
   const staleBefore = new Date(Date.now() - cfg.runStaleMinutes * 60_000);
@@ -43,8 +48,13 @@ export async function reclaimStaleRuns(): Promise<void> {
     ));
 }
 
+// SP5: a "paused" run also holds the single active slot (mirrors the widened
+// pipeline_runs_one_running partial unique index — see db/schema.ts) — no new run may start while
+// one is parked, only Resume or Stop may free it. reclaimStaleRuns() above only ever reaps
+// "running" rows, so a paused row is never at risk of being swept up here either.
 export async function hasRunningRun(): Promise<boolean> {
   await reclaimStaleRuns();
-  const rows = await db.select({ id: pipelineRuns.id }).from(pipelineRuns).where(eq(pipelineRuns.status, "running")).limit(1);
+  const rows = await db.select({ id: pipelineRuns.id }).from(pipelineRuns)
+    .where(inArray(pipelineRuns.status, ["running", "paused"])).limit(1);
   return rows.length > 0;
 }

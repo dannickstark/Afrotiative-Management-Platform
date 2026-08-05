@@ -16,6 +16,9 @@ const STATUS_STYLE: Record<PipelineStatus, string> = {
   success: "text-[var(--status-approved)]",
   partial: "text-[var(--status-pending)]",
   failed: "text-[var(--status-error)]",
+  // SP5: cancelled (Stop) / paused (Pause) — full button wiring lands in Task 5.
+  cancelled: "text-[var(--status-rejected)]",
+  paused: "text-[var(--status-draft)]",
 };
 
 export type RunRow = {

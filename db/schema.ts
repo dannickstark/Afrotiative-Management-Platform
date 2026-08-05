@@ -8,7 +8,12 @@ export const articleStatus = pgEnum("article_status", [
   "draft", "pending", "in_review", "approved", "published", "rejected",
 ]);
 export const feedFetchStatus = pgEnum("feed_fetch_status", ["ok", "error", "never"]);
-export const pipelineStatus = pgEnum("pipeline_status", ["success", "partial", "failed", "running"]);
+export const pipelineStatus = pgEnum("pipeline_status", [
+  "success", "partial", "failed", "running",
+  // ---- SP5: run control ----
+  "cancelled", // Stop: finalized by the user mid-run (Task 3)
+  "paused",    // Pause: parked mid-run with a checkpoint, resumable (Task 4)
+]);
 export const distributionStatus = pgEnum("distribution_status", ["stubbed", "pending", "sent", "failed"]);
 export const userRole = pgEnum("user_role", ["admin", "editor", "journalist"]);
 
@@ -193,12 +198,27 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   processedItems: integer("processed_items").notNull().default(0),
   currentStage: text("current_stage"),
   currentItem: text("current_item"),
+  // ---- SP5: run control (cooperative — polled by executeRun at safe boundaries) ----
+  cancelRequested: boolean("cancel_requested").notNull().default(false), // Stop (Task 3)
+  pauseRequested: boolean("pause_requested").notNull().default(false),   // Pause (Task 4)
+  // Remaining-stories payload for pause/resume: an array of stories, each an array of members
+  // { feedId, feedName, item: RawItem } (RawItem is JSON-serializable). Null until a run is
+  // paused; cleared again on resume. Typed loosely here — Task 4 documents/narrows the shape.
+  checkpoint: jsonb("checkpoint").$type<unknown>(),
 }, (t) => [
-  // DB-level overlap interlock: at most one run may be 'running' at any time. A concurrent
+  // DB-level overlap interlock: at most one row may be 'running' OR 'paused' at any time — a
+  // paused run still holds the single slot (no new run starts while one is parked). A concurrent
   // runPipeline that races past the hasRunningRun() app check will hit a unique violation on
   // its opening insert and back off (returns status "skipped"). runPipeline's try/finally
   // always moves the row to a terminal status, so this can never dead-lock the slot.
-  uniqueIndex("pipeline_runs_one_running").on(t.status).where(sql`${t.status} = 'running'`),
+  //
+  // IMPORTANT: indexed on the constant `(1)`, NOT on t.status. A unique index on t.status would
+  // only forbid two rows sharing the SAME status value (e.g. two 'running' rows) — it would NOT
+  // stop one 'running' row and one 'paused' row from coexisting, since those are different values
+  // in the indexed column. Indexing a constant instead means every row that satisfies the WHERE
+  // predicate (any status in the set) maps to the SAME indexed value, so at most one such row can
+  // ever exist, regardless of which qualifying status it holds.
+  uniqueIndex("pipeline_runs_one_running").on(sql`(1)`).where(sql`${t.status} in ('running', 'paused')`),
 ]);
 
 export const pipelineSteps = pgTable("pipeline_steps", {
