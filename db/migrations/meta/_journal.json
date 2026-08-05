@@ -22,6 +22,13 @@
       "when": 1785843252871,
       "tag": "0002_tearful_deadpool",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785913151436,
+      "tag": "0003_wise_champions",
+      "breakpoints": true
     }
   ]
 }
