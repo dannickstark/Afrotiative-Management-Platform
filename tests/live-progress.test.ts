@@ -94,15 +94,12 @@ describe("stageItem live hooks", () => {
       clusterId = article?.clusterId ?? null;
     }
     // SP4 Task 6a's stageSources embeds the GENERATED title+body (not the raw source text), so
-    // génération now runs BEFORE embedding/clustering — see the ORDER NOTE on stageSources in
-    // lib/pipeline/stages.ts. The SET of 5 stage names is unchanged (still exactly ITEM_STAGES,
-    // which drives the live stepper's fixed 5 slots), only the chronological order differs.
-    const expectedOrder = [
-      "Extraction du contenu", "Génération IA", "Calcul de l'embedding", "Regroupement (clustering)", "Dépôt en revue",
-    ];
+    // génération runs BEFORE embedding/clustering — see the ORDER NOTE on stageSources in
+    // lib/pipeline/stages.ts. ITEM_STAGES was reordered to this exact chronological order, so the
+    // hooks fire in ITEM_STAGES order (both the SET of names and their sequence now match it).
     expect(new Set(starts)).toEqual(new Set(ITEM_STAGES));
-    expect(starts).toEqual(expectedOrder);
-    expect(ends).toEqual(expectedOrder);
+    expect(starts).toEqual([...ITEM_STAGES]);
+    expect(ends).toEqual([...ITEM_STAGES]);
   });
 });
 

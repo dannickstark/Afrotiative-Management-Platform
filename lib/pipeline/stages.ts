@@ -74,9 +74,9 @@ async function timedStep<T>(
  * the RAW source text BEFORE generation, because with exactly one source that text WAS the
  * article's content. With N sources there's no single coherent "pre-generation" text to embed —
  * so this embeds the GENERATED title+body instead, which requires generateArticle to run first.
- * That changes the pipeline_steps chronological ORDER (Génération IA now precedes Calcul de
- * l'embedding/Regroupement) but not the 4 step NAMES, which stay exactly what live.ts's
- * ITEM_STAGES expects (Extraction du contenu is the 5th, run by the caller — see stageItem).
+ * Génération IA therefore now precedes Calcul de l'embedding/Regroupement; live.ts's ITEM_STAGES
+ * was reordered to match this true chronological order (Extraction du contenu is the 1st, run by
+ * the caller — see stageItem), so the live stepper renders/freezes correctly left-to-right.
  *
  * Human-review gate (non-negotiable): the created article always has status "pending" and
  * aiAuthor=true — this function never publishes anything. A failure at any stage aborts
@@ -89,13 +89,22 @@ export async function stageSources(
   hooks: StageHooks = {},
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
-  if (sources.length === 0) return { articleId: null, steps };
+
+  // Dedupe by URL BEFORE anything downstream: two grouped members can share a URL (e.g. the same
+  // article syndicated through two feeds), which would otherwise produce duplicate reference
+  // entries in the published post AND double-count corroboration in the score. Keep the FIRST
+  // occurrence of each distinct URL; everything below (candidateImages, generateArticle sources,
+  // sourceCount for scoring, article_sources rows) uses this de-duplicated list.
+  const sourcesByUrl = new Map<string, SourceInput>();
+  for (const s of sources) if (!sourcesByUrl.has(s.url)) sourcesByUrl.set(s.url, s);
+  const uniqueSources = [...sourcesByUrl.values()];
+  if (uniqueSources.length === 0) return { articleId: null, steps };
 
   try {
-    const candidateImages = [...new Set(sources.flatMap((s) => s.images ?? []))];
+    const candidateImages = [...new Set(uniqueSources.flatMap((s) => s.images ?? []))];
 
     const gen = await timedStep(steps, hooks, "Génération IA", () => generateArticle({
-      sources: sources.map(({ mediaName, url, text }) => ({ mediaName, url, text })),
+      sources: uniqueSources.map(({ mediaName, url, text }) => ({ mediaName, url, text })),
       candidateImages,
       categories: categoryNames,
     }));
@@ -119,13 +128,13 @@ export async function stageSources(
     if (gen.via === "mock") confidence.aiDegraded = true;
     if (emb.via === "mock") { confidence.aiDegraded = true; confidence.clusterUncertain = true; }
     if (gen.via === "mock" || emb.via === "mock") {
-      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) — ${sources.length} source(s)`);
+      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) — ${uniqueSources.length} source(s)`);
     }
 
     // SP4 Task 4's scorer: corroboration (sourceCount — the cross-check payoff), cluster
     // cohesion (bestScore), completeness/image/category signals, minus confidence penalties.
     const score = computeArticleScore({
-      sourceCount: sources.length,
+      sourceCount: uniqueSources.length,
       bestScore: cluster.bestScore,
       bodyHtml: sanitized,
       hasImage: !!draft.featuredImageUrl,
@@ -163,10 +172,11 @@ export async function stageSources(
           generatedAt: new Date(),
         }).returning({ id: articles.id });
 
-        // ONE article_sources row PER source — this is the multi-source synthesis payoff: a
-        // 2-source story yields 2 rows here (and therefore 2 references in the published post).
+        // ONE article_sources row PER distinct source URL — this is the multi-source synthesis
+        // payoff: a 2-source story yields 2 rows here (and therefore 2 references in the published
+        // post). Deduped by URL above, so no duplicate reference entries.
         await tx.insert(articleSources).values(
-          sources.map((s) => ({ articleId: a.id, mediaName: s.mediaName, url: s.url }))
+          uniqueSources.map((s) => ({ articleId: a.id, mediaName: s.mediaName, url: s.url }))
         );
         await tx.insert(articleEmbeddings).values({ articleId: a.id, embedding: vector });
         await insertTags(tx, a.id, draft.tags);

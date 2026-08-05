@@ -1,32 +1,46 @@
 import { describe, it, expect } from "bun:test";
 import { ITEM_STAGES, deriveStepperNodes, computeEta, deriveHeader, formatClock } from "@/lib/pipeline/live";
 
+// Fixtures below use only REACHABLE step sequences under the SP4 Task 6a execution order
+// (ITEM_STAGES = Extraction → Génération IA → Calcul de l'embedding → Regroupement → Dépôt): a
+// completed stage implies every earlier stage also completed, since each stage runs only after the
+// previous one succeeds. (Before Task 6a these fixtures encoded now-unreachable states like
+// "embedding done before génération".)
 describe("deriveStepperNodes", () => {
   it("marks completed stages done, the current stage current, the rest pending", () => {
     const nodes = deriveStepperNodes(
-      [{ name: "Extraction du contenu", status: "success" }, { name: "Calcul de l'embedding", status: "success" }],
-      "Regroupement (clustering)",
+      [{ name: "Extraction du contenu", status: "success" }, { name: "Génération IA", status: "success" }],
+      "Calcul de l'embedding",
     );
     expect(nodes.map((n) => n.state)).toEqual(["done", "done", "current", "pending", "pending"]);
     expect(nodes).toHaveLength(ITEM_STAGES.length);
-    expect(nodes[3].label).toBe("Génération IA"); // short label preserved for the long stage too
+    expect(nodes[1].label).toBe("Génération IA"); // short label preserved for the long stage too
   });
 
-  it("marks a failed stage failed and freezes the rest as pending", () => {
+  it("marks a failed stage failed and freezes the rest as pending (post-generation embed failure)", () => {
+    // The realistic freeze case: extraction + génération succeeded, then the embedding stage failed.
     const nodes = deriveStepperNodes(
-      [{ name: "Extraction du contenu", status: "success" }, { name: "Regroupement (clustering)", status: "failed" }],
+      [
+        { name: "Extraction du contenu", status: "success" },
+        { name: "Génération IA", status: "success" },
+        { name: "Calcul de l'embedding", status: "failed" },
+      ],
       null,
     );
-    expect(nodes.map((n) => n.state)).toEqual(["done", "pending", "failed", "pending", "pending"]);
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "failed", "pending", "pending"]);
   });
 
   it("keeps a stage AFTER a failure pending even when it is the currentStage (freeze wins)", () => {
     const nodes = deriveStepperNodes(
-      [{ name: "Regroupement (clustering)", status: "failed" }],
-      "Génération IA", // names a stage after the failed one — must NOT become "current"
+      [
+        { name: "Extraction du contenu", status: "success" },
+        { name: "Génération IA", status: "success" },
+        { name: "Calcul de l'embedding", status: "failed" },
+      ],
+      "Regroupement (clustering)", // a stale pointer at a stage after the failed one — must NOT become "current"
     );
-    expect(nodes.map((n) => n.state)).toEqual(["pending", "pending", "failed", "pending", "pending"]);
-    expect(nodes[3].state).toBe("pending"); // "Génération IA" frozen, not "current"
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "failed", "pending", "pending"]);
+    expect(nodes[3].state).toBe("pending"); // "Regroupement (clustering)" frozen, not "current"
   });
 });
 

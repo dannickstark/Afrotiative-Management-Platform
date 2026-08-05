@@ -191,34 +191,20 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       const overflow = group.members.slice(STORY_GROUP_CAP);
 
       try {
-        const sources: SourceInput[] = [];
+        // Record EVERY member first (marks them seen — the dedup-tension fix: a member merged into
+        // this story can never resurface as its own candidate on a later run) and take the FIRST
+        // member's rawItemId as the story's single attribution key. ALL of this story's steps —
+        // the one extraction step below AND the synthesis steps — are attributed to this ONE
+        // primaryRawItemId, so groupSteps() (lib/queries/runs.ts) buckets the whole story as a
+        // single run-detail item and the live panel renders its full 5-node stepper (rather than
+        // splitting per-member and showing an extraction-only fragment for the flagship story).
         let primaryRawItemId: string | null = null;
-
-        // Every in-cap member is recorded (marked seen) AND extracted — this is the dedup-tension
-        // fix: whether a member ends up contributing a source or not, it is recordRawItem()'d here,
-        // so it can never be re-collected as a fresh candidate on a later run.
+        const memberRawIds: { m: Candidate; rawItemId: string }[] = [];
         for (const m of inSources) {
           const rawItemId = await recordRawItem(m.feedId, m.item);
           newItems++;
           if (primaryRawItemId === null) primaryRawItemId = rawItemId;
-
-          await setProgress(runId, { currentStage: "Extraction du contenu" });
-          const t0 = Date.now();
-          try {
-            const r = await extract(m.item.url);
-            const text = (r.text || m.item.contentSnippet).trim();
-            await insertStep({ runId, name: "Extraction du contenu", status: "success", durationMs: Date.now() - t0, rawItemId });
-            // Non-empty text only — falls back to the RSS snippet when extraction yields nothing
-            // (r.via === "none" or empty body); a member with no usable text at all contributes no
-            // source (rather than an empty article_sources row) but is still recorded above.
-            if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images });
-          } catch (e) {
-            await insertStep({
-              runId, name: "Extraction du contenu", status: "failed", durationMs: Date.now() - t0,
-              errorMessage: `L'extraction du contenu (${m.item.url}) a échoué : ${(e as Error).message}`,
-              errorTechnical: (e as Error).stack, rawItemId,
-            });
-          }
+          memberRawIds.push({ m, rawItemId });
         }
         // Members beyond STORY_GROUP_CAP: still recorded/seen (dedup fix applies to every match),
         // but never extracted — "capped as sources, not dropped from dedup".
@@ -227,13 +213,36 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
           newItems++;
         }
 
+        // ONE "Extraction du contenu" step for the WHOLE story (exact name → maps to the stepper's
+        // Extraction node), attributed to primaryRawItemId. It times every member's extraction and
+        // is marked failed only if NO member yielded usable text — a single dead link in a
+        // multi-source story just yields one fewer source, never a failed story.
+        await setProgress(runId, { currentStage: "Extraction du contenu" });
+        const t0 = Date.now();
+        const sources: SourceInput[] = [];
+        let lastExtractError: Error | null = null;
+        for (const { m } of memberRawIds) {
+          try {
+            const r = await extract(m.item.url);
+            const text = (r.text || m.item.contentSnippet).trim();
+            // Non-empty text only — falls back to the RSS snippet when extraction yields nothing
+            // (r.via === "none" or empty body); a member with no usable text contributes no source
+            // (rather than an empty article_sources row) but is still recorded/seen above.
+            if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images });
+          } catch (e) {
+            lastExtractError = e as Error;
+          }
+        }
+
         if (sources.length === 0) {
           itemFailures++;
           await insertStep({
-            runId, name: "Traitement du groupe", status: "failed", durationMs: null,
+            runId, name: "Extraction du contenu", status: "failed", durationMs: Date.now() - t0,
             errorMessage: `Aucune source exploitable pour le groupe « ${primary.item.title} ».`,
+            errorTechnical: lastExtractError?.stack, rawItemId: primaryRawItemId,
           });
         } else {
+          await insertStep({ runId, name: "Extraction du contenu", status: "success", durationMs: Date.now() - t0, rawItemId: primaryRawItemId });
           const { articleId } = await stageSources(sources, categoryNames, {
             onStageStart: (name) => setProgress(runId, { currentStage: name }),
             onStageEnd: (step) => insertStep({

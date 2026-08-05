@@ -1,11 +1,17 @@
 // Pure, DB-free view helpers for the live run panel. Unit-tested in tests/live-panel.test.ts.
 
 // The 5 per-item stages, by their EXACT pipeline_steps.name (must match lib/pipeline/stages.ts).
+// Array order == true CHRONOLOGICAL execution order (SP4 Task 6a): stageSources embeds the
+// GENERATED title+body, so Génération IA runs BEFORE Calcul de l'embedding / Regroupement. This
+// ordering is load-bearing for deriveStepperNodes below — it renders and freezes strictly
+// left-to-right, so a stage's array position MUST equal the order it actually fires in, or a
+// completed node would render to the right of a still-spinning one (and freeze the wrong nodes on
+// a mid-pipeline failure).
 export const ITEM_STAGES = [
   "Extraction du contenu",
+  "Génération IA",
   "Calcul de l'embedding",
   "Regroupement (clustering)",
-  "Génération IA",
   "Dépôt en revue",
 ] as const;
 

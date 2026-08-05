@@ -5,8 +5,10 @@ import {
 } from "@/db";
 import { eq, inArray, like } from "drizzle-orm";
 import { openRun, executeRun } from "@/lib/pipeline/run";
+import { stageSources } from "@/lib/pipeline/stages";
 import { isSeen } from "@/lib/pipeline/dedup";
-import { contentHash, type RawItem } from "@/lib/rss/parse-feed";
+import { ITEM_STAGES } from "@/lib/pipeline/live";
+import { type RawItem } from "@/lib/rss/parse-feed";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SP4 Task 6a — the per-story corpus-grouping restructure of executeRun. Real Neon dev DB,
@@ -233,5 +235,67 @@ describe("executeRun — per-story corpus grouping (SP4 Task 6a)", () => {
       expect(a.status).toBe("pending");
       expect(a.score).not.toBeNull();
     }
+
+    // (e) Story-step unification (SP4 Task 6a review, Finding 2): every step of a story — the one
+    // "Extraction du contenu" step AND the 4 synthesis steps — is attributed to that story's
+    // PRIMARY rawItemId, so groupSteps() (lib/queries/runs.ts) buckets the whole story as ONE
+    // run-detail item and the live panel shows its full 5-node stepper. Concretely: exactly 3
+    // attribution buckets (one per story) even though 4 raw_items were recorded — the merged
+    // story's non-primary member gets NO steps of its own — and each bucket holds all 5 stage names.
+    const stepRows = await db.select({ name: pipelineSteps.name, rawItemId: pipelineSteps.rawItemId })
+      .from(pipelineSteps).where(eq(pipelineSteps.runId, runId!));
+    const stagesByItem = new Map<string, Set<string>>();
+    for (const s of stepRows) {
+      if (!s.rawItemId) continue;
+      if (!stagesByItem.has(s.rawItemId)) stagesByItem.set(s.rawItemId, new Set());
+      stagesByItem.get(s.rawItemId)!.add(s.name);
+    }
+    expect(stagesByItem.size).toBe(3); // one bucket per story (< 4 recorded raw_items)
+    for (const names of stagesByItem.values()) {
+      for (const stage of ITEM_STAGES) expect(names.has(stage)).toBe(true); // full 5-node stepper
+    }
   }, 20000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SP4 Task 6a review, Finding 3 — stageSources dedupes its sources by URL before inserting
+// article_sources, so two grouped members sharing a URL (e.g. one article syndicated through two
+// feeds) don't produce duplicate reference entries in the published post. Fully network-free: ALL
+// provider keys (incl. embed) stripped → generateArticle + embed both use their built-in mocks,
+// so no fixture server is needed.
+describe("stageSources dedupes sources by URL (SP4 Task 6a review, Finding 3)", () => {
+  const envSnap = snapshotEnv([...PROVIDER_KEYS, ...EMBED_ENV_KEYS]);
+  let createdArticleId: string | null = null;
+  let createdClusterId: string | null = null;
+
+  beforeAll(() => { for (const k of [...PROVIDER_KEYS, ...EMBED_ENV_KEYS]) delete process.env[k]; });
+  afterAll(async () => {
+    restoreEnv(envSnap);
+    if (createdArticleId) await db.delete(articles).where(eq(articles.id, createdArticleId)); // cascades sources/embeddings/tags
+    if (createdClusterId) {
+      const stillUsed = await db.select({ id: articles.id }).from(articles).where(eq(articles.clusterId, createdClusterId)).limit(1);
+      if (stillUsed.length === 0) await db.delete(clusters).where(eq(clusters.id, createdClusterId));
+    }
+  });
+
+  it("writes ONE article_sources row per distinct URL, keeping the first occurrence's media name", async () => {
+    const url = "https://example.com/syndicated-story";
+    const longText = "Texte de source suffisamment long pour la génération d'un article. ".repeat(10);
+    const { articleId } = await stageSources(
+      [
+        { mediaName: "Ecofin", url, text: longText },
+        { mediaName: "Jeune Afrique", url, text: longText }, // SAME url, different media — a syndication dup
+      ],
+      ["Économie"],
+    );
+    expect(articleId).not.toBeNull();
+    createdArticleId = articleId;
+    const [a] = await db.select({ clusterId: articles.clusterId }).from(articles).where(eq(articles.id, articleId!));
+    createdClusterId = a?.clusterId ?? null;
+
+    const srcs = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId!));
+    expect(srcs.length).toBe(1);              // deduped: one row for the single distinct URL
+    expect(srcs[0].url).toBe(url);
+    expect(srcs[0].mediaName).toBe("Ecofin"); // FIRST occurrence kept
+  });
 });
