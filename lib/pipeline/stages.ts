@@ -114,6 +114,9 @@ export async function stageItem(
 
         const [a] = await tx.insert(articles).values({
           title: draft.title,
+          // NOT sanitized here (SP4 Task 2 wired sanitizeArticleHtml only into the human-edit
+          // save path, lib/actions/article-actions.ts saveDraft — see lib/sanitize.ts). Wiring
+          // this AI-generated bodyHtml through the sanitizer is deferred to SP4 Task 6.
           bodyHtml: draft.bodyHtml,
           excerpt: draft.excerpt,
           status: "pending",
