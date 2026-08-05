@@ -15,6 +15,8 @@ Fermer la boucle **RSS → IA → revue humaine → publication**. Aujourd'hui �
 
 **Barrière de revue humaine préservée (non négociable) :** rien ne se publie sans qu'un humain ait approuvé. La publication planifiée ne publie que des articles déjà `approved` (donc déjà validés par un humain).
 
+> **Mise à jour SP6 (auto-publication contrôlée) :** un article peut désormais aussi atteindre `approved` sans clic humain, via une **exception explicitement configurée, désactivée par défaut, et auditée** (`shouldAutoPublish` — score ≥ seuil, ≥ N sources, image présente, aucun drapeau de faible confiance ; voir `lib/pipeline/auto-publish.ts` et `article_revisions` pour l'entrée « publié automatiquement »). `publishDueArticles` et `publishArticle` décrits ci-dessous restent **inchangés** : ils ne publient toujours que du `status='approved'`, quelle que soit la façon dont l'article y est arrivé. Voir README.md pour la politique complète.
+
 **Thème :** un **adaptateur de canal enfichable** (`PublishChannel`) — WordPress aujourd'hui, WhatsApp/réseaux sociaux plus tard — s'appuyant sur la table `distributions` déjà prévue à cet effet.
 
 ---

@@ -6,7 +6,19 @@ donne à la rédaction le contrôle en application de ses flux, de son équipe, 
 intégrations.
 
 > **Barrière de revue humaine (non négociable) :** aucun article n'est publié sans qu'un humain l'ait
-> approuvé. La publication planifiée ne touche que des articles déjà approuvés.
+> approuvé — sauf exception explicite (voir ci-dessous). La publication planifiée ne touche que des
+> articles déjà approuvés.
+>
+> **Exception — publication automatique (SP6) :** optionnelle, **désactivée par défaut**, et
+> réservée aux administrateurs (`/settings/pipeline`). Quand elle est activée, un article n'est
+> auto-approuvé (statut `approved` + planifié immédiatement) que s'il passe des conditions de
+> sûreté strictes : score de qualité ≥ seuil configuré, ≥ N sources corroborantes, image à la une
+> présente, et **aucun** drapeau de faible confiance (catégorie incertaine, image manquante,
+> cluster incertain, génération dégradée). Chaque auto-approbation est **auditée** : une entrée
+> « publié automatiquement » est ajoutée à l'historique de l'article (`article_revisions`). Le
+> point d'application de la barrière ne change pas : seuls les articles `status='approved'` sont
+> jamais publiés (`publishDueArticles`) — l'auto-publication ne fait qu'ajouter une seconde façon,
+> strictement contrôlée, d'atteindre ce statut sans clic humain.
 
 ## Chaîne de valeur
 

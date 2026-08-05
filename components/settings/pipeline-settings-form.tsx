@@ -117,7 +117,10 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
       <Card>
         <CardHeader>
           <CardTitle>Publication automatique</CardTitle>
-          <CardDescription>Sera activée à partir du SP6.</CardDescription>
+          <CardDescription>
+            Exception contrôlée à la revue humaine, désactivée par défaut. Chaque publication
+            automatique est consignée dans l'historique de l'article.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
