@@ -5,7 +5,10 @@ export function mockGenerateArticle(input: { sources: { mediaName: string; text:
   const base = (first?.text ?? "Contenu indisponible").slice(0, 400);
   return {
     title: `[MOCK] ${base.slice(0, 60)}`.trim(),
-    bodyHtml: `<p>${base}</p><h2>Contexte</h2><p>Article de substitution généré sans fournisseur IA configuré.</p>`,
+    // Two <h2> subheadings (not just one) so downstream consumers of the mock draft — the
+    // completeness signal in lib/pipeline/score.ts, and tests/ai-prompt.test.ts — see the same
+    // sous-titre structure the real prompt (SP4 Task 3) now asks providers for.
+    bodyHtml: `<p>${base}</p><h2>Contexte</h2><p>Article de substitution généré sans fournisseur IA configuré.</p><h2>À vérifier</h2><p>Ce contenu de repli doit être relu et complété par un journaliste avant publication.</p>`,
     excerpt: base.slice(0, 140),
     category: input.categories[0] ?? "Économie",
     tags: ["à vérifier"],
