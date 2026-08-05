@@ -59,6 +59,11 @@ const PENALTY_CLUSTER_UNCERTAIN = 8; // usually paired with a mock embedding —
 const PENALTY_AI_DEGRADED = 20; // mock LLM/embedding fallback — the whole draft is suspect
 
 function clamp(n: number, min: number, max: number): number {
+  // Math.min/Math.max PROPAGATE NaN, so a NaN/Infinity input would sail through to the return
+  // value and (once Task 6 writes this to the integer articles.score column) throw at insert
+  // time — violating the plan's "never let a step-write fail a run". Treat any non-finite value
+  // as out-of-range and floor it to min, guaranteeing a finite result in [min,max].
+  if (!Number.isFinite(n)) return min;
   return Math.min(max, Math.max(min, n));
 }
 

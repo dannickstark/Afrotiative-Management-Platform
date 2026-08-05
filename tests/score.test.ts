@@ -101,6 +101,28 @@ describe("computeArticleScore", () => {
     expect(floored).toBe(0);
   });
 
+  it("always returns a finite integer in [0,100] for non-finite bestScore/sourceCount", () => {
+    const nonFinite = [NaN, Infinity, -Infinity];
+    for (const bad of nonFinite) {
+      for (const input of [
+        { sourceCount: bad, bestScore: 0.5 },
+        { sourceCount: 2, bestScore: bad },
+        { sourceCount: bad, bestScore: bad },
+      ]) {
+        const score = computeArticleScore({
+          ...input,
+          bodyHtml: SHORT_BODY,
+          hasImage: false,
+          confidence: {},
+        });
+        expect(Number.isFinite(score)).toBe(true);
+        expect(Number.isInteger(score)).toBe(true);
+        expect(score).toBeGreaterThanOrEqual(0);
+        expect(score).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
   it("rewards a resolved image and penalizes imageMissing independently", () => {
     const withImage = computeArticleScore({
       sourceCount: 2, bestScore: 0.5, bodyHtml: SHORT_BODY, hasImage: true, confidence: {},

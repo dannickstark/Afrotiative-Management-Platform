@@ -21,6 +21,36 @@ describe("sanitizeArticleHtml", () => {
     expect(out).not.toContain("javascript:");
   });
 
+  it("drops data:, vbscript:, and obfuscated (mixed-case / whitespace) javascript: hrefs", () => {
+    const dataOut = sanitizeArticleHtml('<a href="data:text/html,<script>alert(1)</script>">Lien</a>');
+    expect(dataOut.toLowerCase()).not.toContain("data:");
+
+    const vbOut = sanitizeArticleHtml('<a href="vbscript:msgbox(1)">Lien</a>');
+    expect(vbOut.toLowerCase()).not.toContain("vbscript:");
+
+    const mixedCaseOut = sanitizeArticleHtml('<a href="JaVaScRiPt:alert(1)">Lien</a>');
+    expect(mixedCaseOut.toLowerCase()).not.toContain("javascript:");
+    expect(mixedCaseOut.toLowerCase()).not.toContain("javascript");
+
+    const whitespaceOut = sanitizeArticleHtml('<a href="java\tscript:alert(1)">Lien</a>');
+    // Neither the (whitespace-split) scheme nor a href pointing at it survives.
+    expect(whitespaceOut).not.toContain("alert(");
+  });
+
+  it("strips a bare style=\"...\" attribute (not just the <style> tag)", () => {
+    const out = sanitizeArticleHtml('<p style="position:absolute;left:-9999px">Texte</p>');
+    expect(out).not.toContain("style=");
+    expect(out).not.toContain("position:absolute");
+    expect(out).toContain("Texte");
+  });
+
+  it("preserves target=\"_blank\" AND forces rel=\"noopener noreferrer\" on it", () => {
+    const out = sanitizeArticleHtml('<a href="https://example.com" target="_blank">Lien</a>');
+    expect(out).toContain('target="_blank"');
+    expect(out).toContain('rel="noopener noreferrer"');
+    expect(out).toContain('href="https://example.com"');
+  });
+
   it("preserves h2/h3 subheadings", () => {
     const out = sanitizeArticleHtml("<h2>Contexte</h2><h3>Détails</h3><p>Corps</p>");
     expect(out).toContain("<h2>Contexte</h2>");
