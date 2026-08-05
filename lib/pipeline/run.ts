@@ -3,6 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import { parseFeed } from "@/lib/rss/parse-feed";
 import { isSeen, recordRawItem } from "./dedup";
 import { stageSources, type SourceInput } from "./stages";
+import { withTimeout } from "./timeout";
 import { extract, extractExternal, hasExternalExtractor } from "@/lib/extract";
 import { embed, cosine } from "@/lib/embeddings";
 import { hasRunningRun } from "./overlap";
@@ -233,7 +234,11 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
         let lastExtractError: Error | null = null;
         for (const { m } of memberRawIds) {
           try {
-            const r = await extract(m.item.url);
+            // SP5 Task 2: bounded by settings.perOperationTimeoutMs — a hung fetch/extract on one
+            // member can't stall this story (let alone the whole run) forever. A timeout here is
+            // caught by this same try/catch exactly like any other extraction failure: the member
+            // is skipped (best-effort), never escaping to fail the group or the run.
+            const r = await withTimeout(extract(m.item.url), settings.perOperationTimeoutMs, "Extraction du contenu");
             const text = (r.text || m.item.contentSnippet).trim();
             // Non-empty text only — falls back to the RSS snippet when extraction yields nothing
             // (r.via === "none" or empty body); a member with no usable text contributes no source
@@ -331,7 +336,7 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
               runId, name: step.name, status: step.status, durationMs: step.durationMs,
               errorMessage: step.errorMessage, errorTechnical: step.errorTechnical, rawItemId: primaryRawItemId,
             }),
-          });
+          }, settings.perOperationTimeoutMs);
           if (articleId) produced++; else itemFailures++;
         }
       } catch (e) {

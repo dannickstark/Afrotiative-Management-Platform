@@ -8,6 +8,8 @@ import { decideCluster } from "./cluster";
 import { generateArticle } from "@/lib/ai";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { computeArticleScore } from "./score";
+import { withTimeout } from "./timeout";
+import { getPipelineSettings } from "@/lib/queries/settings";
 import type { RawItem } from "@/lib/rss/parse-feed";
 
 export type StepRec = {
@@ -37,16 +39,24 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 // Shared step-timing helper: runs `fn`, appends a StepRec to `steps` (success or failed) and
 // fires the hooks around it, then rethrows on failure so the caller's own try/catch decides what
 // happens next (stageSources/stageItem both abort — articleId: null — on any stage failure).
+//
+// SP5 Task 2: `fn()` is raced against `timeoutMs` via withTimeout — a stuck provider call (a hung
+// génération/embedding/extraction request) rejects with a French timeout error instead of hanging
+// this story (and the whole run) for as long as the provider takes. A timeout is just another
+// failure from this function's point of view: it lands in the same catch branch below, so the
+// step is recorded "failed" with the timeout message and rethrown exactly like any other error —
+// no separate code path, no change to the abort/best-effort invariants.
 async function timedStep<T>(
   steps: StepRec[],
   hooks: StageHooks,
   name: string,
+  timeoutMs: number,
   fn: () => Promise<T>,
 ): Promise<T> {
   await hooks.onStageStart?.(name);
   const t0 = Date.now();
   try {
-    const r = await fn();
+    const r = await withTimeout(fn(), timeoutMs, name);
     const step: StepRec = { name, status: "success", durationMs: Date.now() - t0 };
     steps.push(step);
     await hooks.onStageEnd?.(step);
@@ -82,11 +92,17 @@ async function timedStep<T>(
  * aiAuthor=true — this function never publishes anything. A failure at any stage aborts
  * (articleId: null) and returns whatever steps ran so far; it never throws, so the caller can
  * always move on to the next story/item.
+ *
+ * `timeoutMs` (SP5 Task 2) bounds each of the 4 stages below via withTimeout — omit it to read
+ * settings.perOperationTimeoutMs directly (the sensible default for a caller outside executeRun,
+ * e.g. reprocessRawItem via stageItem below); executeRun always passes its own already-loaded
+ * settings value explicitly rather than re-reading on every story.
  */
 export async function stageSources(
   sources: SourceInput[],
   categoryNames: string[],
   hooks: StageHooks = {},
+  timeoutMs?: number,
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
 
@@ -101,9 +117,10 @@ export async function stageSources(
   if (uniqueSources.length === 0) return { articleId: null, steps };
 
   try {
+    const ms = timeoutMs ?? (await getPipelineSettings()).perOperationTimeoutMs;
     const candidateImages = [...new Set(uniqueSources.flatMap((s) => s.images ?? []))];
 
-    const gen = await timedStep(steps, hooks, "Génération IA", () => generateArticle({
+    const gen = await timedStep(steps, hooks, "Génération IA", ms, () => generateArticle({
       sources: uniqueSources.map(({ mediaName, url, text }) => ({ mediaName, url, text })),
       candidateImages,
       categories: categoryNames,
@@ -116,10 +133,10 @@ export async function stageSources(
     // run before the DB insert, not after.
     const sanitized = sanitizeArticleHtml(draft.bodyHtml);
 
-    const emb = await timedStep(steps, hooks, "Calcul de l'embedding", () => embed(`${draft.title}\n${sanitized}`));
+    const emb = await timedStep(steps, hooks, "Calcul de l'embedding", ms, () => embed(`${draft.title}\n${sanitized}`));
     const vector = emb.vector;
 
-    const cluster = await timedStep(steps, hooks, "Regroupement (clustering)", () => decideCluster(vector));
+    const cluster = await timedStep(steps, hooks, "Regroupement (clustering)", ms, () => decideCluster(vector));
 
     // A provider outage forces generateArticle()/embed() onto their mock fallbacks. Rather than
     // let a degraded run look identical to a healthy one, flag the article so human reviewers see
@@ -141,7 +158,7 @@ export async function stageSources(
       confidence,
     });
 
-    const articleId = await timedStep(steps, hooks, "Dépôt en revue", async () => {
+    const articleId = await timedStep(steps, hooks, "Dépôt en revue", ms, async () => {
       // Read-only lookup — no write dependency, so it can run outside the transaction below.
       const catId = await resolveCategoryId(draft.category, categoryNames);
 
@@ -199,20 +216,28 @@ export async function stageSources(
  * item is aborted rather than staged from a bare RSS snippet — there is no second source to fall
  * back on for a lone item, unlike the group path in executeRun) then delegates génération IA
  * through dépôt en revue to stageSources with exactly one source.
+ *
+ * `timeoutMs` (SP5 Task 2): as with stageSources above, omit it to read
+ * settings.perOperationTimeoutMs — this is the "called outside the runner" case (reprocessRawItem
+ * never threads a value through), so both this function's own extraction step AND the delegated
+ * stageSources call get a sensible default rather than no timeout at all.
  */
 export async function stageItem(
   item: RawItem,
   mediaName: string,
   categoryNames: string[],
   hooks: StageHooks = {},
+  timeoutMs?: number,
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
   try {
+    const ms = timeoutMs ?? (await getPipelineSettings()).perOperationTimeoutMs;
     // Extraction total failure is a HARD abort, not a degraded-success: if every provider fell
     // through (via "none") or the resulting text is effectively empty, generating an article
     // from it would hallucinate content from nothing. Throw so the step is recorded FAILED and
-    // the item is aborted (articleId: null) rather than staged as garbage.
-    const ex = await timedStep(steps, hooks, "Extraction du contenu", async () => {
+    // the item is aborted (articleId: null) rather than staged as garbage. A timeout is just
+    // another failure here — it lands in this same catch (via timedStep), same abort path.
+    const ex = await timedStep(steps, hooks, "Extraction du contenu", ms, async () => {
       const r = await extract(item.url);
       const effectiveText = (r.text || item.contentSnippet).trim();
       if (r.via === "none" || effectiveText.length < 80) {
@@ -226,6 +251,7 @@ export async function stageItem(
       [{ mediaName, url: item.url, text, images: ex.images }],
       categoryNames,
       hooks,
+      ms,
     );
     return { articleId: result.articleId, steps: [...steps, ...result.steps] };
   } catch {
