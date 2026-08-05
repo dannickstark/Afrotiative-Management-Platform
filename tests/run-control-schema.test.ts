@@ -22,9 +22,14 @@ describe("pipeline_runs run-control columns (cancelRequested/pauseRequested/chec
   });
 
   it("round-trips cancelRequested/pauseRequested/checkpoint and the 'paused'/'cancelled' statuses", async () => {
+    // Shaped exactly as RunCheckpoint (db/schema.ts, narrowed in SP5 Task 4): stories[] of
+    // members[], each { feedId, feedName, item: RawItem }.
     const checkpoint = {
-      remaining: [
-        { feedId: "feed-1", feedName: "Flux Test", item: { guid: "g1", url: "https://example.com/1", title: "T1" } },
+      stories: [
+        [{
+          feedId: "feed-1", feedName: "Flux Test",
+          item: { guid: "g1", url: "https://example.com/1", title: "T1", contentSnippet: "Extrait.", isoDate: null, contentHash: "hash1" },
+        }],
       ],
     };
 

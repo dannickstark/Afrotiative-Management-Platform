@@ -102,6 +102,82 @@ export async function cancelRun(runId: string): Promise<{ ok: true } | { ok: fal
 }
 
 /**
+ * SP5 Task 4 (Pause): sets pause_requested=true on the given run IF it is currently ACTIVE and
+ * still "running" (a run already paused, or terminal, is a friendly no-op — never a throw).
+ * executeRun (lib/pipeline/run.ts) polls this flag at the SAME safe boundaries as
+ * cancel_requested — after phase 1 / before phase 2, and at the top of each story iteration — and,
+ * once observed (and cancel_requested is NOT also set — Stop always wins), finalizes to the
+ * NON-terminal "paused" status with a checkpoint of the remaining stories. finished_at stays NULL:
+ * a paused run intentionally still holds the pipeline_runs_one_running slot (db/schema.ts) — only
+ * resumeRun() or cancelRun() can free it from here.
+ */
+export async function pauseRun(runId: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "configure");
+
+  // Dynamic import (kept AFTER the RBAC check above): mirrors this file's other actions.
+  const { db, pipelineRuns } = await import("@/db");
+  const { and, eq, isNull } = await import("drizzle-orm");
+
+  const updated = await db.update(pipelineRuns)
+    .set({ pauseRequested: true })
+    .where(and(eq(pipelineRuns.id, runId), eq(pipelineRuns.status, "running"), isNull(pipelineRuns.finishedAt)))
+    .returning({ id: pipelineRuns.id });
+
+  if (updated.length === 0) {
+    return { ok: false as const, message: "Cette exécution ne peut pas être mise en pause (elle est déjà en pause ou terminée)." };
+  }
+
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/runs");
+  return { ok: true as const };
+}
+
+/**
+ * SP5 Task 4 (Resume): ONLY proceeds if the run is currently "paused" AND its checkpoint holds at
+ * least one remaining story — otherwise a friendly French no-op (never a throw). Clears
+ * pause_requested + checkpoint and flips status back to "running" FIRST (awaited, not detached) —
+ * this ordering matters: if it ran after firing executeRun, the resumed run's very first
+ * cooperative-flag boundary check could observe a still-true pause_requested and re-pause
+ * immediately without ever processing a single remaining story. Then fires executeRun DETACHED
+ * with the checkpoint's stories (mirrors startPipelineRun's non-blocking pattern exactly) and
+ * returns immediately — the /runs live panel polls getActiveRun to watch it resume.
+ */
+export async function resumeRun(runId: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "configure");
+
+  // Dynamic import (kept AFTER the RBAC check above): mirrors startPipelineRun's pattern — keeps
+  // executeRun's jsdom-heavy dependency graph out of this "use server" module's static analysis.
+  const { db, pipelineRuns } = await import("@/db");
+  const { eq } = await import("drizzle-orm");
+  const { executeRun } = await import("@/lib/pipeline/run");
+
+  const [run] = await db.select({ status: pipelineRuns.status, checkpoint: pipelineRuns.checkpoint })
+    .from(pipelineRuns).where(eq(pipelineRuns.id, runId));
+
+  if (!run || run.status !== "paused") {
+    return { ok: false as const, message: "Cette exécution n'est pas en pause." };
+  }
+  const stories = run.checkpoint?.stories;
+  if (!stories || stories.length === 0) {
+    return { ok: false as const, message: "Aucun point de reprise disponible pour cette exécution." };
+  }
+
+  await db.update(pipelineRuns)
+    .set({ pauseRequested: false, checkpoint: null, status: "running" })
+    .where(eq(pipelineRuns.id, runId));
+
+  // Detached — do NOT await. executeRun always finalizes in its own finally, so a rejection here
+  // is impossible in practice; the catch is belt-and-suspenders against an unhandled rejection.
+  void executeRun(runId, { resumeStories: stories }).catch(() => {});
+
+  const { revalidatePath } = await import("next/cache");
+  revalidatePath("/runs");
+  return { ok: true as const };
+}
+
+/**
  * Retries one stored raw_items row through the stage chain WITHOUT dedup: unlike the normal
  * ingestion path (isSeen/recordRawItem in lib/pipeline/dedup.ts), this operates directly on the
  * already-recorded row, so a previously-failed or previously-published item can be re-run on

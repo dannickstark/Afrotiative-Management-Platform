@@ -2,6 +2,18 @@ import {
   pgTable, pgEnum, text, boolean, timestamp, integer, real, jsonb, uuid, vector, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { RawItem } from "@/lib/rss/parse-feed";
+
+// ---- SP5 Task 4: pause/resume checkpoint payload ----
+// The REMAINING stories (groups) not yet processed when a run is paused. Each story is an array
+// of members — the exact shape executeRun's per-story loop already works with (a story = a group
+// of same-story candidates), so no conversion is needed on pause (capture) or resume (consume).
+// Fully JSON-serializable: RawItem (lib/rss/parse-feed.ts) is plain data (strings only), and
+// lib/rss/parse-feed.ts has no dependency on this file (or the db layer at all), so this import
+// creates no cycle with db/index.ts's `export * from "./schema"`.
+export type RunCheckpoint = {
+  stories: { feedId: string; feedName: string; item: RawItem }[][];
+};
 
 // ---- enums ----
 export const articleStatus = pgEnum("article_status", [
@@ -201,10 +213,9 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   // ---- SP5: run control (cooperative — polled by executeRun at safe boundaries) ----
   cancelRequested: boolean("cancel_requested").notNull().default(false), // Stop (Task 3)
   pauseRequested: boolean("pause_requested").notNull().default(false),   // Pause (Task 4)
-  // Remaining-stories payload for pause/resume: an array of stories, each an array of members
-  // { feedId, feedName, item: RawItem } (RawItem is JSON-serializable). Null until a run is
-  // paused; cleared again on resume. Typed loosely here — Task 4 documents/narrows the shape.
-  checkpoint: jsonb("checkpoint").$type<unknown>(),
+  // Remaining-stories payload for pause/resume (SP5 Task 4): null until a run is paused; cleared
+  // again on resume (resumeRun clears it before re-invoking executeRun). See RunCheckpoint above.
+  checkpoint: jsonb("checkpoint").$type<RunCheckpoint>(),
 }, (t) => [
   // DB-level overlap interlock: at most one row may be 'running' OR 'paused' at any time — a
   // paused run still holds the single slot (no new run starts while one is parked). A concurrent

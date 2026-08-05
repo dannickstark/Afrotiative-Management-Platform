@@ -2,6 +2,11 @@ import { db, pipelineRuns, pipelineSteps, rawItems } from "@/db";
 import { eq, inArray, asc } from "drizzle-orm";
 import { reclaimStaleRuns } from "@/lib/pipeline/overlap";
 
+// SP5 Task 4: the live panel's "active run" now includes a paused run (holding the
+// pipeline_runs_one_running slot, same as "running" — see db/schema.ts/lib/pipeline/overlap.ts),
+// so it can display its progress-so-far and offer Resume (Task 5).
+const ACTIVE_STATUSES = ["running", "paused"] as const;
+
 export type Step = {
   id: string; name: string; status: string; rawItemId: string | null;
   errorMessage: string | null; errorTechnical: string | null; durationMs: number | null;
@@ -50,13 +55,16 @@ export async function getRunDetail(runId: string) {
 export type RunDetail = NonNullable<Awaited<ReturnType<typeof getRunDetail>>>;
 
 /**
- * The single currently-running run (or null), with its progress fields and steps-so-far grouped
- * like getRunDetail. Reclaims stale runs first, so a dead run is finalized (→ returns null) rather
- * than shown as forever-running. Polled ~1.5s by the live panel.
+ * The single currently-active run (or null) — status "running" OR "paused" (SP5 Task 4), with its
+ * progress fields and steps-so-far grouped like getRunDetail. Reclaims stale runs first, so a dead
+ * "running" row is finalized (→ returns null) rather than shown as forever-running; a "paused" row
+ * is never reclaimed (reclaimStaleRuns only ever targets "running" — pause is an intentional
+ * parked state, not staleness) and is returned here so the live panel can show its progress and
+ * offer Resume. Polled ~1.5s by the live panel.
  */
 export async function getActiveRun() {
   await reclaimStaleRuns();
-  const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.status, "running")).limit(1);
+  const [run] = await db.select().from(pipelineRuns).where(inArray(pipelineRuns.status, ACTIVE_STATUSES)).limit(1);
   if (!run) return null;
   const steps = (await db.select({
     id: pipelineSteps.id, name: pipelineSteps.name, status: pipelineSteps.status, rawItemId: pipelineSteps.rawItemId,

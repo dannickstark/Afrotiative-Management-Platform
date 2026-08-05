@@ -10,6 +10,7 @@ import { hasRunningRun } from "./overlap";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import { searchRelated } from "@/lib/search";
 import type { RawItem } from "@/lib/rss/parse-feed";
+import type { RunCheckpoint } from "@/db";
 
 // A same-story group can in principle grow past any sane article/prompt size (a viral story might
 // match dozens of candidates in one run) — cap how many of its members actually become
@@ -21,7 +22,9 @@ const STORY_GROUP_CAP = 6;
 export type RunTrigger = "manual" | "scheduled";
 // SP5 Task 3 adds "cancelled" — a run stopped mid-flight via cancelRun(), distinct from the
 // computed success/partial/failed tally (which is never used when the run was cancelled).
-export type RunStatus = "success" | "partial" | "failed" | "skipped" | "cancelled";
+// SP5 Task 4 adds "paused" — a run parked mid-flight via pauseRun(), holding a checkpoint of its
+// remaining stories; also never reaches the computed tally.
+export type RunStatus = "success" | "partial" | "failed" | "skipped" | "cancelled" | "paused";
 export type RunResult = { runId: string | null; status: RunStatus; produced: number };
 
 // Drizzle wraps driver errors in DrizzleQueryError, so the pg SQLSTATE lives on `.cause` (not the
@@ -72,19 +75,21 @@ async function setProgress(runId: string, fields: Partial<{
   try { await db.update(pipelineRuns).set(fields).where(eq(pipelineRuns.id, runId)); } catch { /* observability only */ }
 }
 
-// SP5 Task 3 — cooperative cancel check: a FRESH re-read of this run's cancel_requested flag,
-// never a closed-over local. The flag is flipped out-of-process by the cancelRun() action while
-// executeRun is already mid-flight (a detached promise), so the only way executeRun can learn
-// about it is by polling the row at safe boundaries. Best-effort like setProgress: a transient
-// read failure must never abort (or falsely cancel) an otherwise healthy run, so it degrades to
-// "not cancelled" rather than throwing.
-async function isCancelRequested(runId: string): Promise<boolean> {
+// SP5 Task 3/4 — cooperative control-flag check: a FRESH re-read of this run's cancel_requested
+// AND pause_requested flags (one select), never a closed-over local. Both flags are flipped
+// out-of-process by the cancelRun()/pauseRun() actions while executeRun is already mid-flight (a
+// detached promise), so the only way executeRun can learn about either is by polling the row at
+// safe boundaries. Best-effort like setProgress: a transient read failure must never abort (or
+// falsely cancel/pause) an otherwise healthy run, so it degrades to "neither" rather than throwing
+// — a flag that was truly set will simply be observed at the next boundary instead.
+async function checkControlFlags(runId: string): Promise<{ cancelled: boolean; paused: boolean }> {
   try {
-    const [row] = await db.select({ cancelRequested: pipelineRuns.cancelRequested })
-      .from(pipelineRuns).where(eq(pipelineRuns.id, runId));
-    return row?.cancelRequested ?? false;
+    const [row] = await db.select({
+      cancelRequested: pipelineRuns.cancelRequested, pauseRequested: pipelineRuns.pauseRequested,
+    }).from(pipelineRuns).where(eq(pipelineRuns.id, runId));
+    return { cancelled: row?.cancelRequested ?? false, paused: row?.pauseRequested ?? false };
   } catch {
-    return false;
+    return { cancelled: false, paused: false };
   }
 }
 
@@ -138,8 +143,18 @@ export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: numb
  * A feed that fails to parse, or a group that fails at any stage, is recorded as a failed
  * pipeline_steps row and the run continues — a single failure never aborts the whole run.
  * Hitting the item cap is recorded explicitly (never a silent truncation).
+ *
+ * SP5 Task 4 — resume path: when `opts.resumeStories` is passed (by resumeRun(), after a prior
+ * call to this same function paused), phase 1 (feed read + grouping) is SKIPPED ENTIRELY — the
+ * checkpoint's remaining stories become this call's phase-2 groups directly. total_items and the
+ * processed_items starting point are read from the row (they belong to the ORIGINAL run and
+ * already reflect progress made before the pause) rather than reset, so progress continues rather
+ * than restarting at 0/0.
  */
-export async function executeRun(runId: string, opts: { feedIds?: string[] } = {}): Promise<RunResult> {
+export async function executeRun(
+  runId: string,
+  opts: { feedIds?: string[]; resumeStories?: RunCheckpoint["stories"] } = {},
+): Promise<RunResult> {
   let feedsRead = 0, feedsFailed = 0, newItems = 0, produced = 0, itemFailures = 0, overCap = 0;
   let capHit = false, targetFeedsLength = 0;
   let status: RunStatus = "failed";
@@ -147,6 +162,12 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
   // here (not inside the try) so the `finally` below can see it and write the terminal status
   // "cancelled" instead of the computed success/partial/failed tally.
   let cancelled = false;
+  // SP5 Task 4: set the moment a cooperative check observes pause_requested=true (and cancel was
+  // NOT also set — cancel always takes precedence, see checkControlFlags call sites below).
+  // remainingStories is captured at the SAME moment: exactly the stories not yet processed, in the
+  // exact member shape (`{ feedId, feedName, item }`) the checkpoint column expects.
+  let paused = false;
+  let remainingStories: RunCheckpoint["stories"] = [];
 
   try {
     // Inside the try (not before it): if getPipelineSettings() ever throws, the finally below must
@@ -154,80 +175,114 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
     // DB-backed (SP1): maxItemsPerRun is admin-editable at /settings/pipeline, not just env —
     // getPipelineConfig() stays for provider/secret/order config elsewhere in the pipeline.
     const settings = await getPipelineSettings();
-    const targetFeeds = opts.feedIds !== undefined
-      ? (opts.feedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, opts.feedIds)) : [])
-      : await db.select().from(feeds).where(eq(feeds.active, true));
-    targetFeedsLength = targetFeeds.length;
     const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
 
-    await setProgress(runId, { phase: "reading_feeds", feedsTotal: targetFeedsLength });
-
-    // ---- Phase 1: read ALL feeds, collect candidates (no recording yet) ----
     type Candidate = { item: RawItem; feedId: string; feedName: string };
-    const candidates: Candidate[] = [];
-    const seenHashes = new Set<string>(); // intra-batch dedup across feeds in this run
-
-    for (const feed of targetFeeds) {
-      const t0 = Date.now();
-      let items: RawItem[];
-      try {
-        items = await parseFeed(feed.feedUrl);
-        feedsRead++;
-        await insertStep({ runId, name: `Lecture du flux « ${feed.name} »`, status: "success", durationMs: Date.now() - t0 });
-        await setProgress(runId, { feedsRead });
-      } catch (e) {
-        feedsFailed++;
-        await insertStep({
-          runId, name: `Lecture du flux « ${feed.name} »`, status: "failed", durationMs: Date.now() - t0,
-          errorMessage: `La lecture du flux « ${feed.name} » a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
-        });
-        continue;
-      }
-      for (const item of items) {
-        if (seenHashes.has(item.contentHash)) continue;      // duplicate within this run's batch
-        if (await isSeen(feed.id, item)) continue;           // recorded by a previous run
-        seenHashes.add(item.contentHash);
-        if (candidates.length >= settings.maxItemsPerRun) { capHit = true; overCap++; continue; }
-        candidates.push({ item, feedId: feed.id, feedName: feed.name });
-      }
-    }
-
-    // ---- Story grouping (SP4 Task 6a): greedily group candidates by cosine similarity of their
-    // lightweight (title+snippet) embedding to each existing group's FIRST member. A hash-based
-    // mock embedder (no embed provider configured) produces uncorrelated vectors for ANY differing
-    // input, so in practice — and by design in tests — only genuinely identical/near-identical
-    // metadata joins a group under the mock fallback; a real semantic embedder groups true
-    // same-story duplicates. groupVectors is parallel to groups (index i = groups[i]'s join target).
     type Group = { members: Candidate[] };
-    const groups: Group[] = [];
-    const groupVectors: number[][] = [];
-    for (const c of candidates) {
-      const { vector } = await embed(`${c.item.title}\n${c.item.contentSnippet}`);
-      let joinedIndex = -1;
-      for (let i = 0; i < groups.length; i++) {
-        if (cosine(vector, groupVectors[i]) >= settings.clusterThreshold) { joinedIndex = i; break; }
+    let groups: Group[];
+    // Starting point for the processed-stories counter below — 0 for a fresh run, or the row's
+    // current processed_items for a resume (see the resume branch).
+    let processedStart = 0;
+
+    if (opts.resumeStories) {
+      // SP5 Task 4 resume path — SKIP phase 1 (no feed read, no grouping): the checkpoint's
+      // remaining stories become this call's phase-2 groups directly.
+      groups = opts.resumeStories.map((members) => ({ members }));
+      // feedsRead/newItems are DB-persisted stats the `finally` below unconditionally overwrites —
+      // seed them from the row so a resumed run's finalize doesn't regress stats accumulated
+      // before the pause (this call itself reads zero feeds and may record zero NEW items if the
+      // remaining stories all fail before recordRawItem). processedItems is the row's own resumable
+      // progress counter — continue incrementing FROM it, never reset to 0.
+      const [prior] = await db.select({
+        processedItems: pipelineRuns.processedItems, feedsRead: pipelineRuns.feedsRead, newItems: pipelineRuns.newItems,
+      }).from(pipelineRuns).where(eq(pipelineRuns.id, runId));
+      processedStart = prior?.processedItems ?? 0;
+      feedsRead = prior?.feedsRead ?? 0;
+      newItems = prior?.newItems ?? 0;
+      await setProgress(runId, { phase: "processing_items" }); // deliberately no totalItems/processedItems here
+    } else {
+      const targetFeeds = opts.feedIds !== undefined
+        ? (opts.feedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, opts.feedIds)) : [])
+        : await db.select().from(feeds).where(eq(feeds.active, true));
+      targetFeedsLength = targetFeeds.length;
+
+      await setProgress(runId, { phase: "reading_feeds", feedsTotal: targetFeedsLength });
+
+      // ---- Phase 1: read ALL feeds, collect candidates (no recording yet) ----
+      const candidates: Candidate[] = [];
+      const seenHashes = new Set<string>(); // intra-batch dedup across feeds in this run
+
+      for (const feed of targetFeeds) {
+        const t0 = Date.now();
+        let items: RawItem[];
+        try {
+          items = await parseFeed(feed.feedUrl);
+          feedsRead++;
+          await insertStep({ runId, name: `Lecture du flux « ${feed.name} »`, status: "success", durationMs: Date.now() - t0 });
+          await setProgress(runId, { feedsRead });
+        } catch (e) {
+          feedsFailed++;
+          await insertStep({
+            runId, name: `Lecture du flux « ${feed.name} »`, status: "failed", durationMs: Date.now() - t0,
+            errorMessage: `La lecture du flux « ${feed.name} » a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
+          });
+          continue;
+        }
+        for (const item of items) {
+          if (seenHashes.has(item.contentHash)) continue;      // duplicate within this run's batch
+          if (await isSeen(feed.id, item)) continue;           // recorded by a previous run
+          seenHashes.add(item.contentHash);
+          if (candidates.length >= settings.maxItemsPerRun) { capHit = true; overCap++; continue; }
+          candidates.push({ item, feedId: feed.id, feedName: feed.name });
+        }
       }
-      if (joinedIndex >= 0) groups[joinedIndex].members.push(c);
-      else { groups.push({ members: [c] }); groupVectors.push(vector); }
+
+      // ---- Story grouping (SP4 Task 6a): greedily group candidates by cosine similarity of their
+      // lightweight (title+snippet) embedding to each existing group's FIRST member. A hash-based
+      // mock embedder (no embed provider configured) produces uncorrelated vectors for ANY differing
+      // input, so in practice — and by design in tests — only genuinely identical/near-identical
+      // metadata joins a group under the mock fallback; a real semantic embedder groups true
+      // same-story duplicates. groupVectors is parallel to builtGroups (index i = its join target).
+      const builtGroups: Group[] = [];
+      const groupVectors: number[][] = [];
+      for (const c of candidates) {
+        const { vector } = await embed(`${c.item.title}\n${c.item.contentSnippet}`);
+        let joinedIndex = -1;
+        for (let i = 0; i < builtGroups.length; i++) {
+          if (cosine(vector, groupVectors[i]) >= settings.clusterThreshold) { joinedIndex = i; break; }
+        }
+        if (joinedIndex >= 0) builtGroups[joinedIndex].members.push(c);
+        else { builtGroups.push({ members: [c] }); groupVectors.push(vector); }
+      }
+      groups = builtGroups;
+
+      await setProgress(runId, { phase: "processing_items", totalItems: groups.length, processedItems: 0 });
     }
 
-    await setProgress(runId, { phase: "processing_items", totalItems: groups.length, processedItems: 0 });
-
-    // SP5 Task 3 — cooperative cancel check (a): safe boundary right after phase 1 (read + collect
-    // + group), before phase 2 begins processing stories.
-    cancelled = await isCancelRequested(runId);
+    // SP5 Task 3/4 — cooperative cancel+pause check (a): safe boundary right after phase 1 (read +
+    // collect + group) OR immediately on resume, before phase 2 begins processing stories. Cancel
+    // takes precedence over pause when both are somehow set.
+    {
+      const flags = await checkControlFlags(runId);
+      if (flags.cancelled) cancelled = true;
+      else if (flags.paused) { paused = true; remainingStories = groups.map((g) => g.members); }
+    }
 
     // ---- Phase 2: process each STORY (group) — synthesize ONE multi-source article per group ----
-    let processed = 0;
-    for (const group of groups) {
-      if (cancelled) break;
-      // SP5 Task 3 — cooperative cancel check (b): safe boundary at the top of each story
-      // iteration, so a cancelRun() issued mid-phase-2 (between two stories) stops further
-      // processing. Already-produced articles from earlier stories in this run stay as-is
+    let processed = processedStart;
+    for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+      if (cancelled || paused) break;
+      // SP5 Task 3/4 — cooperative cancel+pause check (b): safe boundary at the top of each story
+      // iteration, so a cancelRun()/pauseRun() issued mid-phase-2 (between two stories) stops
+      // further processing. Already-produced articles from earlier stories in this run stay as-is
       // (they're "pending"); this story's own members were never recordRawItem()'d, so — like
-      // every other unprocessed story — they resurface as fresh candidates on the next run.
-      if (await isCancelRequested(runId)) { cancelled = true; break; }
+      // every other un-started story — they resurface as fresh candidates on the next run (cancel)
+      // or are captured verbatim into the checkpoint for resumeRun() to replay later (pause).
+      const flags = await checkControlFlags(runId);
+      if (flags.cancelled) { cancelled = true; break; }
+      if (flags.paused) { paused = true; remainingStories = groups.slice(groupIndex).map((g) => g.members); break; }
 
+      const group = groups[groupIndex];
       const primary = group.members[0];
       await setProgress(runId, { currentItem: primary.item.title, currentStage: null });
 
@@ -410,7 +465,20 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       await insertStep({
         runId, name: "Exécution annulée par l'utilisateur", status: "partial", durationMs: null,
         errorMessage:
-          `L'exécution a été annulée par l'utilisateur après le traitement de ${processed} histoire(s) sur ${groups.length}.`,
+          `L'exécution a été annulée par l'utilisateur après le traitement de ${processed - processedStart} histoire(s) sur ${groups.length} (sur cet appel).`,
+      });
+    } else if (paused) {
+      // SP5 Task 4: same best-effort observability placement as the cancel step above (still
+      // inside the outer try, never in `finally`). "partial" — pausing is a deliberate admin
+      // action, not an error, and there is nothing terminal to tally: the remaining stories are
+      // captured verbatim in remainingStories/the checkpoint, untouched (no recordRawItem, no
+      // extraction), for resumeRun() to replay later exactly like a fresh phase 2.
+      await insertStep({
+        runId, name: "Exécution mise en pause", status: "partial", durationMs: null,
+        errorMessage:
+          `L'exécution a été mise en pause par l'utilisateur après le traitement de ${processed - processedStart} `
+          + `histoire(s) sur ${groups.length} (sur cet appel) ; ${remainingStories.length} histoire(s) restante(s) `
+          + `seront reprises à la reprise de l'exécution.`,
       });
     } else {
       // Status tally:
@@ -434,18 +502,32 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       errorMessage: `L'exécution du pipeline a échoué : ${(e as Error).message}`, errorTechnical: (e as Error).stack,
     });
   } finally {
-    // SP5 Task 3: a cancelled run ALWAYS finalizes to the "cancelled" terminal status — never the
-    // computed success/partial/failed tally — even if something unexpected threw after the cancel
-    // was observed (the outer `catch` above would otherwise have left `status` as "failed").
-    if (cancelled) status = "cancelled";
-    // Always land a terminal status AND clear the live pointer so a late poll can't show a stale
-    // stage — this is what guarantees the row never stays "running" (or, for a cancelled run,
-    // "paused"-adjacent/parked: finishedAt below frees the pipeline_runs_one_running interlock slot
-    // exactly like any other terminal status).
-    await db.update(pipelineRuns).set({
-      status, feedsRead, newItems, published: 0, finishedAt: new Date(),
-      phase: "finalizing", currentStage: null, currentItem: null,
-    }).where(eq(pipelineRuns.id, runId));
+    if (paused && !cancelled) {
+      // SP5 Task 4 — the THIRD finalize outcome: a paused run is a HELD, resumable state, NOT a
+      // terminal one. Deliberately does NOT set finishedAt (that would free the
+      // pipeline_runs_one_running interlock slot and let a second run start while this one is only
+      // parked, not finished — a paused run intentionally keeps holding the slot) and does NOT
+      // compute the success/partial/failed tally (nothing terminal to tally — the remaining
+      // stories haven't been attempted at all). checkpoint holds exactly the stories still to
+      // process, in the shape resumeRun()/executeRun's resume path expects back verbatim.
+      status = "paused";
+      await db.update(pipelineRuns).set({
+        status: "paused", checkpoint: { stories: remainingStories } satisfies RunCheckpoint,
+        feedsRead, newItems, phase: "finalizing", currentStage: null, currentItem: null,
+      }).where(eq(pipelineRuns.id, runId));
+    } else {
+      // SP5 Task 3: a cancelled run ALWAYS finalizes to the "cancelled" terminal status — never the
+      // computed success/partial/failed tally — even if something unexpected threw after the cancel
+      // was observed (the outer `catch` above would otherwise have left `status` as "failed").
+      if (cancelled) status = "cancelled";
+      // Always land a terminal status AND clear the live pointer so a late poll can't show a stale
+      // stage — this is what guarantees the row never stays "running" — this is the ONLY branch
+      // that sets finishedAt, freeing the pipeline_runs_one_running interlock slot.
+      await db.update(pipelineRuns).set({
+        status, feedsRead, newItems, published: 0, finishedAt: new Date(),
+        phase: "finalizing", currentStage: null, currentItem: null,
+      }).where(eq(pipelineRuns.id, runId));
+    }
   }
 
   return { runId, status, produced };
