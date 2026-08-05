@@ -4,8 +4,10 @@ import { eq } from "drizzle-orm";
 
 describe("pipeline_runs progress columns + pipeline_steps.at (migration 0003)", () => {
   let runId: string | null = null;
+  let bareId: string | null = null;
   afterAll(async () => {
     if (runId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, runId)); // cascades steps
+    if (bareId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, bareId));
   });
 
   it("persists and reads back the new progress fields with correct defaults", async () => {
@@ -30,7 +32,7 @@ describe("pipeline_runs progress columns + pipeline_steps.at (migration 0003)", 
 
     // processed_items default is 0 on a bare insert
     const [bare] = await db.insert(pipelineRuns).values({ triggeredBy: "manual", status: "failed", finishedAt: new Date() }).returning();
+    bareId = bare.id; // capture before asserting so afterAll always cleans up, even if the assertion throws
     expect(bare.processedItems).toBe(0);
-    await db.delete(pipelineRuns).where(eq(pipelineRuns.id, bare.id));
   });
 });
