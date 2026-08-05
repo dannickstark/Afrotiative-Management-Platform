@@ -20,6 +20,8 @@ type FormState = {
   autoPublishMinSources: string;
   webSearchEnabled: boolean;
   scheduleCron: string;
+  alertEmailEnabled: boolean;
+  alertEmailRecipients: string;
 };
 
 function toFormState(settings: PipelineSettings): FormState {
@@ -32,6 +34,8 @@ function toFormState(settings: PipelineSettings): FormState {
     autoPublishMinSources: String(settings.autoPublishMinSources),
     webSearchEnabled: settings.webSearchEnabled,
     scheduleCron: settings.scheduleCron ?? "",
+    alertEmailEnabled: settings.alertEmailEnabled,
+    alertEmailRecipients: settings.alertEmailRecipients ?? "",
   };
 }
 
@@ -54,6 +58,8 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
       autoPublishMinSources: Number(form.autoPublishMinSources),
       webSearchEnabled: form.webSearchEnabled,
       scheduleCron: form.scheduleCron,
+      alertEmailEnabled: form.alertEmailEnabled,
+      alertEmailRecipients: form.alertEmailRecipients,
     };
     const validated = pipelineSettingsSchema.safeParse(payload);
     if (!validated.success) {
@@ -180,6 +186,37 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
               onChange={(e) => setForm((f) => ({ ...f, scheduleCron: e.target.value }))}
               placeholder="0 */2 * * *"
             />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Alertes</CardTitle>
+          <CardDescription>
+            Alerte l'équipe en cas d'échec d'exécution ou de flux muet. Toujours visible dans le
+            bandeau de notifications de l'application ; l'e-mail est une option supplémentaire.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
+            <Label htmlFor="alert-email-enabled">Notification par e-mail</Label>
+            <Switch
+              id="alert-email-enabled" checked={form.alertEmailEnabled} disabled={isSaving}
+              onCheckedChange={(checked) => setForm((f) => ({ ...f, alertEmailEnabled: checked }))}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="alert-email-recipients">Destinataires (séparés par des virgules)</Label>
+            <Input
+              id="alert-email-recipients" disabled={isSaving}
+              value={form.alertEmailRecipients}
+              onChange={(e) => setForm((f) => ({ ...f, alertEmailRecipients: e.target.value }))}
+              placeholder="admin@afrotiative.com, editeur@afrotiative.com"
+            />
+            <p className="text-xs text-muted-foreground">
+              L'e-mail nécessite RESEND_API_KEY côté serveur.
+            </p>
           </div>
         </CardContent>
         <CardFooter className="flex-col items-stretch gap-3">
