@@ -47,3 +47,45 @@ describe("narrowByRecency", () => {
     expect(r.dropped.map((x) => x.id)).toEqual(["d1", "d2"]);
   });
 });
+
+import { resolveRunParams, cutoffDate } from "@/lib/pipeline/run-params";
+
+describe("resolveRunParams", () => {
+  const now = new Date("2026-08-06T00:00:00.000Z");
+  const defaults = { defaultMaxItemAgeHours: 72, maxItemsPerRun: 20 };
+
+  it("resolves an 'age' input to a cutoff relative to now", () => {
+    const p = resolveRunParams({ recency: { kind: "age", hours: 48 } }, defaults, now);
+    expect(p.recency).toEqual({ kind: "age", hours: 48, cutoffAt: "2026-08-04T00:00:00.000Z" });
+  });
+  it("passes an absolute 'since' through as the cutoff", () => {
+    const p = resolveRunParams({ recency: { kind: "since", at: "2026-08-05T09:00:00.000Z" } }, defaults, now);
+    expect(p.recency).toEqual({ kind: "since", cutoffAt: "2026-08-05T09:00:00.000Z" });
+  });
+  it("honors an explicit 'none' even when a default exists", () => {
+    expect(resolveRunParams({ recency: { kind: "none" } }, defaults, now).recency).toEqual({ kind: "none" });
+  });
+  it("falls back to the settings default when recency is omitted", () => {
+    const p = resolveRunParams(undefined, defaults, now);
+    expect(p.recency).toEqual({ kind: "age", hours: 72, cutoffAt: "2026-08-03T00:00:00.000Z" });
+  });
+  it("yields no cutoff when omitted and the default is null", () => {
+    const p = resolveRunParams(undefined, { defaultMaxItemAgeHours: null, maxItemsPerRun: 20 }, now);
+    expect(p.recency).toEqual({ kind: "none" });
+  });
+  it("defaults feedIds to null and maxItems to the settings value, but honors overrides", () => {
+    expect(resolveRunParams(undefined, defaults, now).feedIds).toBeNull();
+    expect(resolveRunParams(undefined, defaults, now).maxItems).toBe(20);
+    const p = resolveRunParams({ feedIds: ["a"], maxItems: 5 }, defaults, now);
+    expect(p.feedIds).toEqual(["a"]);
+    expect(p.maxItems).toBe(5);
+  });
+});
+
+describe("cutoffDate", () => {
+  it("returns a Date for age/since and null for none", () => {
+    expect(cutoffDate({ recency: { kind: "age", hours: 1, cutoffAt: "2026-08-06T00:00:00.000Z" }, feedIds: null, maxItems: 1 }))
+      .toEqual(new Date("2026-08-06T00:00:00.000Z"));
+    expect(cutoffDate({ recency: { kind: "none" }, feedIds: null, maxItems: 1 })).toBeNull();
+  });
+});
