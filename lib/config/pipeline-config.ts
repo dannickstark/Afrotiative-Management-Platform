@@ -10,6 +10,7 @@ export function parsePipelineConfig(env: Record<string, string | undefined>) {
   return {
     llmOrder: list(env.LLM_ORDER, ["openrouter", "omniroute"]),
     extractOrder: list(env.EXTRACT_ORDER, ["jina", "firecrawl", "readability"]),
+    searchOrder: list(env.SEARCH_ORDER, ["brave", "exa"]),
     openrouter: env.OPENROUTER_API_KEY ? { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL || "openai/gpt-4o-mini", baseUrl: "https://openrouter.ai/api/v1" } : undefined,
     omniroute: env.OMNIROUTE_API_KEY && env.OMNIROUTE_BASE_URL ? { apiKey: env.OMNIROUTE_API_KEY, model: env.OMNIROUTE_MODEL || "auto/chat", baseUrl: env.OMNIROUTE_BASE_URL } : undefined,
     anthropic: env.ANTHROPIC_API_KEY ? { apiKey: env.ANTHROPIC_API_KEY, model: env.ANTHROPIC_MODEL || "claude-3-5-haiku-latest" } : undefined,
