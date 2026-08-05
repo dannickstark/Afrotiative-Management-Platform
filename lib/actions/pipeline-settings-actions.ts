@@ -16,7 +16,12 @@ async function guard() {
 
 export async function updatePipelineSettings(input: PipelineSettingsInput) {
   await guard();
-  const data = pipelineSettingsSchema.parse(input);
+  // safeParse (not parse): the client already validates before calling, but a direct/future caller
+  // could bypass that — a throwing parse() would leak the raw ZodError JSON straight into the form's
+  // error <p> + toast. Surface a clean French message instead; the form's catch renders err.message.
+  const parsed = pipelineSettingsSchema.safeParse(input);
+  if (!parsed.success) throw new Error("Réglages invalides.");
+  const data = parsed.data;
   const scheduleCron = data.scheduleCron?.trim() ? data.scheduleCron.trim() : null;
   const values = {
     maxItemsPerRun: data.maxItemsPerRun,

@@ -53,3 +53,36 @@ describe("decideCluster (pgvector integration)", () => {
     expect(result.bestScore).toBeLessThan(0.83);
   });
 });
+
+// Deterministic guard for decideCluster's try/catch hardening: when the comparison table holds an
+// embedding whose dimension differs from the query vector, pgvector's `<=>` raises "different vector
+// dimensions". decideCluster must swallow that and fall back to a NEW cluster (never abort staging).
+// We force it by inserting a valid 1024-dim row, then querying with a 512-length vector. Own fixture
+// (independent of the suite above) so the comparison row is guaranteed present and in-window.
+describe("decideCluster dimension-mismatch fallback", () => {
+  const stored = mockEmbed("dedup-cluster-dim-mismatch-guard", 1024); // valid stored embedding
+  const mismatched = mockEmbed("dedup-cluster-dim-mismatch-query", 512); // wrong dimension → pgvector error
+  let clusterId: string | null = null;
+  let articleId: string | null = null;
+
+  beforeAll(async () => {
+    const [c] = await db.insert(clusters).values({ label: "test:decideCluster:dim-mismatch" }).returning({ id: clusters.id });
+    clusterId = c.id;
+    const [a] = await db.insert(articles).values({
+      title: "test:decideCluster dim-mismatch article", clusterId, generatedAt: new Date(),
+    }).returning({ id: articles.id });
+    articleId = a.id;
+    await db.insert(articleEmbeddings).values({ articleId, embedding: stored });
+  });
+
+  afterAll(async () => {
+    // deleting the article cascades the articleEmbeddings row (FK onDelete: cascade)
+    if (articleId) await db.delete(articles).where(eq(articles.id, articleId));
+    if (clusterId) await db.delete(clusters).where(eq(clusters.id, clusterId));
+  });
+
+  it("returns a new-cluster fallback (does not throw) when the similarity query hits a dimension mismatch", async () => {
+    const result = await decideCluster(mismatched);
+    expect(result).toEqual({ clusterId: null, isNew: true, bestScore: 0 });
+  });
+});
