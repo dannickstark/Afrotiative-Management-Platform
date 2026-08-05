@@ -38,11 +38,17 @@ async function insertStep(row: {
   try { await db.insert(pipelineSteps).values(row); } catch { /* observability only */ }
 }
 
+// Best-effort progress write (observability only — never fail or skew a real run). A transient DB
+// error on a pure-progress UPDATE must NOT surface: inside the per-feed try it would be miscounted
+// as a feed-read failure (double-counting the feed as read AND failed), and the phase-2 calls sit
+// outside the per-item try, so an error there would abort the whole run as failed even if items
+// already succeeded. The finalize update in executeRun's `finally` is deliberately NOT routed
+// through here — that one must still propagate.
 async function setProgress(runId: string, fields: Partial<{
   phase: string; feedsTotal: number; totalItems: number; processedItems: number;
   currentStage: string | null; currentItem: string | null; feedsRead: number;
 }>): Promise<void> {
-  await db.update(pipelineRuns).set(fields).where(eq(pipelineRuns.id, runId));
+  try { await db.update(pipelineRuns).set(fields).where(eq(pipelineRuns.id, runId)); } catch { /* observability only */ }
 }
 
 /**
@@ -160,7 +166,7 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
         runId, name: "Limite d'éléments atteinte", status: "partial", durationMs: null,
         errorMessage:
           `La limite de ${cfg.maxItemsPerRun} nouveaux éléments par exécution a été atteinte : `
-          + `${overCap} nouvel(x) élément(s) au-delà de la limite n'ont pas été traités ; ils seront repris lors d'une prochaine exécution.`,
+          + `${overCap} élément(s) supplémentaire(s) au-delà de la limite n'ont pas été traités ; ils seront repris lors d'une prochaine exécution.`,
       });
     }
 

@@ -2,6 +2,14 @@ import { describe, it, expect, afterAll, beforeAll } from "bun:test";
 import { db, pipelineRuns, pipelineSteps, articles, clusters, feeds, rawItems, articleSources } from "@/db";
 import { eq, inArray, like } from "drizzle-orm";
 
+// File-scoped self-heal: a bun-test TIMEOUT in the two-phase cap test below abandons the test
+// promise WITHOUT running its `finally`, which can strand a status:"running" pipeline_runs row (+
+// "Fixture cap%" fixture rows). On the NEXT invocation, the very first test in this file inserts a
+// "running" row directly and would 23505-fail against that stray one — so heal BEFORE any test runs
+// here, not just inside the two-phase describe. (`healFixtureResidue`/`reclaimStaleRuns` are hoisted
+// module bindings; safe to reference from this top-level hook.)
+beforeAll(async () => { await healFixtureResidue(); });
+
 describe("pipeline_runs progress columns + pipeline_steps.at (migration 0003)", () => {
   let runId: string | null = null;
   let bareId: string | null = null;
@@ -91,6 +99,25 @@ describe("stageItem live hooks", () => {
 });
 
 import { openRun, executeRun } from "@/lib/pipeline/run";
+import { reclaimStaleRuns } from "@/lib/pipeline/overlap";
+
+// Self-heal any residue a PRIOR aborted run of this suite may have left. A bun-test TIMEOUT (unlike
+// a JS throw) abandons the test promise WITHOUT running the per-test `finally`, which can strand a
+// status:"running" pipeline_runs row (blocking every later openRun/runPipeline for up to
+// RUN_STALE_MINUTES and cascading failures into the same `bun test` invocation) plus leftover
+// "Fixture cap%" feeds and their raw_items. Running this before AND after the suite makes it
+// order- and rerun-independent, without disturbing the per-test `finally` cleanup below.
+async function healFixtureResidue(): Promise<void> {
+  await reclaimStaleRuns(); // finalizes any stale (>threshold) running row to "failed"
+  // A *recent* stray running row won't be old enough for reclaimStaleRuns; delete it so the
+  // one-running slot is free. Serial DB tests (see bunfig.toml) mean no legit run is active here.
+  await db.delete(pipelineRuns).where(eq(pipelineRuns.status, "running"));
+  const strays = await db.select({ id: feeds.id }).from(feeds).where(like(feeds.name, "Fixture cap%"));
+  for (const s of strays) {
+    await db.delete(rawItems).where(eq(rawItems.feedId, s.id));
+    await db.delete(feeds).where(eq(feeds.id, s.id));
+  }
+}
 
 // A feed fixture that serves an RSS document with N distinct items pointing at a local article
 // server. Exposes `articleBase` (not just `rssUrl`) so tests can find + clean up every article
@@ -112,8 +139,11 @@ function rssServer(itemCount: number) {
 
 describe("executeRun two-phase progress + cap", () => {
   const snap = Object.fromEntries(PROVIDER_KEYS.map((k) => [k, process.env[k]]));
-  beforeAll(() => { for (const k of PROVIDER_KEYS) delete process.env[k]; });
-  afterAll(() => { for (const [k, v] of Object.entries(snap)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  beforeAll(async () => { for (const k of PROVIDER_KEYS) delete process.env[k]; await healFixtureResidue(); });
+  afterAll(async () => {
+    for (const [k, v] of Object.entries(snap)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    await healFixtureResidue();
+  });
 
   it("reads all feeds, caps recorded items, records ONLY what it processes, and lands progress fields", async () => {
     process.env.MAX_ITEMS_PER_RUN = "2";
