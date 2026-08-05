@@ -212,13 +212,30 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   // its opening insert and back off (returns status "skipped"). runPipeline's try/finally
   // always moves the row to a terminal status, so this can never dead-lock the slot.
   //
-  // IMPORTANT: indexed on the constant `(1)`, NOT on t.status. A unique index on t.status would
-  // only forbid two rows sharing the SAME status value (e.g. two 'running' rows) — it would NOT
-  // stop one 'running' row and one 'paused' row from coexisting, since those are different values
-  // in the indexed column. Indexing a constant instead means every row that satisfies the WHERE
-  // predicate (any status in the set) maps to the SAME indexed value, so at most one such row can
-  // ever exist, regardless of which qualifying status it holds.
-  uniqueIndex("pipeline_runs_one_running").on(sql`(1)`).where(sql`${t.status} in ('running', 'paused')`),
+  // IMPORTANT: indexed on the constant `(1)`, NOT on any real column. A unique index on `status`
+  // would only forbid two rows sharing the SAME value (e.g. two 'running' rows), NOT one 'running'
+  // + one 'paused' coexisting. A unique index on `finished_at` wouldn't work either: NULLs are
+  // distinct in a unique index, so many finished_at-NULL rows could coexist. Indexing a constant
+  // makes every row that satisfies the WHERE predicate map to the SAME value `1`, so at most one
+  // such row can ever exist.
+  //
+  // PREDICATE = `finished_at is null` (NOT `status in ('running','paused')`). Two reasons, both
+  // load-bearing:
+  //  1. Semantics: a run is active (holds the slot) exactly while unfinalized. executeRun's
+  //     always-finalize `finally` (lib/pipeline/run.ts) writes a terminal status AND finished_at
+  //     together; a paused run (SP5 Task 4) leaves finished_at null by design. So `finished_at is
+  //     null` ⟺ status ∈ {running, paused}. reclaimStaleRuns() (lib/pipeline/overlap.ts) already
+  //     uses this same `isNull(finished_at)` signal for "not yet finalized" — this predicate is the
+  //     existing idiom, not a new invariant.
+  //  2. Fresh-deploy safety (SQLSTATE 55P04): drizzle's migrate() applies ALL pending migrations in
+  //     ONE transaction. On a fresh DB that transaction contains the ALTER TYPE ... ADD VALUE
+  //     'paused'/'cancelled' migration. PostgreSQL forbids REFERENCING a newly-added enum value in
+  //     the same transaction that added it, so any enum-literal predicate would abort the whole
+  //     deploy. A `status::text` cast does NOT rescue it — the enum→text cast is not IMMUTABLE and
+  //     is rejected in an index predicate (SQLSTATE 42P17). `finished_at is null` references no
+  //     enum value at all, so it is immutable and deploy-safe. (Both failures verified empirically
+  //     against Neon in a rolled-back transaction — see .superpowers/sp5-t1-report.md.)
+  uniqueIndex("pipeline_runs_one_running").on(sql`(1)`).where(sql`${t.finishedAt} is null`),
 ]);
 
 export const pipelineSteps = pgTable("pipeline_steps", {

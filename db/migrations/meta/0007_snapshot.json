@@ -1,6 +1,6 @@
 {
-  "id": "435a1369-3a76-4cd6-a7b3-ab14871d0f46",
-  "prevId": "2a149f33-b16e-4c33-8fa7-7e7bada06549",
+  "id": "2a149f33-b16e-4c33-8fa7-7e7bada06549",
+  "prevId": "e714bdb1-08ae-4075-9a49-63b14f3b7301",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -869,9 +869,9 @@
           "name": "pipeline_runs_one_running",
           "columns": [
             {
-              "expression": "(1)",
+              "expression": "status",
+              "isExpression": false,
               "asc": true,
-              "isExpression": true,
               "nulls": "last"
             }
           ],

@@ -7,9 +7,13 @@ import { hasRunningRun, reclaimStaleRuns } from "@/lib/pipeline/overlap";
 // SP5 Task 1 — run-control schema foundation. Adds to pipeline_runs: cancel_requested /
 // pause_requested booleans, a nullable checkpoint jsonb (holds the remaining-stories payload
 // for pause/resume, wired in SP5 Task 4), and two new pipeline_status enum values: 'cancelled'
-// (Stop) and 'paused' (Pause/Resume). Also widens the pipeline_runs_one_running partial unique
-// index to cover BOTH 'running' and 'paused' — a paused run still holds the single active slot,
-// so no new run can start while one is parked. Network-free: real Neon DB only, no external HTTP.
+// (Stop) and 'paused' (Pause/Resume). The pipeline_runs_one_running partial unique index guards
+// the single active slot via WHERE finished_at IS NULL (an active run — running OR paused — is
+// exactly an unfinalized one; a paused run leaves finished_at null and so still holds the slot).
+// The predicate is finished_at-based rather than status-based so the whole migration set applies
+// in one transaction on a FRESH deploy without tripping PostgreSQL 55P04 (can't reference a
+// just-added enum value in the same tx) — see .superpowers/sp5-t1-report.md.
+// Network-free: real Neon DB only, no external HTTP.
 describe("pipeline_runs run-control columns (cancelRequested/pauseRequested/checkpoint)", () => {
   let runId: string | null = null;
 
@@ -92,8 +96,10 @@ describe("hasRunningRun() / reclaimStaleRuns() treat 'paused' as an active, non-
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Interlock: pipeline_runs_one_running must now guard BOTH 'running' and 'paused' — mirrors the
-// existing overlap test pattern in tests/pipeline-run.test.ts ("runPipeline overlap guard").
+// Interlock: pipeline_runs_one_running (WHERE finished_at IS NULL) must let a paused run hold the
+// single slot — a second active run cannot open while one is parked. A paused run has finished_at
+// null (unfinalized), so it occupies the index just like a running run does. Mirrors the existing
+// overlap test pattern in tests/pipeline-run.test.ts ("runPipeline overlap guard").
 describe("pipeline_runs_one_running index also covers 'paused' (interlock)", () => {
   let pausedRunId: string | null = null;
 
