@@ -4,13 +4,15 @@ import { eq, sql } from "drizzle-orm";
 export type QueueRow = {
   id: string; title: string; categoryName: string | null; sourceCount: number;
   imageUrl: string | null; generatedAt: Date | null; status: string; low: boolean;
+  // 0-100 from lib/pipeline/score.ts; null until SP4 Task 6 wires scoring into stageItem.
+  score: number | null;
 };
 
 export async function getQueue(): Promise<QueueRow[]> {
   const rows = await db.select({
     id: articles.id, title: articles.title, categoryName: wpCategories.name,
     imageUrl: articles.featuredImageUrl, generatedAt: articles.generatedAt,
-    status: articles.status, confidenceFlags: articles.confidenceFlags,
+    status: articles.status, confidenceFlags: articles.confidenceFlags, score: articles.score,
     sourceCount: sql<number>`(select count(*) from ${articleSources} s where s.article_id = ${articles.id})`,
   }).from(articles).leftJoin(wpCategories, eq(articles.categoryId, wpCategories.id))
     .orderBy(articles.generatedAt); // oldest first
