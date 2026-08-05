@@ -445,7 +445,14 @@ export async function executeRun(
               runId, name: step.name, status: step.status, durationMs: step.durationMs,
               errorMessage: step.errorMessage, errorTechnical: step.errorTechnical, rawItemId: primaryRawItemId,
             }),
-          }, settings.perOperationTimeoutMs);
+          }, settings.perOperationTimeoutMs, {
+            // SP6 — threaded the same way as perOperationTimeoutMs above: settings was already
+            // read once at the top of this run, so this never triggers stageSources's own
+            // getPipelineSettings() fallback read.
+            enabled: settings.autoPublishEnabled,
+            scoreThreshold: settings.scoreThreshold,
+            minSources: settings.autoPublishMinSources,
+          });
           if (articleId) produced++; else itemFailures++;
         }
       } catch (e) {

@@ -1,16 +1,24 @@
 import {
-  db, articles, articleSources, articleTags, articleEmbeddings, clusters, wpCategories, wpTags,
+  db, articles, articleSources, articleTags, articleEmbeddings, articleRevisions, clusters, wpCategories, wpTags,
 } from "@/db";
 import { eq } from "drizzle-orm";
 import { extract } from "@/lib/extract";
 import { embed } from "@/lib/embeddings";
 import { decideCluster } from "./cluster";
-import { generateArticle } from "@/lib/ai";
+import { generateArticle, type ArticleDraft } from "@/lib/ai";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { computeArticleScore } from "./score";
 import { withTimeout } from "./timeout";
 import { getPipelineSettings } from "@/lib/queries/settings";
+import { shouldAutoPublish, type AutoPublishConfidence } from "./auto-publish";
 import type { RawItem } from "@/lib/rss/parse-feed";
+
+// SP6 — the 3 auto-publish knobs stageSources needs, in the shape lib/pipeline/auto-publish.ts's
+// shouldAutoPublish() expects. Threaded from the caller (executeRun already reads
+// getPipelineSettings() once per run and passes settings.perOperationTimeoutMs the same way — see
+// that call site in lib/pipeline/run.ts) rather than re-read here on every story; stageSources
+// falls back to reading settings itself (below) only when a caller omits it, exactly like timeoutMs.
+export type AutoPublishCfg = { enabled: boolean; scoreThreshold: number; minSources: number };
 
 export type StepRec = {
   name: string;
@@ -88,21 +96,28 @@ async function timedStep<T>(
  * was reordered to match this true chronological order (Extraction du contenu is the 1st, run by
  * the caller — see stageItem), so the live stepper renders/freezes correctly left-to-right.
  *
- * Human-review gate (non-negotiable): the created article always has status "pending" and
- * aiAuthor=true — this function never publishes anything. A failure at any stage aborts
- * (articleId: null) and returns whatever steps ran so far; it never throws, so the caller can
- * always move on to the next story/item.
+ * Human-review gate (non-negotiable): the created article ALWAYS has aiAuthor=true, and its status
+ * is "pending" UNLESS it qualifies for SP6's gated auto-publish exception (default OFF; see
+ * lib/pipeline/auto-publish.ts's shouldAutoPublish — score ≥ threshold, ≥N sources, image present,
+ * no low-confidence flags), in which case status is "approved" + scheduledAt=now instead: this
+ * function itself still never PUBLISHES anything (that's still only ever publishDueArticles(),
+ * unchanged, per lib/wp/publish-due.ts), it only ever decides which status row to insert. A
+ * failure at any stage aborts (articleId: null) and returns whatever steps ran so far; it never
+ * throws, so the caller can always move on to the next story/item.
  *
  * `timeoutMs` (SP5 Task 2) bounds each of the 4 stages below via withTimeout — omit it to read
  * settings.perOperationTimeoutMs directly (the sensible default for a caller outside executeRun,
  * e.g. reprocessRawItem via stageItem below); executeRun always passes its own already-loaded
- * settings value explicitly rather than re-reading on every story.
+ * settings value explicitly rather than re-reading on every story. `autoPublishCfg` (SP6) is
+ * threaded the same way — omit it to read settings.{autoPublishEnabled,scoreThreshold,
+ * autoPublishMinSources} directly.
  */
 export async function stageSources(
   sources: SourceInput[],
   categoryNames: string[],
   hooks: StageHooks = {},
   timeoutMs?: number,
+  autoPublishCfg?: AutoPublishCfg,
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
 
@@ -117,7 +132,18 @@ export async function stageSources(
   if (uniqueSources.length === 0) return { articleId: null, steps };
 
   try {
-    const ms = timeoutMs ?? (await getPipelineSettings()).perOperationTimeoutMs;
+    // Read settings ONCE only if either caller-supplied default is missing — when executeRun calls
+    // this (both timeoutMs AND autoPublishCfg passed explicitly), this never re-reads settings,
+    // preserving the "one getPipelineSettings() call per run" property already established for
+    // timeoutMs. A direct caller that omits either (stageItem's own default path, or a test) gets
+    // a sensible fallback for whichever one it left out.
+    const settings = (timeoutMs === undefined || autoPublishCfg === undefined) ? await getPipelineSettings() : null;
+    const ms = timeoutMs ?? settings!.perOperationTimeoutMs;
+    const apCfg: AutoPublishCfg = autoPublishCfg ?? {
+      enabled: settings!.autoPublishEnabled,
+      scoreThreshold: settings!.scoreThreshold,
+      minSources: settings!.autoPublishMinSources,
+    };
     const candidateImages = [...new Set(uniqueSources.flatMap((s) => s.images ?? []))];
 
     const gen = await timedStep(steps, hooks, "Génération IA", ms, () => generateArticle({
@@ -158,54 +184,147 @@ export async function stageSources(
       confidence,
     });
 
-    const articleId = await timedStep(steps, hooks, "Dépôt en revue", ms, async () => {
-      // Read-only lookup — no write dependency, so it can run outside the transaction below.
-      const catId = await resolveCategoryId(draft.category, categoryNames);
+    const depot = await timedStep(steps, hooks, "Dépôt en revue", ms, () => persistArticle({
+      draft, sanitizedBody: sanitized, vector, clusterId: cluster.clusterId, score, confidence,
+      sources: uniqueSources, categoryNames, autoPublish: apCfg,
+    }));
 
-      // Everything that writes rows for this article is transactional: if any insert in this
-      // block fails (e.g. insertTags), the whole thing rolls back rather than leaving a
-      // half-written "pending" article (missing its sources/embedding/tags) silently sitting
-      // in the human review queue while the caller believes staging failed (articleId: null).
-      return db.transaction(async (tx) => {
-        let clusterId = cluster.clusterId;
-        if (!clusterId) {
-          const [c] = await tx.insert(clusters).values({ label: draft.title.slice(0, 80) }).returning({ id: clusters.id });
-          clusterId = c.id;
-        }
+    // SP6 — best-effort live step so the run's live view + trace show the auto-approval happened,
+    // distinct from the always-present "Dépôt en revue" step above. Deliberately AFTER that step's
+    // timedStep call (never wraps it): the article is already durably written (approved or
+    // pending, decided inside persistArticle's own transaction) by this point, so a failure here
+    // is purely an observability hiccup — it must never retroactively fail the story or flip a
+    // successfully-approved article back to looking unapproved.
+    if (depot.autoApproved) {
+      try {
+        await hooks.onStageStart?.("Publication automatique");
+        const step: StepRec = {
+          name: "Publication automatique", status: "success", durationMs: 0,
+          errorMessage: `Score ${score} ≥ seuil ${apCfg.scoreThreshold} ; ${uniqueSources.length} source(s) ; aucune alerte de confiance.`,
+        };
+        steps.push(step);
+        await hooks.onStageEnd?.(step);
+      } catch {
+        // Best-effort observability only (see comment above) — never fail the story over this.
+      }
+    }
 
-        const [a] = await tx.insert(articles).values({
-          title: draft.title,
-          bodyHtml: sanitized,
-          excerpt: draft.excerpt,
-          status: "pending",
-          aiAuthor: true,
-          categoryId: catId,
-          featuredImageUrl: draft.featuredImageUrl,
-          imageCredit: draft.imageCredit,
-          imageSourceUrl: draft.imageSourceUrl,
-          clusterId,
-          score,
-          confidenceFlags: confidence,
-          generatedAt: new Date(),
-        }).returning({ id: articles.id });
-
-        // ONE article_sources row PER distinct source URL — this is the multi-source synthesis
-        // payoff: a 2-source story yields 2 rows here (and therefore 2 references in the published
-        // post). Deduped by URL above, so no duplicate reference entries.
-        await tx.insert(articleSources).values(
-          uniqueSources.map((s) => ({ articleId: a.id, mediaName: s.mediaName, url: s.url }))
-        );
-        await tx.insert(articleEmbeddings).values({ articleId: a.id, embedding: vector });
-        await insertTags(tx, a.id, draft.tags);
-
-        return a.id;
-      });
-    });
-
-    return { articleId, steps };
+    return { articleId: depot.articleId, steps };
   } catch {
     return { articleId: null, steps };
   }
+}
+
+// SP6 — the transactional write behind "Dépôt en revue". Inserts the article (+ its cluster if
+// new, sources, embedding, tags) and, when lib/pipeline/auto-publish.ts's shouldAutoPublish() gate
+// passes, AUTO-APPROVES it instead of leaving it "pending": status becomes "approved" with
+// scheduledAt=now (so the EXISTING, UNCHANGED publishDueArticles() cron — lib/wp/publish-due.ts —
+// picks it up on its next run; that function still only ever selects status='approved', so this
+// adds a second gated PATH to approved rather than touching its enforcement point at all) plus an
+// audited article_revisions row ("publié automatiquement", actorId null = system), inserted in
+// this SAME transaction so the audit row can never exist without the article it documents, or vice
+// versa. A non-qualifying article is inserted exactly as before this SP: status "pending".
+//
+// Exported (not just inlined above) so tests/auto-publish-run.test.ts can drive BOTH directions of
+// the auto-publish decision directly against the real DB with a fully crafted, non-degraded
+// draft/score/confidence — proving the wiring itself (status/scheduledAt/audit-row) without needing
+// a real (or elaborately faked) LLM/embedding provider round-trip merely to get a network-free
+// article with aiDegraded:false (this project's network-free tests force generateArticle/embed
+// onto their mock fallback, which always sets aiDegraded:true — see stages.ts's own confidence
+// comment above — so driving the POSITIVE auto-approve path through the full stageSources() call
+// would otherwise require fragile shared-module-registry mocking of the AI/embedding stack).
+export async function persistArticle(input: {
+  draft: ArticleDraft;
+  sanitizedBody: string;
+  vector: number[];
+  clusterId: string | null;
+  score: number;
+  confidence: AutoPublishConfidence;
+  sources: SourceInput[]; // already deduped by URL
+  categoryNames: string[];
+  autoPublish: AutoPublishCfg;
+}): Promise<{ articleId: string; autoApproved: boolean }> {
+  const { draft, sanitizedBody, vector, score, confidence, sources, categoryNames, autoPublish } = input;
+
+  // Read-only lookup — no write dependency, so it can run outside the transaction below.
+  const catId = await resolveCategoryId(draft.category, categoryNames);
+
+  // The gate itself is pure and should never throw — but if it somehow did, fall back to "pending"
+  // (never to "approved"): an auto-publish DECISION failure must only ever withhold the exception,
+  // never grant it. This is the "best-effort, never fails the run" contract for the auto-approve
+  // path specifically (the run/story-level best-effort behavior — one story's failure never
+  // aborting the whole run — is unchanged, handled by executeRun's existing per-story try/catch).
+  let autoApproved = false;
+  try {
+    autoApproved = shouldAutoPublish({
+      enabled: autoPublish.enabled,
+      score,
+      scoreThreshold: autoPublish.scoreThreshold,
+      sourceCount: sources.length,
+      minSources: autoPublish.minSources,
+      hasImage: !!draft.featuredImageUrl,
+      confidence,
+    });
+  } catch {
+    autoApproved = false;
+  }
+
+  // Everything that writes rows for this article is transactional: if any insert in this block
+  // fails (e.g. insertTags, or the audit revision insert below), the whole thing rolls back rather
+  // than leaving a half-written article (missing its sources/embedding/tags, or auto-approved
+  // without its audit trail) silently sitting in the DB while the caller believes staging failed
+  // (articleId: null) — matching the existing pre-SP6 all-or-nothing behavior of this step.
+  const articleId = await db.transaction(async (tx) => {
+    let clusterId = input.clusterId;
+    if (!clusterId) {
+      const [c] = await tx.insert(clusters).values({ label: draft.title.slice(0, 80) }).returning({ id: clusters.id });
+      clusterId = c.id;
+    }
+
+    const [a] = await tx.insert(articles).values({
+      title: draft.title,
+      bodyHtml: sanitizedBody,
+      excerpt: draft.excerpt,
+      status: autoApproved ? "approved" : "pending",
+      aiAuthor: true,
+      categoryId: catId,
+      featuredImageUrl: draft.featuredImageUrl,
+      imageCredit: draft.imageCredit,
+      imageSourceUrl: draft.imageSourceUrl,
+      clusterId,
+      score,
+      confidenceFlags: confidence,
+      generatedAt: new Date(),
+      // SP6: an auto-approved article is scheduled for "now" so the existing publish-due cron
+      // (unchanged — still selects only status='approved') publishes it on its next pass. A
+      // non-qualifying article gets no schedule, exactly as before this SP.
+      scheduledAt: autoApproved ? new Date() : null,
+    }).returning({ id: articles.id });
+
+    // ONE article_sources row PER distinct source URL — this is the multi-source synthesis
+    // payoff: a 2-source story yields 2 rows here (and therefore 2 references in the published
+    // post). Deduped by URL above, so no duplicate reference entries.
+    await tx.insert(articleSources).values(
+      sources.map((s) => ({ articleId: a.id, mediaName: s.mediaName, url: s.url }))
+    );
+    await tx.insert(articleEmbeddings).values({ articleId: a.id, embedding: vector });
+    await insertTags(tx, a.id, draft.tags);
+
+    if (autoApproved) {
+      // The audit trail for the SP6 exception — actorId null (no human involved) makes that
+      // fact visible in article_revisions itself, exactly like every other revision entry.
+      await tx.insert(articleRevisions).values({
+        articleId: a.id,
+        actorId: null,
+        action: "publié automatiquement",
+        detail: `Score ${score} ≥ seuil ${autoPublish.scoreThreshold} ; ${sources.length} source(s) ; aucune alerte de confiance.`,
+      });
+    }
+
+    return a.id;
+  });
+
+  return { articleId, autoApproved };
 }
 
 /**
