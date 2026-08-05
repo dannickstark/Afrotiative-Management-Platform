@@ -1,5 +1,5 @@
-import { db, pipelineRuns } from "@/db";
-import { and, eq, isNull, lt } from "drizzle-orm";
+import { db, pipelineRuns, pipelineSteps } from "@/db";
+import { and, eq, isNull, lt, notExists, sql } from "drizzle-orm";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
 
 // Overlap guard: callers (manual-trigger action / scheduled endpoint) MUST check this
@@ -16,6 +16,15 @@ import { getPipelineConfig } from "@/lib/config/pipeline-config";
 // 15 — safely above the route's 5-minute cap, so a genuinely in-flight run is never reclaimed) by
 // finalizing it to "failed". That frees the partial unique index immediately, so a fresh run can
 // proceed right after.
+//
+// Age alone is no longer sufficient: startPipelineRun (lib/actions/pipeline-actions.ts) fires
+// executeRun DETACHED (`void executeRun(runId).catch(() => {})`), so a manual run has NO
+// maxDuration ceiling — a legitimately long run (large MAX_ITEMS_PER_RUN, slow providers) can run
+// well past RUN_STALE_MINUTES while still alive. Reaping by age alone would falsely mark it
+// "failed" mid-flight and free the pipeline_runs_one_running slot, letting a second run start
+// concurrently. executeRun inserts a pipeline_steps row every few seconds while it's alive, so
+// recent step activity is the real liveness signal: only reclaim a row that is BOTH past the age
+// cutoff AND has produced no pipeline_steps activity since that same cutoff.
 export async function reclaimStaleRuns(): Promise<void> {
   const cfg = getPipelineConfig();
   const staleBefore = new Date(Date.now() - cfg.runStaleMinutes * 60_000);
@@ -25,6 +34,12 @@ export async function reclaimStaleRuns(): Promise<void> {
       eq(pipelineRuns.status, "running"),
       isNull(pipelineRuns.finishedAt),
       lt(pipelineRuns.startedAt, staleBefore),
+      notExists(
+        db.select({ one: sql`1` }).from(pipelineSteps).where(and(
+          eq(pipelineSteps.runId, pipelineRuns.id),
+          sql`${pipelineSteps.at} >= ${staleBefore}`,
+        )),
+      ),
     ));
 }
 

@@ -63,8 +63,10 @@ export function computeEta(input: {
 
 export type HeaderModel = { phaseLabel: string; numerator: number; denominator: number | null; percent: number | null };
 
+// Clamped to 100: numerator can in principle exceed denominator (e.g. a caller passes stale
+// counters mid-update), and a >100% readout would look broken in the header progress bar.
 const pct = (num: number, den: number | null): number | null =>
-  den && den > 0 ? Math.round((num / den) * 100) : null;
+  den && den > 0 ? Math.min(100, Math.round((num / den) * 100)) : null;
 
 /** Which counter/label the header shows, per phase. */
 export function deriveHeader(run: {

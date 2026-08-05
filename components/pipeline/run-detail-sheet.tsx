@@ -228,7 +228,7 @@ function RerunRunButton() {
   return (
     <Button variant="outline" size="sm" onClick={handleClick} disabled={isPending} className="self-start">
       {isPending && <Loader2 className="animate-spin" aria-hidden />}
-      {isPending ? "Exécution en cours…" : "Relancer l'exécution"}
+      {isPending ? "Démarrage…" : "Relancer l'exécution"}
     </Button>
   );
 }

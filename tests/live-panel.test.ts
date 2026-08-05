@@ -53,6 +53,12 @@ describe("deriveHeader", () => {
   it("reports 100% while finalizing", () => {
     expect(deriveHeader({ phase: "finalizing", feedsRead: 6, feedsTotal: 6, processedItems: 20, totalItems: 20 }).percent).toBe(100);
   });
+  it("clamps percent to 100 when the numerator exceeds the denominator", () => {
+    // processedItems (21) > totalItems (20) — e.g. a stale/racy counter update — must never
+    // read as >100% in the header progress bar.
+    expect(deriveHeader({ phase: "processing_items", feedsRead: 6, feedsTotal: 6, processedItems: 21, totalItems: 20 }).percent).toBe(100);
+    expect(deriveHeader({ phase: "reading_feeds", feedsRead: 7, feedsTotal: 6, processedItems: 0, totalItems: null }).percent).toBe(100);
+  });
 });
 
 describe("formatClock", () => {

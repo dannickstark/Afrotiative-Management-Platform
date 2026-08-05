@@ -88,12 +88,14 @@ export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: numb
  * Hitting the item cap is recorded explicitly (never a silent truncation).
  */
 export async function executeRun(runId: string, opts: { feedIds?: string[] } = {}): Promise<RunResult> {
-  const cfg = getPipelineConfig();
   let feedsRead = 0, feedsFailed = 0, newItems = 0, produced = 0, itemFailures = 0, overCap = 0;
   let capHit = false, targetFeedsLength = 0;
   let status: RunStatus = "failed";
 
   try {
+    // Inside the try (not before it): if getPipelineConfig() ever throws, the finally below must
+    // still finalize the row rather than leaving it stuck "running".
+    const cfg = getPipelineConfig();
     const targetFeeds = opts.feedIds !== undefined
       ? (opts.feedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, opts.feedIds)) : [])
       : await db.select().from(feeds).where(eq(feeds.active, true));

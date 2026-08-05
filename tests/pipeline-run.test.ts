@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, articles, articleSources, articleEmbeddings, clusters, feeds, pipelineRuns } from "@/db";
+import { db, articles, articleSources, articleEmbeddings, clusters, feeds, pipelineRuns, pipelineSteps } from "@/db";
 import { eq, sql } from "drizzle-orm";
 import { stageItem } from "@/lib/pipeline/stages";
 import { runPipeline } from "@/lib/pipeline/run";
@@ -259,5 +259,42 @@ describe("hasRunningRun reclaims stale running rows", () => {
     const [after] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, staleRunId));
     expect(after.status).toBe("failed");
     expect(after.finishedAt).not.toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Activity-based reclaim: startPipelineRun (lib/actions/pipeline-actions.ts) fires executeRun
+// DETACHED, so a manual run has no maxDuration ceiling — a legitimately long-running run can
+// outlive RUN_STALE_MINUTES while still alive. reclaimStaleRuns() must NOT reap a "running" row
+// whose startedAt is past the stale cutoff if it has produced a pipeline_steps row recently
+// (executeRun inserts steps every few seconds while alive) — only age-AND-no-recent-activity
+// counts as dead.
+describe("hasRunningRun does not reclaim a stale-by-age row with recent step activity", () => {
+  let liveRunId: string | null = null;
+
+  afterAll(async () => {
+    // Cascades pipeline_steps (run_id FK is ON DELETE CASCADE).
+    if (liveRunId) await db.delete(pipelineRuns).where(eq(pipelineRuns.id, liveRunId));
+  });
+
+  it("leaves the row 'running' when a recent pipeline_steps row proves it's still alive", async () => {
+    const [run] = await db.insert(pipelineRuns).values({
+      triggeredBy: "manual",
+      status: "running",
+      startedAt: new Date(Date.now() - 30 * 60_000), // 30 min ago — past the 15-min default threshold
+    }).returning({ id: pipelineRuns.id });
+    liveRunId = run.id;
+
+    // A step inserted just now — proof of life despite the old startedAt.
+    await db.insert(pipelineSteps).values({
+      runId: liveRunId, name: "Lecture du flux « Test »", status: "success", durationMs: 10, at: new Date(),
+    });
+
+    // Must NOT be reclaimed: recent activity overrides the age-based cutoff.
+    expect(await hasRunningRun()).toBe(true);
+
+    const [after] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, liveRunId));
+    expect(after.status).toBe("running");
+    expect(after.finishedAt).toBeNull();
   });
 });

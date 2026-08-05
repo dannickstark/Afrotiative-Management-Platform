@@ -39,7 +39,9 @@ export async function getRunDetailAction(runId: string): Promise<RunDetail | nul
  * Non-blocking trigger: opens the run (holds the slot, gives us runId synchronously), then kicks
  * executeRun DETACHED and returns immediately. The /runs live panel polls getActiveRun to watch it.
  * Detached promise survives on Railway's long-lived Node process; a mid-run process death is caught
- * by the RUN_STALE_MINUTES reaper.
+ * by the RUN_STALE_MINUTES reaper. Note: going detached also means this path has no `maxDuration`
+ * ceiling (unlike the scheduled route's 300s) — liveness is instead covered by the activity-based
+ * stale-run reclaim in lib/pipeline/overlap.ts (reclaimStaleRuns), not by age alone.
  */
 export async function startPipelineRun(): Promise<{ ok: true; runId: string } | { ok: false; message: string }> {
   const user = await requireUser();
@@ -97,9 +99,10 @@ export async function reprocessRawItem(
   const cats = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
 
   // Open the "reprocess" run row. Even with the hasRunningRun() check above, two admin-triggered
-  // reprocess/run-now calls can slip past it in the same instant; the pipeline_runs_one_running
-  // partial unique index then rejects the losing insert (SQLSTATE 23505). Return the friendly
-  // message rather than throwing, matching runPipeline()'s handling of the same collision.
+  // reprocess/startPipelineRun calls can slip past it in the same instant; the
+  // pipeline_runs_one_running partial unique index then rejects the losing insert (SQLSTATE
+  // 23505). Return the friendly message rather than throwing, matching runPipeline()'s handling
+  // of the same collision.
   let run: { id: string };
   try {
     [run] = await db.insert(pipelineRuns)
