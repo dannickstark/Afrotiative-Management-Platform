@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ChevronsUpDownIcon, LogOutIcon } from "lucide-react";
+import { useTheme } from "next-themes";
+import { ChevronsUpDownIcon, LogOutIcon, MoonIcon, SunIcon } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -22,7 +23,6 @@ import {
 import { authClient } from "@/lib/auth-client";
 import { ROLE_LABEL } from "@/lib/rbac";
 import type { SessionUser } from "@/lib/session";
-import { ThemeToggle } from "./theme-toggle";
 
 function getInitials(name: string) {
   return (
@@ -37,7 +37,9 @@ function getInitials(name: string) {
 
 export function NavUser({ user }: { user: SessionUser }) {
   const { isMobile } = useSidebar();
+  const { resolvedTheme, setTheme } = useTheme();
   const router = useRouter();
+  const isDark = resolvedTheme === "dark";
 
   async function handleLogout() {
     await authClient.signOut();
@@ -84,10 +86,13 @@ export function NavUser({ user }: { user: SessionUser }) {
               </DropdownMenuLabel>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <div className="flex items-center justify-between gap-2 px-1.5 py-1 text-sm">
-              <span className="text-muted-foreground">Thème</span>
-              <ThemeToggle />
-            </div>
+            <DropdownMenuItem
+              closeOnClick={false}
+              onClick={() => setTheme(isDark ? "light" : "dark")}
+            >
+              {isDark ? <SunIcon /> : <MoonIcon />}
+              {isDark ? "Thème clair" : "Thème sombre"}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={handleLogout}>
               <LogOutIcon />
