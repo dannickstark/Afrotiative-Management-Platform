@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RoleGate } from "@/components/role-gate";
-import { pipelineStatusLabel, formatDate, type PipelineStatus } from "@/lib/format";
+import { pipelineStatusLabel, formatDate, formatRunDuration, type PipelineStatus } from "@/lib/format";
 import { startPipelineRun, reprocessRawItem } from "@/lib/actions/pipeline-actions";
 import type { RunDetail, Step } from "@/lib/queries/runs";
 import { cn } from "@/lib/utils";
@@ -48,17 +48,6 @@ function StatusPill({ status, className }: { status: string; className?: string 
 function formatStepDuration(ms: number | null): string {
   if (ms == null) return "—";
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
-}
-
-// A run with no finished_at is not finalized: normally "running" (→ "en cours"), but SP5 Task 5
-// also makes "paused" rows reachable in the runs list/detail (they intentionally leave finished_at
-// null while parked) — so a paused run must read "en pause", not the misleading "en cours".
-function formatRunDuration(startedAt: Date | string, finishedAt: Date | string | null, status: string): string {
-  if (!finishedAt) return status === "paused" ? "en pause" : "en cours";
-  const ms = Math.max(0, new Date(finishedAt).getTime() - new Date(startedAt).getTime());
-  const totalSec = Math.round(ms / 1000);
-  if (totalSec < 60) return `${totalSec} s`;
-  return `${Math.floor(totalSec / 60)} min ${totalSec % 60} s`;
 }
 
 const TRIGGERED_BY_LABEL: Record<string, string> = {

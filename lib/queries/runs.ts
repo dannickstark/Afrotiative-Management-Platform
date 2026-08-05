@@ -1,5 +1,5 @@
-import { db, pipelineRuns, pipelineSteps, rawItems } from "@/db";
-import { eq, inArray, asc } from "drizzle-orm";
+import { db, pipelineRuns, pipelineSteps, rawItems, articles } from "@/db";
+import { eq, inArray, asc, gte, sql } from "drizzle-orm";
 import { reclaimStaleRuns } from "@/lib/pipeline/overlap";
 
 // SP5 Task 4: the live panel's "active run" now includes a paused run (holding the
@@ -80,3 +80,137 @@ export async function getActiveRun() {
   return { run, ...groupSteps(steps, meta) };
 }
 export type ActiveRun = NonNullable<Awaited<ReturnType<typeof getActiveRun>>>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SP7 — runs list client-side filter bar.
+//
+// Pure so it's unit-testable without a DOM/DB (mirrors groupSteps above): the runs-view.tsx client
+// component just calls this from a useMemo over the ~50 already-loaded rows, no re-fetch involved.
+// Generic over the minimal shape it needs so it isn't coupled to runs-view.tsx's full RunRow type.
+export function filterRuns<T extends { status: string; triggeredBy: string }>(
+  rows: readonly T[],
+  filters: { status: string; trigger: string },
+): T[] {
+  return rows.filter((r) =>
+    (filters.status === "all" || r.status === filters.status)
+    && (filters.trigger === "all" || r.triggeredBy === filters.trigger));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SP7 — history trends strip (components/pipeline/run-trends.tsx), derived entirely from existing
+// data (pipeline_runs + articles) — no migration, no new table.
+
+export type TrendDay = { day: string; runs: number; failures: number; produced: number };
+export type RunTrendsSummary = {
+  runs7d: number; articles7d: number; failureRatePct: number; avgDurationSec: number | null;
+};
+
+/**
+ * Pure day-merge/zero-fill: given the ordered list of day keys making up the window (oldest→newest,
+ * 'YYYY-MM-DD') plus the two INDEPENDENTLY grouped aggregates (each keyed by their own 'day'),
+ * produce exactly one row per day in the window, zero-filling any day absent from either aggregate.
+ *
+ * The day-key list is deliberately an INPUT here, not computed by this function from `new
+ * Date()`/Date.now() — see getRunTrends below, which derives it from Postgres's own `current_date`
+ * instead of the app process's local clock/timezone, so this function stays pure and trivially
+ * unit-testable (no Date.now()/timezone dependency at all).
+ */
+export function mergeDailyTrends(
+  dayKeys: readonly string[],
+  runsAgg: readonly { day: string; runs: number; failures: number }[],
+  producedAgg: readonly { day: string; produced: number }[],
+): TrendDay[] {
+  const runsByDay = new Map(runsAgg.map((r) => [r.day, r]));
+  const producedByDay = new Map(producedAgg.map((p) => [p.day, p.produced]));
+  return dayKeys.map((day) => ({
+    day,
+    runs: runsByDay.get(day)?.runs ?? 0,
+    failures: runsByDay.get(day)?.failures ?? 0,
+    produced: producedByDay.get(day) ?? 0,
+  }));
+}
+
+/**
+ * Pure summary math over a set of pipeline_runs rows already narrowed to a window (getRunTrends
+ * below passes the last 7 days) — no DB access, so unit-testable with synthetic rows.
+ *
+ * `cancelled` counts as NON-failure: an admin Stop is an intentional action, not a pipeline failure
+ * (per the SP7 plan) — only `failed`/`partial` count toward the failure rate. Average duration only
+ * considers FINALIZED rows (finishedAt present); a still-active running/paused row (finishedAt null)
+ * is excluded from the average rather than treated as zero-duration.
+ */
+export function summarizeRunsWindow(
+  rows: readonly { status: string; startedAt: Date | string; finishedAt: Date | string | null }[],
+): { runs: number; failureRatePct: number; avgDurationSec: number | null } {
+  const runs = rows.length;
+  const failedOrPartial = rows.filter((r) => r.status === "failed" || r.status === "partial").length;
+  const failureRatePct = runs > 0 ? Math.round((failedOrPartial / runs) * 1000) / 10 : 0;
+  const durations = rows
+    .filter((r) => r.finishedAt !== null)
+    .map((r) => (new Date(r.finishedAt!).getTime() - new Date(r.startedAt).getTime()) / 1000);
+  const avgDurationSec = durations.length > 0
+    ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
+    : null;
+  return { runs, failureRatePct, avgDurationSec };
+}
+
+/**
+ * `perDay`: one row per day over the last `days` days (default 14) — `runs`/`failures` grouped from
+ * pipeline_runs by calendar day of started_at, `produced` grouped from articles by calendar day of
+ * coalesce(generated_at, created_at) (the pipeline sets generatedAt; created_at is the fallback for
+ * any article without one). The two are grouped by two small SQL aggregate queries (Drizzle `sql`)
+ * and merged/zero-filled in JS by the pure mergeDailyTrends helper above.
+ *
+ * The window's day-key list AND the calendar-day bucketing both use Postgres's own `current_date` /
+ * `to_char(...)` — NOT a JS `new Date()` boundary — so this is immune to any mismatch between the
+ * app process's local timezone and the DB session's timezone (the same naive-timestamp convention
+ * every other pipeline_runs/articles timestamp in this app already relies on, since they're all
+ * written DB-side via `defaultNow()`).
+ *
+ * `summary` is a rolling last-7-days window (not calendar-day bucketed): run count, articles
+ * produced, failure rate, and average run duration — computed by the pure summarizeRunsWindow
+ * helper above over a plain row fetch, so the arithmetic itself is unit-tested independently of the
+ * DB round-trip.
+ */
+export async function getRunTrends(days = 14): Promise<{ perDay: TrendDay[]; summary: RunTrendsSummary }> {
+  const windowDays = Math.max(1, Math.floor(days));
+
+  const [dayKeyRows, runsAggRows, producedAggRows] = await Promise.all([
+    db.execute<{ day: string }>(sql`
+      select to_char((current_date - g)::date, 'YYYY-MM-DD') as day
+      from generate_series(0, ${windowDays - 1}) as g
+      order by day
+    `),
+    db.execute<{ day: string; runs: string; failures: string }>(sql`
+      select to_char(${pipelineRuns.startedAt}, 'YYYY-MM-DD') as day,
+             count(*) as runs,
+             count(*) filter (where ${pipelineRuns.status} in ('failed', 'partial')) as failures
+      from ${pipelineRuns}
+      where ${pipelineRuns.startedAt} >= current_date - (${windowDays - 1} * interval '1 day')
+      group by 1
+    `),
+    db.execute<{ day: string; produced: string }>(sql`
+      select to_char(coalesce(${articles.generatedAt}, ${articles.createdAt}), 'YYYY-MM-DD') as day,
+             count(*) as produced
+      from ${articles}
+      where coalesce(${articles.generatedAt}, ${articles.createdAt}) >= current_date - (${windowDays - 1} * interval '1 day')
+      group by 1
+    `),
+  ]);
+
+  const dayKeys = dayKeyRows.rows.map((r) => r.day);
+  const runsAgg = runsAggRows.rows.map((r) => ({ day: r.day, runs: Number(r.runs), failures: Number(r.failures) }));
+  const producedAgg = producedAggRows.rows.map((r) => ({ day: r.day, produced: Number(r.produced) }));
+  const perDay = mergeDailyTrends(dayKeys, runsAgg, producedAgg);
+
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000);
+  const runs7dRows = await db.select({
+    status: pipelineRuns.status, startedAt: pipelineRuns.startedAt, finishedAt: pipelineRuns.finishedAt,
+  }).from(pipelineRuns).where(gte(pipelineRuns.startedAt, sevenDaysAgo));
+  const { runs: runs7d, failureRatePct, avgDurationSec } = summarizeRunsWindow(runs7dRows);
+
+  const producedSince = sql`coalesce(${articles.generatedAt}, ${articles.createdAt})`;
+  const articles7d = await db.$count(articles, gte(producedSince, sevenDaysAgo));
+
+  return { perDay, summary: { runs7d, articles7d, failureRatePct, avgDurationSec } };
+}
