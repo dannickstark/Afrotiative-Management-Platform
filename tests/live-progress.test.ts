@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll } from "bun:test";
-import { db, pipelineRuns, pipelineSteps } from "@/db";
+import { db, pipelineRuns, pipelineSteps, articles, clusters } from "@/db";
 import { eq } from "drizzle-orm";
 
 describe("pipeline_runs progress columns + pipeline_steps.at (migration 0003)", () => {
@@ -40,7 +40,6 @@ describe("pipeline_runs progress columns + pipeline_steps.at (migration 0003)", 
 import { stageItem } from "@/lib/pipeline/stages";
 import { ITEM_STAGES } from "@/lib/pipeline/live";
 import { contentHash, type RawItem } from "@/lib/rss/parse-feed";
-import { articles } from "@/db";
 
 const PROVIDER_KEYS = [
   "JINA_API_KEY", "FIRECRAWL_API_KEY", "EMBED_API_KEY", "OPENROUTER_API_KEY",
@@ -54,7 +53,7 @@ describe("stageItem live hooks", () => {
   let server: ReturnType<typeof Bun.serve>;
   let url: string;
   let articleId: string | null = null;
-  const clean: string[] = [];
+  let clusterId: string | null = null;
 
   beforeAll(() => {
     for (const k of PROVIDER_KEYS) delete process.env[k];
@@ -64,9 +63,12 @@ describe("stageItem live hooks", () => {
   afterAll(async () => {
     server.stop(true);
     for (const [k, v] of Object.entries(snap)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-    const { db: dbClean, articles: articlesClean } = await import("@/db");
-    const { eq: eqClean } = await import("drizzle-orm");
-    if (articleId) await dbClean.delete(articlesClean).where(eqClean(articlesClean.id, articleId));
+    // FK order: article first (cascades sources/embeddings/tags), then its cluster if now unused.
+    if (articleId) await db.delete(articles).where(eq(articles.id, articleId));
+    if (clusterId) {
+      const stillUsed = await db.select({ id: articles.id }).from(articles).where(eq(articles.clusterId, clusterId)).limit(1);
+      if (stillUsed.length === 0) await db.delete(clusters).where(eq(clusters.id, clusterId));
+    }
   });
 
   it("fires onStageStart before each stage and onStageEnd after, in ITEM_STAGES order", async () => {
@@ -79,6 +81,10 @@ describe("stageItem live hooks", () => {
     });
     articleId = res.articleId;
     expect(res.articleId).not.toBeNull();
+    if (articleId) {
+      const [article] = await db.select({ clusterId: articles.clusterId }).from(articles).where(eq(articles.id, articleId));
+      clusterId = article?.clusterId ?? null;
+    }
     expect(starts).toEqual([...ITEM_STAGES]);
     expect(ends).toEqual([...ITEM_STAGES]);
   });
