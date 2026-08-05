@@ -55,3 +55,27 @@ export function validateMemberInput(input: unknown) {
     ? { ok: true as const, data: r.data }
     : { ok: false as const, message: r.error.issues[0]?.message ?? "Entrée invalide" };
 }
+
+// Light 5-field cron validator (SP1 only stores scheduleCron; SP2 wires it to an in-app
+// scheduler). Each field: digits, "*", "/", "-", "," — good enough to catch typos without
+// pulling in a full cron-parsing dependency for a field that isn't executed yet.
+const CRON_FIELD = "[\\d*/,-]+";
+const CRON_5_FIELD_RE = new RegExp(`^${CRON_FIELD}(\\s+${CRON_FIELD}){4}$`);
+
+// Lives in lib/validation.ts (not lib/actions/pipeline-settings-actions.ts) for the same reason as
+// feedSchema/memberSchema above: that file needs a file-level "use server" directive, and Next.js
+// only allows async-function exports from such a module.
+export const pipelineSettingsSchema = z.object({
+  maxItemsPerRun: z.number().int().positive("Doit être un entier positif"),
+  perOperationTimeoutMs: z.number().int().positive("Doit être un entier positif"),
+  clusterThreshold: z.number().min(0, "Doit être entre 0 et 1").max(1, "Doit être entre 0 et 1"),
+  scoreThreshold: z.number().int().min(0, "Doit être entre 0 et 100").max(100, "Doit être entre 0 et 100"),
+  autoPublishEnabled: z.boolean(),
+  autoPublishMinSources: z.number().int().positive("Doit être un entier positif"),
+  webSearchEnabled: z.boolean(),
+  scheduleCron: z.string().optional().refine(
+    (v) => !v || CRON_5_FIELD_RE.test(v),
+    "Cron invalide (5 champs requis, ex. « 0 */2 * * * »)",
+  ),
+});
+export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;

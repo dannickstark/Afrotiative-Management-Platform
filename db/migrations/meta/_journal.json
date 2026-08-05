@@ -29,6 +29,13 @@
       "when": 1785913151436,
       "tag": "0003_wise_champions",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785923135769,
+      "tag": "0004_lush_timeslip",
+      "breakpoints": true
     }
   ]
 }

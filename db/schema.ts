@@ -1,5 +1,5 @@
 import {
-  pgTable, pgEnum, text, boolean, timestamp, integer, jsonb, uuid, vector, index, uniqueIndex,
+  pgTable, pgEnum, text, boolean, timestamp, integer, real, jsonb, uuid, vector, index, uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -208,6 +208,24 @@ export const pipelineSteps = pgTable("pipeline_steps", {
   // failure, cap-reached); set to the raw_items.id for steps produced while staging one item.
   rawItemId: uuid("raw_item_id").references(() => rawItems.id, { onDelete: "set null" }),
   at: timestamp("at").notNull().defaultNow(),
+});
+
+// ---- pipeline settings (DB-backed, admin-editable singleton — SP1) ----
+// Always exactly one row, id=1. Env vars (MAX_ITEMS_PER_RUN, CLUSTER_THRESHOLD, …) remain the seed
+// default for the very first read (see getPipelineSettings()); after that this table is the
+// runtime source of truth for run-behavior knobs. Secrets/provider creds/order stay env-only via
+// getPipelineConfig() — never move those here.
+export const pipelineSettings = pgTable("pipeline_settings", {
+  id: integer("id").primaryKey().default(1),
+  maxItemsPerRun: integer("max_items_per_run").notNull().default(20),
+  perOperationTimeoutMs: integer("per_operation_timeout_ms").notNull().default(300000), // 5 min — wired in SP5
+  clusterThreshold: real("cluster_threshold").notNull().default(0.83), // wired in SP4
+  scoreThreshold: integer("score_threshold").notNull().default(70), // auto-publish min score — wired in SP6
+  autoPublishEnabled: boolean("auto_publish_enabled").notNull().default(false), // wired in SP6
+  autoPublishMinSources: integer("auto_publish_min_sources").notNull().default(2), // wired in SP6
+  webSearchEnabled: boolean("web_search_enabled").notNull().default(false), // wired in SP4
+  scheduleCron: text("schedule_cron"), // null = no in-app schedule — wired in SP2
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 // ---- distributions (pluggable publish targets) ----

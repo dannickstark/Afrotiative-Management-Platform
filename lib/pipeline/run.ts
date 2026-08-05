@@ -4,7 +4,7 @@ import { parseFeed } from "@/lib/rss/parse-feed";
 import { isSeen, recordRawItem } from "./dedup";
 import { stageItem } from "./stages";
 import { hasRunningRun } from "./overlap";
-import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { getPipelineSettings } from "@/lib/queries/settings";
 import type { RawItem } from "@/lib/rss/parse-feed";
 
 export type RunTrigger = "manual" | "scheduled";
@@ -93,9 +93,11 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
   let status: RunStatus = "failed";
 
   try {
-    // Inside the try (not before it): if getPipelineConfig() ever throws, the finally below must
+    // Inside the try (not before it): if getPipelineSettings() ever throws, the finally below must
     // still finalize the row rather than leaving it stuck "running".
-    const cfg = getPipelineConfig();
+    // DB-backed (SP1): maxItemsPerRun is admin-editable at /settings/pipeline, not just env —
+    // getPipelineConfig() stays for provider/secret/order config elsewhere in the pipeline.
+    const settings = await getPipelineSettings();
     const targetFeeds = opts.feedIds !== undefined
       ? (opts.feedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, opts.feedIds)) : [])
       : await db.select().from(feeds).where(eq(feeds.active, true));
@@ -129,7 +131,7 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
         if (seenHashes.has(item.contentHash)) continue;      // duplicate within this run's batch
         if (await isSeen(feed.id, item)) continue;           // recorded by a previous run
         seenHashes.add(item.contentHash);
-        if (candidates.length >= cfg.maxItemsPerRun) { capHit = true; overCap++; continue; }
+        if (candidates.length >= settings.maxItemsPerRun) { capHit = true; overCap++; continue; }
         candidates.push({ item, feedId: feed.id, feedName: feed.name });
       }
     }
@@ -167,7 +169,7 @@ export async function executeRun(runId: string, opts: { feedIds?: string[] } = {
       await insertStep({
         runId, name: "Limite d'éléments atteinte", status: "partial", durationMs: null,
         errorMessage:
-          `La limite de ${cfg.maxItemsPerRun} nouveaux éléments par exécution a été atteinte : `
+          `La limite de ${settings.maxItemsPerRun} nouveaux éléments par exécution a été atteinte : `
           + `${overCap} élément(s) supplémentaire(s) au-delà de la limite n'ont pas été traités ; ils seront repris lors d'une prochaine exécution.`,
       });
     }
