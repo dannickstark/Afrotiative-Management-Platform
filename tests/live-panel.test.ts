@@ -19,6 +19,15 @@ describe("deriveStepperNodes", () => {
     );
     expect(nodes.map((n) => n.state)).toEqual(["done", "pending", "failed", "pending", "pending"]);
   });
+
+  it("keeps a stage AFTER a failure pending even when it is the currentStage (freeze wins)", () => {
+    const nodes = deriveStepperNodes(
+      [{ name: "Regroupement (clustering)", status: "failed" }],
+      "Génération IA", // names a stage after the failed one — must NOT become "current"
+    );
+    expect(nodes.map((n) => n.state)).toEqual(["pending", "pending", "failed", "pending", "pending"]);
+    expect(nodes[3].state).toBe("pending"); // "Génération IA" frozen, not "current"
+  });
 });
 
 describe("computeEta", () => {

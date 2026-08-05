@@ -29,13 +29,23 @@ export function deriveStepperNodes(
   currentStage: string | null,
 ): StepperNode[] {
   const byName = new Map(itemSteps.map((s) => [s.name, s.status]));
+  let sawFailure = false;
   return ITEM_STAGES.map((name) => {
     const status = byName.get(name);
     let state: StepperNode["state"];
-    if (status === "failed") state = "failed";
-    else if (status === "success") state = "done";
-    else if (name === currentStage) state = "current";
-    else state = "pending";
+    if (sawFailure) {
+      // Once any stage has failed, freeze everything after it as pending.
+      state = "pending";
+    } else if (status === "failed") {
+      state = "failed";
+      sawFailure = true;
+    } else if (status === "success") {
+      state = "done";
+    } else if (name === currentStage) {
+      state = "current";
+    } else {
+      state = "pending";
+    }
     return { name, label: STAGE_LABEL[name] ?? name, state };
   });
 }
