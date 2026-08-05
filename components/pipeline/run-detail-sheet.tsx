@@ -28,7 +28,7 @@ const STATUS_PILL_STYLE: Record<PipelineStatus, string> = {
   failed: "bg-[var(--status-error)]/15 text-[var(--status-error)] border-[var(--status-error)]/30",
   running: "bg-[var(--status-in-review)]/15 text-[var(--status-in-review)] border-[var(--status-in-review)]/30",
   partial: "bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30",
-  // SP5: cancelled (Stop) / paused (Pause) — full button wiring lands in Task 5.
+  // SP5: cancelled (Stop) / paused (Pause) — button wiring lives in live-run-panel.tsx (Task 5).
   cancelled: "bg-[var(--status-rejected)]/15 text-[var(--status-rejected)] border-[var(--status-rejected)]/30",
   paused: "bg-[var(--status-draft)]/15 text-[var(--status-draft)] border-[var(--status-draft)]/30",
 };

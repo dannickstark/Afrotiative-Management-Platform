@@ -15,7 +15,8 @@ export function statusLabel(s: ArticleStatus) {
 
 // SP5: adds 'cancelled' (Stop) and 'paused' (Pause/Resume) — mirrors db/schema.ts pipelineStatus.
 // Labels only here (Task 1, required for this type to compile against the widened DB enum);
-// panel/detail pill styling for these two statuses is wired in SP5 Task 5.
+// panel/detail pill styling for these two statuses is wired in components/pipeline/live-run-panel.tsx,
+// run-detail-sheet.tsx and runs-view.tsx (Task 5).
 export type PipelineStatus = "success" | "partial" | "failed" | "running" | "cancelled" | "paused";
 
 export const PIPELINE_STATUS_LABEL: Record<PipelineStatus, string> = {

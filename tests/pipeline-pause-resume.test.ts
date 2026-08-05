@@ -152,10 +152,14 @@ describe("executeRun cooperative pause — checkpoint (a): before phase 2 begins
       expect(blockedRunId).toBeNull();
 
       // ---- Phase 2: resume — directly, for determinism (resumeRun itself fires this detached).
-      // Mirrors resumeRun's own clear-before-call ordering (lib/actions/pipeline-actions.ts): the
-      // flag/checkpoint MUST be cleared before the call, or executeRun's very first boundary check
-      // would immediately observe the still-true pause_requested and re-pause without processing
-      // anything.
+      // Mirrors resumeRun's own step-first-then-flip ordering (lib/actions/pipeline-actions.ts,
+      // SP5 Task 5): the "Reprise de l'exécution" step is inserted WHILE STILL "paused", THEN the
+      // flag/checkpoint/status flip happens — deliberately WITHOUT touching started_at (the
+      // duration-display fix: elapsed/duration must read as true total wall-clock, not
+      // time-since-resume). Clearing pause_requested before executeRun runs is still required, or
+      // its very first boundary check would immediately observe the still-true flag and re-pause
+      // without processing anything.
+      await db.insert(pipelineSteps).values({ runId: runId!, name: "Reprise de l'exécution", status: "success", durationMs: null });
       await db.update(pipelineRuns).set({ pauseRequested: false, checkpoint: null, status: "running" })
         .where(eq(pipelineRuns.id, runId!));
       const res2 = await executeRun(runId!, { resumeStories: stories });
@@ -167,6 +171,7 @@ describe("executeRun cooperative pause — checkpoint (a): before phase 2 begins
       expect(row2.finishedAt).not.toBeNull(); // NOW terminal — interlock slot freed
       expect(row2.processedItems).toBe(1);    // continued from 0 (processedStart), not reset
       expect(row2.totalItems).toBe(1);        // untouched by the resume call
+      expect(row2.startedAt.getTime()).toBe(row1.startedAt.getTime()); // SP5 Task 5: never refreshed on resume
 
       // The member IS now recorded (processed during resume), and produced a pending article.
       const recordedAfter = await db.select().from(rawItems).where(eq(rawItems.feedId, feedId));
@@ -178,10 +183,11 @@ describe("executeRun cooperative pause — checkpoint (a): before phase 2 begins
       const [producedArticle] = await db.select().from(articles).where(eq(articles.id, producedSources[0].articleId));
       expect(producedArticle.status).toBe("pending"); // human-review barrier intact
 
-      // SP5 Task 4 review C1: the resume path inserts an immediate "Reprise de l'exécution" step
-      // (fresh activity so reclaimStaleRuns can't reap a just-resumed run before its first extraction).
+      // The "Reprise de l'exécution" step (inserted above, mirroring resumeRun) is present — and
+      // exactly ONCE: executeRun's own resume branch (SP5 Task 5) no longer inserts it itself.
       const steps2 = await db.select().from(pipelineSteps).where(eq(pipelineSteps.runId, runId!));
-      expect(steps2.some((s) => s.name === "Reprise de l'exécution")).toBe(true);
+      const resumeSteps = steps2.filter((s) => s.name === "Reprise de l'exécution");
+      expect(resumeSteps.length).toBe(1);
 
       // Interlock freed now that the run is genuinely terminal.
       expect(await hasRunningRun()).toBe(false);
@@ -309,7 +315,9 @@ describe("executeRun cooperative pause — checkpoint (b): between two stories, 
       expect(blockedRunId).toBeNull();
 
       // ---- Resume: story B now gets fetched, recorded, and processed ----
-      // Mirrors resumeRun's own clear-before-call ordering — see the checkpoint-(a) test above.
+      // Mirrors resumeRun's own step-first-then-flip ordering (SP5 Task 5) — see the checkpoint-(a)
+      // test above: started_at is deliberately left untouched (duration-display fix).
+      await db.insert(pipelineSteps).values({ runId: runId!, name: "Reprise de l'exécution", status: "success", durationMs: null });
       await db.update(pipelineRuns).set({ pauseRequested: false, checkpoint: null, status: "running" })
         .where(eq(pipelineRuns.id, runId!));
       const res2 = await executeRun(runId!, { resumeStories: stories });
@@ -322,6 +330,7 @@ describe("executeRun cooperative pause — checkpoint (b): between two stories, 
       expect(row2.finishedAt).not.toBeNull();
       expect(row2.processedItems).toBe(2); // continues from 1 → 2, not reset to 0/1
       expect(row2.totalItems).toBe(2);     // untouched by the resume call
+      expect(row2.startedAt.getTime()).toBe(row1.startedAt.getTime()); // SP5 Task 5: never refreshed on resume
 
       const recordedAfter = await db.select().from(rawItems).where(eq(rawItems.feedId, feedId));
       expect(recordedAfter.length).toBe(2);
@@ -459,36 +468,46 @@ describe("resumeRun's DB mechanism (real Neon, network-free)", () => {
 // resume). These exercise the exact drizzle mechanisms the reviewed actions run (the actions
 // themselves can't be invoked under plain `bun test` — requireUser() → next/headers).
 describe("SP5 Task 4 review — pause/resume invariant fixes", () => {
-  // C1 — a paused run older than runStaleMinutes, once resumed (status→running + started_at
-  // REFRESHED, as resumeRun's atomic flip does), must NOT be reaped by reclaimStaleRuns(). Before
-  // the fix it kept its old started_at and had no fresh step, so the reaper (which runs on every
-  // getActiveRun poll) matched it and freed the interlock slot mid-resume.
-  it("C1: a just-resumed run with a refreshed started_at is not reaped by reclaimStaleRuns()", async () => {
+  // C1, revised for SP5 Task 5 (duration-display fix) — a paused run older than runStaleMinutes,
+  // once resumed via resumeRun's REVISED order (insert the "Reprise de l'exécution" step FIRST,
+  // while still "paused", THEN flip status→running WITHOUT touching started_at), must NOT be reaped
+  // by reclaimStaleRuns(), AND must keep its ORIGINAL started_at (so elapsed/duration reads as true
+  // total wall-clock, not time-since-resume). Before the SP5 Task 4 fix this had no fresh step, so
+  // the reaper (which runs on every getActiveRun poll) matched it and freed the interlock slot
+  // mid-resume; the SP5 Task 4 fix (this test previously) instead refreshed started_at to dodge the
+  // reaper's age predicate — which is exactly what caused the duration bug this task fixes. The
+  // FRESH STEP alone (not started_at) is now what keeps the resume reaper-safe.
+  it("C1 (SP5 Task 5): a just-resumed run keeps its ORIGINAL started_at and is still not reaped (the fresh step, not started_at, makes it reaper-safe)", async () => {
     const checkpoint: RunCheckpoint = {
       stories: [[{
         feedId: "feed-c1", feedName: "Flux C1",
         item: { guid: "g-c1", url: "https://example.com/c1", title: "T", contentSnippet: "S", isoDate: null, contentHash: "h-c1" },
       }]],
     };
+    const originalStartedAt = new Date(Date.now() - 24 * 60 * 60_000); // 24h ago — well past the stale cutoff
     // Paused, started 24h ago (well past the 15-min default stale cutoff), no steps at all.
     const [run] = await db.insert(pipelineRuns).values({
-      triggeredBy: "manual", status: "paused", startedAt: new Date(Date.now() - 24 * 60 * 60_000), checkpoint,
+      triggeredBy: "manual", status: "paused", startedAt: originalStartedAt, checkpoint,
     }).returning({ id: pipelineRuns.id });
     try {
-      // resumeRun's atomic, status-guarded claim: flips to running AND refreshes started_at.
+      // resumeRun's REVISED order (SP5 Task 5): step first (while still "paused"), then the atomic
+      // flip — deliberately WITHOUT refreshing started_at.
+      await db.insert(pipelineSteps).values({ runId: run.id, name: "Reprise de l'exécution", status: "success", durationMs: null });
       const claimed = await db.update(pipelineRuns)
-        .set({ status: "running", startedAt: new Date(), pauseRequested: false, checkpoint: null })
+        .set({ status: "running", pauseRequested: false, checkpoint: null })
         .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
         .returning({ id: pipelineRuns.id });
       expect(claimed.length).toBe(1);
 
-      // The reaper runs on every getActiveRun/hasRunningRun poll — it must leave this run alone
-      // because started_at is now recent (even with zero steps yet).
+      // The reaper runs on every getActiveRun/hasRunningRun poll. started_at is STILL 24h old
+      // (never refreshed) — the age predicate alone would match — but the FRESH step (inserted a
+      // moment ago, before the flip) makes the activity predicate false, so it's still not reaped.
       await reclaimStaleRuns();
 
       const [after] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.id, run.id));
       expect(after.status).toBe("running");   // NOT reaped to "failed"
       expect(after.finishedAt).toBeNull();     // slot still held by the live resume
+      expect(after.startedAt.getTime()).toBe(originalStartedAt.getTime()); // UNCHANGED — true wall-clock preserved
     } finally {
       await db.delete(pipelineRuns).where(eq(pipelineRuns.id, run.id));
     }
@@ -496,7 +515,8 @@ describe("SP5 Task 4 review — pause/resume invariant fixes", () => {
 
   // I3 — two concurrent resumeRun calls both pass the SELECT gate, but only the FIRST atomic
   // status-guarded flip matches a 'paused' row; the second sees 0 rows and no-ops (so only one
-  // executeRun fires → no duplicate articles).
+  // executeRun fires → no duplicate articles). Mirrors resumeRun's real flip (SP5 Task 5: no
+  // started_at refresh).
   it("I3: a second concurrent resume claim finds 0 rows (only one executeRun fires)", async () => {
     const checkpoint: RunCheckpoint = {
       stories: [[{
@@ -509,7 +529,7 @@ describe("SP5 Task 4 review — pause/resume invariant fixes", () => {
     }).returning({ id: pipelineRuns.id });
     try {
       const flip = () => db.update(pipelineRuns)
-        .set({ status: "running", startedAt: new Date(), pauseRequested: false, checkpoint: null })
+        .set({ status: "running", pauseRequested: false, checkpoint: null })
         .where(and(eq(pipelineRuns.id, run.id), eq(pipelineRuns.status, "paused")))
         .returning({ id: pipelineRuns.id });
       const first = await flip();

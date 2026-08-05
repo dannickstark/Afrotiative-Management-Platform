@@ -157,17 +157,28 @@ export async function pauseRun(runId: string): Promise<{ ok: true } | { ok: fals
 
 /**
  * SP5 Task 4 (Resume): ONLY proceeds if the run is currently "paused" AND its checkpoint holds at
- * least one remaining story — otherwise a friendly French no-op (never a throw). The status flip is
- * a SINGLE atomic, status-guarded UPDATE (review I3): `… SET status='running', started_at=now,
- * pause_requested=false, checkpoint=null WHERE id=? AND status='paused'`. Three things ride on this
- * one statement:
+ * least one remaining story — otherwise a friendly French no-op (never a throw). Two writes make up
+ * the resume, in this exact ORDER — SP5 Task 5 revises the original Task 4 design (which refreshed
+ * `started_at` on the flip) to fix a duration-display bug: refreshing `started_at` made the panel's
+ * `elapsed = now - startedAt` and the run-detail's `finishedAt - startedAt` read as time-SINCE-RESUME
+ * rather than the run's true total wall-clock (understating it by the paused interval). The fix:
+ *   1. Insert the "Reprise de l'exécution" `pipeline_steps` row FIRST, WHILE THE RUN IS STILL
+ *      "paused" — a pure observability insert, safe to do before the status flip.
+ *   2. THEN the atomic, status-guarded flip: `UPDATE … SET status='running', pause_requested=false,
+ *      checkpoint=null WHERE id=? AND status='paused' RETURNING` — deliberately WITHOUT touching
+ *      `started_at`. Leaving it at the run's original open time means elapsed/duration everywhere
+ *      reads as the TRUE total wall-clock (paused interval included), not merely time-since-resume.
+ * Three invariants ride on this ordering:
+ *   - Reaper-safe (review C1, revised): because a fresh pipeline_steps row already exists at the
+ *     INSTANT status flips to "running" (inserted a moment earlier, in step 1), reclaimStaleRuns()'s
+ *     activity predicate (`no step since staleBefore`) is already false the moment the row becomes
+ *     visible as "running" — so the run is never reaped, even though `started_at` is old (age alone
+ *     is no longer a safe signal now that started_at stops being refreshed on resume). executeRun's
+ *     own resume branch (lib/pipeline/run.ts) no longer inserts this step itself — one insert, here,
+ *     not two.
  *   - Atomicity vs. concurrent resumes (I3): two racing resumeRun calls both pass the SELECT gate,
  *     but only the FIRST update matches a `paused` row; the loser sees 0 rows and no-ops instead of
  *     firing a second executeRun (which would duplicate this run's articles).
- *   - Reaper-safe (review C1): refreshing started_at means the just-resumed run is no longer past
- *     the stale age cutoff, so reclaimStaleRuns() (which runs on every getActiveRun poll) can't
- *     reap it in the window before executeRun's first step lands. executeRun's resume path ALSO
- *     inserts an immediate "Reprise de l'exécution" step — belt and suspenders (age + activity).
  *   - Clearing pause_requested BEFORE executeRun runs prevents its first cooperative-flag boundary
  *     check from re-observing a stale flag and immediately re-pausing without processing anything.
  * Only if a row was actually claimed does it fire executeRun DETACHED (mirrors startPipelineRun's
@@ -179,7 +190,7 @@ export async function resumeRun(runId: string): Promise<{ ok: true } | { ok: fal
 
   // Dynamic import (kept AFTER the RBAC check above): mirrors startPipelineRun's pattern — keeps
   // executeRun's jsdom-heavy dependency graph out of this "use server" module's static analysis.
-  const { db, pipelineRuns } = await import("@/db");
+  const { db, pipelineRuns, pipelineSteps } = await import("@/db");
   const { and, eq } = await import("drizzle-orm");
   const { executeRun } = await import("@/lib/pipeline/run");
 
@@ -194,9 +205,13 @@ export async function resumeRun(runId: string): Promise<{ ok: true } | { ok: fal
     return { ok: false as const, message: "Aucun point de reprise disponible pour cette exécution." };
   }
 
-  // Atomic, status-guarded claim (see the doc comment above for the three invariants this closes).
+  // SP5 Task 5 — step FIRST, while the run is still "paused" (see the doc comment above for why
+  // this order — not the atomic flip below — is what keeps the resumed run reaper-safe).
+  await db.insert(pipelineSteps).values({ runId, name: "Reprise de l'exécution", status: "success", durationMs: null });
+
+  // Atomic, status-guarded claim — deliberately does NOT refresh started_at (see doc comment above).
   const claimed = await db.update(pipelineRuns)
-    .set({ status: "running", startedAt: new Date(), pauseRequested: false, checkpoint: null })
+    .set({ status: "running", pauseRequested: false, checkpoint: null })
     .where(and(eq(pipelineRuns.id, runId), eq(pipelineRuns.status, "paused")))
     .returning({ id: pipelineRuns.id });
   if (claimed.length === 0) {

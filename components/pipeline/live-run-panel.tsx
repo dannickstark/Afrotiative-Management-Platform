@@ -2,14 +2,14 @@
 import { useEffect, useRef, useState, useTransition, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, Check, X, ExternalLink, Play } from "lucide-react";
+import { Loader2, Check, X, ExternalLink, Play, Pause, Square } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/role-gate";
 import { cn } from "@/lib/utils";
 import { pipelineStatusLabel, relativeDate, type PipelineStatus } from "@/lib/format";
 import { deriveStepperNodes, computeEta, deriveHeader, formatClock } from "@/lib/pipeline/live";
-import { getActiveRunAction, startPipelineRun } from "@/lib/actions/pipeline-actions";
+import { getActiveRunAction, startPipelineRun, pauseRun, resumeRun, cancelRun } from "@/lib/actions/pipeline-actions";
 import type { ActiveRun } from "@/lib/queries/runs";
 import type { RunRow } from "@/components/pipeline/runs-view";
 
@@ -43,6 +43,12 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
           const st = (detail?.run.status ?? "success") as PipelineStatus;
           if (st === "failed") toast.error("Exécution terminée — échec. Voir le détail.");
           else if (st === "partial") toast.warning("Exécution terminée — succès partiel.");
+          // SP5 Task 5: a Stop finalizes to 'cancelled' — the panel's poll observes it here (the
+          // active run becomes null) exactly like any other terminal status, regardless of whether
+          // this browser session is the one that clicked Stop (handleStop below already toasts
+          // "Exécution annulée." immediately on click — this is the async confirmation once the run
+          // row has actually finalized, same relationship as the other terminal toasts here).
+          else if (st === "cancelled") toast.warning("Exécution annulée.");
           else toast.success("Exécution terminée avec succès.");
         } catch { /* ignore */ }
       }
@@ -92,7 +98,17 @@ function IdleView({ lastRun, onStart, starting }: { lastRun: RunRow | null; onSt
 
 function RunningView({ active }: { active: ActiveRun }) {
   const { run, feedSteps, items } = active;
-  const header = deriveHeader(run);
+  // SP5 Task 5: getActiveRun (lib/queries/runs.ts) returns a run that's either "running" or
+  // "paused" — RunningView handles both (the panel's idle/done states are untouched; a paused run
+  // is neither).
+  const isPaused = run.status === "paused";
+  // While paused, `phase` is "finalizing" (set by executeRun's pause finalize path — see
+  // lib/pipeline/run.ts) even though only SOME stories were processed — deriveHeader's finalizing
+  // branch is calibrated for a run that's genuinely wrapping up (percent forced to 100), which
+  // would wrongly render a paused run as if it were done. Override phase to "processing_items" for
+  // the header calculation ONLY, so the label/percent reflect the run's real processed/total
+  // progress instead — "don't treat paused as done".
+  const header = deriveHeader(isPaused ? { ...run, phase: "processing_items" } : run);
   const startedMs = new Date(run.startedAt).getTime();
   const elapsed = Date.now() - startedMs;
   const etaMs = computeEta({ startedAtMs: startedMs, nowMs: Date.now(), processedItems: run.processedItems, totalItems: run.totalItems });
@@ -102,25 +118,88 @@ function RunningView({ active }: { active: ActiveRun }) {
   const currentGroup = items[items.length - 1];
   const failures = items.filter((i) => i.hasFailure).length + feedSteps.filter((s) => s.status === "failed").length;
 
+  const [isControlPending, startControlTransition] = useTransition();
+
+  // Async transition callbacks — same pattern as LiveRunPanel's handleStart above (see its comment):
+  // a sync callback that returns a floating promise would flip `isControlPending` back to false in
+  // the same tick, re-enabling the buttons before the action's result is known and defeating
+  // double-submit protection.
+  const handlePause = useCallback(() => {
+    startControlTransition(async () => {
+      try {
+        const r = await pauseRun(run.id);
+        if (!r.ok) { toast.error(r.message); return; }
+        toast.success("Exécution mise en pause.");
+      } catch { toast.error("Une erreur inattendue est survenue."); }
+    });
+  }, [run.id]);
+
+  const handleResume = useCallback(() => {
+    startControlTransition(async () => {
+      try {
+        const r = await resumeRun(run.id);
+        if (!r.ok) { toast.error(r.message); return; }
+        toast.success("Exécution reprise.");
+      } catch { toast.error("Une erreur inattendue est survenue."); }
+    });
+  }, [run.id]);
+
+  const handleStop = useCallback(() => {
+    startControlTransition(async () => {
+      try {
+        const r = await cancelRun(run.id);
+        if (!r.ok) { toast.error(r.message); return; }
+        toast.success("Exécution annulée.");
+      } catch { toast.error("Une erreur inattendue est survenue."); }
+    });
+  }, [run.id]);
+
   return (
     <Card>
       <CardContent className="space-y-4 py-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <div className="font-semibold">Exécution en cours</div>
+            <div className="font-semibold">{isPaused ? "Exécution en pause" : "Exécution en cours"}</div>
             <div className="text-xs text-muted-foreground">{TRIGGER_LABEL[run.triggeredBy] ?? run.triggeredBy} · démarrée {new Intl.DateTimeFormat("fr-FR", { timeStyle: "medium" }).format(startedMs)}</div>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--status-in-review)]/25 bg-[var(--status-in-review)]/10 px-2.5 py-1 text-xs font-semibold text-[var(--status-in-review)]">
-            <span className="size-1.5 animate-pulse rounded-full bg-current" /> En cours
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold",
+              isPaused
+                ? "border-[var(--status-draft)]/25 bg-[var(--status-draft)]/10 text-[var(--status-draft)]"
+                : "border-[var(--status-in-review)]/25 bg-[var(--status-in-review)]/10 text-[var(--status-in-review)]",
+            )}>
+              <span className={cn("size-1.5 rounded-full bg-current", !isPaused && "animate-pulse")} />
+              {pipelineStatusLabel(run.status)}
+            </span>
+            <RoleGate allow={["admin"]}>
+              <div className="flex items-center gap-2">
+                {isPaused ? (
+                  <Button size="sm" variant="outline" onClick={handleResume} disabled={isControlPending}>
+                    {isControlPending ? <Loader2 className="animate-spin" aria-hidden /> : <Play aria-hidden />}
+                    Reprendre
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={handlePause} disabled={isControlPending}>
+                    {isControlPending ? <Loader2 className="animate-spin" aria-hidden /> : <Pause aria-hidden />}
+                    Pause
+                  </Button>
+                )}
+                <Button size="sm" variant="destructive" onClick={handleStop} disabled={isControlPending}>
+                  {isControlPending ? <Loader2 className="animate-spin" aria-hidden /> : <Square aria-hidden />}
+                  Stop
+                </Button>
+              </div>
+            </RoleGate>
+          </div>
         </div>
 
         <div className="flex justify-between text-xs text-muted-foreground">
           <span>{header.phaseLabel}{header.denominator != null && <> — <b className="text-foreground">{header.numerator}/{header.denominator}</b></>}</span>
-          <span>écoulé <b className="text-foreground">{formatClock(elapsed)}</b>{etaMs != null && <> · ~{formatClock(etaMs)} restant</>}{failures > 0 && <> · <span className="text-[var(--status-error)]">{failures} échec{failures > 1 ? "s" : ""}</span></>}</span>
+          <span>écoulé <b className="text-foreground">{formatClock(elapsed)}</b>{etaMs != null && !isPaused && <> · ~{formatClock(etaMs)} restant</>}{failures > 0 && <> · <span className="text-[var(--status-error)]">{failures} échec{failures > 1 ? "s" : ""}</span></>}</span>
         </div>
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-          <div className="h-full rounded-full bg-[var(--status-in-review)] transition-all" style={{ width: `${header.percent ?? 8}%` }} />
+          <div className={cn("h-full rounded-full transition-all", isPaused ? "bg-[var(--status-draft)]" : "bg-[var(--status-in-review)]")} style={{ width: `${header.percent ?? 8}%` }} />
         </div>
 
         {run.phase === "processing_items" && currentGroup && (
@@ -183,10 +262,13 @@ function LiveJournal({ feedSteps, items, currentRawItemId }: { feedSteps: Active
   );
 }
 
+// Used by IdleView's "Dernière exécution" line — a terminal run only, so `running`/`paused` never
+// actually render here in practice, but the map stays exhaustive against PipelineStatus.
 const STATUS_TEXT: Record<PipelineStatus, string> = {
   running: "text-[var(--status-in-review)]", success: "text-[var(--status-approved)]",
   partial: "text-[var(--status-pending)]", failed: "text-[var(--status-error)]",
-  // SP5: cancelled (Stop) / paused (Pause) — full button wiring lands in Task 5.
+  // SP5: cancelled (Stop) / paused (Pause) — RunningView (Task 5) renders its own pill for the
+  // live "running"/"paused" cases; this map only needs to stay exhaustive here.
   cancelled: "text-[var(--status-rejected)]", paused: "text-[var(--status-draft)]",
 };
 

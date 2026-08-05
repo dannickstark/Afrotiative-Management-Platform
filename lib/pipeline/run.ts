@@ -188,12 +188,12 @@ export async function executeRun(
       // SP5 Task 4 resume path — SKIP phase 1 (no feed read, no grouping): the checkpoint's
       // remaining stories become this call's phase-2 groups directly.
       groups = opts.resumeStories.map((members) => ({ members }));
-      // SP5 Task 4 review C1 (reaper-safe resume): insert a fresh step IMMEDIATELY, before the
-      // first story's extraction, so reclaimStaleRuns() (which runs on every getActiveRun poll,
-      // ~1.5s) sees recent pipeline_steps activity for this run and never reaps it mid-resume.
-      // resumeRun also refreshes started_at on the flip; the two together close the reaper window
-      // (activity-based AND age-based) so a run parked longer than runStaleMinutes resumes safely.
-      await insertStep({ runId, name: "Reprise de l'exécution", status: "success", durationMs: null });
+      // SP5 Task 5: the "Reprise de l'exécution" step is inserted by resumeRun() itself
+      // (lib/actions/pipeline-actions.ts), BEFORE the status flip — while the run is still
+      // "paused" — so a fresh step already exists the instant the row becomes "running" (see
+      // resumeRun's doc comment for why that ordering, not started_at, is what keeps a resumed run
+      // reaper-safe now that started_at is no longer refreshed on resume). Do NOT insert it again
+      // here — that would double-insert it for every resume.
       // feedsRead/newItems are DB-persisted stats the `finally` below unconditionally overwrites —
       // seed them from the row so a resumed run's finalize doesn't regress stats accumulated
       // before the pause (this call itself reads zero feeds and may record zero NEW items if the
