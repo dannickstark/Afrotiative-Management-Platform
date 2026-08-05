@@ -20,13 +20,18 @@ const MAX_LIMIT = 10; // hard cap regardless of what a caller asks for
 export async function searchRelated(query: string, opts?: { limit?: number }): Promise<SearchResult[]> {
   const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
 
-  const settings = await getPipelineSettings();
-  if (!settings.webSearchEnabled) return [];
-
-  const apiKey = process.env.BRAVE_SEARCH_API_KEY;
-  if (!apiKey) return [];
-
+  // ONE try/catch around the ENTIRE body — the settings read included. getPipelineSettings() hits
+  // Neon (and may run a seed-insert on first use), so a transient DB blip can reject here just as
+  // easily as braveSearch's fetch can; both must degrade to [] rather than propagate, since SP4
+  // Task 6 calls this from inside the per-story runner loop where an unhandled rejection has real
+  // blast radius. (run.ts / scheduler.ts likewise treat getPipelineSettings() as throwable.)
   try {
+    const settings = await getPipelineSettings();
+    if (!settings.webSearchEnabled) return [];
+
+    const apiKey = process.env.BRAVE_SEARCH_API_KEY;
+    if (!apiKey) return [];
+
     return await braveSearch(query, apiKey, limit);
   } catch (e) {
     console.warn(`[search] la recherche web (Brave) a échoué : ${(e as Error).message}`);

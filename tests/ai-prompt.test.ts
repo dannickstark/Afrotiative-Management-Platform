@@ -30,9 +30,13 @@ describe("buildArticlePrompt", () => {
   });
 
   it("instructs the model NOT to invent its own Sources/Références section", () => {
-    const p = buildArticlePrompt(input);
-    expect(p.toLowerCase()).toMatch(/sources.*ajout|ajout.*sources/); // references appended automatically
-    expect(p.toLowerCase()).toMatch(/n['e]|ne .*jamais|n'ajoute pas|n'invente pas/);
+    const p = buildArticlePrompt(input).toLowerCase();
+    // The references list is appended automatically after the body.
+    expect(p).toMatch(/sources.*ajout|ajout.*sources/);
+    // Assert the actual "don't add a Sources/Références section" instruction: a negation AND a
+    // reference to a sources/références section — not a near-tautology that matches any French.
+    expect(p).toMatch(/n['e ].*\b(sections?|sources|références)\b/);
+    expect(p).toContain("n'ajoute jamais");
   });
 
   it("still includes every source's content", () => {

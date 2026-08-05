@@ -3,23 +3,42 @@ import { db, pipelineSettings } from "@/db";
 import { eq } from "drizzle-orm";
 import type { PipelineSettings } from "@/lib/queries/settings";
 
-// Capture the REAL brave module BEFORE mock.module() below swaps the registry. Bun mutates the
-// SAME exports object in place (documented at length in tests/ai-fallback.test.ts) — destructuring
-// the real braveSearch here, before the mock is registered, is what lets afterAll genuinely
-// restore it afterwards instead of leaking the stub into the rest of the `bun test` process.
+// Capture the REAL brave + settings exports BEFORE mock.module() below swaps the registry, and
+// DESTRUCTURE each function into its own plain const. This matters: Bun's mock.module() mutates
+// the SAME module-namespace object in place (documented at length in tests/ai-fallback.test.ts),
+// so re-reading `realSettings.getPipelineSettings` AFTER mocking would yield the WRAPPER, not the
+// original — and since the wrapper delegates to getPipelineSettingsImpl, feeding the wrapper back
+// into that indirection (in beforeEach) is infinite recursion. Destructured consts are copies that
+// mock.module() can no longer touch, so they stay the genuine originals for the whole file.
 const realBrave = await import("@/lib/search/brave");
-const { parseBraveResponse } = realBrave;
+const { braveSearch: realBraveSearch, parseBraveResponse } = realBrave;
+const realSettingsModule = await import("@/lib/queries/settings");
+const {
+  getPipelineSettings: realGetPipelineSettings,
+  getFeeds, getMembers, getTaxonomy, getIntegrationStatus,
+} = realSettingsModule;
 
-// Mutable indirection the module mock below always delegates to — swapped per-test to simulate a
-// Brave failure, reset to the real implementation by default.
-let braveSearchImpl: typeof realBrave.braveSearch = realBrave.braveSearch;
+// Mutable indirections the module mocks below always delegate to — swapped per-test to simulate a
+// Brave failure / a settings-read rejection, reset to the real implementations by default.
+let braveSearchImpl: typeof realBraveSearch = realBraveSearch;
+let getPipelineSettingsImpl: typeof realGetPipelineSettings = realGetPipelineSettings;
 
 mock.module("@/lib/search/brave", () => ({
-  braveSearch: (...args: Parameters<typeof realBrave.braveSearch>) => braveSearchImpl(...args),
-  parseBraveResponse: realBrave.parseBraveResponse,
+  braveSearch: (...args: Parameters<typeof realBraveSearch>) => braveSearchImpl(...args),
+  parseBraveResponse,
 }));
 
-// Imported AFTER the mock is registered so its internal `./brave` import resolves to the stub.
+// List every export explicitly (NOT `...realSettingsModule`) so getFeeds/getTaxonomy/… stay the
+// real functions for any other test file that imports them, while getPipelineSettings routes
+// through the mutable indirection. Spreading the namespace here is what deadlocked an earlier
+// draft — the spread re-materialized the wrapper back onto the indirection.
+mock.module("@/lib/queries/settings", () => ({
+  getFeeds, getMembers, getTaxonomy, getIntegrationStatus,
+  getPipelineSettings: (...args: Parameters<typeof realGetPipelineSettings>) => getPipelineSettingsImpl(...args),
+}));
+
+// Imported AFTER the mocks are registered so its internal `./brave` and `@/lib/queries/settings`
+// imports resolve to the stubs.
 const { searchRelated } = await import("@/lib/search");
 
 // pipeline_settings row id=1 is a shared, app-wide singleton (possibly holding a real
@@ -37,7 +56,8 @@ afterAll(async () => {
   await db.delete(pipelineSettings).where(eq(pipelineSettings.id, 1));
   if (snapshot) await db.insert(pipelineSettings).values(snapshot);
   mock.restore();
-  braveSearchImpl = realBrave.braveSearch;
+  braveSearchImpl = realBraveSearch;
+  getPipelineSettingsImpl = realGetPipelineSettings;
 });
 
 async function setWebSearchEnabled(enabled: boolean): Promise<void> {
@@ -51,7 +71,8 @@ async function setWebSearchEnabled(enabled: boolean): Promise<void> {
 const ORIGINAL_BRAVE_KEY = process.env.BRAVE_SEARCH_API_KEY;
 
 beforeEach(() => {
-  braveSearchImpl = realBrave.braveSearch;
+  braveSearchImpl = realBraveSearch;
+  getPipelineSettingsImpl = realGetPipelineSettings;
 });
 afterEach(() => {
   if (ORIGINAL_BRAVE_KEY === undefined) delete process.env.BRAVE_SEARCH_API_KEY;
@@ -79,6 +100,22 @@ describe("searchRelated (network-free)", () => {
     await setWebSearchEnabled(true);
     process.env.BRAVE_SEARCH_API_KEY = "fake-key";
     braveSearchImpl = async () => { throw new Error("panne réseau simulée"); };
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    const results = await searchRelated("sujet quelconque");
+
+    expect(results).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain("[search]");
+    warnSpy.mockRestore();
+  });
+
+  it("never throws — swallows a getPipelineSettings() DB rejection and returns [] (transient Neon blip)", async () => {
+    // The settings read hits Neon (and may run a seed-insert) — a transient DB failure there must
+    // degrade to [] just like a Brave failure, since SP4 Task 6 calls searchRelated from inside the
+    // per-story runner loop. Set the key so we'd otherwise proceed past the gates to the DB read.
+    process.env.BRAVE_SEARCH_API_KEY = "fake-key";
+    getPipelineSettingsImpl = async () => { throw new Error("Neon indisponible (simulé)"); };
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
 
     const results = await searchRelated("sujet quelconque");
