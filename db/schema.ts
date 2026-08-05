@@ -181,6 +181,13 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   published: integer("published").notNull().default(0),
   startedAt: timestamp("started_at").notNull().defaultNow(),
   finishedAt: timestamp("finished_at"),
+  // ---- live progress (written incrementally by executeRun) ----
+  phase: text("phase"), // reading_feeds | processing_items | finalizing
+  feedsTotal: integer("feeds_total"),
+  totalItems: integer("total_items"),
+  processedItems: integer("processed_items").notNull().default(0),
+  currentStage: text("current_stage"),
+  currentItem: text("current_item"),
 }, (t) => [
   // DB-level overlap interlock: at most one run may be 'running' at any time. A concurrent
   // runPipeline that races past the hasRunningRun() app check will hit a unique violation on
@@ -200,6 +207,7 @@ export const pipelineSteps = pgTable("pipeline_steps", {
   // Per-item attribution for the run-detail view: null for feed-/run-level steps (RSS read, feed
   // failure, cap-reached); set to the raw_items.id for steps produced while staging one item.
   rawItemId: uuid("raw_item_id").references(() => rawItems.id, { onDelete: "set null" }),
+  at: timestamp("at").notNull().defaultNow(),
 });
 
 // ---- distributions (pluggable publish targets) ----

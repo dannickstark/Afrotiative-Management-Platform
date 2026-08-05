@@ -3,6 +3,7 @@ import { desc, sql } from "drizzle-orm";
 import { RunsView } from "@/components/pipeline/runs-view";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
+import { getActiveRun } from "@/lib/queries/runs";
 
 export default async function RunsPage() {
   const user = await requireUser();
@@ -27,6 +28,7 @@ export default async function RunsPage() {
     .limit(20);
 
   const runs = rows.map((r) => ({ ...r, failedSteps: Number(r.failedSteps) }));
+  const activeRun = await getActiveRun();
 
-  return <RunsView runs={runs} />;
+  return <RunsView runs={runs} initialActive={activeRun} />;
 }

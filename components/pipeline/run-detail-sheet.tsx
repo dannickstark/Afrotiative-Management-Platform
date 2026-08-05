@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RoleGate } from "@/components/role-gate";
 import { pipelineStatusLabel, formatDate, type PipelineStatus } from "@/lib/format";
-import { runPipelineNow, reprocessRawItem } from "@/lib/actions/pipeline-actions";
+import { startPipelineRun, reprocessRawItem } from "@/lib/actions/pipeline-actions";
 import type { RunDetail, Step } from "@/lib/queries/runs";
 import { cn } from "@/lib/utils";
 
@@ -68,7 +68,7 @@ function triggeredByLabel(v: string): string {
 /**
  * Run-detail drawer (SP4 Task 3). Purely presentational: the page/wrapper built in Task 4 fetches
  * `getRunDetail()` and owns the open/loading state; this component only renders it and wires the
- * two admin recovery actions (runPipelineNow / reprocessRawItem) already built in Task 2.
+ * two admin recovery actions (startPipelineRun / reprocessRawItem).
  */
 export function RunDetailSheet({
   run,
@@ -147,8 +147,8 @@ function RunDetailBody({ run }: { run: RunDetail }) {
         </div>
       </dl>
 
-      {/* Recovery is scoped to admins to match runPipelineNow()'s server-side
-          requirePermission(role, "pipeline", "configure") — see components/pipeline/run-now.tsx. */}
+      {/* Recovery is scoped to admins to match startPipelineRun()'s server-side
+          requirePermission(role, "pipeline", "configure"). */}
       <RoleGate allow={["admin"]}>
         <RerunRunButton />
       </RoleGate>
@@ -206,23 +206,29 @@ function RerunRunButton() {
   const [isPending, startTransition] = useTransition();
 
   function handleClick() {
-    startTransition(() => {
-      runPipelineNow()
-        .then((r) => {
-          if (r.ok) toast.success(`Exécution terminée — ${r.produced} article(s) en attente.`);
-          else toast.error(r.message);
-        })
+    // Async transition callback so React 19 tracks the in-flight action and keeps `isPending`
+    // true until it resolves — a sync callback that returns a floating promise (startTransition(()
+    // => promise.then(...))) flips the pending flag back in the same tick, re-enabling the button
+    // before the request completes and defeating the disabled state. Mirrors LiveRunPanel's
+    // handleStart (components/pipeline/live-run-panel.tsx).
+    startTransition(async () => {
+      try {
+        const r = await startPipelineRun();
+        if (r.ok) toast.success("Exécution lancée — suivez-la en direct sur la page des exécutions.");
+        else toast.error(r.message);
+      } catch {
         // Defense in depth: requirePermission()/requireUser() throw rather than return
         // {ok:false,...} — shouldn't happen given the RoleGate above, but never leave the
         // button silently stuck without feedback if it does.
-        .catch(() => toast.error("Une erreur inattendue est survenue."));
+        toast.error("Une erreur inattendue est survenue.");
+      }
     });
   }
 
   return (
     <Button variant="outline" size="sm" onClick={handleClick} disabled={isPending} className="self-start">
       {isPending && <Loader2 className="animate-spin" aria-hidden />}
-      {isPending ? "Exécution en cours…" : "Relancer l'exécution"}
+      {isPending ? "Démarrage…" : "Relancer l'exécution"}
     </Button>
   );
 }

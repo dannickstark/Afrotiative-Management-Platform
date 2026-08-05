@@ -16,6 +16,11 @@ export type StepRec = {
   errorTechnical?: string;
 };
 
+export type StageHooks = {
+  onStageStart?: (name: string) => void | Promise<void>;
+  onStageEnd?: (step: StepRec) => void | Promise<void>;
+};
+
 // The transaction handle type db.transaction() hands its callback — used so insertTags can
 // participate in the same transaction as the article/sources/embedding inserts below.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -31,20 +36,26 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export async function stageItem(
   item: RawItem,
   mediaName: string,
-  categoryNames: string[]
+  categoryNames: string[],
+  hooks: StageHooks = {},
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
   const timed = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
+    await hooks.onStageStart?.(name);
     const t0 = Date.now();
     try {
       const r = await fn();
-      steps.push({ name, status: "success", durationMs: Date.now() - t0 });
+      const step: StepRec = { name, status: "success", durationMs: Date.now() - t0 };
+      steps.push(step);
+      await hooks.onStageEnd?.(step);
       return r;
     } catch (e) {
-      steps.push({
+      const step: StepRec = {
         name, status: "failed", durationMs: Date.now() - t0,
         errorMessage: humanError(name, e as Error), errorTechnical: (e as Error).stack,
-      });
+      };
+      steps.push(step);
+      await hooks.onStageEnd?.(step);
       throw e;
     }
   };

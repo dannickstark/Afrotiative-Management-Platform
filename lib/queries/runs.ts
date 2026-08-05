@@ -1,5 +1,6 @@
 import { db, pipelineRuns, pipelineSteps, rawItems } from "@/db";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, asc } from "drizzle-orm";
+import { reclaimStaleRuns } from "@/lib/pipeline/overlap";
 
 export type Step = {
   id: string; name: string; status: string; rawItemId: string | null;
@@ -47,3 +48,27 @@ export async function getRunDetail(runId: string) {
   return { run, ...groupSteps(steps, meta) };
 }
 export type RunDetail = NonNullable<Awaited<ReturnType<typeof getRunDetail>>>;
+
+/**
+ * The single currently-running run (or null), with its progress fields and steps-so-far grouped
+ * like getRunDetail. Reclaims stale runs first, so a dead run is finalized (→ returns null) rather
+ * than shown as forever-running. Polled ~1.5s by the live panel.
+ */
+export async function getActiveRun() {
+  await reclaimStaleRuns();
+  const [run] = await db.select().from(pipelineRuns).where(eq(pipelineRuns.status, "running")).limit(1);
+  if (!run) return null;
+  const steps = (await db.select({
+    id: pipelineSteps.id, name: pipelineSteps.name, status: pipelineSteps.status, rawItemId: pipelineSteps.rawItemId,
+    errorMessage: pipelineSteps.errorMessage, errorTechnical: pipelineSteps.errorTechnical, durationMs: pipelineSteps.durationMs,
+  }).from(pipelineSteps).where(eq(pipelineSteps.runId, run.id)).orderBy(asc(pipelineSteps.at))) as Step[];
+  const itemIds = [...new Set(steps.filter((s) => s.rawItemId).map((s) => s.rawItemId!))];
+  const meta = new Map<string, { title: string; url: string }>();
+  if (itemIds.length) {
+    const rows = await db.select({ id: rawItems.id, title: rawItems.rawTitle, url: rawItems.url })
+      .from(rawItems).where(inArray(rawItems.id, itemIds));
+    for (const r of rows) meta.set(r.id, { title: r.title ?? "(sans titre)", url: r.url });
+  }
+  return { run, ...groupSteps(steps, meta) };
+}
+export type ActiveRun = NonNullable<Awaited<ReturnType<typeof getActiveRun>>>;

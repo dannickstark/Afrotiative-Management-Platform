@@ -1,9 +1,8 @@
 "use server";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { revalidatePath } from "next/cache";
 import type { RawItem } from "@/lib/rss/parse-feed";
-import type { RunDetail } from "@/lib/queries/runs";
+import type { RunDetail, ActiveRun } from "@/lib/queries/runs";
 
 // Drizzle wraps driver errors in DrizzleQueryError, so the pg SQLSTATE lives on `.cause` (not the
 // top-level error) — walk the cause chain to find it. Mirrors lib/pipeline/run.ts's helper; used
@@ -22,13 +21,13 @@ function pgErrorCode(e: unknown): string | undefined {
 /**
  * On-demand fetch for the run-detail drawer (SP4 Task 4): the runs list page only loads summary
  * rows, so RunsView calls this per-click rather than front-loading every run's full step trace.
- * Read-only (pipeline:read, not :configure) — unlike runPipelineNow/reprocessRawItem above.
+ * Read-only (pipeline:read, not :configure) — unlike startPipelineRun/reprocessRawItem below.
  */
 export async function getRunDetailAction(runId: string): Promise<RunDetail | null> {
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "read");
 
-  // Dynamic import (kept AFTER the RBAC check above): mirrors runPipelineNow's/reprocessRawItem's
+  // Dynamic import (kept AFTER the RBAC check above): mirrors startPipelineRun's/reprocessRawItem's
   // pattern in this file — keeping every value-level import inside pipeline-actions.ts deferred
   // avoids Turbopack ever needing to resolve the pipeline's jsdom-heavy dependency graph while
   // statically analyzing this "use server" module at build time.
@@ -36,30 +35,40 @@ export async function getRunDetailAction(runId: string): Promise<RunDetail | nul
   return getRunDetail(runId);
 }
 
-export async function runPipelineNow() {
+/**
+ * Non-blocking trigger: opens the run (holds the slot, gives us runId synchronously), then kicks
+ * executeRun DETACHED and returns immediately. The /runs live panel polls getActiveRun to watch it.
+ * Detached promise survives on Railway's long-lived Node process; a mid-run process death is caught
+ * by the RUN_STALE_MINUTES reaper. Note: going detached also means this path has no `maxDuration`
+ * ceiling (unlike the scheduled route's 300s) — liveness is instead covered by the activity-based
+ * stale-run reclaim in lib/pipeline/overlap.ts (reclaimStaleRuns), not by age alone.
+ */
+export async function startPipelineRun(): Promise<{ ok: true; runId: string } | { ok: false; message: string }> {
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "configure");
 
-  // Dynamic import (kept AFTER the RBAC check above): runPipeline() transitively pulls in the
-  // extraction chain (jsdom, via @mozilla/readability), whose internal css-tree dependency does
-  // a relative require('../data/patch.json') that Turbopack can't statically resolve when this
-  // "use server" module is analyzed at build time. Once Task 9 wires this action into a page, a
-  // top-level static import would break `bun run build` exactly as it did for the route handler;
-  // deferring the load sidesteps that while behaving identically at request time.
-  const { runPipeline } = await import("@/lib/pipeline/run");
-  const { hasRunningRun } = await import("@/lib/pipeline/overlap");
+  // Dynamic import (kept AFTER the RBAC check above): mirrors reprocessRawItem's pattern in this
+  // file — see reprocessRawItem's comment below for why.
+  const { openRun, executeRun } = await import("@/lib/pipeline/run");
+  const { db, feeds } = await import("@/db");
+  const { eq } = await import("drizzle-orm");
 
-  // Fast path: avoid opening a run (and its DB round-trips) when one is already in flight.
-  // runPipeline() re-checks this itself, so this is a belt-and-suspenders early exit only.
-  if (await hasRunningRun()) return { ok: false as const, message: "Une exécution est déjà en cours." };
+  const active = (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.active, true))).length;
+  const runId = await openRun({ triggeredBy: "manual", feedsTotal: active });
+  if (!runId) return { ok: false as const, message: "Une exécution est déjà en cours." };
 
-  const res = await runPipeline({ triggeredBy: "manual" });
-  if (res.status === "skipped") return { ok: false as const, message: "Une exécution est déjà en cours." };
+  // Detached — do NOT await. executeRun always finalizes in its own finally, so a rejection here
+  // is impossible in practice; the catch is belt-and-suspenders against an unhandled rejection.
+  void executeRun(runId).catch(() => {});
+  return { ok: true as const, runId };
+}
 
-  revalidatePath("/runs");
-  revalidatePath("/dashboard");
-  revalidatePath("/queue");
-  return { ok: true as const, ...res };
+/** Read-only fetch of the active run for the live panel poll (pipeline:read). */
+export async function getActiveRunAction(): Promise<ActiveRun | null> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "read");
+  const { getActiveRun } = await import("@/lib/queries/runs");
+  return getActiveRun();
 }
 
 /**
@@ -74,9 +83,9 @@ export async function reprocessRawItem(
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "configure");
 
-  // Dynamic import (kept AFTER the RBAC check above): see runPipelineNow's comment — stageItem
-  // transitively pulls in the jsdom-heavy extraction chain, which breaks `bun run build` under
-  // Turbopack if statically imported at the top of this "use server" module.
+  // Dynamic import (kept AFTER the RBAC check above): see startPipelineRun's comment above —
+  // stageItem transitively pulls in the jsdom-heavy extraction chain, which breaks `bun run build`
+  // under Turbopack if statically imported at the top of this "use server" module.
   const { db, rawItems, feeds, wpCategories, pipelineRuns, pipelineSteps } = await import("@/db");
   const { eq } = await import("drizzle-orm");
   const { hasRunningRun } = await import("@/lib/pipeline/overlap");
@@ -90,9 +99,10 @@ export async function reprocessRawItem(
   const cats = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
 
   // Open the "reprocess" run row. Even with the hasRunningRun() check above, two admin-triggered
-  // reprocess/run-now calls can slip past it in the same instant; the pipeline_runs_one_running
-  // partial unique index then rejects the losing insert (SQLSTATE 23505). Return the friendly
-  // message rather than throwing, matching runPipeline()'s handling of the same collision.
+  // reprocess/startPipelineRun calls can slip past it in the same instant; the
+  // pipeline_runs_one_running partial unique index then rejects the losing insert (SQLSTATE
+  // 23505). Return the friendly message rather than throwing, matching runPipeline()'s handling
+  // of the same collision.
   let run: { id: string };
   try {
     [run] = await db.insert(pipelineRuns)
