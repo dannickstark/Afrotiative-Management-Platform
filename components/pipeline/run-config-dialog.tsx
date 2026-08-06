@@ -16,6 +16,17 @@ const AGE_PRESETS = [
   { value: "6", label: "6 heures" }, { value: "12", label: "12 heures" }, { value: "24", label: "24 heures" },
   { value: "48", label: "48 heures" }, { value: "72", label: "72 heures" }, { value: "168", label: "7 jours" },
 ];
+
+// If the current hours value isn't one of AGE_PRESETS (e.g. a non-preset defaultMaxItemAgeHours
+// from settings, like 36), inject it as an extra option — in numeric order — so the Select has a
+// matching SelectItem and doesn't render blank. Presets stay untouched otherwise.
+function ageOptionsFor(hours: string) {
+  if (AGE_PRESETS.some((p) => p.value === hours)) return AGE_PRESETS;
+  const n = Number(hours);
+  if (!Number.isFinite(n) || n <= 0) return AGE_PRESETS;
+  return [...AGE_PRESETS, { value: hours, label: `${n} heures` }].sort((a, b) => Number(a.value) - Number(b.value));
+}
+
 type Feed = { id: string; name: string };
 type RecencyMode = "none" | "age" | "since";
 
@@ -63,6 +74,7 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
       if (!sinceDate) { toast.error("Choisissez une date « depuis »."); return null; }
       const at = new Date(`${sinceDate}T${sinceTime || "00:00"}`);        // local → ISO with tz
       if (Number.isNaN(at.getTime())) { toast.error("Date « depuis » invalide."); return null; }
+      if (at.getTime() > Date.now()) { toast.error("La date « depuis » ne peut pas être dans le futur."); return null; }
       recency = { kind: "since", at: at.toISOString() };
     }
     const allSelected = selected.size === feeds.length;
@@ -114,7 +126,7 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
               {mode === "age" && (
                 <Select value={ageHours} onValueChange={(v) => setAgeHours(v ?? "48")}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>{AGE_PRESETS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+                  <SelectContent>{ageOptionsFor(ageHours).map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
                 </Select>
               )}
               {mode === "since" && (

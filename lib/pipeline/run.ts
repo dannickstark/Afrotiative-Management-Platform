@@ -123,10 +123,17 @@ export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: numb
  * every future run via the pipeline_runs_one_running index).
  *
  * Phase 1 (reading_feeds): reads EVERY target feed — even past the item cap — so feed-health
- * signals (feedsRead) and totalItems are exact. Collects NEW candidates (dedup'd by isSeen() and
- * an intra-batch hash set) without recording them yet. The item cap (maxItemsPerRun) is enforced
- * HERE, on candidates — unchanged from before Task 6a; grouping (below) happens strictly AFTER
- * the cap, so the cap bounds how much work a run can do, not how many stories it produces.
+ * signals (feedsRead) and totalItems are exact. Each item is first filtered by the recency cutoff
+ * (isWithinRecency(item.isoDate, cutoff)): items published before the cutoff are skipped (counted
+ * in tooOld) and never recorded; undated/unparseable-date items are kept (undated-include policy).
+ * Surviving items become NEW candidates (dedup'd by isSeen() and an intra-batch hash set),
+ * collected across ALL feeds WITHOUT an in-loop cap. Only once every feed has been read is the
+ * item cap (maxItemsPerRun) applied, by narrowByRecency(candidates, ..., maxItems): it keeps the
+ * most-recent maxItems candidates (undated ranked as oldest) and counts the rest in overCap. This
+ * narrowing happens strictly BEFORE grouping/embedding (below), so embedding — and everything
+ * downstream — stays bounded by maxItems, not by however many candidates survived recency
+ * filtering. Both tooOld and overCap surface as their own visible "partial" pipeline_steps rows
+ * (see below) — neither is a silent truncation.
  *
  * Grouping (SP4 Task 6a — corpus cross-check, no web search): each candidate is embedded on its
  * lightweight RSS metadata (title + snippet — cheap, no extraction/network fetch yet) and greedily
@@ -618,10 +625,15 @@ export async function executeRun(
 }
 
 /**
- * Runs one full pipeline pass: opens the run (holding the one-running slot) then executes it.
- * Preserved for the cron route + manual-trigger action + existing tests — behaviourally identical
- * to the previous single-function runPipeline (same overlap safety, same always-finalize
- * guarantee), just composed from openRun + executeRun under the hood.
+ * Runs one full pipeline pass: resolves run params from settings and persists them on the run row,
+ * then opens the run (holding the one-running slot) and executes it. Preserved for the cron route
+ * (app/api/pipeline/run/route.ts, via the scheduled trigger) + existing tests — behaviourally
+ * identical to the previous single-function runPipeline (same overlap safety, same always-finalize
+ * guarantee), just composed from openRun + executeRun under the hood. The manual-trigger action
+ * (startPipelineRun, in lib/actions/pipeline-actions.ts) no longer calls this: it resolves/
+ * validates its own params and composes openRun + executeRun directly, so it can return the
+ * freshly-opened runId without awaiting executeRun to finish (see its own doc comment for why that
+ * matters).
  */
 export async function runPipeline(opts: { triggeredBy: RunTrigger; feedIds?: string[] }): Promise<RunResult> {
   // Resolve params from settings so scheduled/programmatic runs persist the same shape as manual
