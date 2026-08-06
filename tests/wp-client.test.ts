@@ -71,7 +71,13 @@ beforeAll(() => {
       }
 
       if (url.pathname.endsWith("/tags") && req.method === "GET") return Response.json([]); // none exist
-      if (url.pathname.endsWith("/tags") && req.method === "POST") return Response.json({ id: 42, name: c.json?.name });
+      if (url.pathname.endsWith("/tags") && req.method === "POST") {
+        // WP rejects a create with 400 term_exists when the term already exists but the search missed
+        // it — and returns the existing term_id in the body. Simulate that for one name.
+        if (c.json?.name === "Existe Déjà Tag")
+          return Response.json({ code: "term_exists", message: "exists", data: { status: 400, term_id: 88 } }, { status: 400 });
+        return Response.json({ id: 42, name: c.json?.name });
+      }
 
       if (url.pathname.endsWith("/categories") && req.method === "GET") {
         const q = url.searchParams.get("search") || "";
@@ -83,6 +89,13 @@ beforeAll(() => {
         return Response.json([]);
       }
       if (url.pathname.endsWith("/categories") && req.method === "POST") {
+        // term_exists: the term already exists on WP (our search-then-decode compare missed it); WP
+        // returns the existing term_id — the client must recover with it, not fail the publish.
+        if (c.json?.name === "Existe Déjà")
+          return Response.json({ code: "term_exists", message: "A term with the name provided already exists", data: { status: 400, term_id: 77 } }, { status: 400 });
+        // A DIFFERENT 400 (not term_exists) must still surface as an error — recovery is narrow.
+        if (c.json?.name === "Invalide")
+          return Response.json({ code: "rest_term_invalid", message: "Terme invalide" }, { status: 400 });
         return Response.json({ id: 55, name: c.json?.name });
       }
 
@@ -144,6 +157,21 @@ describe("WordPressClient", () => {
     const post = calls.at(-1)!;
     expect(post.method).toBe("POST");
     expect(post.json).toEqual({ name: "Nouvelle Catégorie" });
+  });
+
+  it("resolveOrCreateCategory recovers the existing id when the create returns a 400 term_exists", async () => {
+    // The search misses (GET returns []), so a create is attempted; WP rejects with term_exists and
+    // the existing term_id. The client must use that id instead of failing the whole publish — this
+    // is the fix for the opaque "Échec de la requête WordPress (400) sur /categories." publish error.
+    expect(await client().resolveOrCreateCategory("Existe Déjà")).toBe(77);
+  });
+
+  it("resolveOrCreateTag also recovers the existing id on a 400 term_exists", async () => {
+    expect(await client().resolveOrCreateTag("Existe Déjà Tag")).toBe(88);
+  });
+
+  it("resolveOrCreateCategory still throws on a non-term_exists 400 (recovery is narrow)", async () => {
+    await expect(client().resolveOrCreateCategory("Invalide")).rejects.toThrow(WordPressError);
   });
 
   it("uploadMedia posts the RAW BYTES (not JSON) with the right Content-Disposition + Content-Type", async () => {
@@ -240,6 +268,9 @@ describe("WordPressClient", () => {
       const wpErr = err as WordPressError;
       expect(wpErr.status).toBe(500);
       expect(wpErr.body).toContain("Erreur interne");
+      // The response body is folded into the message so the failure is never opaque (a bare status +
+      // path told us nothing about WHY the 400/500 happened).
+      expect(wpErr.message).toContain("Erreur interne");
     }
   });
 });

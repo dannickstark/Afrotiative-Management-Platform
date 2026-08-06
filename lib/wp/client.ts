@@ -60,6 +60,32 @@ function sanitizeFilename(name: string): string {
   return name.replace(/["\\]/g, "_").replace(/[\x00-\x1f\x7f]/g, "");
 }
 
+// Fold a short excerpt of the response body into the failure message so a WordPress error is never
+// opaque: a bare "(400) sur /categories" never told us WHY (term_exists? invalid param? auth?). WP
+// error bodies are small JSON, so a 300-char single-line excerpt is enough to diagnose.
+function wpFailMessage(status: number, where: string, body: string): string {
+  const excerpt = body.trim().replace(/\s+/g, " ").slice(0, 300);
+  return `Échec de la requête WordPress (${status}) sur ${where}.${excerpt ? ` — ${excerpt}` : ""}`;
+}
+
+// WordPress rejects a term create with HTTP 400 `term_exists` when the term already exists — which
+// happens whenever resolveOrCreate's search-then-decode compare misses an existing term (Unicode
+// NFC/NFD, stray whitespace, or a slug/entity variant decodeWpEntities doesn't cover). WP returns
+// the existing term's id in the error body, so callers can recover with it instead of failing the
+// whole publish. Returns null for anything else (non-400, other code, or a malformed/absent id) so
+// the caller re-throws that error unchanged — the recovery is deliberately narrow.
+function termExistsId(err: unknown): number | null {
+  if (!(err instanceof WordPressError) || err.status !== 400) return null;
+  try {
+    const parsed = JSON.parse(err.body) as { code?: string; term_id?: number; data?: { term_id?: number } | null };
+    if (parsed?.code !== "term_exists") return null;
+    const id = parsed.data?.term_id ?? parsed.term_id;
+    return typeof id === "number" && Number.isFinite(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 // Thin typed wrapper around the WordPress REST API v2 (wp-json/wp/v2). All requests carry
 // the site's Application Password Basic-Auth header; any non-2xx response is surfaced as a
 // WordPressError (French message, HTTP status, raw response body) so callers (Tasks 2-5) can
@@ -74,7 +100,7 @@ export class WordPressClient {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new WordPressError(`Échec de la requête WordPress (${res.status}) sur ${path}.`, res.status, body);
+      throw new WordPressError(wpFailMessage(res.status, path, body), res.status, body);
     }
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -107,7 +133,7 @@ export class WordPressClient {
       );
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new WordPressError(`Échec de la requête WordPress (${res.status}) sur /${kind}.`, res.status, body);
+        throw new WordPressError(wpFailMessage(res.status, `/${kind}`, body), res.status, body);
       }
       const batch = (await res.json()) as WpTerm[];
       all.push(...batch);
@@ -128,12 +154,22 @@ export class WordPressClient {
     const target = name.toLowerCase();
     const existing = list.find((t) => decodeWpEntities(t.name).toLowerCase() === target);
     if (existing) return existing.id;
-    const created = await this.req<WpTerm>(`/${kind}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    return created.id;
+    try {
+      const created = await this.req<WpTerm>(`/${kind}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      return created.id;
+    } catch (err) {
+      // The search-then-decode compare above can miss an existing term (Unicode/whitespace/slug
+      // variants decodeWpEntities doesn't normalize), so WP rejects the create with 400 term_exists
+      // and hands back the existing id — recover with it rather than failing the publish. Any other
+      // error propagates unchanged (see termExistsId — the recovery is deliberately narrow).
+      const id = termExistsId(err);
+      if (id != null) return id;
+      throw err;
+    }
   }
 
   async resolveOrCreateCategory(name: string): Promise<number> {
