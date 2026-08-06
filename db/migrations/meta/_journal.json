@@ -85,6 +85,13 @@
       "when": 1785970229334,
       "tag": "0011_nifty_aqueduct",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786023745343,
+      "tag": "0012_keen_goblin_queen",
+      "breakpoints": true
     }
   ]
 }

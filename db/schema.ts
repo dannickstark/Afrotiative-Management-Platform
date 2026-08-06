@@ -340,4 +340,10 @@ export const distributions = pgTable("distributions", {
   status: distributionStatus("status").notNull().default("stubbed"),
   externalId: text("external_id"),
   at: timestamp("at").notNull().defaultNow(),
-});
+}, (t) => [
+  // At most one 'wordpress' distribution row per article (upsertDistribution's invariant,
+  // lib/wp/publish.ts): guards against a theoretical race-created duplicate that would double a
+  // row in the /published list. Partial (WHERE channel = 'wordpress') so other channels are
+  // unconstrained — modeled on pipeline_runs_one_running above.
+  uniqueIndex("distributions_one_wordpress_per_article").on(t.articleId).where(sql`${t.channel} = 'wordpress'`),
+]);
