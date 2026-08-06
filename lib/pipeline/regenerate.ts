@@ -50,7 +50,7 @@ const FIELD_LABELS: Record<keyof RegenerateFieldsInput, string> = {
 // partial write (e.g. tags replaced but article row unchanged) can never happen.
 export async function applyRegeneration(input: {
   articleId: string;
-  prior: { title: string; bodyHtml: string; featuredImageUrl: string | null };
+  prior: { title: string; bodyHtml: string; featuredImageUrl: string | null; confidenceFlags: typeof articles.$inferSelect.confidenceFlags };
   draft: ArticleDraft;
   fields: RegenerateFieldsInput;
   sourceCount: number;
@@ -64,6 +64,20 @@ export async function applyRegeneration(input: {
   // Category (read-only lookup) + body sanitize happen outside the tx.
   const categoryId = sel.categoryName !== null ? await resolveCategoryId(sel.categoryName, categoryNames) : undefined;
   const sanitizedBody = sel.bodyHtml !== null ? sanitizeArticleHtml(sel.bodyHtml) : null;
+
+  // On a PARTIAL regen the non-regenerated fields keep their PRIOR values, so the fresh draft's
+  // confidence flags (computed against the whole freshly-generated draft) don't describe the
+  // article as it will actually be persisted — e.g. a body-only regen of an article that HAS an
+  // image re-extracts with no image and sets imageMissing:true, even though the prior image is
+  // kept untouched. Merge per-field: start from the prior flags, and override a flag ONLY when
+  // its corresponding field was actually regenerated. aiDegraded is left as the prior value —
+  // it isn't tied to any single checked field.
+  const mergedConfidence = {
+    ...prior.confidenceFlags,
+    ...(fields.category ? { categoryUncertain: draft.confidence.categoryUncertain } : {}),
+    ...(fields.image ? { imageMissing: draft.confidence.imageMissing } : {}),
+    ...(fields.body ? { clusterUncertain: draft.confidence.clusterUncertain } : {}),
+  };
 
   // Re-derive embedding/cluster/score ONLY when the body changed (see plan constraint). The
   // effective new title (regenerated iff title is checked, else the prior one) is what we embed
@@ -82,7 +96,7 @@ export async function applyRegeneration(input: {
       bestScore: cluster.bestScore,
       bodyHtml: sel.bodyHtml!, // pre-sanitize body per computeArticleScore's contract — non-null: bodyChanged implies bodyHtml was set (selectRegenerationColumns)
       hasImage: fields.image ? !!draft.featuredImageUrl : !!prior.featuredImageUrl,
-      confidence: draft.confidence,
+      confidence: mergedConfidence,
     });
   }
 
@@ -111,7 +125,7 @@ export async function applyRegeneration(input: {
       ...(categoryId != null ? { categoryId } : {}), // != null: a checked-but-unresolved category leaves the prior one, never clears it
       ...(clusterId !== undefined ? { clusterId } : {}),
       ...(score !== undefined ? { score } : {}),
-      status: "pending", confidenceFlags: draft.confidence, aiAuthor: true, updatedAt: new Date(),
+      status: "pending", confidenceFlags: mergedConfidence, aiAuthor: true, updatedAt: new Date(),
     }).where(eq(articles.id, articleId));
 
     if (sel.tags !== null) {

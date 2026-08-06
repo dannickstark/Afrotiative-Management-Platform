@@ -88,7 +88,7 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
   it("overwrites ONLY the checked fields, snapshots prior title+body, sets pending", async () => {
     const before = await priorOf();
     await applyRegeneration({
-      articleId, prior: { title: before.title, bodyHtml: before.bodyHtml, featuredImageUrl: before.featuredImageUrl },
+      articleId, prior: { title: before.title, bodyHtml: before.bodyHtml, featuredImageUrl: before.featuredImageUrl, confidenceFlags: before.confidenceFlags },
       draft, fields: { title: true, excerpt: true, body: false, category: false, tags: false, image: false },
       sourceCount: 1, categoryNames: ["RegenTest Économie", "RegenTest Sport"], actorId: null,
     });
@@ -98,6 +98,10 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
     expect(after.bodyHtml).toBe("<p>Ancien corps.</p>"); // body NOT checked → unchanged
     expect(after.categoryId).toBe(catIds[1]);            // category NOT checked → unchanged
     expect(after.status).toBe("pending");
+    // image NOT checked on this partial regen → confidenceFlags.imageMissing must NOT be forced to
+    // the fresh draft's value (draft.confidence.imageMissing is false; this asserts it isn't
+    // clobbered wholesale — the seeded article's prior flags default to {}, i.e. undefined here).
+    expect(after.confidenceFlags?.imageMissing).toBe(before.confidenceFlags?.imageMissing);
     // snapshot revision carries the PRIOR title + body
     const [rev] = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, articleId)).orderBy(desc(articleRevisions.at)).limit(1);
     expect(rev.action).toBe("régénéré par IA");
@@ -114,7 +118,7 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
     // collision-free "RegenTest Économie" name — every other field (body/tags/score) is unaffected.
     const regenDraft = { ...draft, category: "RegenTest Économie" };
     await applyRegeneration({
-      articleId, prior: { title: "Nouveau titre", bodyHtml: "<p>Ancien corps.</p>", featuredImageUrl: "https://old/i.jpg" },
+      articleId, prior: { title: "Nouveau titre", bodyHtml: "<p>Ancien corps.</p>", featuredImageUrl: "https://old/i.jpg", confidenceFlags: {} },
       draft: regenDraft, fields: { title: false, excerpt: false, body: true, category: true, tags: true, image: false },
       sourceCount: 1, categoryNames: ["RegenTest Économie", "RegenTest Sport"], actorId: null,
     });

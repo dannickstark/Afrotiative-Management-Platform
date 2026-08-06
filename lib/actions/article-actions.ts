@@ -92,7 +92,7 @@ export async function regenerate(articleId: string, fields: RegenerateFieldsInpu
 
   const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
   await applyRegeneration({
-    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl },
+    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
     draft, fields: parsed.data, sourceCount: extracted.length, categoryNames, actorId: user.id,
   });
 
@@ -123,7 +123,7 @@ export async function improveWithAi(articleId: string, input?: ImproveActionInpu
   const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
   const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
   await applyRegeneration({
-    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl },
+    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
     draft: {
       title: article.title, bodyHtml, excerpt: article.excerpt ?? "", category: "", tags: [],
       featuredImageUrl: article.featuredImageUrl, imageCredit: article.imageCredit, imageSourceUrl: article.imageSourceUrl,
