@@ -31,7 +31,9 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (!next && !isPending) setFields(ALL_CHECKED); // reset for next open
+    // Reset on any close: an in-flight regenerate() already captured its `fields`,
+    // so resetting the UI state is safe even mid-submit.
+    if (!next) setFields(ALL_CHECKED);
   }
 
   function toggle(key: FieldKey) {

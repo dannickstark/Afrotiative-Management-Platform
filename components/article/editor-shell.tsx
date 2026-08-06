@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { RoleGate } from "@/components/role-gate";
 import { RichEditor } from "./rich-editor";
 import { ActionBar } from "./action-bar";
 import { ImproveDialog } from "./improve-dialog";
@@ -86,7 +87,9 @@ export function EditorShell({
               aria-label="Titre de l'article"
               className="h-10 flex-1 font-heading text-lg font-semibold"
             />
-            <ImproveDialog articleId={articleId} disabled={readOnly} />
+            <RoleGate allow={["admin", "editor"]}>
+              <ImproveDialog articleId={articleId} disabled={readOnly} />
+            </RoleGate>
           </div>
 
           <RichEditor value={bodyHtml} onChange={setBodyHtml} editable={!readOnly} />

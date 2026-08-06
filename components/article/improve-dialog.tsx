@@ -20,7 +20,9 @@ export function ImproveDialog({ articleId, disabled: triggerDisabled }: { articl
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (!next && !isPending) setInstruction(""); // reset for next open
+    // Reset on any close: an in-flight improveWithAi() already captured its
+    // instruction, so resetting the UI state is safe even mid-submit.
+    if (!next) setInstruction("");
   }
 
   function handleConfirm() {
