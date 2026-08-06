@@ -71,8 +71,12 @@ export function ActionBar({
   function handleRegenerate() {
     startTransition(async () => {
       try {
-        const res = await regenerate(articleId);
-        toast.success(res.message);
+        // TEMPORARY shim: regenerate() now takes a per-field selection (Task 4). This call-site
+        // is rewired to a field-picker dialog in Task 5 — until then, request every field so the
+        // button keeps its prior "regenerate everything" behavior.
+        const res = await regenerate(articleId, { title: true, body: true, excerpt: true, category: true, tags: true, image: true });
+        if (res.ok) toast.success(res.message);
+        else toast.error(res.message);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Échec du renvoi à l'IA.");
       }
