@@ -8,8 +8,13 @@ export function chooseCluster(bestScore: number, threshold: number): "attach" | 
 
 type NearestRow = { cluster_id: string; score: number | string };
 
-// nearest existing article embedding within the recency window, by cosine distance (pgvector <=>)
-export async function decideCluster(embedding: number[]): Promise<{ clusterId: string | null; isNew: boolean; bestScore: number }> {
+// nearest existing article embedding within the recency window, by cosine distance (pgvector <=>).
+// excludeArticleId lets a regenerate/improve flow exclude the article's OWN (stale) embedding row
+// from its own re-cluster decision — without it, a body regen would trivially self-match its prior
+// embedding (score ~1) and either "attach" to its own stale cluster or otherwise skew the decision
+// with a row that's about to be overwritten anyway. Optional + backward-compatible: existing callers
+// (the ingest pipeline, which has no prior embedding for a brand-new article) omit it.
+export async function decideCluster(embedding: number[], excludeArticleId?: string): Promise<{ clusterId: string | null; isNew: boolean; bestScore: number }> {
   const cfg = getPipelineConfig();
   const since = new Date(Date.now() - cfg.windowHours * 3600_000);
   const vec = `[${embedding.join(",")}]`;
@@ -25,6 +30,7 @@ export async function decideCluster(embedding: number[]): Promise<{ clusterId: s
       select a.cluster_id as cluster_id, 1 - (e.embedding <=> ${vec}::vector) as score
       from ${articleEmbeddings} e join ${articles} a on a.id = e.article_id
       where a.generated_at >= ${since} and a.cluster_id is not null
+      ${excludeArticleId ? sql`and a.id <> ${excludeArticleId}` : sql``}
       order by e.embedding <=> ${vec}::vector asc limit 1`);
     top = result.rows[0];
   } catch (e) {

@@ -71,8 +71,9 @@ export async function applyRegeneration(input: {
   // image re-extracts with no image and sets imageMissing:true, even though the prior image is
   // kept untouched. Merge per-field: start from the prior flags, and override a flag ONLY when
   // its corresponding field was actually regenerated. aiDegraded is left as the prior value —
-  // it isn't tied to any single checked field.
-  const mergedConfidence = {
+  // it isn't tied to any single checked field — except when THIS regen's own embedding call
+  // degrades to mock (see below), which OR-in's it fresh regardless of prior value.
+  let mergedConfidence = {
     ...prior.confidenceFlags,
     ...(fields.category ? { categoryUncertain: draft.confidence.categoryUncertain } : {}),
     ...(fields.image ? { imageMissing: draft.confidence.imageMissing } : {}),
@@ -89,8 +90,17 @@ export async function applyRegeneration(input: {
   let cluster: Awaited<ReturnType<typeof decideCluster>> | null = null;
   let score: number | undefined;
   if (sel.bodyChanged && sanitizedBody !== null) {
-    vector = (await embed(`${embedTitle}\n${sanitizedBody}`)).vector;
-    cluster = await decideCluster(vector);
+    const { vector: embedVector, via: embedVia } = await embed(`${embedTitle}\n${sanitizedBody}`);
+    vector = embedVector;
+    // excludeArticleId: this article's OWN prior embedding row is still in the table at this point
+    // (it's only overwritten inside the tx below), so without excluding it decideCluster would
+    // trivially self-match (score ~1) and either re-attach to its own stale cluster or otherwise
+    // skew the decision off a row that's about to be replaced.
+    cluster = await decideCluster(vector, articleId);
+    // Mirrors stages.ts's ingest-time degraded-run flagging: a provider outage forces embed() onto
+    // its mock fallback, which makes the similarity/cluster decision meaningless — flag it so human
+    // reviewers see this regen wasn't produced under normal conditions, same as a fresh ingest would.
+    if (embedVia === "mock") mergedConfidence = { ...mergedConfidence, clusterUncertain: true, aiDegraded: true };
     score = computeArticleScore({
       sourceCount,
       bestScore: cluster.bestScore,

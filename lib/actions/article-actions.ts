@@ -67,8 +67,7 @@ export async function regenerate(articleId: string, fields: RegenerateFieldsInpu
   const parsed = regenerateFieldsSchema.safeParse(fields);
   if (!parsed.success) return { ok: false, message: "Sélectionnez au moins un champ à régénérer." };
 
-  const { db, articles, articleSources, wpCategories } = await import("@/db");
-  const { eq } = await import("drizzle-orm");
+  const { articleSources, wpCategories } = await import("@/db");
   const [article] = await db.select().from(articles).where(eq(articles.id, articleId));
   if (!article) return { ok: false, message: "Article introuvable." };
   const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
@@ -81,7 +80,9 @@ export async function regenerate(articleId: string, fields: RegenerateFieldsInpu
     try {
       const r = await extractExternal(s.url);
       if (r.text.trim().length > 0) { extracted.push({ mediaName: s.mediaName, url: s.url, text: r.text }); candidateImages.push(...r.images); }
-    } catch { /* best-effort: skip a dead source */ }
+    } catch (e) {
+      console.warn(`[regenerate] extraction échouée pour ${s.url}: ${(e as Error).message}`);
+    }
   }
   if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré)." };
 
@@ -110,8 +111,7 @@ export async function improveWithAi(articleId: string, input?: ImproveActionInpu
   const instruction = improveInputSchema.safeParse(input ?? {});
   if (!instruction.success) return { ok: false, message: "Instruction invalide." };
 
-  const { db, articles, articleSources } = await import("@/db");
-  const { eq } = await import("drizzle-orm");
+  const { articleSources } = await import("@/db");
   const [article] = await db.select().from(articles).where(eq(articles.id, articleId));
   if (!article) return { ok: false, message: "Article introuvable." };
 
