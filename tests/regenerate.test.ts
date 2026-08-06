@@ -54,6 +54,7 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
   // references it), so the resolved cluster is always a different, real one.
   let staleClusterId: string | null = null;
   let createdClusterId: string | null = null; // the cluster the body-regen resolves to (match OR freshly created)
+  let selfExcludeClusterId: string | null = null; // the cluster the self-exclusion test (below) resolves to
   beforeAll(async () => {
     for (const n of ["RegenTest Économie", "RegenTest Sport"]) {
       const [c] = await db.insert(wpCategories).values({ name: n, slug: n.toLowerCase().replace(/\W+/g, "-") }).returning({ id: wpCategories.id });
@@ -75,7 +76,7 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
     // Drop each cluster this test may own (the seeded stale prior, and the body-regen's resolved
     // one) ONLY if nothing else references it now that our article is gone — a shared/pre-existing
     // (matched) cluster keeps its other articles and is left intact. clusters aren't cascade-deleted.
-    for (const cid of [staleClusterId, createdClusterId]) {
+    for (const cid of [staleClusterId, createdClusterId, selfExcludeClusterId]) {
       if (!cid) continue;
       const stillUsed = await db.select({ id: articles.id }).from(articles).where(eq(articles.clusterId, cid)).limit(1);
       if (stillUsed.length === 0) await db.delete(clusters).where(eq(clusters.id, cid));
@@ -137,5 +138,34 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
     expect(emb).toBeDefined();                            // embedding written
     const tagRows = await db.select().from(articleTags).where(eq(articleTags.articleId, articleId));
     expect(tagRows.map((t) => t.tagName).sort()).toEqual(["bourse", "brvm"]); // tags replaced
+  });
+
+  it("decideCluster excludes the article's OWN embedding — a body regen must not self-match its just-written vector", async () => {
+    // The previous test left this article's OWN embedding in articleEmbeddings (title="Nouveau
+    // titre", body=the sanitized "Nouveau corps." html) and clusterId=createdClusterId. mockEmbed()
+    // (no JINA_API_KEY in the test env — see test-setup.ts) is a deterministic hash of the exact
+    // text, so re-regenerating the body with the SAME unchanged title+body recomputes the EXACT
+    // same vector that's already stored under this article's own id. Without excludeArticleId,
+    // decideCluster's similarity query would trivially find that row — cosine score ~1, i.e.
+    // spuriously ~1 from nothing but self-similarity — and "confirm" the article's current cluster
+    // for the wrong reason (masking a real clustering bug behind a no-op-looking result). With the
+    // article excluded, no OTHER recent embedding is anywhere near close enough (the only other
+    // seeded cluster, staleClusterId, belongs to a DIFFERENT, unrelated article that was never given
+    // an embedding row), so this must resolve to a genuinely FRESH cluster, not the one it already had.
+    const before = await priorOf();
+    const priorClusterId = before.clusterId;
+    expect(priorClusterId).toBe(createdClusterId); // sanity: continuing from the previous test's state
+    await applyRegeneration({
+      articleId, prior: { title: before.title, bodyHtml: before.bodyHtml, featuredImageUrl: before.featuredImageUrl, confidenceFlags: before.confidenceFlags },
+      draft: { ...draft, title: before.title, bodyHtml: before.bodyHtml, category: "RegenTest Économie" },
+      fields: { title: false, excerpt: false, body: true, category: false, tags: false, image: false },
+      sourceCount: 1, categoryNames: ["RegenTest Économie", "RegenTest Sport"], actorId: null,
+    });
+    const after = await priorOf();
+    expect(after.clusterId).not.toBeNull();
+    // The bug this guards against: a spurious self-match would resolve to the SAME cluster id
+    // (score ~1 against its own now-identical embedding) instead of a freshly created one.
+    expect(after.clusterId).not.toBe(priorClusterId);
+    selfExcludeClusterId = after.clusterId;
   });
 });

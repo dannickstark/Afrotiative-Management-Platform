@@ -123,11 +123,13 @@ export async function openRun(opts: { triggeredBy: RunTrigger; feedsTotal?: numb
  * every future run via the pipeline_runs_one_running index).
  *
  * Phase 1 (reading_feeds): reads EVERY target feed — even past the item cap — so feed-health
- * signals (feedsRead) and totalItems are exact. Each item is first filtered by the recency cutoff
- * (isWithinRecency(item.isoDate, cutoff)): items published before the cutoff are skipped (counted
- * in tooOld) and never recorded; undated/unparseable-date items are kept (undated-include policy).
- * Surviving items become NEW candidates (dedup'd by isSeen() and an intra-batch hash set),
- * collected across ALL feeds WITHOUT an in-loop cap. Only once every feed has been read is the
+ * signals (feedsRead) and totalItems are exact. Each item is first dedup'd (an intra-batch hash
+ * set, then isSeen() against prior runs); only once an item is confirmed NEW is it filtered by the
+ * recency cutoff (isWithinRecency(item.isoDate, cutoff)) — this ordering means tooOld counts only
+ * genuinely-new items skipped for age, never an already-processed item that also happens to be old.
+ * Items published before the cutoff are skipped (counted in tooOld) and never recorded;
+ * undated/unparseable-date items are kept (undated-include policy). Surviving items become NEW
+ * candidates, collected across ALL feeds WITHOUT an in-loop cap. Only once every feed has been read is the
  * item cap (maxItemsPerRun) applied, by narrowByRecency(candidates, ..., maxItems): it keeps the
  * most-recent maxItems candidates (undated ranked as oldest) and counts the rest in overCap. This
  * narrowing happens strictly BEFORE grouping/embedding (below), so embedding — and everything
@@ -233,7 +235,7 @@ export async function executeRun(
       newItems = prior?.newItems ?? 0;
       await setProgress(runId, { phase: "processing_items" }); // deliberately no totalItems/processedItems here
     } else {
-      const paramFeedIds = params?.feedIds ?? opts.feedIds;
+      const paramFeedIds = params != null ? params.feedIds : opts.feedIds;
       const targetFeeds = paramFeedIds != null
         ? (paramFeedIds.length > 0 ? await db.select().from(feeds).where(inArray(feeds.id, paramFeedIds)) : [])
         : await db.select().from(feeds).where(eq(feeds.active, true));
@@ -271,9 +273,9 @@ export async function executeRun(
           continue;
         }
         for (const item of items) {
-          if (!isWithinRecency(item.isoDate, cutoff)) { tooOld++; continue; }  // published before cutoff
           if (seenHashes.has(item.contentHash)) continue;                       // duplicate within this run
           if (await isSeen(feed.id, item)) continue;                            // already processed by a prior run
+          if (!isWithinRecency(item.isoDate, cutoff)) { tooOld++; continue; }  // published before cutoff
           seenHashes.add(item.contentHash);
           candidates.push({ item, feedId: feed.id, feedName: feed.name });      // NO cap here — narrowed below
         }

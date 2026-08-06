@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "distributions_one_wordpress_per_article" ON "distributions" USING btree ("article_id") WHERE "distributions"."channel" = 'wordpress';

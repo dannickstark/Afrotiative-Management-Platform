@@ -1,5 +1,5 @@
 import {
-  pgTable, pgEnum, text, boolean, timestamp, integer, real, jsonb, uuid, vector, index, uniqueIndex,
+  pgTable, pgEnum, text, boolean, timestamp, integer, real, jsonb, uuid, vector, index, uniqueIndex, check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { RawItem } from "@/lib/rss/parse-feed";
@@ -181,7 +181,12 @@ export const articles = pgTable("articles", {
   publishedAt: timestamp("published_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-}, (t) => [index("articles_status_idx").on(t.status)]);
+}, (t) => [
+  index("articles_status_idx").on(t.status),
+  // Published articles must record when they were published; non-published rows
+  // (draft/pending/approved/rejected/...) legitimately keep published_at NULL.
+  check("articles_published_has_date", sql`${t.status} <> 'published' OR ${t.publishedAt} IS NOT NULL`),
+]);
 
 export const articleSources = pgTable("article_sources", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -340,4 +345,10 @@ export const distributions = pgTable("distributions", {
   status: distributionStatus("status").notNull().default("stubbed"),
   externalId: text("external_id"),
   at: timestamp("at").notNull().defaultNow(),
-});
+}, (t) => [
+  // At most one 'wordpress' distribution row per article (upsertDistribution's invariant,
+  // lib/wp/publish.ts): guards against a theoretical race-created duplicate that would double a
+  // row in the /published list. Partial (WHERE channel = 'wordpress') so other channels are
+  // unconstrained — modeled on pipeline_runs_one_running above.
+  uniqueIndex("distributions_one_wordpress_per_article").on(t.articleId).where(sql`${t.channel} = 'wordpress'`),
+]);

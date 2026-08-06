@@ -44,7 +44,7 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
 
   async function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (next && feeds.length === 0) {
+    if (next) {
       setLoading(true);
       try {
         const opts = await getRunConfigOptions();
