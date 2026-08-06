@@ -36,6 +36,23 @@ export async function getRunDetailAction(runId: string): Promise<RunDetail | nul
   return getRunDetail(runId);
 }
 
+/** Feeds + defaults for the "configure run" dialog (pipeline:configure). */
+export async function getRunConfigOptions(): Promise<{
+  feeds: { id: string; name: string }[];
+  defaults: { defaultMaxItemAgeHours: number | null; maxItemsPerRun: number };
+}> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "configure");
+  const { db, feeds } = await import("@/db");
+  const { eq, asc } = await import("drizzle-orm");
+  const { getPipelineSettings } = await import("@/lib/queries/settings");
+  const [feedRows, settings] = await Promise.all([
+    db.select({ id: feeds.id, name: feeds.name }).from(feeds).where(eq(feeds.active, true)).orderBy(asc(feeds.name)),
+    getPipelineSettings(),
+  ]);
+  return { feeds: feedRows, defaults: { defaultMaxItemAgeHours: settings.defaultMaxItemAgeHours, maxItemsPerRun: settings.maxItemsPerRun } };
+}
+
 /**
  * Non-blocking trigger: opens the run (holds the slot, gives us runId synchronously), then kicks
  * executeRun DETACHED and returns immediately. The /runs live panel polls getActiveRun to watch it.
