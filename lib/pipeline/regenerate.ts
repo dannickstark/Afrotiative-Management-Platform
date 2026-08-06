@@ -1,6 +1,6 @@
 import type { ArticleDraft } from "@/lib/ai/schema";
 import type { RegenerateFieldsInput } from "@/lib/validation";
-import { db, articles, articleTags, articleEmbeddings, articleRevisions } from "@/db";
+import { db, articles, articleTags, articleEmbeddings, articleRevisions, clusters } from "@/db";
 import { eq } from "drizzle-orm";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { embed } from "@/lib/embeddings";
@@ -65,13 +65,18 @@ export async function applyRegeneration(input: {
   const categoryId = sel.categoryName !== null ? await resolveCategoryId(sel.categoryName, categoryNames) : undefined;
   const sanitizedBody = sel.bodyHtml !== null ? sanitizeArticleHtml(sel.bodyHtml) : null;
 
-  // Re-derive embedding/cluster/score ONLY when the body changed (see plan constraint).
-  let vector: number[] | null = null, clusterId: string | undefined, score: number | undefined;
+  // Re-derive embedding/cluster/score ONLY when the body changed (see plan constraint). The
+  // effective new title (regenerated iff title is checked, else the prior one) is what we embed
+  // with AND what labels a freshly-created cluster below. decideCluster is a read-only similarity
+  // query so it runs here, outside the tx; but a no-match must CREATE a cluster row, which has to
+  // happen inside the tx — so keep the raw decision and resolve it to a concrete id in the tx.
+  const embedTitle = fields.title ? draft.title : prior.title;
+  let vector: number[] | null = null;
+  let cluster: Awaited<ReturnType<typeof decideCluster>> | null = null;
+  let score: number | undefined;
   if (sel.bodyChanged && sanitizedBody !== null) {
-    const embedTitle = fields.title ? draft.title : prior.title;
     vector = (await embed(`${embedTitle}\n${sanitizedBody}`)).vector;
-    const cluster = await decideCluster(vector);
-    clusterId = cluster.clusterId ?? undefined;
+    cluster = await decideCluster(vector);
     score = computeArticleScore({
       sourceCount,
       bestScore: cluster.bestScore,
@@ -90,10 +95,20 @@ export async function applyRegeneration(input: {
       detail: `Champs : ${fieldList}.\n— Titre précédent : ${prior.title}\n— Corps précédent :\n${prior.bodyHtml}`,
     });
 
+    // Resolve the cluster to a REAL id when the body changed: attach to decideCluster's nearest
+    // match, or — mirroring persistArticle (stages.ts) — create a fresh cluster row when it found
+    // no match, so a regenerated body never keeps a STALE prior clusterId while its embedding/score
+    // reflect the new content.
+    let clusterId: string | undefined;
+    if (cluster !== null) {
+      clusterId = cluster.clusterId
+        ?? (await tx.insert(clusters).values({ label: embedTitle.slice(0, 80) }).returning({ id: clusters.id }))[0].id;
+    }
+
     await tx.update(articles).set({
       ...sel.columns,
       ...(sanitizedBody !== null ? { bodyHtml: sanitizedBody } : {}),
-      ...(categoryId !== undefined ? { categoryId } : {}),
+      ...(categoryId != null ? { categoryId } : {}), // != null: a checked-but-unresolved category leaves the prior one, never clears it
       ...(clusterId !== undefined ? { clusterId } : {}),
       ...(score !== undefined ? { score } : {}),
       status: "pending", confidenceFlags: draft.confidence, aiAuthor: true, updatedAt: new Date(),

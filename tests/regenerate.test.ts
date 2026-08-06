@@ -48,14 +48,23 @@ describe("selectRegenerationColumns", () => {
 describe("applyRegeneration (real DB, synthetic draft)", () => {
   const catIds: string[] = [];
   let articleId = "";
+  // Seed a NON-null "stale" prior cluster so the body-regen test can prove finding 2 deterministically
+  // (regen must move OFF this id), not just "non-null" — which a decideCluster match would satisfy even
+  // with the bug present. decideCluster never returns this id (no OTHER article + no embedding row
+  // references it), so the resolved cluster is always a different, real one.
+  let staleClusterId: string | null = null;
+  let createdClusterId: string | null = null; // the cluster the body-regen resolves to (match OR freshly created)
   beforeAll(async () => {
     for (const n of ["RegenTest Économie", "RegenTest Sport"]) {
       const [c] = await db.insert(wpCategories).values({ name: n, slug: n.toLowerCase().replace(/\W+/g, "-") }).returning({ id: wpCategories.id });
       catIds.push(c.id);
     }
+    const [stale] = await db.insert(clusters).values({ label: "RegenTest ancien cluster" }).returning({ id: clusters.id });
+    staleClusterId = stale.id;
     const [a] = await db.insert(articles).values({
       title: "Ancien titre", bodyHtml: "<p>Ancien corps.</p>", excerpt: "Ancien extrait",
       status: "approved", categoryId: catIds[1], aiAuthor: true, featuredImageUrl: "https://old/i.jpg", imageCredit: "Vieux",
+      clusterId: staleClusterId,
     }).returning({ id: articles.id });
     articleId = a.id;
     await db.insert(articleSources).values({ articleId, mediaName: "Ecofin", url: "https://ex/1" });
@@ -63,6 +72,14 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
   });
   afterAll(async () => {
     await db.delete(articles).where(eq(articles.id, articleId)); // cascades sources/tags/embeddings/revisions
+    // Drop each cluster this test may own (the seeded stale prior, and the body-regen's resolved
+    // one) ONLY if nothing else references it now that our article is gone — a shared/pre-existing
+    // (matched) cluster keeps its other articles and is left intact. clusters aren't cascade-deleted.
+    for (const cid of [staleClusterId, createdClusterId]) {
+      if (!cid) continue;
+      const stillUsed = await db.select({ id: articles.id }).from(articles).where(eq(articles.clusterId, cid)).limit(1);
+      if (stillUsed.length === 0) await db.delete(clusters).where(eq(clusters.id, cid));
+    }
     if (catIds.length) await db.delete(wpCategories).where(inArray(wpCategories.id, catIds));
   });
 
@@ -105,6 +122,13 @@ describe("applyRegeneration (real DB, synthetic draft)", () => {
     expect(after.bodyHtml).toContain("Nouveau corps");    // sanitized new body
     expect(after.categoryId).toBe(catIds[0]);             // "RegenTest Économie" resolved
     expect(after.score).not.toBeNull();                   // re-scored
+    // finding 2: a body regen must resolve to a REAL cluster (match OR freshly created) and MOVE OFF
+    // the stale prior clusterId — never keep it while embedding/score reflect the new content.
+    expect(after.clusterId).not.toBeNull();
+    expect(after.clusterId).not.toBe(staleClusterId);     // moved off the stale prior cluster
+    createdClusterId = after.clusterId;
+    const [clusterRow] = await db.select().from(clusters).where(eq(clusters.id, after.clusterId!));
+    expect(clusterRow).toBeDefined();                     // valid cluster row
     const [emb] = await db.select().from(articleEmbeddings).where(eq(articleEmbeddings.articleId, articleId));
     expect(emb).toBeDefined();                            // embedding written
     const tagRows = await db.select().from(articleTags).where(eq(articleTags.articleId, articleId));
