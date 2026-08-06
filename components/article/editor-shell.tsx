@@ -1,11 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { RichEditor } from "./rich-editor";
 import { ActionBar } from "./action-bar";
+import { ImproveDialog } from "./improve-dialog";
 import { LockBanner } from "./lock-banner";
 import { SidePanel } from "./side-panel";
 import { PublishControls } from "./publish-controls";
@@ -88,22 +86,7 @@ export function EditorShell({
               aria-label="Titre de l'article"
               className="h-10 flex-1 font-heading text-lg font-semibold"
             />
-            <Tooltip>
-              {/* Wrap the disabled button in a focusable span: Button's `disabled:`
-                  styles set `pointer-events-none`, which would otherwise stop the
-                  span-less trigger from ever receiving the hover/focus that opens
-                  the tooltip. */}
-              <TooltipTrigger
-                render={
-                  <span tabIndex={0} className="inline-flex shrink-0">
-                    <Button type="button" variant="outline" size="sm" disabled>
-                      <Sparkles className="size-4" /> Améliorer avec IA
-                    </Button>
-                  </span>
-                }
-              />
-              <TooltipContent>Bientôt (SP3)</TooltipContent>
-            </Tooltip>
+            <ImproveDialog articleId={articleId} disabled={readOnly} />
           </div>
 
           <RichEditor value={bodyHtml} onChange={setBodyHtml} editable={!readOnly} />

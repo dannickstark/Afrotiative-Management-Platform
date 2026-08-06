@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RoleGate } from "@/components/role-gate";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { saveDraft, rejectArticle, regenerate, approveAndPublish, schedule } from "@/lib/actions/article-actions";
+import { RegenerateDialog } from "@/components/article/regenerate-dialog";
+import { saveDraft, rejectArticle, approveAndPublish, schedule } from "@/lib/actions/article-actions";
 
 // Persistent action bar for the article editor. "Enregistrer" is available to
 // any role that can reach this screen (journalist/editor/admin all have
@@ -64,21 +65,6 @@ export function ActionBar({
         toast.success(`« ${displayTitle} » rejeté.`);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Échec du rejet.");
-      }
-    });
-  }
-
-  function handleRegenerate() {
-    startTransition(async () => {
-      try {
-        // TEMPORARY shim: regenerate() now takes a per-field selection (Task 4). This call-site
-        // is rewired to a field-picker dialog in Task 5 — until then, request every field so the
-        // button keeps its prior "regenerate everything" behavior.
-        const res = await regenerate(articleId, { title: true, body: true, excerpt: true, category: true, tags: true, image: true });
-        if (res.ok) toast.success(res.message);
-        else toast.error(res.message);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Échec du renvoi à l'IA.");
       }
     });
   }
@@ -143,9 +129,7 @@ export function ActionBar({
           onConfirm={handleReject}
         />
 
-        <Button type="button" variant="ghost" disabled={disabled} onClick={handleRegenerate}>
-          Renvoyer à l'IA
-        </Button>
+        <RegenerateDialog articleId={articleId} disabled={disabled} />
 
         <Popover open={scheduleOpen} onOpenChange={setScheduleOpen}>
           <PopoverTrigger
