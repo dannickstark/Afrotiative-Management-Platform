@@ -135,3 +135,14 @@ export const runParamsSchema = z.object({
   { message: "La date « depuis » ne peut pas être dans le futur.", path: ["recency"] },
 );
 export type RunParamsInput = z.infer<typeof runParamsSchema>;
+
+export const regenerateFieldsSchema = z.object({
+  title: z.boolean(), body: z.boolean(), excerpt: z.boolean(),
+  category: z.boolean(), tags: z.boolean(), image: z.boolean(),
+}).refine((f) => Object.values(f).some(Boolean), { message: "Sélectionnez au moins un champ à régénérer." });
+export type RegenerateFieldsInput = z.infer<typeof regenerateFieldsSchema>;
+
+export const improveInputSchema = z.object({
+  instruction: z.string().max(500, "Instruction trop longue (max 500 caractères).").optional(),
+});
+export type ImproveActionInput = z.infer<typeof improveInputSchema>;
