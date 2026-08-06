@@ -16,6 +16,9 @@ export type PublishedPage = { rows: PublishedRow[]; total: number; page: number;
 
 export const PUBLISHED_PAGE_SIZE = 25;
 
+// LIKE/ILIKE metacharacters escaped so a typed % or _ matches literally (default ESCAPE is backslash).
+function escapeLike(s: string): string { return s.replace(/[\\%_]/g, (c) => `\\${c}`); }
+
 // Pure: map raw URL search params → typed filters (no DB/DOM). Invalid dates / unknown author /
 // blank strings are dropped; page clamps to >= 1; pageSize is fixed. Mirrors filterRuns/resolveRunParams.
 export function parsePublishedSearchParams(
@@ -43,7 +46,7 @@ export function parsePublishedSearchParams(
 
 export async function getPublishedArticles(f: PublishedFilters): Promise<PublishedPage> {
   const conds = [eq(articles.status, "published")];
-  if (f.search) conds.push(ilike(articles.title, `%${f.search}%`));
+  if (f.search) conds.push(ilike(articles.title, `%${escapeLike(f.search)}%`));
   if (f.categoryId) conds.push(eq(articles.categoryId, f.categoryId));
   if (f.from) conds.push(gte(articles.publishedAt, f.from));
   if (f.to) {

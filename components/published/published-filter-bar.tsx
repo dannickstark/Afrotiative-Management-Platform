@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -21,9 +21,14 @@ export function PublishedFilterBar({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // Kept in sync every render so a delayed push (e.g. the debounced search below) merges onto
+  // the latest URL instead of a stale render-time snapshot of searchParams.
+  const spRef = useRef(searchParams);
+  spRef.current = searchParams;
+
   // Any filter change resets pagination to page 1.
   function setParams(patch: Record<string, string | undefined>) {
-    const p = new URLSearchParams(searchParams.toString());
+    const p = new URLSearchParams(spRef.current.toString());
     for (const [k, v] of Object.entries(patch)) { if (v) p.set(k, v); else p.delete(k); }
     p.delete("page");
     router.push(`${pathname}?${p.toString()}`);
@@ -38,12 +43,21 @@ export function PublishedFilterBar({
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
+  // Resync on external URL change (Back/Forward, or another filter's push racing ahead of the
+  // debounce timer above) so the input doesn't keep showing a stale typed value.
+  useEffect(() => { setQ(filters.search ?? ""); }, [filters.search]);
 
   return (
     <div className="flex flex-wrap items-end gap-2">
       <div className="relative w-full max-w-xs">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder="Rechercher un titre…" value={q} onChange={(e) => setQ(e.target.value)} className="pl-8" />
+        <Input
+          placeholder="Rechercher un titre…"
+          aria-label="Rechercher un titre"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="pl-8"
+        />
       </div>
 
       <Select value={filters.categoryId ?? "all"} onValueChange={(v) => setParams({ cat: v && v !== "all" ? v : undefined })}>
