@@ -385,7 +385,7 @@ function humanError(step: string, e: Error): string {
 // Resolves a WordPress category name to its mirrored wp_categories.id. Returns null when the
 // name isn't one of the allowed categoryNames (defensive — the generateArticle schema already
 // constrains draft.category to this list) or has no matching row in wp_categories.
-async function resolveCategoryId(categoryName: string, categoryNames: string[]): Promise<string | null> {
+export async function resolveCategoryId(categoryName: string, categoryNames: string[]): Promise<string | null> {
   if (!categoryNames.includes(categoryName)) return null;
   const [row] = await db.select({ id: wpCategories.id }).from(wpCategories)
     .where(eq(wpCategories.name, categoryName)).limit(1);
@@ -395,7 +395,7 @@ async function resolveCategoryId(categoryName: string, categoryNames: string[]):
 // Inserts one article_tags row per generated tag, flagging isNew=true for any tag name not
 // already present in the wp_tags mirror (case-insensitive, since the LLM's casing may differ
 // from the WordPress-stored term name).
-async function insertTags(tx: Tx, articleId: string, tags: string[]): Promise<void> {
+export async function insertTags(tx: Tx, articleId: string, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   const existing = await tx.select({ name: wpTags.name }).from(wpTags);
   const existingLower = new Set(existing.map((t) => t.name.toLowerCase()));

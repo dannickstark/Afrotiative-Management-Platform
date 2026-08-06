@@ -4,10 +4,11 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { saveDraftSchema, type SaveDraftInput } from "@/lib/validation";
+import { saveDraftSchema, type SaveDraftInput, regenerateFieldsSchema, improveInputSchema, type RegenerateFieldsInput, type ImproveActionInput } from "@/lib/validation";
 import { isLockActive } from "@/lib/lock";
 import { publishArticle } from "@/lib/wp/publish";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
+import type { ArticleDraft } from "@/lib/ai/schema";
 import { z } from "zod";
 
 export async function acquireLock(id: string) {
@@ -56,14 +57,85 @@ export async function rejectArticle(input: { id: string; reason: string }) {
   revalidatePath(`/article/${id}`); revalidatePath("/queue");
 }
 
-export async function regenerate(id: string) {
+// Real regeneration: re-extract every existing source, regenerate a full draft, and apply only
+// the checked fields. RBAC runs FIRST (cheap, statically-imported) — every subsequent import is
+// dynamic so the jsdom-heavy extraction/generation graph never enters this "use server" module's
+// static analysis (mirrors reprocessRawItem in lib/actions/pipeline-actions.ts).
+export async function regenerate(articleId: string, fields: RegenerateFieldsInput): Promise<{ ok: boolean; message: string }> {
   const user = await requireUser();
   requirePermission(user.role, "article", "regenerate");
-  // STUB (SP3): mark for regeneration; no AI call yet.
-  await db.update(articles).set({ status: "pending", updatedAt: new Date() }).where(eq(articles.id, id));
-  await db.insert(articleRevisions).values({ articleId: id, actorId: user.id, action: "renvoyé à l'IA (simulé)" });
-  revalidatePath(`/article/${id}`);
-  return { stub: true, message: "Régénération simulée — le pipeline IA sera branché en SP3." };
+  const parsed = regenerateFieldsSchema.safeParse(fields);
+  if (!parsed.success) return { ok: false, message: "Sélectionnez au moins un champ à régénérer." };
+
+  const { db, articles, articleSources, wpCategories } = await import("@/db");
+  const { eq } = await import("drizzle-orm");
+  const [article] = await db.select().from(articles).where(eq(articles.id, articleId));
+  if (!article) return { ok: false, message: "Article introuvable." };
+  const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
+  if (sources.length === 0) return { ok: false, message: "Aucune source à régénérer." };
+
+  const { extractExternal } = await import("@/lib/extract");
+  const extracted: { mediaName: string; url: string; text: string; images?: string[] }[] = [];
+  const candidateImages: string[] = [];
+  for (const s of sources) {
+    try {
+      const r = await extractExternal(s.url);
+      if (r.text.trim().length > 0) { extracted.push({ mediaName: s.mediaName, url: s.url, text: r.text }); candidateImages.push(...r.images); }
+    } catch { /* best-effort: skip a dead source */ }
+  }
+  if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré)." };
+
+  const { generateArticle } = await import("@/lib/ai/generate-article");
+  const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
+  const { draft, via } = await generateArticle({ sources: extracted, candidateImages, categories: categoryNames });
+  if (via === "mock") return { ok: false, message: "Aucun fournisseur IA configuré — régénération impossible." };
+
+  const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
+  await applyRegeneration({
+    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
+    draft, fields: parsed.data, sourceCount: extracted.length, categoryNames, actorId: user.id,
+  });
+
+  revalidatePath(`/article/${articleId}`); revalidatePath("/queue");
+  return { ok: true, message: "Article régénéré — déposé en revue." };
+}
+
+// AI-assisted body rewrite driven by an optional editor instruction. Reuses applyRegeneration
+// with a body-only "draft" (fields:{body:true, ...false}) so the same selective-write, revision,
+// re-embed/re-score machinery applies — only tagged with a distinct revisionAction for
+// traceability in the article history.
+export async function improveWithAi(articleId: string, input?: ImproveActionInput): Promise<{ ok: boolean; message: string }> {
+  const user = await requireUser();
+  requirePermission(user.role, "article", "regenerate");
+  const instruction = improveInputSchema.safeParse(input ?? {});
+  if (!instruction.success) return { ok: false, message: "Instruction invalide." };
+
+  const { db, articles, articleSources } = await import("@/db");
+  const { eq } = await import("drizzle-orm");
+  const [article] = await db.select().from(articles).where(eq(articles.id, articleId));
+  if (!article) return { ok: false, message: "Article introuvable." };
+
+  const { improveArticleBody } = await import("@/lib/ai/improve-article");
+  const { bodyHtml, via } = await improveArticleBody({ title: article.title, bodyHtml: article.bodyHtml, instruction: instruction.data.instruction });
+  if (via === "mock") return { ok: false, message: "Aucun fournisseur IA configuré — amélioration impossible." };
+
+  // Reuse applyRegeneration with a body-only "draft": only bodyHtml is applied (fields.body=true).
+  const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
+  const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
+  await applyRegeneration({
+    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
+    draft: {
+      title: article.title, bodyHtml, excerpt: article.excerpt ?? "", category: "", tags: [],
+      featuredImageUrl: article.featuredImageUrl, imageCredit: article.imageCredit, imageSourceUrl: article.imageSourceUrl,
+      confidence: (article.confidenceFlags ?? { categoryUncertain: false, imageMissing: false, clusterUncertain: false }) as ArticleDraft["confidence"],
+    },
+    fields: { title: false, body: true, excerpt: false, category: false, tags: false, image: false },
+    sourceCount: sources.length, categoryNames: [], actorId: user.id,
+    revisionAction: "amélioré par IA",
+  });
+
+  revalidatePath(`/article/${articleId}`); revalidatePath("/queue");
+  return { ok: true, message: "Corps amélioré — déposé en revue." };
 }
 
 export async function approveAndPublish(id: string) {
