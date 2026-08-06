@@ -121,7 +121,7 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
               value={form.perOperationTimeoutMs}
               onChange={(e) => setForm((f) => ({ ...f, perOperationTimeoutMs: e.target.value }))}
             />
-            <p className="text-xs text-muted-foreground">Appliqué à partir du SP5.</p>
+            <p className="text-xs text-muted-foreground">Chaque opération du pipeline est interrompue si elle dépasse ce délai (minimum 5 s).</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="cluster-threshold">Seuil de similarité de cluster</Label>
@@ -130,7 +130,7 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
               value={form.clusterThreshold}
               onChange={(e) => setForm((f) => ({ ...f, clusterThreshold: e.target.value }))}
             />
-            <p className="text-xs text-muted-foreground">Entre 0 et 1. Appliqué à partir du SP4.</p>
+            <p className="text-xs text-muted-foreground">Entre 0 et 1. Plus la valeur est élevée, plus le regroupement des sujets similaires est strict.</p>
           </div>
         </CardContent>
       </Card>
@@ -174,7 +174,7 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
       <Card>
         <CardHeader>
           <CardTitle>Recherche web</CardTitle>
-          <CardDescription>Sera activée à partir du SP4.</CardDescription>
+          <CardDescription>Enrichit les articles avec des sources web externes corroborantes.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
@@ -190,7 +190,7 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
       <Card>
         <CardHeader>
           <CardTitle>Planification</CardTitle>
-          <CardDescription>Sera activée à partir du SP2.</CardDescription>
+          <CardDescription>Déclenche automatiquement le pipeline selon une planification cron.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-1.5">
