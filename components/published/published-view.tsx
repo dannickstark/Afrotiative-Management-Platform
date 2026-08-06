@@ -19,7 +19,7 @@ export function PublishedView({
       </div>
       <PublishedFilterBar filters={filters} categories={categories} />
       <PublishedTable rows={page.rows} filtered={filtered} />
-      <PublishedPagination page={page.page} pageCount={page.pageCount} />
+      {page.pageCount > 1 && <PublishedPagination page={page.page} pageCount={page.pageCount} />}
     </div>
   );
 }

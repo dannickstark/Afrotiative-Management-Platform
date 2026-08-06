@@ -118,7 +118,7 @@ return <PublishedView page={page} filters={filters} categories={categories} />
 ## 7. UI — `components/published/`
 
 - **`published-filters.tsx`** (`"use client"`) : recherche titre (débouncée), `Select` catégorie, deux `<input type="date">` (from/to), `Select` auteur (`Tous` / `IA` / `Humain`). Chaque changement `router.push` les search params mis à jour et **remet `page=1`**. Valeurs contrôlées depuis les props (rendues serveur) → partageables. Aucune primitive UI nouvelle (réutilise `Select`/`Input`/`Label` existants).
-- **`published-table.tsx`** : lignes = vignette (featuredImageUrl) · titre (lien `/article/[id]`) · catégorie · date de publication (`formatDate`) · badge auteur (IA/Humain) · lien externe **« Voir sur WordPress »** (`row.wpUrl`, `target="_blank" rel="noopener noreferrer"`, masqué si `null`). États vides : « Aucun article publié. » (aucun filtre actif) vs « Aucun résultat pour ces filtres. » (filtres actifs).
+- **`published-table.tsx`** : lignes = vignette (featuredImageUrl) · titre (lien `/article/[id]`) · catégorie · date de publication (`formatDate`) · badge auteur (IA/Humain) · lien externe **« Voir sur WordPress »** (`row.wpUrl`, `target="_blank" rel="noopener noreferrer"`, remplacé par un tiret cadratin `—` si `null`). États vides : « Aucun article publié. » (aucun filtre actif) vs « Aucun résultat pour ces filtres. » (filtres actifs).
 - **`published-pagination.tsx`** (`"use client"`) : `Précédent` / `Suivant` (désactivés aux bornes) + « Page X / N » ; met à jour le param `page`. `PublishedView` compose filtres + tableau + pagination.
 
 ---
