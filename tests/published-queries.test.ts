@@ -30,9 +30,12 @@ describe("getPublishedArticles", () => {
     recentId = await mkArticle({ title: "PubTest BRVM record", catIdx: 0, ai: true, publishedAt: new Date("2026-08-06T10:00:00Z"), wpId: "501" });
     await mkArticle({ title: "PubTest Ancienne dépêche", catIdx: 1, ai: false, publishedAt: new Date("2026-08-01T10:00:00Z"), wpId: "502" });
     await mkArticle({ title: "PubTest Milieu", catIdx: 0, ai: true, publishedAt: new Date("2026-08-04T10:00:00Z"), wpId: "503" });
-    // Oldest of the batch and outside the 08-02..08-04 range used below, so it doesn't perturb
-    // the ordering/range assertions; only the ILIKE-escaping assertion cares about this one.
-    await mkArticle({ title: "PubTest 100% marché", catIdx: 0, ai: true, publishedAt: new Date("2026-07-25T10:00:00Z"), wpId: "504" });
+    // ILIKE-escaping pair: a literal-"%" title and a DECOY that matches ONLY if "%" is treated as a
+    // wildcard (the "%" here sits between literal chars, so it can't collapse into the wrapping "%").
+    // Dated oldest + outside the 08-02..08-04 range so they don't perturb the range test; both
+    // catIdx 0 / ai:true so the category/author filters below are unaffected.
+    await mkArticle({ title: "PubTest solde 50%off", catIdx: 0, ai: true, publishedAt: new Date("2026-07-21T10:00:00Z"), wpId: "504" });
+    await mkArticle({ title: "PubTest solde 50XYZoff", catIdx: 0, ai: true, publishedAt: new Date("2026-07-20T10:00:00Z"), wpId: "505" });
     await mkArticle({ title: "PubTest Brouillon", catIdx: 0, ai: true, publishedAt: null, status: "approved" });
     await mkArticle({ title: "PubTest Dépubliée", catIdx: 0, ai: true, publishedAt: null, status: "approved", wpId: "599" });
   });
@@ -49,7 +52,8 @@ describe("getPublishedArticles", () => {
     const p = await getPublishedArticles({ ...base });
     const rows = mine(p);
     expect(rows.map((r) => r.title)).toEqual([
-      "PubTest BRVM record", "PubTest Milieu", "PubTest Ancienne dépêche", "PubTest 100% marché",
+      "PubTest BRVM record", "PubTest Milieu", "PubTest Ancienne dépêche",
+      "PubTest solde 50%off", "PubTest solde 50XYZoff",
     ]);
     expect(rows.find((r) => r.id === recentId)!.wpUrl).toBe("https://wp.example.com/?p=501");
     // excluded: the approved-never-published and the unpublished one
@@ -59,8 +63,10 @@ describe("getPublishedArticles", () => {
     expect(mine(await getPublishedArticles({ ...base, categoryId: catIds[1] })).map((r) => r.title)).toEqual(["PubTest Ancienne dépêche"]);
     expect(mine(await getPublishedArticles({ ...base, author: "human" })).map((r) => r.title)).toEqual(["PubTest Ancienne dépêche"]);
     expect(mine(await getPublishedArticles({ ...base, search: "record" })).map((r) => r.title)).toEqual(["PubTest BRVM record"]);
-    // a literal "%" in the query must match literally, not act as a wildcard (ILIKE escaping)
-    expect(mine(await getPublishedArticles({ ...base, search: "100%" })).map((r) => r.title)).toEqual(["PubTest 100% marché"]);
+    // ILIKE escaping: a literal "%" in the query matches literally, NOT as a wildcard. Searching
+    // "50%off" must return ONLY the literal-"%" title, never the "50XYZoff" decoy (which WOULD match
+    // if "%" were an unescaped wildcard). This assertion fails if escapeLike is removed.
+    expect(mine(await getPublishedArticles({ ...base, search: "50%off" })).map((r) => r.title)).toEqual(["PubTest solde 50%off"]);
     // to = 2026-08-04 must INCLUDE an article published that day (end-of-day bound)
     const ranged = mine(await getPublishedArticles({ ...base, from: new Date("2026-08-02"), to: new Date("2026-08-04") }));
     expect(ranged.map((r) => r.title)).toEqual(["PubTest Milieu"]);
