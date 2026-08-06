@@ -1,6 +1,8 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { db, articles, articleSources, articleTags, articleRevisions, articleEmbeddings, wpCategories, clusters } from "@/db";
+import { eq, inArray, desc } from "drizzle-orm";
 import { regenerateFieldsSchema, improveInputSchema } from "@/lib/validation";
-import { selectRegenerationColumns } from "@/lib/pipeline/regenerate";
+import { selectRegenerationColumns, applyRegeneration } from "@/lib/pipeline/regenerate";
 import type { ArticleDraft } from "@/lib/ai/schema";
 
 const draft: ArticleDraft = {
@@ -40,5 +42,72 @@ describe("selectRegenerationColumns", () => {
     expect(s.bodyChanged).toBe(false);
     expect(s.categoryName).toBeNull();
     expect(s.tags).toBeNull();
+  });
+});
+
+describe("applyRegeneration (real DB, synthetic draft)", () => {
+  const catIds: string[] = [];
+  let articleId = "";
+  beforeAll(async () => {
+    for (const n of ["RegenTest Économie", "RegenTest Sport"]) {
+      const [c] = await db.insert(wpCategories).values({ name: n, slug: n.toLowerCase().replace(/\W+/g, "-") }).returning({ id: wpCategories.id });
+      catIds.push(c.id);
+    }
+    const [a] = await db.insert(articles).values({
+      title: "Ancien titre", bodyHtml: "<p>Ancien corps.</p>", excerpt: "Ancien extrait",
+      status: "approved", categoryId: catIds[1], aiAuthor: true, featuredImageUrl: "https://old/i.jpg", imageCredit: "Vieux",
+    }).returning({ id: articles.id });
+    articleId = a.id;
+    await db.insert(articleSources).values({ articleId, mediaName: "Ecofin", url: "https://ex/1" });
+    await db.insert(articleTags).values({ articleId, tagName: "ancien", isNew: false });
+  });
+  afterAll(async () => {
+    await db.delete(articles).where(eq(articles.id, articleId)); // cascades sources/tags/embeddings/revisions
+    if (catIds.length) await db.delete(wpCategories).where(inArray(wpCategories.id, catIds));
+  });
+
+  const priorOf = async () => (await db.select().from(articles).where(eq(articles.id, articleId)))[0];
+
+  it("overwrites ONLY the checked fields, snapshots prior title+body, sets pending", async () => {
+    const before = await priorOf();
+    await applyRegeneration({
+      articleId, prior: { title: before.title, bodyHtml: before.bodyHtml, featuredImageUrl: before.featuredImageUrl },
+      draft, fields: { title: true, excerpt: true, body: false, category: false, tags: false, image: false },
+      sourceCount: 1, categoryNames: ["RegenTest Économie", "RegenTest Sport"], actorId: null,
+    });
+    const after = await priorOf();
+    expect(after.title).toBe("Nouveau titre");           // regenerated
+    expect(after.excerpt).toBe("Nouvel extrait");        // regenerated
+    expect(after.bodyHtml).toBe("<p>Ancien corps.</p>"); // body NOT checked → unchanged
+    expect(after.categoryId).toBe(catIds[1]);            // category NOT checked → unchanged
+    expect(after.status).toBe("pending");
+    // snapshot revision carries the PRIOR title + body
+    const [rev] = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, articleId)).orderBy(desc(articleRevisions.at)).limit(1);
+    expect(rev.action).toBe("régénéré par IA");
+    expect(rev.detail).toContain("Ancien titre");
+    expect(rev.detail).toContain("Ancien corps");
+  });
+
+  it("re-embeds + re-scores when the body is regenerated", async () => {
+    // NOTE: resolveCategoryId (stages.ts, unmodified) matches by EXACT name against BOTH the
+    // categoryNames whitelist and wp_categories.name — draft.category ("Économie", shared with the
+    // pure-selector tests above) can't resolve against the "RegenTest ..." seeded rows, and the dev
+    // DB already has a real "Économie" row (from db/seed.ts) that a plain "Économie" seed name would
+    // collide with. So this test overrides just the category on a draft copy to match the seeded,
+    // collision-free "RegenTest Économie" name — every other field (body/tags/score) is unaffected.
+    const regenDraft = { ...draft, category: "RegenTest Économie" };
+    await applyRegeneration({
+      articleId, prior: { title: "Nouveau titre", bodyHtml: "<p>Ancien corps.</p>", featuredImageUrl: "https://old/i.jpg" },
+      draft: regenDraft, fields: { title: false, excerpt: false, body: true, category: true, tags: true, image: false },
+      sourceCount: 1, categoryNames: ["RegenTest Économie", "RegenTest Sport"], actorId: null,
+    });
+    const after = await priorOf();
+    expect(after.bodyHtml).toContain("Nouveau corps");    // sanitized new body
+    expect(after.categoryId).toBe(catIds[0]);             // "RegenTest Économie" resolved
+    expect(after.score).not.toBeNull();                   // re-scored
+    const [emb] = await db.select().from(articleEmbeddings).where(eq(articleEmbeddings.articleId, articleId));
+    expect(emb).toBeDefined();                            // embedding written
+    const tagRows = await db.select().from(articleTags).where(eq(articleTags.articleId, articleId));
+    expect(tagRows.map((t) => t.tagName).sort()).toEqual(["bourse", "brvm"]); // tags replaced
   });
 });
