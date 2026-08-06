@@ -46,6 +46,14 @@ describe("narrowByRecency", () => {
     expect(r.kept.map((x) => x.id)).toEqual(["a"]);
     expect(r.dropped.map((x) => x.id)).toEqual(["d1", "d2"]);
   });
+  it("keeps equal non-null timestamps in stable (input) order", () => {
+    const a = { id: "a", isoDate: "2026-08-05T00:00:00.000Z" };
+    const b = { id: "b", isoDate: "2026-08-05T00:00:00.000Z" }; // same instant as a
+    const c = { id: "c", isoDate: "2026-08-04T00:00:00.000Z" }; // older — dropped by the cap
+    const r = narrowByRecency([a, b, c], iso, 2);
+    expect(r.kept.map((x) => x.id)).toEqual(["a", "b"]);        // a before b preserved, not reordered
+    expect(r.dropped.map((x) => x.id)).toEqual(["c"]);
+  });
 });
 
 import { resolveRunParams, cutoffDate } from "@/lib/pipeline/run-params";

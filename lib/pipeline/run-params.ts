@@ -24,13 +24,14 @@ function resolveRecency(
   defaultHours: number | null,
   now: Date,
 ): RunParams["recency"] {
+  const ageCutoff = (h: number) => new Date(now.getTime() - h * HOUR_MS).toISOString();
   if (input) {
-    if (input.kind === "age") return { kind: "age", hours: input.hours, cutoffAt: new Date(now.getTime() - input.hours * HOUR_MS).toISOString() };
+    if (input.kind === "age") return { kind: "age", hours: input.hours, cutoffAt: ageCutoff(input.hours) };
     if (input.kind === "since") return { kind: "since", cutoffAt: input.at };
     return { kind: "none" };
   }
   if (defaultHours == null) return { kind: "none" };
-  return { kind: "age", hours: defaultHours, cutoffAt: new Date(now.getTime() - defaultHours * HOUR_MS).toISOString() };
+  return { kind: "age", hours: defaultHours, cutoffAt: ageCutoff(defaultHours) };
 }
 
 // The absolute instant the phase-1 filter compares against (null = no cutoff).
