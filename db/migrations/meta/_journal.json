@@ -92,6 +92,13 @@
       "when": 1786023745343,
       "tag": "0012_keen_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786024068296,
+      "tag": "0013_parallel_vance_astro",
+      "breakpoints": true
     }
   ]
 }

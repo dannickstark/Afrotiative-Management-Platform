@@ -1,0 +1,1 @@
+ALTER TABLE "articles" ADD CONSTRAINT "articles_published_has_date" CHECK ("articles"."status" <> 'published' OR "articles"."published_at" IS NOT NULL);
