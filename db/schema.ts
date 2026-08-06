@@ -15,6 +15,18 @@ export type RunCheckpoint = {
   stories: { feedId: string; feedName: string; item: RawItem }[][];
 };
 
+// ---- run trigger parameters (persisted per run; resolved at trigger time) ----
+// Single source of truth for what a run used: recency cutoff (resolved to an instant), the feed
+// subset (null = all active feeds), and the item cap. executeRun reads this off the row.
+export type RunParams = {
+  recency:
+    | { kind: "age"; hours: number; cutoffAt: string }  // "last N h" — cutoffAt resolved at open
+    | { kind: "since"; cutoffAt: string }               // absolute ISO datetime
+    | { kind: "none" };                                  // no cutoff
+  feedIds: string[] | null;
+  maxItems: number;
+};
+
 // ---- enums ----
 export const articleStatus = pgEnum("article_status", [
   "draft", "pending", "in_review", "approved", "published", "rejected",
@@ -222,6 +234,9 @@ export const pipelineRuns = pgTable("pipeline_runs", {
   // Remaining-stories payload for pause/resume (SP5 Task 4): null until a run is paused; cleared
   // again on resume (resumeRun clears it before re-invoking executeRun). See RunCheckpoint above.
   checkpoint: jsonb("checkpoint").$type<RunCheckpoint>(),
+  // Parameters this run used (recency/feeds/maxItems), resolved at trigger time. NULL for runs
+  // created before this feature. See RunParams above.
+  params: jsonb("params").$type<RunParams>(),
 }, (t) => [
   // DB-level overlap interlock: at most one row may be 'running' OR 'paused' at any time — a
   // paused run still holds the single slot (no new run starts while one is parked). A concurrent
@@ -282,6 +297,9 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   scoreThreshold: integer("score_threshold").notNull().default(70), // auto-publish min score — wired in SP6
   autoPublishEnabled: boolean("auto_publish_enabled").notNull().default(false), // wired in SP6
   autoPublishMinSources: integer("auto_publish_min_sources").notNull().default(2), // wired in SP6
+  // Default recency cutoff (relative, hours) for a run. NULL = no cutoff (backward-compatible ship
+  // default). The trigger dialog pre-fills from this; scheduled runs inherit it.
+  defaultMaxItemAgeHours: integer("default_max_item_age_hours"),
   webSearchEnabled: boolean("web_search_enabled").notNull().default(false), // wired in SP4
   scheduleCron: text("schedule_cron"), // null = no in-app schedule — wired in SP2
   // ---- SP9a: optional email notification for alerts (default OFF, no-op without RESEND_API_KEY) ----

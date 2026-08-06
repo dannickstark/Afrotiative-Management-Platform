@@ -9,7 +9,8 @@ import { RoleGate } from "@/components/role-gate";
 import { cn } from "@/lib/utils";
 import { pipelineStatusLabel, relativeDate, type PipelineStatus } from "@/lib/format";
 import { deriveStepperNodes, computeEta, deriveHeader, formatClock } from "@/lib/pipeline/live";
-import { getActiveRunAction, startPipelineRun, pauseRun, resumeRun, cancelRun } from "@/lib/actions/pipeline-actions";
+import { getActiveRunAction, pauseRun, resumeRun, cancelRun } from "@/lib/actions/pipeline-actions";
+import { RunConfigDialog } from "@/components/pipeline/run-config-dialog";
 import type { ActiveRun } from "@/lib/queries/runs";
 import type { RunRow } from "@/components/pipeline/runs-view";
 
@@ -19,7 +20,6 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
   const router = useRouter();
   const [active, setActive] = useState<ActiveRun | null>(initialActive);
   const [polling, setPolling] = useState<boolean>(initialActive != null);
-  const [isStarting, startTransition] = useTransition();
   const watchedRef = useRef<string | null>(initialActive?.run.id ?? null);
   // SP5 Task 5: set to a run's id by RunningView's Stop handler the moment IT successfully cancels
   // that run, so the terminal poll below can suppress its own "Exécution annulée." toast for the
@@ -67,26 +67,16 @@ export function LiveRunPanel({ initialActive, lastRun }: { initialActive: Active
     return () => { clearInterval(poll); clearInterval(clock); };
   }, [polling, router]);
 
-  const handleStart = useCallback(() => {
-    // Async transition callback so React 19 tracks the in-flight action and keeps `isStarting`
-    // true until it resolves — a sync callback that returns a floating promise flips the pending
-    // flag back in the same tick, re-enabling the button before the first poll and defeating
-    // double-submit protection.
-    startTransition(async () => {
-      try {
-        const r = await startPipelineRun();
-        if (!r.ok) { toast.error(r.message); return; }
-        watchedRef.current = r.runId;
-        setPolling(true); // effect will pick up the live state on the next poll
-      } catch { toast.error("Une erreur inattendue est survenue."); }
-    });
+  const handleStarted = useCallback((runId: string) => {
+    watchedRef.current = runId;
+    setPolling(true); // effect picks up the live state on the next poll
   }, []);
 
   if (active) return <RunningView active={active} onCancelInitiated={(id) => { justCancelledRef.current = id; }} />;
-  return <IdleView lastRun={lastRun} onStart={handleStart} starting={isStarting} />;
+  return <IdleView lastRun={lastRun} onStarted={handleStarted} />;
 }
 
-function IdleView({ lastRun, onStart, starting }: { lastRun: RunRow | null; onStart: () => void; starting: boolean }) {
+function IdleView({ lastRun, onStarted }: { lastRun: RunRow | null; onStarted: (runId: string) => void }) {
   return (
     <Card>
       <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
@@ -96,10 +86,7 @@ function IdleView({ lastRun, onStart, starting }: { lastRun: RunRow | null; onSt
           ) : "Aucune exécution pour l'instant."}
         </div>
         <RoleGate allow={["admin"]}>
-          <Button onClick={onStart} disabled={starting}>
-            {starting ? <Loader2 className="animate-spin" aria-hidden /> : <Play aria-hidden />}
-            {starting ? "Démarrage…" : "Lancer une exécution maintenant"}
-          </Button>
+          <RunConfigDialog onStarted={onStarted} />
         </RoleGate>
       </CardContent>
     </Card>
@@ -130,10 +117,10 @@ function RunningView({ active, onCancelInitiated }: { active: ActiveRun; onCance
 
   const [isControlPending, startControlTransition] = useTransition();
 
-  // Async transition callbacks — same pattern as LiveRunPanel's handleStart above (see its comment):
-  // a sync callback that returns a floating promise would flip `isControlPending` back to false in
-  // the same tick, re-enabling the buttons before the action's result is known and defeating
-  // double-submit protection.
+  // Async transition callbacks — same pattern as RunConfigDialog's handleLaunch (components/pipeline/
+  // run-config-dialog.tsx): a sync callback that returns a floating promise would flip
+  // `isControlPending` back to false in the same tick, re-enabling the buttons before the action's
+  // result is known and defeating double-submit protection.
   const handlePause = useCallback(() => {
     startControlTransition(async () => {
       try {

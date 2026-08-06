@@ -22,6 +22,7 @@ type FormState = {
   scheduleCron: string;
   alertEmailEnabled: boolean;
   alertEmailRecipients: string;
+  defaultMaxItemAgeHours: string;
 };
 
 function toFormState(settings: PipelineSettings): FormState {
@@ -36,6 +37,7 @@ function toFormState(settings: PipelineSettings): FormState {
     scheduleCron: settings.scheduleCron ?? "",
     alertEmailEnabled: settings.alertEmailEnabled,
     alertEmailRecipients: settings.alertEmailRecipients ?? "",
+    defaultMaxItemAgeHours: settings.defaultMaxItemAgeHours == null ? "" : String(settings.defaultMaxItemAgeHours),
   };
 }
 
@@ -60,6 +62,7 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
       scheduleCron: form.scheduleCron,
       alertEmailEnabled: form.alertEmailEnabled,
       alertEmailRecipients: form.alertEmailRecipients,
+      defaultMaxItemAgeHours: form.defaultMaxItemAgeHours.trim() === "" ? null : Number(form.defaultMaxItemAgeHours),
     };
     const validated = pipelineSettingsSchema.safeParse(payload);
     if (!validated.success) {
@@ -98,6 +101,18 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
               value={form.maxItemsPerRun}
               onChange={(e) => setForm((f) => ({ ...f, maxItemsPerRun: e.target.value }))}
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="default-recency">Récence par défaut (heures)</Label>
+            <Input
+              id="default-recency" type="number" min={1} max={720} disabled={isSaving}
+              value={form.defaultMaxItemAgeHours}
+              placeholder="Aucune limite"
+              onChange={(e) => setForm((f) => ({ ...f, defaultMaxItemAgeHours: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">
+              Vide = aucune limite. Pré-remplit la fenêtre de récence au lancement d&apos;une exécution ; appliquée aussi aux exécutions planifiées.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="timeout-ms">Délai max par opération (ms)</Label>

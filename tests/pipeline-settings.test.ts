@@ -3,6 +3,7 @@ import { db, pipelineSettings } from "@/db";
 import { eq } from "drizzle-orm";
 import { getPipelineSettings, type PipelineSettings } from "@/lib/queries/settings";
 import { pipelineSettingsSchema } from "@/lib/validation";
+import { persistPipelineSettings } from "@/lib/pipeline/settings-write";
 import { can } from "@/lib/rbac";
 
 // pipeline_settings row id=1 is a shared, app-wide singleton (possibly holding a real
@@ -82,6 +83,20 @@ describe("getPipelineSettings()", () => {
       if (prevEnv === undefined) delete process.env.MAX_ITEMS_PER_RUN;
       else process.env.MAX_ITEMS_PER_RUN = prevEnv;
     }
+  });
+});
+
+describe("persistPipelineSettings — default recency (defaultMaxItemAgeHours)", () => {
+  it("persists and clears the default recency (defaultMaxItemAgeHours)", async () => {
+    const base = {
+      maxItemsPerRun: 20, perOperationTimeoutMs: 300000, clusterThreshold: 0.83, scoreThreshold: 70,
+      autoPublishEnabled: false, autoPublishMinSources: 2, webSearchEnabled: false,
+      scheduleCron: null, alertEmailEnabled: false, alertEmailRecipients: null,
+    };
+    await persistPipelineSettings({ ...base, defaultMaxItemAgeHours: 96 });
+    expect((await getPipelineSettings()).defaultMaxItemAgeHours).toBe(96);
+    await persistPipelineSettings({ ...base, defaultMaxItemAgeHours: null });
+    expect((await getPipelineSettings()).defaultMaxItemAgeHours).toBeNull();
   });
 });
 

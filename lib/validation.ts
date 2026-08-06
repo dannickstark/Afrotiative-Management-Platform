@@ -114,5 +114,24 @@ export const pipelineSettingsSchema = z.object({
     (v) => !v || !v.trim() || isValidRecipientsList(v),
     "Emails invalides (séparés par des virgules)",
   ),
+  // Default recency cutoff (hours). Nullable = "no limit". `.default(null)` keeps existing callers
+  // that don't send the field valid (mirrors alertEmailEnabled's default-for-compat pattern).
+  defaultMaxItemAgeHours: z.number().int().positive("Doit être un entier positif").max(720, "Maximum 720 heures (30 jours)").nullable().default(null),
 });
 export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;
+
+// Per-run trigger parameters (all optional — omitted fields fall back to the settings defaults in
+// resolveRunParams). `since` must not be in the future. maxItems capped at a sane ceiling.
+export const runParamsSchema = z.object({
+  recency: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("age"), hours: z.number().int().positive("Doit être un entier positif").max(720, "Maximum 720 heures (30 jours)") }),
+    z.object({ kind: z.literal("since"), at: z.string().datetime("Date/heure invalide") }),
+    z.object({ kind: z.literal("none") }),
+  ]).optional(),
+  feedIds: z.array(z.string().uuid("Identifiant de flux invalide")).nullable().optional(),
+  maxItems: z.number().int().positive("Doit être un entier positif").max(500, "Maximum 500 éléments").optional(),
+}).refine(
+  (v) => v.recency?.kind !== "since" || Date.parse(v.recency.at) <= Date.now(),
+  { message: "La date « depuis » ne peut pas être dans le futur.", path: ["recency"] },
+);
+export type RunParamsInput = z.infer<typeof runParamsSchema>;

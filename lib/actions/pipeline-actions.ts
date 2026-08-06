@@ -1,6 +1,7 @@
 "use server";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
+import { runParamsSchema, type RunParamsInput } from "@/lib/validation";
 import type { RawItem } from "@/lib/rss/parse-feed";
 import type { RunDetail, ActiveRun } from "@/lib/queries/runs";
 
@@ -35,6 +36,23 @@ export async function getRunDetailAction(runId: string): Promise<RunDetail | nul
   return getRunDetail(runId);
 }
 
+/** Feeds + defaults for the "configure run" dialog (pipeline:configure). */
+export async function getRunConfigOptions(): Promise<{
+  feeds: { id: string; name: string }[];
+  defaults: { defaultMaxItemAgeHours: number | null; maxItemsPerRun: number };
+}> {
+  const user = await requireUser();
+  requirePermission(user.role, "pipeline", "configure");
+  const { db, feeds } = await import("@/db");
+  const { eq, asc } = await import("drizzle-orm");
+  const { getPipelineSettings } = await import("@/lib/queries/settings");
+  const [feedRows, settings] = await Promise.all([
+    db.select({ id: feeds.id, name: feeds.name }).from(feeds).where(eq(feeds.active, true)).orderBy(asc(feeds.name)),
+    getPipelineSettings(),
+  ]);
+  return { feeds: feedRows, defaults: { defaultMaxItemAgeHours: settings.defaultMaxItemAgeHours, maxItemsPerRun: settings.maxItemsPerRun } };
+}
+
 /**
  * Non-blocking trigger: opens the run (holds the slot, gives us runId synchronously), then kicks
  * executeRun DETACHED and returns immediately. The /runs live panel polls getActiveRun to watch it.
@@ -43,18 +61,36 @@ export async function getRunDetailAction(runId: string): Promise<RunDetail | nul
  * ceiling (unlike the scheduled route's 300s) — liveness is instead covered by the activity-based
  * stale-run reclaim in lib/pipeline/overlap.ts (reclaimStaleRuns), not by age alone.
  */
-export async function startPipelineRun(): Promise<{ ok: true; runId: string } | { ok: false; message: string }> {
+export async function startPipelineRun(input?: RunParamsInput): Promise<{ ok: true; runId: string } | { ok: false; message: string }> {
   const user = await requireUser();
   requirePermission(user.role, "pipeline", "configure");
 
-  // Dynamic import (kept AFTER the RBAC check above): mirrors reprocessRawItem's pattern in this
-  // file — see reprocessRawItem's comment below for why.
-  const { openRun, executeRun } = await import("@/lib/pipeline/run");
-  const { db, feeds } = await import("@/db");
-  const { eq } = await import("drizzle-orm");
+  // Validate overrides if provided; omit → resolve everything from settings defaults.
+  let parsed: RunParamsInput | undefined;
+  if (input !== undefined) {
+    const r = runParamsSchema.safeParse(input);
+    if (!r.success) return { ok: false as const, message: "Paramètres d'exécution invalides." };
+    parsed = r.data;
+  }
 
-  const active = (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.active, true))).length;
-  const runId = await openRun({ triggeredBy: "manual", feedsTotal: active });
+  // Dynamic imports kept AFTER the RBAC check (mirrors the rest of this file — see reprocessRawItem).
+  const { openRun, executeRun } = await import("@/lib/pipeline/run");
+  const { resolveRunParams } = await import("@/lib/pipeline/run-params");
+  const { getPipelineSettings } = await import("@/lib/queries/settings");
+  const { db, feeds } = await import("@/db");
+  const { eq, inArray } = await import("drizzle-orm");
+
+  const settings = await getPipelineSettings();
+  const params = resolveRunParams(parsed, {
+    defaultMaxItemAgeHours: settings.defaultMaxItemAgeHours,
+    maxItemsPerRun: settings.maxItemsPerRun,
+  }, new Date());
+
+  const feedsTotal = params.feedIds != null
+    ? (await db.select({ id: feeds.id }).from(feeds).where(inArray(feeds.id, params.feedIds))).length
+    : (await db.select({ id: feeds.id }).from(feeds).where(eq(feeds.active, true))).length;
+
+  const runId = await openRun({ triggeredBy: "manual", feedsTotal, params });
   if (!runId) return { ok: false as const, message: "Une exécution est déjà en cours." };
 
   // Detached — do NOT await. executeRun always finalizes in its own finally, so a rejection here
