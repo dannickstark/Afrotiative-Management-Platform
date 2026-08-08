@@ -1,0 +1,1 @@
+ALTER TABLE "articles" ADD COLUMN "missing_fields" jsonb DEFAULT '[]'::jsonb NOT NULL;

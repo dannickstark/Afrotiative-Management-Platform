@@ -173,6 +173,13 @@ export const articles = pgTable("articles", {
     // review queue can visibly flag the article as produced under degraded conditions.
     aiDegraded?: boolean;
   }>().notNull().default({}),
+  // SP « complétion » — la liste de travail des informations manquantes, calculée par
+  // lib/pipeline/completeness.ts à la génération puis recalculée à chaque correction manuelle.
+  // Volontairement DISTINCTE de confidenceFlags : celle-ci exprime un doute de l'IA sur la
+  // qualité, celle-là énumère ce qui manque factuellement — les mélanger empêcherait de
+  // distinguer « l'IA n'était pas sûre de la catégorie » de « il n'y a pas de catégorie ».
+  // Ordre canonique garanti (MISSING_FIELD_KEYS).
+  missingFields: jsonb("missing_fields").$type<string[]>().notNull().default([]),
   lockedBy: text("locked_by").references(() => user.id),
   lockedAt: timestamp("locked_at"),
   rejectReason: text("reject_reason"),
