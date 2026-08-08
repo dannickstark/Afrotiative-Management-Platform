@@ -4,24 +4,23 @@ import { usePathname } from "next/navigation";
 import { Rss, Tags, Users, Plug, SlidersHorizontal } from "lucide-react";
 import type { Role } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CHILDREN } from "@/components/shell/nav-items";
 
-type SettingsNavItem = { href: string; label: string; icon: typeof Rss; roles: Role[] };
-
-const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
-  { href: "/settings/feeds", label: "Sources RSS", icon: Rss, roles: ["admin", "editor"] },
-  { href: "/settings/taxonomy", label: "Catégories & Tags", icon: Tags, roles: ["admin", "editor"] },
-  { href: "/settings/team", label: "Équipe", icon: Users, roles: ["admin"] },
-  { href: "/settings/integrations", label: "Intégrations", icon: Plug, roles: ["admin"] },
-  { href: "/settings/pipeline", label: "Pipeline", icon: SlidersHorizontal, roles: ["admin"] },
-];
+const SETTINGS_ICON: Record<string, typeof Rss> = {
+  "/settings/feeds": Rss,
+  "/settings/taxonomy": Tags,
+  "/settings/team": Users,
+  "/settings/integrations": Plug,
+  "/settings/pipeline": SlidersHorizontal,
+};
 
 export function SettingsNav({ role }: { role: Role }) {
   const pathname = usePathname();
   return (
     <nav className="flex items-center gap-1 border-b px-1">
-      {SETTINGS_NAV_ITEMS.filter((item) => item.roles.includes(role)).map((item) => {
+      {SETTINGS_CHILDREN.filter((item) => item.roles!.includes(role)).map((item) => {
         const active = pathname.startsWith(item.href);
-        const Icon = item.icon;
+        const Icon = SETTINGS_ICON[item.href];
         return (
           <Link key={item.href} href={item.href}
             className={cn("flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm",

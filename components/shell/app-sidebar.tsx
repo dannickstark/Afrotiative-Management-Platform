@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 
+import { NavMain } from "./nav-main";
 import { NavUser } from "./nav-user";
 import { visibleNavItems } from "./nav-items";
 import {
@@ -14,9 +14,9 @@ import {
   SidebarGroupContent,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
 } from "@/components/ui/sidebar";
 import type { Role } from "@/lib/auth";
 import type { SessionUser } from "@/lib/session";
@@ -31,7 +31,6 @@ export function AppSidebar({
   pendingCount: number;
   user: SessionUser;
 }) {
-  const pathname = usePathname();
   const items = visibleNavItems(role);
 
   return (
@@ -54,31 +53,14 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => {
-                const active = pathname.startsWith(item.href);
-                const Icon = item.icon;
-                return (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton isActive={active} tooltip={item.label} render={<Link href={item.href} />}>
-                      <Icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                    {item.badgeKey === "pending" && pendingCount > 0 && (
-                      <SidebarMenuBadge className="rounded-full bg-[var(--accent-brand)] px-1.5 text-[var(--accent-brand-foreground)]">
-                        {pendingCount}
-                      </SidebarMenuBadge>
-                    )}
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
+            <NavMain items={items} pendingCount={pendingCount} />
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={user} />
       </SidebarFooter>
+      <SidebarRail />
     </Sidebar>
   );
 }
