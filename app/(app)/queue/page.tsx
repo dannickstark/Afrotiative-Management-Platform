@@ -1,12 +1,21 @@
-import { getQueue } from "@/lib/queries/queue";
-import { QueueTable } from "@/components/queue/queue-table";
+import { requireUser } from "@/lib/session";
+import { getQueue, parseQueueSearchParams } from "@/lib/queries/queue";
+import { getTaxonomy } from "@/lib/queries/settings";
+import { QueueView } from "@/components/queue/queue-view";
 
-export default async function QueuePage() {
-  const rows = await getQueue();
+export default async function QueuePage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  await requireUser();
+  const filters = parseQueueSearchParams(await searchParams);
+  const [page, { categories }] = await Promise.all([getQueue(filters), getTaxonomy()]);
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">File de revue</h1>
-      <QueueTable data={rows} />
-    </div>
+    <QueueView
+      page={page}
+      filters={filters}
+      categories={categories.map((c) => ({ id: c.id, name: c.name }))}
+    />
   );
 }

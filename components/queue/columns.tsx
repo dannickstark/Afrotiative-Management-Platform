@@ -7,10 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ConfidenceBadge } from "./confidence-badge";
 import { RowActions } from "./row-actions";
 import { relativeDate, type ArticleStatus } from "@/lib/format";
-
-// Bucketed "source count" filter used by queue-filters.tsx: "single" (1 or
-// fewer sources — needs more scrutiny) vs "multiple" (2+ corroborating sources).
-export type SourceBucket = "single" | "multiple";
+import { MISSING_LABEL } from "@/lib/pipeline/completeness";
 
 export const columns: ColumnDef<QueueRow>[] = [
   { accessorKey: "title", header: "Titre", cell: ({ row }) => (
@@ -29,14 +26,9 @@ export const columns: ColumnDef<QueueRow>[] = [
         </div>
       );
     } },
-  { accessorKey: "categoryName", header: "Catégorie", filterFn: "equalsString",
+  { accessorKey: "categoryName", header: "Catégorie",
     cell: ({ getValue }) => (getValue() as string) ?? "—" },
-  { accessorKey: "sourceCount", header: "Sources",
-    filterFn: (row, columnId, filterValue: SourceBucket | undefined) => {
-      if (!filterValue) return true;
-      const count = row.getValue<number>(columnId);
-      return filterValue === "single" ? count <= 1 : count > 1;
-    } },
+  { accessorKey: "sourceCount", header: "Sources" },
   // Read-only quality signal from lib/pipeline/score.ts. Null until SP4 Task 6 wires scoring
   // into stageItem — show nothing rather than a placeholder for un-scored (pre-Task-6) articles.
   { accessorKey: "score", header: "Score", cell: ({ getValue }) => {
@@ -44,7 +36,17 @@ export const columns: ColumnDef<QueueRow>[] = [
       return score === null ? null : <Badge variant="outline">Score {score}</Badge>;
     } },
   { accessorKey: "generatedAt", header: "Généré", cell: ({ getValue }) => relativeDate(getValue() as Date) },
-  { accessorKey: "status", header: "Statut", filterFn: "equalsString",
+  { accessorKey: "status", header: "Statut",
     cell: ({ getValue }) => <StatusBadge status={getValue() as ArticleStatus} /> },
+  { id: "missing", header: "Complétude", enableSorting: false, cell: ({ row }) => {
+      const missing = row.original.missingFields;
+      if (missing.length === 0) return <span className="text-muted-foreground">—</span>;
+      return (
+        <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-400"
+          title={missing.map((m) => MISSING_LABEL[m]).join(", ")}>
+          {missing.length} manque{missing.length > 1 ? "s" : ""}
+        </Badge>
+      );
+    } },
   { id: "actions", enableSorting: false, enableGlobalFilter: false, cell: ({ row }) => <RowActions row={row.original} /> },
 ];

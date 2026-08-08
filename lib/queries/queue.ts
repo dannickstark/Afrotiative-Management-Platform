@@ -94,9 +94,14 @@ export async function getQueue(f: QueueFilters): Promise<QueuePage> {
   // plutôt qu'un tableau vide.
   const page = Math.min(Math.max(1, f.page), pageCount);
 
+  // `desc(articles.score)` seul trierait NULLS FIRST (comportement Postgres par défaut pour
+  // DESC) : les articles JAMAIS notés passeraient devant les mieux notés — l'inverse de ce que
+  // « Meilleur score » doit produire. `desc()`/`asc()` renvoient un SQL sans méthode `.nulls()`
+  // dans cette version de Drizzle (0.45.2 — vérifié : absente de sql/sql.d.ts et
+  // sql/expressions/select.d.ts) ; un fragment `sql` brut est l'équivalent portable.
   const orderBy =
     f.sort === "newest" ? desc(articles.generatedAt)
-      : f.sort === "score" ? desc(articles.score)
+      : f.sort === "score" ? sql`${articles.score} desc nulls last`
         : asc(articles.generatedAt);
 
   const rows = await db.select({
