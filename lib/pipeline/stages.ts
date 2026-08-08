@@ -41,7 +41,10 @@ export type StageHooks = {
 // ExtractResult.images from lib/extract); stageSources aggregates them across every source of a
 // story before handing candidateImages to generateArticle. Optional because not every caller
 // tracks per-source images.
-export type SourceInput = { mediaName: string; url: string; text: string; images?: string[] };
+export type SourceInput = {
+  mediaName: string; url: string; text: string; images?: string[];
+  origin?: "feed" | "web";
+};
 
 // The transaction handle type db.transaction() hands its callback — used so insertTags can
 // participate in the same transaction as the article/sources/embedding inserts below.
@@ -171,18 +174,21 @@ export async function stageSources(
     // Placée AVANT l'embedding pour que computeArticleScore (plus bas) voie l'article RÉPARÉ :
     // une image récupérée ici améliore réellement le score au lieu d'être pénalisée.
     //
-    // deps.extract = extractExternal, PAS extract : `uniqueSources` peut contenir des sources
-    // ajoutées par l'augmentation « Recherche web » (SP4 Task 6b, lib/pipeline/run.ts), des URLs
-    // NON DIGNES DE CONFIANCE (résultat d'un moteur de recherche tiers). stageSources ne distingue
-    // pas l'origine d'une source à ce stade — repairDraft ne doit donc JAMAIS relancer une
-    // extraction en clair (readability : fetch direct ; ou le backfill d'images de extract() après
-    // un succès Jina/Firecrawl, lui aussi un fetch direct de l'URL) sur une source qu'il n'a pas
-    // lui-même vérifiée. extractExternal ne touche que l'infrastructure du fournisseur externe
-    // (Jina/Firecrawl) — aucune surface SSRF depuis ce serveur, quelle que soit l'URL.
+    // Le choix d'extracteur se fait PAR SOURCE, sur la marque `origin` posée à la construction
+    // (Task 4b) : une source de flux RSS (`origin: "feed"`) a son URL fixée par la configuration
+    // de l'opérateur et a déjà été récupérée par un extract() brut à l'ingestion — aucune
+    // exposition nouvelle à relancer cet extract() (backfill d'images inclus) ici. Une source de
+    // recherche web (`origin: "web"`, ajoutée par SP4 Task 6b) reste une URL NON DIGNE DE
+    // CONFIANCE (résultat d'un moteur de recherche tiers) : elle ne doit JAMAIS déclencher de
+    // fetch en clair depuis ce serveur (ni readability, ni le backfill d'images de extract() après
+    // un succès Jina/Firecrawl) — extractExternal() est alors seul autorisé, il ne touche que
+    // l'infrastructure du fournisseur externe (Jina/Firecrawl). Une source sans `origin` est
+    // traitée comme non fiable par défaut (voir le commentaire sur SourceRef/repairDraft).
     let missingFields: MissingField[];
     try {
       const repair = await timedStep(steps, hooks, "Vérification & complétion", ms, () =>
-        repairDraft(draft, uniqueSources, categoryNames, candidateImages, { extract: extractExternal }),
+        repairDraft(draft, uniqueSources, categoryNames, candidateImages,
+          { extract, extractExternal }),
       );
       draft = repair.draft;
       missingFields = repair.missing;
@@ -409,7 +415,7 @@ export async function stageItem(
     const text = ex.text || item.contentSnippet;
 
     const result = await stageSources(
-      [{ mediaName, url: item.url, text, images: ex.images }],
+      [{ mediaName, url: item.url, text, images: ex.images, origin: "feed" }],
       categoryNames,
       hooks,
       ms,

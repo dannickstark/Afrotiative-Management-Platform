@@ -181,9 +181,14 @@ describe("sourceForImage", () => {
   });
 });
 
+// SOURCES (déclaré plus haut) n'a pas de champ `origin` : ces sources sont donc traitées comme non
+// fiables et repairDraft doit toujours passer par `extractExternal`, jamais par `extract`.
 const noExtract: RepairDeps = {
   extract: async () => {
     throw new Error("extract ne doit pas être appelé dans ce test");
+  },
+  extractExternal: async () => {
+    throw new Error("extractExternal ne doit pas être appelé dans ce test");
   },
 };
 
@@ -213,9 +218,12 @@ describe("repairDraft", () => {
   });
 
   it("ré-extrait les sources quand aucune image candidate n'a été fournie", async () => {
+    // SOURCES n'a pas de champ `origin` → traitées comme non fiables → c'est extractExternal qui
+    // doit porter le comportement attendu ; extract ne doit jamais être appelé.
     const seen: string[] = [];
     const deps: RepairDeps = {
-      extract: async (url) => {
+      extract: async () => { throw new Error("extract ne doit pas être appelé pour une source sans origine"); },
+      extractExternal: async (url) => {
         seen.push(url);
         return url.includes("jeuneafrique")
           ? { images: ["https://www.jeuneafrique.com/media/p.jpg"] }
@@ -230,7 +238,8 @@ describe("repairDraft", () => {
 
   it("écarte une image que le garde-fou SSRF refuse", async () => {
     const deps: RepairDeps = {
-      extract: async () => ({ images: ["http://localhost/secret.png", "file:///etc/passwd"] }),
+      extract: async () => { throw new Error("extract ne doit pas être appelé pour une source sans origine"); },
+      extractExternal: async () => ({ images: ["http://localhost/secret.png", "file:///etc/passwd"] }),
     };
     const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
     expect(r.draft.featuredImageUrl).toBeNull();
@@ -240,7 +249,8 @@ describe("repairDraft", () => {
 
   it("une source qui échoue à l'extraction n'empêche pas d'essayer les suivantes", async () => {
     const deps: RepairDeps = {
-      extract: async (url) => {
+      extract: async () => { throw new Error("extract ne doit pas être appelé pour une source sans origine"); },
+      extractExternal: async (url) => {
         if (url.includes("agenceecofin")) throw new Error("502");
         return { images: ["https://www.jeuneafrique.com/media/p.jpg"] };
       },
@@ -250,7 +260,10 @@ describe("repairDraft", () => {
   });
 
   it("ne lève jamais, même si toutes les extractions échouent", async () => {
-    const deps: RepairDeps = { extract: async () => { throw new Error("réseau coupé"); } };
+    const deps: RepairDeps = {
+      extract: async () => { throw new Error("extract ne doit pas être appelé pour une source sans origine"); },
+      extractExternal: async () => { throw new Error("réseau coupé"); },
+    };
     const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
     expect(r.draft.featuredImageUrl).toBeNull();
     expect(r.missing).toContain("featuredImageUrl");
@@ -276,8 +289,10 @@ describe("repairDraft", () => {
   });
 
   it("dérive le chapô du corps", async () => {
+    // SOURCES n'a pas d'origine → extractExternal ; extract ne doit jamais être appelé.
     const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], {
-      extract: async () => ({ images: [] }),
+      extract: async () => { throw new Error("extract ne doit pas être appelé pour une source sans origine"); },
+      extractExternal: async () => ({ images: [] }),
     });
     expect(r.draft.excerpt.length).toBeGreaterThan(0);
     expect(r.draft.excerpt).not.toContain("<");
@@ -286,7 +301,10 @@ describe("repairDraft", () => {
 
   it("ne devine JAMAIS la catégorie", async () => {
     const d = { ...bareDraft(), category: "Sport" };
-    const r = await repairDraft(d, SOURCES, CATEGORIES, [], { extract: async () => ({ images: [] }) });
+    const r = await repairDraft(d, SOURCES, CATEGORIES, [], {
+      extract: async () => { throw new Error("extract ne doit pas être appelé pour une source sans origine"); },
+      extractExternal: async () => ({ images: [] }),
+    });
     expect(r.draft.category).toBe("Sport");
     expect(r.repaired).not.toContain("categoryId");
     expect(r.missing).toContain("categoryId");
@@ -303,5 +321,59 @@ describe("repairDraft", () => {
     const d = { ...bareDraft(), featuredImageUrl: "https://ex.com/a.jpg" };
     const r = await repairDraft(d, SOURCES, CATEGORIES, [], noExtract);
     expect(r.draft.featuredImageUrl).toBe("https://ex.com/a.jpg");
+  });
+
+  it("utilise extract (avec backfill) pour une source issue d'un flux RSS", async () => {
+    const calls: { fn: string; url: string }[] = [];
+    const deps = {
+      extract: async (url: string) => { calls.push({ fn: "extract", url }); return { images: ["https://www.agenceecofin.com/img/p.jpg"] }; },
+      extractExternal: async (url: string) => { calls.push({ fn: "extractExternal", url }); return { images: [] }; },
+    };
+    const feedSources = [{ mediaName: "Ecofin", url: "https://www.agenceecofin.com/a/1", origin: "feed" as const }];
+    const r = await repairDraft(bareDraft(), feedSources, CATEGORIES, [], deps);
+    expect(calls).toEqual([{ fn: "extract", url: "https://www.agenceecofin.com/a/1" }]);
+    expect(r.draft.featuredImageUrl).toBe("https://www.agenceecofin.com/img/p.jpg");
+  });
+
+  it("utilise extractExternal pour une source issue de la recherche web", async () => {
+    const calls: { fn: string; url: string }[] = [];
+    const deps = {
+      extract: async (url: string) => { calls.push({ fn: "extract", url }); return { images: ["https://mechant.example/p.jpg"] }; },
+      extractExternal: async (url: string) => { calls.push({ fn: "extractExternal", url }); return { images: [] }; },
+    };
+    const webSources = [{ mediaName: "example.com", url: "https://example.com/hit", origin: "web" as const }];
+    const r = await repairDraft(bareDraft(), webSources, CATEGORIES, [], deps);
+    expect(calls).toEqual([{ fn: "extractExternal", url: "https://example.com/hit" }]);
+    expect(r.draft.featuredImageUrl).toBeNull();
+  });
+
+  it("traite une source SANS origine comme non fiable (défaut sûr)", async () => {
+    const calls: string[] = [];
+    const deps = {
+      extract: async () => { calls.push("extract"); return { images: ["https://ex.com/p.jpg"] }; },
+      extractExternal: async () => { calls.push("extractExternal"); return { images: [] }; },
+    };
+    // SOURCES n'a pas de champ `origin` — le défaut doit être extractExternal, jamais extract.
+    await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
+    expect(calls.every((c) => c === "extractExternal")).toBe(true);
+    expect(calls).not.toContain("extract");
+  });
+
+  it("choisit l'extracteur source par source dans une liste mixte", async () => {
+    const calls: { fn: string; url: string }[] = [];
+    const deps = {
+      extract: async (url: string) => { calls.push({ fn: "extract", url }); return { images: ["https://www.agenceecofin.com/img/p.jpg"] }; },
+      extractExternal: async (url: string) => { calls.push({ fn: "extractExternal", url }); return { images: [] }; },
+    };
+    const mixed = [
+      { mediaName: "example.com", url: "https://example.com/hit", origin: "web" as const },
+      { mediaName: "Ecofin", url: "https://www.agenceecofin.com/a/1", origin: "feed" as const },
+    ];
+    const r = await repairDraft(bareDraft(), mixed, CATEGORIES, [], deps);
+    expect(calls).toEqual([
+      { fn: "extractExternal", url: "https://example.com/hit" },
+      { fn: "extract", url: "https://www.agenceecofin.com/a/1" },
+    ]);
+    expect(r.draft.featuredImageUrl).toBe("https://www.agenceecofin.com/img/p.jpg");
   });
 });

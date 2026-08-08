@@ -36,7 +36,11 @@ export const MISSING_LABEL: Record<MissingField, string> = {
   tags: "Tags",
 };
 
-export type SourceRef = { mediaName: string; url: string };
+// `origin` distingue une source de flux RSS (configurée par l'opérateur, déjà récupérée par un
+// extract() brut à l'ingestion) d'un résultat de recherche web (URL non fiable). ABSENT = non
+// fiable : le défaut doit toujours dégrader vers la sécurité, pour qu'un point de construction
+// oublié ne puisse pas ouvrir une faille SSRF par omission.
+export type SourceRef = { mediaName: string; url: string; origin?: "feed" | "web" };
 
 // Le sous-ensemble d'un brouillon d'article que ces règles observent. Volontairement structurel
 // (et non `ArticleDraft`) : les champs image sont `.nullish()` dans le schéma Zod, et ce module
@@ -170,10 +174,15 @@ export function excerptFromHtml(html: string, max = 200): string {
 // Réexporté pour que repairDraft (Task 2) et les tests partagent le même garde-fou d'URL.
 export { isSafePublicHttpUrl };
 
-// L'unique dépendance à effets de ce module, injectée : les tests n'ont donc jamais besoin du
+// Les dépendances à effets de ce module, injectées : les tests n'ont donc jamais besoin du
 // réseau (test-setup.ts supprime activement toute clé d'API, une extraction réelle échouerait).
 export type RepairDeps = {
+  // Récupère depuis NOTRE infrastructure (fetch brut, backfill d'images inclus) — réservé aux
+  // sources de flux RSS, dont l'URL vient de la configuration de l'opérateur.
   extract: (url: string) => Promise<{ images?: string[] }>;
+  // Passe par l'infrastructure du fournisseur externe (jina/firecrawl), sans fetch brut chez
+  // nous — obligatoire pour toute URL non fiable.
+  extractExternal: (url: string) => Promise<{ images?: string[] }>;
 };
 
 export type RepairResult<T extends CompletenessDraft> = {
@@ -212,8 +221,12 @@ export async function repairDraft<T extends CompletenessDraft>(
       // ou simple échec réseau au moment de l'ingestion.
       const recovered: string[] = [];
       for (const s of sources) {
+        // Le choix se fait source par source : une seule source de recherche web dans le lot ne
+        // doit pas priver les sources de flux de leur backfill d'images, et inversement une
+        // source de flux ne doit pas légitimer un fetch brut sur une URL de recherche web.
+        const fetcher = s.origin === "feed" ? deps.extract : deps.extractExternal;
         try {
-          const r = await deps.extract(s.url);
+          const r = await fetcher(s.url);
           recovered.push(...(r.images ?? []));
         } catch {
           // Une source inaccessible ne doit pas empêcher d'essayer les suivantes.
