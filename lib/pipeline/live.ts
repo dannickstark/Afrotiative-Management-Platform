@@ -1,15 +1,18 @@
 // Pure, DB-free view helpers for the live run panel. Unit-tested in tests/live-panel.test.ts.
 
-// The 5 per-item stages, by their EXACT pipeline_steps.name (must match lib/pipeline/stages.ts).
-// Array order == true CHRONOLOGICAL execution order (SP4 Task 6a): stageSources embeds the
-// GENERATED title+body, so Génération IA runs BEFORE Calcul de l'embedding / Regroupement. This
-// ordering is load-bearing for deriveStepperNodes below — it renders and freezes strictly
-// left-to-right, so a stage's array position MUST equal the order it actually fires in, or a
-// completed node would render to the right of a still-spinning one (and freeze the wrong nodes on
-// a mid-pipeline failure).
+// Les 6 étapes par article, par leur nom EXACT pipeline_steps.name (doit correspondre à
+// lib/pipeline/stages.ts). Array order == true CHRONOLOGICAL execution order (SP4 Task 6a, then
+// the completeness stage below): stageSources embeds the GENERATED title+body, so Génération IA
+// runs BEFORE Calcul de l'embedding / Regroupement, and Vérification & complétion runs right after
+// génération (so a repaired image is scored correctly) and before the embedding. This ordering is
+// load-bearing for deriveStepperNodes below — it renders and freezes strictly left-to-right, so a
+// stage's array position MUST equal the order it actually fires in, or a completed node would
+// render to the right of a still-spinning one (and freeze the wrong nodes on a mid-pipeline
+// failure).
 export const ITEM_STAGES = [
   "Extraction du contenu",
   "Génération IA",
+  "Vérification & complétion",
   "Calcul de l'embedding",
   "Regroupement (clustering)",
   "Dépôt en revue",
@@ -18,9 +21,10 @@ export const ITEM_STAGES = [
 // Short labels for the stepper nodes (the long names don't fit under a 24px circle).
 const STAGE_LABEL: Record<string, string> = {
   "Extraction du contenu": "Extraction",
+  "Génération IA": "Génération IA",
+  "Vérification & complétion": "Complétion",
   "Calcul de l'embedding": "Embedding",
   "Regroupement (clustering)": "Clustering",
-  "Génération IA": "Génération IA",
   "Dépôt en revue": "Dépôt",
 };
 

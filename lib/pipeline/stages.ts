@@ -2,7 +2,7 @@ import {
   db, articles, articleSources, articleTags, articleEmbeddings, articleRevisions, clusters, wpCategories, wpTags,
 } from "@/db";
 import { eq } from "drizzle-orm";
-import { extract } from "@/lib/extract";
+import { extract, extractExternal } from "@/lib/extract";
 import { embed } from "@/lib/embeddings";
 import { decideCluster } from "./cluster";
 import { generateArticle, type ArticleDraft } from "@/lib/ai";
@@ -11,6 +11,9 @@ import { computeArticleScore } from "./score";
 import { withTimeout } from "./timeout";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import { shouldAutoPublish, type AutoPublishConfidence } from "./auto-publish";
+import {
+  repairDraft, checkCompleteness, sortMissingFields, type MissingField,
+} from "./completeness";
 import type { RawItem } from "@/lib/rss/parse-feed";
 
 // SP6 — the 3 auto-publish knobs stageSources needs, in the shape lib/pipeline/auto-publish.ts's
@@ -151,13 +154,41 @@ export async function stageSources(
       candidateImages,
       categories: categoryNames,
     }));
-    const draft = gen.draft;
+    let draft = gen.draft;
 
     // SP4 Task 2's sanitizer, wired here (closing that task's deferral): the AI-generated
     // bodyHtml is sanitized BEFORE it is ever embedded or persisted — a provider (or its mock
     // fallback) can echo unsafe-looking markup straight out of scraped source text, so this must
     // run before the DB insert, not after.
     const sanitized = sanitizeArticleHtml(draft.bodyHtml);
+
+    // Étape « Vérification & complétion ». SEULE étape de cette fonction dont l'échec n'avorte
+    // PAS l'article : les cinq autres relèvent leur erreur, ce qui fait sortir stageSources par
+    // son catch (articleId: null). Ici, perdre une réparation ne doit jamais coûter un article —
+    // on enregistre l'étape en échec (timedStep l'a déjà fait avant de relever) et on poursuit
+    // avec le brouillon non réparé, dont les manques sont alors calculés sans réparation.
+    //
+    // Placée AVANT l'embedding pour que computeArticleScore (plus bas) voie l'article RÉPARÉ :
+    // une image récupérée ici améliore réellement le score au lieu d'être pénalisée.
+    //
+    // deps.extract = extractExternal, PAS extract : `uniqueSources` peut contenir des sources
+    // ajoutées par l'augmentation « Recherche web » (SP4 Task 6b, lib/pipeline/run.ts), des URLs
+    // NON DIGNES DE CONFIANCE (résultat d'un moteur de recherche tiers). stageSources ne distingue
+    // pas l'origine d'une source à ce stade — repairDraft ne doit donc JAMAIS relancer une
+    // extraction en clair (readability : fetch direct ; ou le backfill d'images de extract() après
+    // un succès Jina/Firecrawl, lui aussi un fetch direct de l'URL) sur une source qu'il n'a pas
+    // lui-même vérifiée. extractExternal ne touche que l'infrastructure du fournisseur externe
+    // (Jina/Firecrawl) — aucune surface SSRF depuis ce serveur, quelle que soit l'URL.
+    let missingFields: MissingField[];
+    try {
+      const repair = await timedStep(steps, hooks, "Vérification & complétion", ms, () =>
+        repairDraft(draft, uniqueSources, categoryNames, candidateImages, { extract: extractExternal }),
+      );
+      draft = repair.draft;
+      missingFields = repair.missing;
+    } catch {
+      missingFields = checkCompleteness(draft, uniqueSources, categoryNames);
+    }
 
     const emb = await timedStep(steps, hooks, "Calcul de l'embedding", ms, () => embed(`${draft.title}\n${sanitized}`));
     const vector = emb.vector;
@@ -186,7 +217,7 @@ export async function stageSources(
 
     const depot = await timedStep(steps, hooks, "Dépôt en revue", ms, () => persistArticle({
       draft, sanitizedBody: sanitized, vector, clusterId: cluster.clusterId, score, confidence,
-      sources: uniqueSources, categoryNames, autoPublish: apCfg,
+      sources: uniqueSources, categoryNames, autoPublish: apCfg, missingFields,
     }));
 
     // SP6 — best-effort live step so the run's live view + trace show the auto-approval happened,
@@ -243,11 +274,21 @@ export async function persistArticle(input: {
   sources: SourceInput[]; // already deduped by URL
   categoryNames: string[];
   autoPublish: AutoPublishCfg;
+  missingFields: MissingField[];
 }): Promise<{ articleId: string; autoApproved: boolean }> {
   const { draft, sanitizedBody, vector, score, confidence, sources, categoryNames, autoPublish } = input;
 
   // Read-only lookup — no write dependency, so it can run outside the transaction below.
   const catId = await resolveCategoryId(draft.category, categoryNames);
+
+  // Réconciliation de la clé `categoryId` : checkCompleteness a travaillé sur un NOM de
+  // catégorie ; sa résolution en identifiant n'a lieu qu'ici et peut échouer même sur un nom
+  // plausible (aucune ligne wp_categories correspondante). C'est la SEULE clé complétée après
+  // l'étape — les six autres sont figées. La liste écrite en base fait ensuite foi pour
+  // l'affichage et le filtrage.
+  const missingFields = catId === null
+    ? sortMissingFields([...input.missingFields, "categoryId"])
+    : input.missingFields;
 
   // The gate itself is pure and should never throw — but if it somehow did, fall back to "pending"
   // (never to "approved"): an auto-publish DECISION failure must only ever withhold the exception,
@@ -294,6 +335,7 @@ export async function persistArticle(input: {
       clusterId,
       score,
       confidenceFlags: confidence,
+      missingFields,
       generatedAt: new Date(),
       // SP6: an auto-approved article is scheduled for "now" so the existing publish-due cron
       // (unchanged — still selects only status='approved') publishes it on its next pass. A
