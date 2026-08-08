@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Cron } from "croner";
+import { isSafePublicHttpUrl } from "@/lib/url-guard";
 
 export const saveDraftSchema = z.object({
   id: z.string().uuid(),
@@ -157,3 +158,18 @@ export const bulkRejectSchema = z.object({
   ids: bulkIdsSchema,
   reason: z.string().min(3, "Motif requis"),
 });
+
+// Chaque champ est optionnel : la correction est PARTIELLE par nature — on ne renseigne que ce
+// qui manque. Un champ absent de l'entrée n'est pas touché en base (voir fixArticleFields).
+// Le garde-fou SSRF est appliqué ici, au plus près de la saisie, avec le même prédicat que la
+// publication : inutile d'accepter une URL que WordPress refusera ensuite de télécharger.
+export const fixFieldsSchema = z.object({
+  id: z.string().uuid(),
+  categoryId: z.string().uuid().optional(),
+  featuredImageUrl: z.string().url("URL d'image invalide")
+    .refine(isSafePublicHttpUrl, "URL d'image non autorisée").optional(),
+  imageCredit: z.string().trim().min(1, "Crédit vide").optional(),
+  imageSourceUrl: z.string().url("URL source invalide")
+    .refine(isSafePublicHttpUrl, "URL source non autorisée").optional(),
+});
+export type FixFieldsInput = z.infer<typeof fixFieldsSchema>;

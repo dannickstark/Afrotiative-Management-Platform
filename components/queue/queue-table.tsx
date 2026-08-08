@@ -2,16 +2,22 @@
 import { useEffect, useState } from "react";
 import { flexRender, getCoreRowModel, useReactTable, type RowSelectionState } from "@tanstack/react-table";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { columns } from "./columns";
+import { buildColumns } from "./columns";
 import { BulkActionBar } from "./bulk-action-bar";
 import type { QueueRow } from "@/lib/queries/queue";
 
-export function QueueTable({ rows }: { rows: QueueRow[] }) {
+export function QueueTable({
+  rows, categories,
+}: {
+  rows: QueueRow[];
+  categories: { id: string; name: string }[];
+}) {
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const cols = buildColumns(categories);
 
   const table = useReactTable({
     data: rows,
-    columns,
+    columns: cols,
     state: { rowSelection },
     onRowSelectionChange: setRowSelection,
     getRowId: (row) => row.id, // l'identifiant d'article EST la clé de sélection
@@ -54,7 +60,7 @@ export function QueueTable({ rows }: { rows: QueueRow[] }) {
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={cols.length} className="h-24 text-center text-muted-foreground">
                   Aucun article ne correspond à ces filtres.
                 </TableCell>
               </TableRow>

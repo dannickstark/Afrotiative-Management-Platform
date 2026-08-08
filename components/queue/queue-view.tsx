@@ -19,7 +19,7 @@ export function QueueView({
         </span>
       </div>
       <QueueFilters filters={filters} categories={categories} />
-      <QueueTable rows={page.rows} />
+      <QueueTable rows={page.rows} categories={categories} />
       {page.pageCount > 1 && <QueuePagination page={page.page} pageCount={page.pageCount} />}
     </div>
   );

@@ -4,11 +4,12 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { saveDraftSchema, type SaveDraftInput, regenerateFieldsSchema, improveInputSchema, type RegenerateFieldsInput, type ImproveActionInput } from "@/lib/validation";
+import { saveDraftSchema, type SaveDraftInput, regenerateFieldsSchema, improveInputSchema, type RegenerateFieldsInput, type ImproveActionInput, fixFieldsSchema, type FixFieldsInput } from "@/lib/validation";
 import { isLockActive } from "@/lib/lock";
 import { publishArticle } from "@/lib/wp/publish";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import type { ArticleDraft } from "@/lib/ai/schema";
+import type { MissingField } from "@/lib/pipeline/completeness";
 import { z } from "zod";
 
 export async function acquireLock(id: string) {
@@ -160,4 +161,75 @@ export async function schedule(input: { id: string; at: Date }) {
   await db.update(articles).set({ status: "approved", scheduledAt: at, updatedAt: new Date() }).where(eq(articles.id, id));
   await db.insert(articleRevisions).values({ articleId: id, actorId: user.id, action: "planifié" });
   revalidatePath(`/article/${id}`);
+}
+
+/**
+ * Correction ciblée des informations manquantes, depuis /queue (fix-popover) ou ailleurs.
+ * Écrit UNIQUEMENT les champs fournis, puis RECALCULE articles.missing_fields avec le même
+ * module que le pipeline — c'est ce qui garantit que le badge de la file, l'encadré de l'aperçu
+ * et le refus de publication racontent tous la même chose.
+ */
+export async function fixArticleFields(
+  input: FixFieldsInput,
+): Promise<{ ok: boolean; message: string; missingFields: MissingField[] }> {
+  const user = await requireUser();
+  requirePermission(user.role, "article", "edit");
+  const data = fixFieldsSchema.parse(input);
+
+  const { articleSources, wpCategories, articleTags } = await import("@/db");
+  const { checkCompleteness, sortMissingFields } = await import("@/lib/pipeline/completeness");
+
+  // Seuls les champs réellement fournis entrent dans le SET — un champ absent garde sa valeur.
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (data.categoryId !== undefined) patch.categoryId = data.categoryId;
+  if (data.featuredImageUrl !== undefined) patch.featuredImageUrl = data.featuredImageUrl;
+  if (data.imageCredit !== undefined) patch.imageCredit = data.imageCredit;
+  if (data.imageSourceUrl !== undefined) patch.imageSourceUrl = data.imageSourceUrl;
+  await db.update(articles).set(patch).where(eq(articles.id, data.id));
+
+  // Relecture APRÈS écriture : le recalcul doit porter sur l'état réel de la ligne, jamais sur
+  // une reconstitution en mémoire de ce qu'on croit avoir écrit.
+  const [row] = await db.select({
+    category: wpCategories.name, bodyHtml: articles.bodyHtml, excerpt: articles.excerpt,
+    featuredImageUrl: articles.featuredImageUrl, imageCredit: articles.imageCredit,
+    imageSourceUrl: articles.imageSourceUrl, confidenceFlags: articles.confidenceFlags,
+  }).from(articles)
+    .leftJoin(wpCategories, eq(articles.categoryId, wpCategories.id))
+    .where(eq(articles.id, data.id)).limit(1);
+  if (!row) return { ok: false, message: "Article introuvable.", missingFields: [] };
+
+  const [sources, tags, allCategories] = await Promise.all([
+    db.select({ mediaName: articleSources.mediaName, url: articleSources.url })
+      .from(articleSources).where(eq(articleSources.articleId, data.id)),
+    db.select({ tagName: articleTags.tagName }).from(articleTags).where(eq(articleTags.articleId, data.id)),
+    db.select({ name: wpCategories.name }).from(wpCategories),
+  ]);
+
+  const categoryNames = allCategories.map((c) => c.name);
+  const missingFields = sortMissingFields(checkCompleteness(
+    {
+      // Une catégorie non résolue donne category: "" — absente de categoryNames, donc
+      // correctement signalée comme manquante.
+      category: row.category ?? "",
+      bodyHtml: row.bodyHtml, excerpt: row.excerpt ?? "",
+      tags: tags.map((t) => t.tagName),
+      featuredImageUrl: row.featuredImageUrl, imageCredit: row.imageCredit,
+      imageSourceUrl: row.imageSourceUrl,
+      // Le doute initial de l'IA sur la catégorie est levé dès qu'un humain en choisit une.
+      confidence: data.categoryId !== undefined
+        ? { ...row.confidenceFlags, categoryUncertain: false }
+        : (row.confidenceFlags ?? {}),
+    },
+    sources, categoryNames,
+  ));
+
+  await db.update(articles).set({ missingFields }).where(eq(articles.id, data.id));
+  await db.insert(articleRevisions).values({
+    articleId: data.id, actorId: user.id, action: "informations complétées",
+    detail: Object.keys(patch).filter((k) => k !== "updatedAt").join(", "),
+  });
+
+  revalidatePath("/queue");
+  revalidatePath(`/article/${data.id}`);
+  return { ok: true, message: "Informations enregistrées.", missingFields };
 }
