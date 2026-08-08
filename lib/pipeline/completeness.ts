@@ -169,3 +169,98 @@ export function excerptFromHtml(html: string, max = 200): string {
 
 // Réexporté pour que repairDraft (Task 2) et les tests partagent le même garde-fou d'URL.
 export { isSafePublicHttpUrl };
+
+// L'unique dépendance à effets de ce module, injectée : les tests n'ont donc jamais besoin du
+// réseau (test-setup.ts supprime activement toute clé d'API, une extraction réelle échouerait).
+export type RepairDeps = {
+  extract: (url: string) => Promise<{ images?: string[] }>;
+};
+
+export type RepairResult<T extends CompletenessDraft> = {
+  draft: T;
+  repaired: MissingField[];
+  missing: MissingField[];
+};
+
+/**
+ * Tente de combler les manques réparables d'un brouillon, puis recalcule ce qui reste.
+ *
+ * NE LÈVE JAMAIS : chaque tentative a son propre try/catch, et un échec laisse simplement la clé
+ * dans `missing`. C'est ce qui permet à stageSources de traiter cette étape comme non bloquante
+ * (perdre une réparation ne doit jamais coûter un article).
+ *
+ * Générique sur T pour préserver le type concret de l'appelant (ArticleDraft dans stages.ts) :
+ * un retour typé CompletenessDraft obligerait à ré-élargir le brouillon avant persistArticle.
+ */
+export async function repairDraft<T extends CompletenessDraft>(
+  draft: T,
+  sources: SourceRef[],
+  categoryNames: string[],
+  candidateImages: string[],
+  deps: RepairDeps,
+): Promise<RepairResult<T>> {
+  const next = { ...draft, confidence: { ...draft.confidence } } as T;
+  const repaired: MissingField[] = [];
+
+  // 1. Image à la une.
+  if (!filled(next.featuredImageUrl)) {
+    let pool = candidateImages;
+    if (pool.length === 0 && sources.length > 0) {
+      // Le cas signalé en production : la génération n'a reçu AUCUNE image candidate (ni lien,
+      // ni source). On relance l'extraction sur chaque source pour retrouver des images que la
+      // première passe n'avait pas remontées — fournisseur différent, page entre-temps modifiée,
+      // ou simple échec réseau au moment de l'ingestion.
+      const recovered: string[] = [];
+      for (const s of sources) {
+        try {
+          const r = await deps.extract(s.url);
+          recovered.push(...(r.images ?? []));
+        } catch {
+          // Une source inaccessible ne doit pas empêcher d'essayer les suivantes.
+        }
+      }
+      pool = recovered;
+    }
+    // Même garde-fou SSRF que la publication : inutile de retenir une URL que
+    // lib/wp/publish.ts refusera de télécharger ensuite.
+    const picked = pool.find((u) => isSafePublicHttpUrl(u));
+    if (picked) {
+      next.featuredImageUrl = picked;
+      next.confidence.imageMissing = false;
+      repaired.push("featuredImageUrl");
+    }
+  }
+
+  // 2. Crédit et source de l'image — uniquement s'il y a désormais une image à créditer.
+  if (filled(next.featuredImageUrl)) {
+    const owner = sourceForImage(next.featuredImageUrl!, sources);
+    if (owner) {
+      if (!filled(next.imageCredit)) {
+        next.imageCredit = owner.mediaName;
+        repaired.push("imageCredit");
+      }
+      if (!filled(next.imageSourceUrl)) {
+        next.imageSourceUrl = owner.url;
+        repaired.push("imageSourceUrl");
+      }
+    }
+  }
+
+  // 3. Chapô.
+  if (!filled(next.excerpt)) {
+    const derived = excerptFromHtml(next.bodyHtml);
+    if (derived) {
+      next.excerpt = derived;
+      repaired.push("excerpt");
+    }
+  }
+
+  // La catégorie n'est JAMAIS devinée : choisir une rubrique est une décision éditoriale.
+  // `tags` non plus — c'est purement indicatif.
+
+  return {
+    draft: next,
+    repaired: sortMissingFields(repaired),
+    missing: checkCompleteness(next, sources, categoryNames),
+  };
+}

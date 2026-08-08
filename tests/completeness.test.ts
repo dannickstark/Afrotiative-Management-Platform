@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   checkCompleteness, sortMissingFields, blockingGapsForArticle,
-  excerptFromHtml, sourceForImage,
+  excerptFromHtml, sourceForImage, repairDraft, type RepairDeps,
   BLOCKING_FIELDS, MISSING_FIELD_KEYS, MISSING_LABEL,
   type CompletenessDraft, type SourceRef,
 } from "@/lib/pipeline/completeness";
@@ -178,5 +178,130 @@ describe("sourceForImage", () => {
 
   it("retourne null sans source", () => {
     expect(sourceForImage("https://cdn.imgur.com/p.jpg", [])).toBeNull();
+  });
+});
+
+const noExtract: RepairDeps = {
+  extract: async () => {
+    throw new Error("extract ne doit pas être appelé dans ce test");
+  },
+};
+
+function bareDraft(): CompletenessDraft {
+  return {
+    category: "Économie",
+    bodyHtml: `<p>${"Un paragraphe de contenu réel et vérifié. ".repeat(12)}</p>`,
+    excerpt: "",
+    tags: ["bceao"],
+    featuredImageUrl: null,
+    imageCredit: null,
+    imageSourceUrl: null,
+    confidence: { categoryUncertain: false, imageMissing: true, clusterUncertain: false },
+  };
+}
+
+describe("repairDraft", () => {
+  it("répare l'image depuis les candidates déjà connues, sans ré-extraire", async () => {
+    const r = await repairDraft(
+      bareDraft(), SOURCES, CATEGORIES,
+      ["https://www.agenceecofin.com/img/photo.jpg"], noExtract,
+    );
+    expect(r.draft.featuredImageUrl).toBe("https://www.agenceecofin.com/img/photo.jpg");
+    expect(r.repaired).toContain("featuredImageUrl");
+    expect(r.draft.confidence.imageMissing).toBe(false);
+    expect(r.missing).not.toContain("featuredImageUrl");
+  });
+
+  it("ré-extrait les sources quand aucune image candidate n'a été fournie", async () => {
+    const seen: string[] = [];
+    const deps: RepairDeps = {
+      extract: async (url) => {
+        seen.push(url);
+        return url.includes("jeuneafrique")
+          ? { images: ["https://www.jeuneafrique.com/media/p.jpg"] }
+          : { images: [] };
+      },
+    };
+    const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
+    expect(seen).toEqual(SOURCES.map((s) => s.url));
+    expect(r.draft.featuredImageUrl).toBe("https://www.jeuneafrique.com/media/p.jpg");
+    expect(r.repaired).toContain("featuredImageUrl");
+  });
+
+  it("écarte une image que le garde-fou SSRF refuse", async () => {
+    const deps: RepairDeps = {
+      extract: async () => ({ images: ["http://localhost/secret.png", "file:///etc/passwd"] }),
+    };
+    const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
+    expect(r.draft.featuredImageUrl).toBeNull();
+    expect(r.missing).toContain("featuredImageUrl");
+    expect(r.repaired).not.toContain("featuredImageUrl");
+  });
+
+  it("une source qui échoue à l'extraction n'empêche pas d'essayer les suivantes", async () => {
+    const deps: RepairDeps = {
+      extract: async (url) => {
+        if (url.includes("agenceecofin")) throw new Error("502");
+        return { images: ["https://www.jeuneafrique.com/media/p.jpg"] };
+      },
+    };
+    const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
+    expect(r.draft.featuredImageUrl).toBe("https://www.jeuneafrique.com/media/p.jpg");
+  });
+
+  it("ne lève jamais, même si toutes les extractions échouent", async () => {
+    const deps: RepairDeps = { extract: async () => { throw new Error("réseau coupé"); } };
+    const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
+    expect(r.draft.featuredImageUrl).toBeNull();
+    expect(r.missing).toContain("featuredImageUrl");
+  });
+
+  it("dérive le crédit et la source d'image du média correspondant", async () => {
+    const r = await repairDraft(
+      bareDraft(), SOURCES, CATEGORIES,
+      ["https://www.jeuneafrique.com/media/p.jpg"], noExtract,
+    );
+    expect(r.draft.imageCredit).toBe("Jeune Afrique");
+    expect(r.draft.imageSourceUrl).toBe("https://www.jeuneafrique.com/xyz");
+    expect(r.repaired).toEqual(
+      expect.arrayContaining(["featuredImageUrl", "imageCredit", "imageSourceUrl"]),
+    );
+  });
+
+  it("retombe sur la première source quand l'hôte de l'image ne correspond à rien", async () => {
+    const r = await repairDraft(
+      bareDraft(), SOURCES, CATEGORIES, ["https://cdn.imgur.com/p.jpg"], noExtract,
+    );
+    expect(r.draft.imageCredit).toBe("Ecofin");
+  });
+
+  it("dérive le chapô du corps", async () => {
+    const r = await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], {
+      extract: async () => ({ images: [] }),
+    });
+    expect(r.draft.excerpt.length).toBeGreaterThan(0);
+    expect(r.draft.excerpt).not.toContain("<");
+    expect(r.repaired).toContain("excerpt");
+  });
+
+  it("ne devine JAMAIS la catégorie", async () => {
+    const d = { ...bareDraft(), category: "Sport" };
+    const r = await repairDraft(d, SOURCES, CATEGORIES, [], { extract: async () => ({ images: [] }) });
+    expect(r.draft.category).toBe("Sport");
+    expect(r.repaired).not.toContain("categoryId");
+    expect(r.missing).toContain("categoryId");
+  });
+
+  it("ne mute pas le brouillon d'entrée", async () => {
+    const original = bareDraft();
+    await repairDraft(original, SOURCES, CATEGORIES, ["https://ex.com/a.jpg"], noExtract);
+    expect(original.featuredImageUrl).toBeNull();
+    expect(original.confidence.imageMissing).toBe(true);
+  });
+
+  it("n'appelle pas extract quand l'image est déjà présente", async () => {
+    const d = { ...bareDraft(), featuredImageUrl: "https://ex.com/a.jpg" };
+    const r = await repairDraft(d, SOURCES, CATEGORIES, [], noExtract);
+    expect(r.draft.featuredImageUrl).toBe("https://ex.com/a.jpg");
   });
 });
