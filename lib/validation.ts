@@ -147,3 +147,13 @@ export const improveInputSchema = z.object({
   instruction: z.string().max(500, "Instruction trop longue (max 500 caractères).").optional(),
 });
 export type ImproveActionInput = z.infer<typeof improveInputSchema>;
+
+// Plafond volontaire : les actions en lot publient séquentiellement sur WordPress, une sélection
+// démesurée tiendrait la Server Action ouverte trop longtemps. 100 couvre largement une page de
+// file (25 lignes) et plusieurs pages sélectionnées à la suite.
+export const bulkIdsSchema = z.array(z.string().uuid()).min(1, "Sélectionnez au moins un article").max(100);
+
+export const bulkRejectSchema = z.object({
+  ids: bulkIdsSchema,
+  reason: z.string().min(3, "Motif requis"),
+});

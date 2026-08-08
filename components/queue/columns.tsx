@@ -4,12 +4,29 @@ import { ImageOff } from "lucide-react";
 import type { QueueRow } from "@/lib/queries/queue";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ConfidenceBadge } from "./confidence-badge";
 import { RowActions } from "./row-actions";
 import { relativeDate, type ArticleStatus } from "@/lib/format";
 import { MISSING_LABEL } from "@/lib/pipeline/completeness";
 
 export const columns: ColumnDef<QueueRow>[] = [
+  { id: "select", enableSorting: false,
+    header: ({ table }) => (
+      <Checkbox
+        checked={table.getIsAllPageRowsSelected()}
+        indeterminate={table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected()}
+        onCheckedChange={(v) => table.toggleAllPageRowsSelected(Boolean(v))}
+        aria-label="Tout sélectionner"
+      />
+    ),
+    cell: ({ row }) => (
+      <Checkbox
+        checked={row.getIsSelected()}
+        onCheckedChange={(v) => row.toggleSelected(Boolean(v))}
+        aria-label="Sélectionner cet article"
+      />
+    ) },
   { accessorKey: "title", header: "Titre", cell: ({ row }) => (
       <div className="flex items-center gap-2 max-w-[380px]">
         {row.original.low && <ConfidenceBadge />}
