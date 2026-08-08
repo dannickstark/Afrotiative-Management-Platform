@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
 import { db, articles, articleRevisions, user } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 import { faker } from "@faker-js/faker";
@@ -38,6 +38,17 @@ if (!seededAdmin) throw new Error("Seed manquant : admin@afrotiative.com introuv
 const FAKE_ADMIN = {
   id: seededAdmin.id, name: "Test Admin", email: "admin@afrotiative.com",
   role: seededAdmin.role, banned: false, image: null,
+};
+
+// Utilisé uniquement par la section RBAC ci-dessous (refus d'un rôle sans permission) : un id
+// réel n'est pas strictement nécessaire côté FK — requirePermission lève avant toute écriture —
+// mais on réutilise le compte journaliste seedé (README) par cohérence avec FAKE_ADMIN ci-dessus.
+const [seededJournalist] = await db.select({ id: user.id, role: user.role }).from(user).where(eq(user.email, "journaliste@afrotiative.com"));
+if (!seededJournalist) throw new Error("Seed manquant : journaliste@afrotiative.com introuvable (bun run db:seed).");
+
+const FAKE_JOURNALIST = {
+  id: seededJournalist.id, name: "Test Journalist", email: "journaliste@afrotiative.com",
+  role: seededJournalist.role, banned: false, image: null,
 };
 
 mock.module("@/lib/session", () => ({
@@ -129,5 +140,39 @@ describe("bulkReject", () => {
       const revs = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, id));
       expect(revs.some((r) => r.action === "rejeté")).toBe(true);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RBAC : la garde `requirePermission` — pas seulement la matrice `can()` testée plus haut, mais
+// bien le chemin réel des actions — doit refuser un rôle sans permission AVANT toute écriture.
+// Re-stub `requireUser` sur un journaliste seedé (jamais muté, lecture seule — même précaution que
+// FAKE_ADMIN), scopé à CE describe via son propre beforeAll/afterAll : le stub admin utilisé par
+// les describes bulkApprove/bulkReject ci-dessus n'est donc jamais affecté (ils tournent avant, et
+// afterAll ci-dessous repointe explicitement sur FAKE_ADMIN dès la fin de cette section, avant que
+// le afterAll global ne restaure les vraies implémentations).
+describe("RBAC : bulkApprove/bulkReject refusent un rôle sans permission", () => {
+  beforeAll(() => {
+    mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_JOURNALIST }));
+  });
+  afterAll(() => {
+    mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_ADMIN }));
+  });
+
+  it("bulkApprove : un journaliste est refusé (article:publish)", async () => {
+    const id = await seedArticle({ status: "pending" });
+    await expect(bulkApprove([id])).rejects.toThrow();
+  });
+
+  it("bulkReject : un journaliste est refusé (article:reject), sans écriture", async () => {
+    const id = await seedArticle({ status: "pending" });
+    await expect(bulkReject({ ids: [id], reason: "Motif de test suffisant" })).rejects.toThrow();
+
+    // Le refus doit avoir lieu AVANT toute mutation : un guard qui lève APRÈS avoir écrit serait
+    // un bug bien pire qu'un guard qui ne lève pas du tout.
+    const [row] = await db.select({ status: articles.status }).from(articles).where(eq(articles.id, id));
+    expect(row.status).toBe("pending");
+    const revs = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, id));
+    expect(revs.some((r) => r.action === "rejeté")).toBe(false);
   });
 });
