@@ -175,13 +175,17 @@ export async function stageSources(
     // une image récupérée ici améliore réellement le score au lieu d'être pénalisée.
     //
     // Le choix d'extracteur se fait PAR SOURCE, sur la marque `origin` posée à la construction
-    // (Task 4b) : une source de flux RSS (`origin: "feed"`) a son URL fixée par la configuration
-    // de l'opérateur et a déjà été récupérée par un extract() brut à l'ingestion — aucune
-    // exposition nouvelle à relancer cet extract() (backfill d'images inclus) ici. Une source de
-    // recherche web (`origin: "web"`, ajoutée par SP4 Task 6b) reste une URL NON DIGNE DE
-    // CONFIANCE (résultat d'un moteur de recherche tiers) : elle ne doit JAMAIS déclencher de
-    // fetch en clair depuis ce serveur (ni readability, ni le backfill d'images de extract() après
-    // un succès Jina/Firecrawl) — extractExternal() est alors seul autorisé, il ne touche que
+    // (Task 4b) : une source de flux RSS (`origin: "feed"`) a déjà été récupérée par un extract()
+    // brut à l'ingestion (stageItem/executeRun) — relancer cet extract() (backfill d'images inclus)
+    // sur CETTE MÊME URL ici n'expose donc RIEN de nouveau ; c'est le seul fait qui justifie ce
+    // choix. (Seule l'URL du FLUX lui-même — pas celle de chaque item — est fixée par la
+    // configuration de l'opérateur ; l'URL de l'item est choisie par l'éditeur du flux, un tiers. Ne
+    // pas lire « opérateur-configuré » comme une licence à étendre `origin: "feed"` à d'autres URLs
+    // fournies par cet éditeur qui n'auraient pas, elles, déjà été extraites une première fois.)
+    // Une source de recherche web (`origin: "web"`, ajoutée par SP4 Task 6b) reste une URL NON
+    // DIGNE DE CONFIANCE (résultat d'un moteur de recherche tiers) : elle ne doit JAMAIS déclencher
+    // de fetch en clair depuis ce serveur (ni readability, ni le backfill d'images de extract()
+    // après un succès Jina/Firecrawl) — extractExternal() est alors seul autorisé, il ne touche que
     // l'infrastructure du fournisseur externe (Jina/Firecrawl). Une source sans `origin` est
     // traitée comme non fiable par défaut (voir le commentaire sur SourceRef/repairDraft).
     let missingFields: MissingField[];

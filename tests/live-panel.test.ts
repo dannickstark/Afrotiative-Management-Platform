@@ -60,6 +60,28 @@ describe("deriveStepperNodes", () => {
     expect(nodes.find((n) => n.name === "Vérification & complétion")!.state).toBe("pending");
     expect(nodes.find((n) => n.name === "Dépôt en revue")!.state).toBe("done");
   });
+
+  it("a failed « Vérification & complétion » does NOT freeze the stepper — stageSources continues past it", () => {
+    // stageSources deliberately lets ONLY this stage fail without aborting the article: repairDraft
+    // is best-effort, and stageSources's own try/catch around it swallows a timeout/failure,
+    // continuing with the unrepaired draft into embedding/clustering/dépôt (see the comment on the
+    // repairDraft call site in lib/pipeline/stages.ts). The stepper must reflect that reality: this
+    // node renders "failed", but every later node must show its REAL recorded outcome — not a
+    // frozen "pending" describing a run that never happened.
+    const nodes = deriveStepperNodes(
+      [
+        { name: "Extraction du contenu", status: "success" },
+        { name: "Génération IA", status: "success" },
+        { name: "Vérification & complétion", status: "failed" },
+        { name: "Calcul de l'embedding", status: "success" },
+        { name: "Regroupement (clustering)", status: "success" },
+        { name: "Dépôt en revue", status: "success" },
+      ],
+      null,
+    );
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "failed", "done", "done", "done"]);
+    expect(nodes.find((n) => n.name === "Dépôt en revue")!.state).toBe("done");
+  });
 });
 
 describe("computeEta", () => {

@@ -355,6 +355,11 @@ describe("repairDraft", () => {
     };
     // SOURCES n'a pas de champ `origin` — le défaut doit être extractExternal, jamais extract.
     await repairDraft(bareDraft(), SOURCES, CATEGORIES, [], deps);
+    // Sans cette assertion, une régression qui ne relancerait AUCUNE extraction (repairDraft
+    // court-circuité, ou une image déjà présente) ferait passer ce test vacuously : [].every(...)
+    // est true et expect([]).not.toContain("extract") aussi. Vérifier qu'un appel a bien eu lieu
+    // par source prouve que le chemin "non fiable par défaut" a réellement été exercé.
+    expect(calls.length).toBe(SOURCES.length);
     expect(calls.every((c) => c === "extractExternal")).toBe(true);
     expect(calls).not.toContain("extract");
   });

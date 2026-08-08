@@ -9,10 +9,16 @@
 // stage's array position MUST equal the order it actually fires in, or a completed node would
 // render to the right of a still-spinning one (and freeze the wrong nodes on a mid-pipeline
 // failure).
+// Named so ITEM_STAGES and deriveStepperNodes's non-freezing check below can never drift apart —
+// this is the ONE stage whose failure (lib/pipeline/stages.ts's own comment: "SEULE étape de cette
+// fonction dont l'échec n'avorte PAS l'article") must still render as "failed" without freezing
+// every later node to "pending" — see the sawFailure guard below.
+export const COMPLETENESS_STAGE_NAME = "Vérification & complétion" as const;
+
 export const ITEM_STAGES = [
   "Extraction du contenu",
   "Génération IA",
-  "Vérification & complétion",
+  COMPLETENESS_STAGE_NAME,
   "Calcul de l'embedding",
   "Regroupement (clustering)",
   "Dépôt en revue",
@@ -31,8 +37,12 @@ const STAGE_LABEL: Record<string, string> = {
 export type StepperNode = { name: string; label: string; state: "done" | "current" | "pending" | "failed" };
 
 /**
- * Map an item's already-completed steps + the run's current_stage onto the 5 fixed nodes.
- * A failed stage stays failed and everything after it stays pending (the stepper freezes there).
+ * Map an item's already-completed steps + the run's current_stage onto the 6 fixed nodes.
+ * A failed stage stays failed and everything after it stays pending (the stepper freezes there) —
+ * EXCEPT COMPLETENESS_STAGE_NAME ("Vérification & complétion"), the one stage stageSources lets
+ * fail without aborting the article (see its own comment in lib/pipeline/stages.ts): a timed-out
+ * or failed repair still renders that node "failed", but does NOT freeze the nodes after it, since
+ * the run genuinely continues past it (embedding, clustering, dépôt can all still succeed).
  */
 export function deriveStepperNodes(
   itemSteps: { name: string; status: string }[],
@@ -48,7 +58,7 @@ export function deriveStepperNodes(
       state = "pending";
     } else if (status === "failed") {
       state = "failed";
-      sawFailure = true;
+      if (name !== COMPLETENESS_STAGE_NAME) sawFailure = true;
     } else if (status === "success") {
       state = "done";
     } else if (name === currentStage) {
