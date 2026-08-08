@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { POST } from "@/app/api/publish/due/route";
 import { publishDueArticles } from "@/lib/wp/publish-due";
 import { unpublishArticle } from "@/lib/wp/publish";
-import { db, articles, wpCategories, distributions, articleRevisions } from "@/db";
+import { db, articles, articleSources, wpCategories, distributions, articleRevisions } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,6 +18,14 @@ import { eq, inArray } from "drizzle-orm";
 const ENV_KEYS = ["WP_BASE_URL", "WP_USER", "WP_APP_PASSWORD"] as const;
 const savedWpEnv: Record<string, string | undefined> = {};
 
+// Complétude oblige désormais l'article "dû" à avoir une image à la une (voir dueApprovedId
+// ci-dessous). Un fetch réel vers un domaine .test échouerait de toute façon, mais pour rester
+// strictement hors réseau (comme tests/wp-publish.test.ts), on intercepte cette URL précise et on
+// laisse passer tout le reste vers le fetch réel.
+const FIXTURE_IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+const FIXTURE_IMAGE_URL = "https://cdn.example.test/publish-due-fixture.jpg";
+let realFetch: typeof fetch;
+
 describe("publishDueArticles — due-selection + human-review gate", () => {
   let server: ReturnType<typeof Bun.serve>;
   let base: string;
@@ -29,6 +37,15 @@ describe("publishDueArticles — due-selection + human-review gate", () => {
 
   beforeAll(async () => {
     for (const k of ENV_KEYS) savedWpEnv[k] = process.env[k];
+
+    realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url === FIXTURE_IMAGE_URL) {
+        return new Response(FIXTURE_IMAGE_BYTES, { headers: { "content-type": "image/jpeg" } });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
 
     server = Bun.serve({
       port: 0,
@@ -72,10 +89,15 @@ describe("publishDueArticles — due-selection + human-review gate", () => {
         bodyHtml: "<p>Contenu approuvé et dû.</p>",
         status: "approved",
         categoryId: cat.id,
+        // Complet (image + crédit + source d'image + source) : ce fixture doit franchir la garde
+        // de complétude de publishArticle pour exercer le chemin "dû -> publié" testé ici.
+        featuredImageUrl: FIXTURE_IMAGE_URL,
+        imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
         scheduledAt: new Date(Date.now() - 60 * 60 * 1000), // 1h ago
       })
       .returning();
     dueApprovedId = a.id;
+    await db.insert(articleSources).values({ articleId: dueApprovedId, mediaName: "Source Test", url: "https://example.com/source" });
 
     const [b] = await db
       .insert(articles)
@@ -104,6 +126,7 @@ describe("publishDueArticles — due-selection + human-review gate", () => {
 
   afterAll(async () => {
     server.stop(true);
+    globalThis.fetch = realFetch;
     const ids = [dueApprovedId, futureApprovedId, duePendingId];
     await db.delete(distributions).where(inArray(distributions.articleId, ids));
     await db.delete(articleRevisions).where(inArray(articleRevisions.articleId, ids));
@@ -153,9 +176,14 @@ describe("publishDueArticles — due-selection + human-review gate", () => {
       bodyHtml: "<p>Contenu.</p>",
       status: "approved",
       categoryId: categoryRowId,
+      // Complet — mêmes raisons que dueApprovedId ci-dessus : la garde de complétude doit être
+      // franchie pour que ce fixture atteigne réellement le chemin de publication testé ici.
+      featuredImageUrl: FIXTURE_IMAGE_URL,
+      imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
       scheduledAt: new Date(Date.now() - 60 * 60 * 1000), // 1h ago -> due
     }).returning();
     const id = row.id;
+    await db.insert(articleSources).values({ articleId: id, mediaName: "Source Test", url: "https://example.com/source" });
 
     try {
       const res1 = await publishDueArticles();

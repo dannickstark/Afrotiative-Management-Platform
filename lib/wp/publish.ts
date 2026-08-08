@@ -5,6 +5,7 @@ import { and, eq, desc } from "drizzle-orm";
 import { getWpConfig } from "./config";
 import { WordPressClient, WordPressError, type WpPostPayload } from "./client";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
+import { blockingGapsForArticle, MISSING_LABEL } from "@/lib/pipeline/completeness";
 
 export type PostSource = { mediaName: string; url: string };
 
@@ -257,11 +258,26 @@ export async function publishArticle(articleId: string, actorId?: string | null)
 
   const article = await loadArticleForPublish(articleId);
   if (!article) return { ok: false, message: "Article introuvable." };
-  if (!article.categoryId || !article.categoryName) {
-    return { ok: false, message: "Choisissez une catégorie avant de publier." };
-  }
-  if (article.featuredImageUrl && !article.imageCredit) {
-    return { ok: false, message: "Le crédit de l'image est obligatoire." };
+
+  // Garde de complétude unique — l'ensemble bloquant est DÉRIVÉ des colonnes réelles de
+  // l'article (et non lu dans articles.missing_fields) pour deux raisons : les articles
+  // antérieurs à la migration ont une colonne vide et y échapperaient ; et un article corrigé
+  // à la main voit ses colonnes changer immédiatement, sans attendre un recalcul. Les deux
+  // chemins partagent lib/pipeline/completeness.ts, donc l'affichage dans /queue et le refus
+  // ici ne peuvent pas diverger.
+  const gaps = blockingGapsForArticle({
+    categoryId: article.categoryId,
+    categoryName: article.categoryName,
+    featuredImageUrl: article.featuredImageUrl,
+    imageCredit: article.imageCredit,
+    imageSourceUrl: article.imageSourceUrl,
+    sourceCount: article.sources.length,
+  });
+  if (gaps.length > 0) {
+    return {
+      ok: false,
+      message: `Informations manquantes : ${gaps.map((g) => MISSING_LABEL[g]).join(", ")}.`,
+    };
   }
 
   const wp = new WordPressClient(cfg);

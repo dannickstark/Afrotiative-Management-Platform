@@ -38,27 +38,41 @@ export type ShouldAutoPublishInput = {
   /** Whether a featuredImageUrl was resolved for the article. */
   hasImage: boolean;
   confidence: AutoPublishConfidence;
+  /**
+   * Whether the article has at least one BLOCKING gap per lib/pipeline/completeness.ts
+   * (BLOCKING_FIELDS) — sources, catégorie, image à la une, crédit image ou source de l'image.
+   * Fed by the caller's RECONCILED `missingFields` (post resolveCategoryId in persistArticle),
+   * never the pre-reconciliation input, so an unresolved category can't slip an incomplete
+   * article through.
+   */
+  hasBlockingGaps: boolean;
 };
 
 /**
  * Returns true iff EVERY one of the following holds — all are required, none is a "nice to have":
  *
- *  1. `enabled` — the admin master switch is on. Defaults false; this alone makes auto-publish a
+ *  1. `!hasBlockingGaps` — un article incomplet ne peut jamais franchir l'exception
+ *     d'auto-publication : la barrière de revue humaine existe justement pour ces cas-là. Cette
+ *     condition passe avant même la lecture des drapeaux de confiance.
+ *  2. `enabled` — the admin master switch is on. Defaults false; this alone makes auto-publish a
  *     fully opt-in exception rather than a behavior change for existing installs.
- *  2. `score` is not null AND `score >= scoreThreshold` — an article whose score hasn't been
+ *  3. `score` is not null AND `score >= scoreThreshold` — an article whose score hasn't been
  *     computed (null) can never qualify, regardless of the threshold's value.
- *  3. `sourceCount >= minSources` — the cross-check corroboration floor; a single-source story
+ *  4. `sourceCount >= minSources` — the cross-check corroboration floor; a single-source story
  *     never auto-publishes even with a high score.
- *  4. `hasImage` — a featured image was resolved. No image, no auto-publish.
- *  5. NONE of the 4 confidence flags are set (categoryUncertain, imageMissing, clusterUncertain,
+ *  5. `hasImage` — a featured image was resolved. No image, no auto-publish.
+ *  6. NONE of the 4 confidence flags are set (categoryUncertain, imageMissing, clusterUncertain,
  *     aiDegraded) — any single low-confidence signal blocks auto-publish outright, even paired
  *     with a high score and plenty of sources: these flags mark exactly the conditions a human
  *     reviewer should distrust, so they must distrust an automatic approval too.
  *
  * Pure — safe to unit-test without a database, and safe to call on every article regardless of
- * whether auto-publish is enabled (condition 1 short-circuits everything else when it's off).
+ * whether auto-publish is enabled (condition 2 short-circuits everything else when it's off).
  */
 export function shouldAutoPublish(input: ShouldAutoPublishInput): boolean {
+  // Un article incomplet ne peut jamais franchir l'exception d'auto-publication : la barrière de
+  // revue humaine existe justement pour ces cas-là.
+  if (input.hasBlockingGaps) return false;
   if (!input.enabled) return false;
   if (input.score == null || input.score < input.scoreThreshold) return false;
   if (input.sourceCount < input.minSources) return false;

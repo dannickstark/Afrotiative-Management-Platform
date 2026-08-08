@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { buildPostBody, publishArticle, unpublishArticle, republishArticle, isFetchableImageUrl } from "@/lib/wp/publish";
 import { WordPressChannel } from "@/lib/wp/channel";
 import { can } from "@/lib/rbac";
+import { blockingGapsForArticle, MISSING_LABEL } from "@/lib/pipeline/completeness";
 import {
   db, articles, articleSources, articleTags, wpCategories, wpTags, distributions, articleRevisions, user,
 } from "@/db";
@@ -79,6 +80,25 @@ describe("isFetchableImageUrl (SSRF guard on the featured-image fetch)", () => {
     expect(isFetchableImageUrl("file:///etc/passwd")).toBe(false);
     expect(isFetchableImageUrl("ftp://example.com/photo.jpg")).toBe(false);
     expect(isFetchableImageUrl("not a url")).toBe(false);
+  });
+});
+
+describe("garde de complétude à la publication", () => {
+  const base = {
+    categoryId: "c1", categoryName: "Économie",
+    featuredImageUrl: "https://ex.com/a.jpg", imageCredit: "Ecofin",
+    imageSourceUrl: "https://ex.com/a", sourceCount: 2,
+  };
+
+  it("le message énumère les manques en français", () => {
+    const gaps = blockingGapsForArticle({ ...base, categoryId: null, categoryName: null, imageCredit: null });
+    const message = `Informations manquantes : ${gaps.map((g) => MISSING_LABEL[g]).join(", ")}.`;
+    expect(message).toBe("Informations manquantes : Catégorie, Crédit image.");
+  });
+
+  it("les deux refus historiques restent couverts", () => {
+    expect(blockingGapsForArticle({ ...base, categoryId: null, categoryName: null })).toContain("categoryId");
+    expect(blockingGapsForArticle({ ...base, imageCredit: null })).toContain("imageCredit");
   });
 });
 
@@ -225,9 +245,14 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
 
     const [a3] = await db.insert(articles).values({
       title: "Article de test (échec WP)", bodyHtml: "<p>Contenu.</p>", status: "approved", categoryId: cat.id,
+      // Complet (image + crédit + source d'image + au moins une source) : le test cible l'échec
+      // WP lui-même, pas la garde de complétude — un article incomplet serait désormais refusé
+      // avant même d'atteindre l'appel WordPress simulé.
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
       scheduledAt: new Date(Date.now() - 60 * 60 * 1000), // must survive a FAILED publish (kept for retry)
     }).returning();
     failArticleId = a3.id;
+    await db.insert(articleSources).values({ articleId: failArticleId, mediaName: "Source Test", url: "https://example.com/source" });
   });
 
   afterAll(async () => {
@@ -236,7 +261,7 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     await db.delete(distributions).where(inArray(distributions.articleId, [articleId, failArticleId, notConfiguredArticleId]));
     await db.delete(articleRevisions).where(inArray(articleRevisions.articleId, [articleId, failArticleId, notConfiguredArticleId]));
     await db.delete(articleTags).where(eq(articleTags.articleId, articleId));
-    await db.delete(articleSources).where(eq(articleSources.articleId, articleId));
+    await db.delete(articleSources).where(inArray(articleSources.articleId, [articleId, failArticleId]));
     await db.delete(articles).where(inArray(articles.id, [articleId, failArticleId, notConfiguredArticleId]));
     await db.delete(wpCategories).where(eq(wpCategories.id, categoryRowId));
     await db.delete(wpTags).where(inArray(wpTags.name, ["Tag Publish Test A", "Tag Publish Test B"]));
@@ -408,30 +433,40 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
   });
 
   it("publishArticle rejects an article with no category, unchanged", async () => {
+    // Complet à part la catégorie (image + crédit + source d'image + source), pour isoler le
+    // manque testé : la garde énumère TOUS les manques bloquants, donc un article par ailleurs
+    // incomplet produirait un message plus long que celui vérifié ici.
     const [noCatArticle] = await db.insert(articles).values({
       title: "Sans catégorie", bodyHtml: "<p>x</p>", status: "approved",
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
     }).returning();
     try {
+      await db.insert(articleSources).values({ articleId: noCatArticle.id, mediaName: "Source Test", url: "https://example.com/source" });
       const res = await publishArticle(noCatArticle.id);
-      expect(res).toEqual({ ok: false, message: "Choisissez une catégorie avant de publier." });
+      expect(res).toEqual({ ok: false, message: "Informations manquantes : Catégorie." });
       const dist = await db.select().from(distributions).where(eq(distributions.articleId, noCatArticle.id));
       expect(dist).toHaveLength(0);
     } finally {
+      await db.delete(articleSources).where(eq(articleSources.articleId, noCatArticle.id));
       await db.delete(articles).where(eq(articles.id, noCatArticle.id));
     }
   });
 
   it("publishArticle rejects a featured image without a credit, unchanged", async () => {
+    // Complet à part le crédit (catégorie + image + source d'image + source), pour isoler le
+    // manque testé — mêmes raisons que le test précédent.
     const [noCreditArticle] = await db.insert(articles).values({
       title: "Sans crédit", bodyHtml: "<p>x</p>", status: "approved", categoryId: categoryRowId,
-      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: null,
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: null, imageSourceUrl: "https://example.com/credit",
     }).returning();
     try {
+      await db.insert(articleSources).values({ articleId: noCreditArticle.id, mediaName: "Source Test", url: "https://example.com/source" });
       const res = await publishArticle(noCreditArticle.id);
-      expect(res).toEqual({ ok: false, message: "Le crédit de l'image est obligatoire." });
+      expect(res).toEqual({ ok: false, message: "Informations manquantes : Crédit image." });
       const dist = await db.select().from(distributions).where(eq(distributions.articleId, noCreditArticle.id));
       expect(dist).toHaveLength(0);
     } finally {
+      await db.delete(articleSources).where(eq(articleSources.articleId, noCreditArticle.id));
       await db.delete(articles).where(eq(articles.id, noCreditArticle.id));
     }
   });
@@ -443,8 +478,13 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
     });
     const [row] = await db.insert(articles).values({
       title: "Article de test (actorId)", bodyHtml: "<p>Contenu.</p>", status: "approved", categoryId: categoryRowId,
+      // Complet (image + crédit + source d'image + source) : ce test cible l'acteur enregistré
+      // sur article_revisions, pas la garde de complétude — un article incomplet serait
+      // désormais refusé avant que publishArticle n'atteigne ce code.
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
     }).returning();
     const id = row.id;
+    await db.insert(articleSources).values({ articleId: id, mediaName: "Source Test", url: "https://example.com/source" });
 
     try {
       const pub = await publishArticle(id, actorId);
@@ -469,8 +509,11 @@ describe("publishArticle / unpublishArticle / republishArticle (fake WP, real Ne
   it("publishDueArticles-style call with no actor (omitted) records a null actorId — legitimate system action", async () => {
     const [row] = await db.insert(articles).values({
       title: "Article de test (sans acteur)", bodyHtml: "<p>Contenu.</p>", status: "approved", categoryId: categoryRowId,
+      // Complet — mêmes raisons que le test précédent.
+      featuredImageUrl: FIXTURE_IMAGE_URL, imageCredit: "Crédit Test", imageSourceUrl: "https://example.com/credit",
     }).returning();
     const id = row.id;
+    await db.insert(articleSources).values({ articleId: id, mediaName: "Source Test", url: "https://example.com/source" });
     try {
       const res = await publishArticle(id); // no actorId argument — same call shape publishDueArticles uses
       expect(res.ok).toBe(true);

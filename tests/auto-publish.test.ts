@@ -12,6 +12,7 @@ const QUALIFYING: ShouldAutoPublishInput = {
   minSources: 2,
   hasImage: true,
   confidence: {},
+  hasBlockingGaps: false,
 };
 
 describe("shouldAutoPublish — SP6 gated auto-publish", () => {
@@ -80,5 +81,21 @@ describe("shouldAutoPublish — SP6 gated auto-publish", () => {
     expect(shouldAutoPublish({
       ...QUALIFYING, confidence: { categoryUncertain: true, aiDegraded: true },
     })).toBe(false);
+  });
+
+  it("un manque bloquant interdit l'auto-publication malgré un score et des sources suffisants", () => {
+    expect(shouldAutoPublish({
+      enabled: true, score: 95, scoreThreshold: 70,
+      sourceCount: 4, minSources: 2, hasImage: true,
+      confidence: {}, hasBlockingGaps: true,
+    })).toBe(false);
+  });
+
+  it("sans manque bloquant, le comportement d'origine est conservé", () => {
+    expect(shouldAutoPublish({
+      enabled: true, score: 95, scoreThreshold: 70,
+      sourceCount: 4, minSources: 2, hasImage: true,
+      confidence: {}, hasBlockingGaps: false,
+    })).toBe(true);
   });
 });

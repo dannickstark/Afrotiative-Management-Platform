@@ -143,8 +143,9 @@ export async function approveAndPublish(id: string) {
   requirePermission(user.role, "article", "publish");
   const [a] = await db.select().from(articles).where(eq(articles.id, id));
   if (!a) throw new Error("Article introuvable.");
-  if (!a.categoryId) throw new Error("Choisissez une catégorie avant de publier.");
-  if (a.featuredImageUrl && !a.imageCredit) throw new Error("Le crédit de l'image est obligatoire.");
+  // La garde de complétude n'est PAS dupliquée ici : publishArticle (lib/wp/publish.ts) est
+  // l'unique point d'application du refus de publication, dérivé de blockingGapsForArticle.
+  // Un second contrôle ici pourrait diverger (message obsolète) sans jamais devenir plus strict.
   const res = await publishArticle(id, user.id);
   if (!res.ok) throw new Error(res.message);
   revalidatePath(`/article/${id}`); revalidatePath("/queue"); revalidatePath("/dashboard");

@@ -12,7 +12,7 @@ import { withTimeout } from "./timeout";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import { shouldAutoPublish, type AutoPublishConfidence } from "./auto-publish";
 import {
-  repairDraft, checkCompleteness, sortMissingFields, type MissingField,
+  repairDraft, checkCompleteness, sortMissingFields, BLOCKING_FIELDS, type MissingField,
 } from "./completeness";
 import type { RawItem } from "@/lib/rss/parse-feed";
 
@@ -315,6 +315,7 @@ export async function persistArticle(input: {
       minSources: autoPublish.minSources,
       hasImage: !!draft.featuredImageUrl,
       confidence,
+      hasBlockingGaps: missingFields.some((f) => BLOCKING_FIELDS.includes(f)),
     });
   } catch {
     autoApproved = false;
