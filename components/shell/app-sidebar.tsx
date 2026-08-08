@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { NavUser } from "./nav-user";
-import { NAV_ITEMS } from "./nav-items";
+import { visibleNavItems } from "./nav-items";
 import {
   Sidebar,
   SidebarContent,
@@ -32,7 +32,7 @@ export function AppSidebar({
   user: SessionUser;
 }) {
   const pathname = usePathname();
-  const items = NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(role));
+  const items = visibleNavItems(role);
 
   return (
     <Sidebar variant="inset" collapsible="icon" {...props}>
