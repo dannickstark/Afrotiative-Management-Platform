@@ -15,6 +15,7 @@
     "db:push": "drizzle-kit push",
     "db:seed": "bun db/seed.ts",
     "db:studio-templates": "bun db/studio-templates.ts",
+    "db:seed-category-colors": "bun db/seed-category-colors.ts",
     "db:create-admin": "bun db/create-admin.ts"
   },
   "dependencies": {

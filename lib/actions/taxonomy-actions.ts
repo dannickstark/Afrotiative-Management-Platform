@@ -2,6 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
+import { validateCategoryColor } from "@/lib/validation";
 
 // The DB-upsert core (applyTaxonomySync) and the pure diff/slug helpers live in NON-"use server"
 // modules (lib/taxonomy-sync-core.ts / lib/taxonomy-diff.ts) — NOT here. Every export from a
@@ -60,4 +61,30 @@ export async function syncTaxonomyFromWordPress(): Promise<
 
   revalidatePath("/settings/taxonomy");
   return { ok: true as const, categories: wpCats.length, tags: wpTagsList.length };
+}
+
+// V2 Task 3 — the write path V1 documented as missing: wp_categories.color (db/schema.ts) and the
+// {{category.color}} render read (lib/studio/articleTokenValues) both existed with no way to set
+// the column, so every render fell back to DEFAULT_CATEGORY_COLOR regardless of the article's real
+// category. Tags have no `color` column (kept off wpTags deliberately — see components/settings/
+// taxonomy-tables.tsx), so this only ever targets wpCategories.
+//
+// Validation lives in lib/validation.ts (validateCategoryColor), not inline: same "use server"
+// constraint as syncTaxonomyFromWordPress's neighbors (validateFeedInput, validateMemberInput) —
+// this module may only export async functions, so a pure helper can't live here.
+export async function setCategoryColor(
+  id: string,
+  color: string | null,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+
+  const validated = validateCategoryColor(color);
+  if (!validated.ok) return validated;
+
+  const { db, wpCategories } = await import("@/db");
+  const { eq } = await import("drizzle-orm");
+  await db.update(wpCategories).set({ color: validated.data }).where(eq(wpCategories.id, id));
+
+  revalidatePath("/settings/taxonomy");
+  return { ok: true as const };
 }

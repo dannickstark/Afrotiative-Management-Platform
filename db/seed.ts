@@ -5,6 +5,7 @@ import {
 } from "@/db/schema";
 import { createCredentialUser } from "@/lib/create-user";
 import { inArray } from "drizzle-orm";
+import { DEFAULT_CATEGORY_COLORS } from "./default-category-colors";
 
 // db:seed WIPES every application table before re-seeding demo data. With separate Neon
 // branches (dev / production), that is a loaded gun: run it against the wrong DATABASE_URL
@@ -60,8 +61,14 @@ async function main() {
   }
   const [admin] = await db.select().from(user).where(inArray(user.email, ["admin@afrotiative.com"]));
 
+  // V2 Task 3 — seeds each demo category with a distinct default colour (DEFAULT_CATEGORY_COLORS)
+  // so a fresh `db:seed` demonstrates the {{category.color}} render path immediately, instead of
+  // every category falling back to DEFAULT_CATEGORY_COLOR until someone visits /settings/taxonomy.
   const cats = await db.insert(wpCategories).values(
-    CATS.map((name, i) => ({ name, slug: name.toLowerCase().replace(/[^a-z]+/g, "-"), wpId: i + 1 }))
+    CATS.map((name, i) => ({
+      name, slug: name.toLowerCase().replace(/[^a-z]+/g, "-"), wpId: i + 1,
+      color: DEFAULT_CATEGORY_COLORS[name] ?? null,
+    }))
   ).returning();
   await db.insert(wpTags).values(
     TAGS.map((name, i) => ({ name, slug: name.toLowerCase().replace(/[^a-z]+/g, "-"), wpId: i + 1 }))

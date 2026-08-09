@@ -4,10 +4,10 @@ import { getWpConfig } from "@/lib/wp/config";
 import { wpPostUrl } from "@/lib/wp/post-url";
 import type { TokenValues } from "./values";
 import { CONTEXT_TOKENS, type TemplateContext, type TokenId } from "./tokens";
-
-// Couleur de marque utilisée quand une catégorie n'a pas de couleur propre. Une catégorie sans
-// couleur ne doit jamais faire échouer un rendu.
-export const DEFAULT_CATEGORY_COLOR = "#1B7F4A";
+// Définie dans son propre module sans import (voir ce fichier pour pourquoi) — réexportée ici pour
+// que les imports existants de DEFAULT_CATEGORY_COLOR depuis "./bindings" continuent de fonctionner.
+export { DEFAULT_CATEGORY_COLOR } from "./default-category-color";
+import { DEFAULT_CATEGORY_COLOR } from "./default-category-color";
 
 // Lue À L'INTÉRIEUR de la fonction, PAS capturée au chargement du module : une capture au niveau
 // module fige la valeur au premier import (donc avant que les tests n'aient eu l'occasion de poser
