@@ -724,7 +724,7 @@ const values = {
   "article.image": "https://cdn.test/photo.jpg",
   "article.title": "Le cacao camerounais",
   "category.name": "Agribusiness",
-  "category.color": "#1B7F४".replace("४", "4"),
+  "category.color": "#1B7F4A",
 } as const;
 
 describe("resolveTokens", () => {
@@ -736,8 +736,8 @@ describe("resolveTokens", () => {
     if (img.type !== "image" || txt.type !== "text" || bar.type !== "shape") throw new Error("types");
     expect(img.source).toEqual({ kind: "url", url: "https://cdn.test/photo.jpg" });
     expect(txt.content).toBe("Le cacao camerounais · Agribusiness");
-    expect(txt.color).toBe("#1B7F4");
-    expect(bar.fill).toBe("#1B7F4");
+    expect(txt.color).toBe("#1B7F4A");
+    expect(bar.fill).toBe("#1B7F4A");
   });
 
   it("ne mute jamais la scène d'entrée", () => {
@@ -758,10 +758,6 @@ describe("resolveTokens", () => {
   });
 });
 ```
-
-> Note for the implementer: the odd `"#1B7F४".replace(...)` above is deliberate obfuscation-free
-> plain ASCII once evaluated — it produces `#1B7F4`. Replace it with the literal `"#1B7F4"` if you
-> prefer; the assertion values must stay consistent.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -2360,9 +2356,8 @@ Expected: FAIL — cannot resolve `@/lib/studio/bindings`.
 - [ ] **Step 3: Implement `lib/studio/bindings.ts`**
 
 ```ts
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, articles, articleSources, wpCategories, distributions } from "@/db";
-import { and } from "drizzle-orm";
 import type { TokenValues } from "./values";
 import { CONTEXT_TOKENS, type TemplateContext, type TokenId } from "./tokens";
 
