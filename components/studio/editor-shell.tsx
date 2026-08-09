@@ -115,12 +115,21 @@ function EditorShellInner({ template, initialScene, publishedScene, versions, pr
   const autosave = autosaveRef.current;
   useEffect(() => () => autosave.destroy(), [autosave]);
 
-  // Ne notifie PAS au tout premier rendu : `state.scene === initialScene` à ce moment-là, le
-  // serveur détient déjà exactement cette valeur — un autosave immédiat serait un aller-retour pour
-  // rien (et afficherait « Enregistrement… » avant la moindre action de l'utilisateur).
-  const mountedRef = useRef(false);
+  // Ne notifie PAS tant que `state.scene` est encore LA MÊME RÉFÉRENCE que la valeur d'origine — le
+  // serveur détient déjà exactement cette valeur, un autosave serait un aller-retour pour rien (et
+  // afficherait « Enregistrement… » avant la moindre action de l'utilisateur). Comparée par
+  // RÉFÉRENCE à une valeur capturée UNE FOIS (`initialSceneRef`), pas par un simple booléen « ai-je
+  // déjà tourné » : repéré en vérifiant l'écran réel dans un navigateur (pas seulement en lisant le
+  // code) — un booléen de type `mountedRef` se fait piéger par le double appel d'effet du Strict
+  // Mode de React en développement (monte -> nettoie -> remonte, sur la MÊME instance, donc le
+  // booléen reste déjà à `true` au second passage) et déclenchait un autosave fantôme au montage,
+  // visible dans les journaux du serveur dev comme un saveTemplateScene() sans la moindre édition.
+  // Le réducteur (lib/studio/editor-state.ts) garantit renvoyer LA MÊME référence tant qu'aucune
+  // modification valide n'a été committée — cette comparaison est donc immunisée contre le nombre de
+  // fois où l'effet est rejoué, Strict Mode ou pas.
+  const initialSceneRef = useRef(initialScene);
   useEffect(() => {
-    if (!mountedRef.current) { mountedRef.current = true; return; }
+    if (state.scene === initialSceneRef.current) return;
     autosave.notifyChange(state.scene);
   }, [state.scene, autosave]);
 
