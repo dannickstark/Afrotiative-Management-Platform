@@ -20,9 +20,10 @@ describe("visibleNavItems", () => {
     ]);
   });
 
-  it("un admin voit les cinq sous-pages de Réglages", () => {
+  it("un admin voit les six sous-pages de Réglages (D1 §6 ajoute Réseaux sociaux)", () => {
     const settings = visibleNavItems("admin").find((i) => i.href === "/settings");
-    expect(settings!.items).toHaveLength(5);
+    expect(settings!.items).toHaveLength(6);
+    expect(settings!.items!.map((c) => c.href)).toContain("/settings/social");
   });
 
   it("un parent dont tous les enfants sont refusés n'est pas rendu", () => {

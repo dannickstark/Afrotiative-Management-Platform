@@ -8,7 +8,7 @@
 import { db, socialChannelSettings } from "@/db";
 import { eq } from "drizzle-orm";
 import { SOCIAL_CHANNELS } from "./channels";
-import type { Channel } from "@/lib/studio";
+import { CHANNELS, type Channel } from "@/lib/studio";
 
 export type SocialChannelSettings = typeof socialChannelSettings.$inferSelect;
 
@@ -50,6 +50,17 @@ export async function getChannelSettings(channel: Channel): Promise<SocialChanne
 
   const [again] = await db.select().from(socialChannelSettings).where(eq(socialChannelSettings.channel, channel));
   return again;
+}
+
+// /settings/social (Task 7) lists every channel at once. Returns one row per CHANNELS entry, in
+// that same fixed order — the page zips this array back up against CHANNELS itself to recover each
+// row's (typed) Channel key, rather than trusting the `channel` column's own type (plain `text` in
+// the DB, see db/schema.ts's comment on socialChannelSettings.channel — so drizzle infers it as
+// `string`, not the Channel union). Lazily creates any row that doesn't exist yet, same as a single
+// getChannelSettings call — an admin opening the list for the very first time must see all five
+// channels, not just whichever ones happen to already have a settings row.
+export async function getAllChannelSettings(): Promise<SocialChannelSettings[]> {
+  return Promise.all(CHANNELS.map((channel) => getChannelSettings(channel)));
 }
 
 // Only the fields an operator can actually change from /settings/social/[channel] (spec §6):
