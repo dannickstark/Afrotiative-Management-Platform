@@ -22,6 +22,20 @@ const nextConfig: NextConfig = {
   // studio-preview-actions.ts) est le PREMIER module "use server" à tirer lib/studio/render.ts dans
   // le graphe d'une Server Action — bun test ne l'a jamais détecté puisque bun exécute lib/studio/
   // render.ts nativement, sans jamais passer par le bundler Turbopack des Server Actions.
+  //
+  // V3 (Tâche 1) : la revue de branche V1 a renvoyé ici la question de `sharp` et `satori` — aucun
+  // code applicatif n'importait lib/studio avant que V3 ajoute previewArticleImage (Server Action).
+  // Vérifié contre les versions RÉELLEMENT installées, pas supposé :
+  //   - `sharp` (0.35.3) : DÉJÀ dans la liste par défaut de Next lui-même — voir
+  //     node_modules/next/dist/lib/server-external-packages.jsonc, ligne "sharp". Aucune entrée à
+  //     ajouter ici, elle serait redondante.
+  //   - `satori` (0.29.0) : lib/studio/render.ts importe le point d'entrée PAR DÉFAUT du paquet
+  //     ("satori" → dist/index.js, cf. l'export "." de node_modules/satori/package.json), pas le
+  //     sous-chemin "./wasm". Ce fichier ne charge aucun binaire natif ni aucun yoga.wasm à
+  //     l'exécution : le moteur de mise en page Yoga y est porté en JS pur et directement inclus
+  //     dans le bundle (vérifié : dist/index.js ne référence la chaîne "yoga.wasm" nulle part).
+  //     Rien à externaliser.
+  // `@resvg/resvg-js`, lui, reste listé ci-dessous — voir le commentaire dédié juste après.
   serverExternalPackages: ["jsdom", "css-tree", "@mozilla/readability", "isomorphic-dompurify", "@resvg/resvg-js"],
   // Studio V2 Tâche 11 (bibliothèque d'assets) : uploadAsset (lib/actions/asset-actions.ts) reçoit
   // un fichier binaire — jusqu'à 5 Mo pour une image (spec §5) — dans le corps d'une Server Action.
