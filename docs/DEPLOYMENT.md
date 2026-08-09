@@ -50,9 +50,8 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 
 > Les deux `*_TRIGGER_SECRET` doivent être **distincts** l'un de l'autre et de tout autre secret.
 
-**Studio de gabarits (V1) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
-renvoie `null` ; `renderForArticle` répond alors avec un message français plutôt que de planter,
-même raisonnement que WordPress ci-dessus) :
+**Studio de gabarits (V1 + V2) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
+renvoie `null`) :
 
 | Variable | Rôle |
 |---|---|
@@ -62,11 +61,30 @@ même raisonnement que WordPress ci-dessus) :
 | `R2_BUCKET` | Nom du bucket (ex. `afrotiative-media`). |
 | `R2_PUBLIC_BASE_URL` | Base des URLs publiques (ex. `https://media.afrotiative.com`). |
 
+Sans ces cinq variables, le studio bascule en **lecture seule** plutôt que d'échouer au clic avec une
+pile brute :
+
+- **Pipeline (V1)** : `renderForArticle` (déclenché par « Approuver & publier » / la publication
+  planifiée) répond avec `{ ok: false, message: "Stockage R2 non configuré." }`, jamais une
+  exception — l'image à la une reste simplement absente, l'article part quand même.
+- **Interface (V2)** : `/studio`, `/studio/[id]`, `/studio/assets` et `/studio/generer` affichent
+  chacune une bannière française explicite (« Stockage R2 non configuré ») et désactivent
+  téléversement, aperçu, publication et génération — l'écran ne permet même pas de déclencher
+  l'action, plutôt que de la laisser échouer.
+
 **Optionnel — jeton `{{brand.logo}}` :**
 
 | Variable | Rôle |
 |---|---|
-| `STUDIO_BRAND_LOGO_URL` | URL du logo de marque injecté dans le jeton `{{brand.logo}}`. Laissée vide, le jeton est simplement absent des valeurs — tout gabarit qui référence `{{brand.logo}}` échoue alors avec « Valeurs manquantes pour : brand.logo. » plutôt que de planter silencieusement. |
+| `STUDIO_BRAND_LOGO_URL` | URL du logo de marque injecté dans le jeton `{{brand.logo}}` (`lib/studio/bindings.ts`). |
+
+Laissée vide, le jeton `{{brand.logo}}` est simplement **absent** des valeurs — comme n'importe quel
+autre jeton non fourni. Tout gabarit qui l'utilise (les trois contextes à saisie manuelle —
+citation, bandeau, récap — le référencent tous par défaut, voir `CONTEXT_TOKENS` dans
+`lib/studio/tokens.ts`) échoue alors avec **« Valeurs manquantes pour : brand.logo. »** plutôt que
+de planter silencieusement ou d'afficher un logo cassé. C'est la seule variable du studio qui est
+réellement optionnelle : les cinq `R2_*` ci-dessus sont tout-ou-rien, celle-ci dégrade gabarit par
+gabarit selon qu'il référence `{{brand.logo}}` ou non.
 
 ---
 
@@ -131,7 +149,7 @@ bun run build
 bun run start            # sert la build de production sur le port 3000
 ```
 
-Vérification rapide : `bun test` (135 tests, sans réseau ni clés), `bun run typecheck`.
+Vérification rapide : `bun test` (~850 tests, sans réseau ni clés), `bun run typecheck`.
 
 ### 5.1 Déploiement sur Railway — migrations automatiques à chaque déploiement
 
@@ -270,7 +288,9 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 - **Mode dégradé** : sans clés IA, les brouillons sont produits mais marqués dégradés (`confidenceFlags.aiDegraded`) — visibles en revue, jamais publiés automatiquement.
 - **WordPress non configuré** : toute tentative de publication renvoie « WordPress non configuré » et laisse l'article `approved` (jamais de faux succès).
 - **Image fail-soft** : si l'image à la une échoue, le post part **sans** image (jamais de post à moitié cassé) ; l'éditeur peut l'ajouter puis **Republier**.
-- **Studio — couleur de catégorie** : `wp_categories.color` (jeton `{{category.color}}`) n'a **aucun chemin d'écriture** aujourd'hui — pas d'UI, pas de seed, pas posée par la synchronisation de taxonomie WordPress. Toute catégorie rend donc avec `DEFAULT_CATEGORY_COLOR` (`lib/studio/bindings.ts`) tant qu'elle n'est pas posée directement en base Postgres, ou jusqu'à ce que V2 livre un éditeur.
+- **Studio — couleur de catégorie** : éditable depuis **Réglages → Catégories & Tags** (colonne *Couleur*, pastille + sélecteur `#RRGGBB` strict, vide = retour au défaut). Toute catégorie sans couleur posée rend avec `DEFAULT_CATEGORY_COLOR` (`lib/studio/bindings.ts`).
+- **Studio — surfaces V2** : `/studio` liste les gabarits par contexte (portée canal/catégorie, état brouillon/publié/modifications non publiées) ; `/studio/[id]` est l'éditeur (canevas DOM, calques, liaison de jetons, aperçu réel produit par le moteur V1, publication versionnée avec historique) ; `/studio/assets` téléverse et gère images (PNG/JPEG/WebP/SVG, 5 Mo max) et polices (TTF/OTF, 2 Mo max — **le WOFF2 est refusé**, Satori ne sait pas le lire) ; `/studio/generer` produit une image ponctuelle pour les trois contextes à saisie manuelle (citation, bandeau newsletter, récap), en choisissant éventuellement un canal/une catégorie de portée.
+- **Studio — `/studio/generer` sans gabarit publié** : les trois contextes à saisie manuelle (`quote_card`, `newsletter_header`, `recap_card`) n'ont **aucun gabarit de départ** (`bun run db:studio-templates` ne sème que `article_image`/`social_post`) — tant que personne n'en a créé et publié un dans `/studio/[id]`, la génération répond « Aucun gabarit publié pour ce contexte. Créez-en un et publiez-le depuis Studio → Gabarits avant de générer. » plutôt qu'un état vide silencieux.
 - **Idempotence** : republier met à jour le post WP existant (via `distributions.externalId`), jamais de doublon.
 - **Dépublier / Republier** : depuis l'éditeur d'un article publié (rôles Éditeur/Admin).
 - **Sécurité** : secrets uniquement en `.env`/gestionnaire de secrets ; endpoints cron bearer-gardés ; RBAC appliqué **côté serveur** sur chaque action (pas seulement l'UI) ; un admin ne peut pas se verrouiller lui-même (anti-lockout).
@@ -297,3 +317,6 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 | « WordPress non configuré » à la publication | Une des 4 variables `WP_*` manque. Compléter puis « Tester » dans Intégrations. |
 | Publication planifiée qui ne part pas | L'article doit être `approved` **et** avoir un `scheduledAt` passé ; le cron `/api/publish/due` doit tourner. |
 | Erreur pgvector au build/migrate | Extension `vector` non activée sur la base. `CREATE EXTENSION IF NOT EXISTS vector;`. |
+| Studio en lecture seule, bannière « Stockage R2 non configuré » | Une des cinq variables `R2_*` manque (§2). Les compléter — aucun redémarrage de la base requis. |
+| « Aucun gabarit publié pour ce contexte » sur `/studio/generer` | Normal pour `quote_card`/`newsletter_header`/`recap_card` tant qu'aucun gabarit n'a été créé **et publié** dans `/studio/[id]` pour ce contexte (aucun gabarit de départ ne les couvre). |
+| Gabarit qui échoue avec « Valeurs manquantes pour : brand.logo. » | `STUDIO_BRAND_LOGO_URL` n'est pas posée (§2) — optionnelle, mais tout gabarit qui référence `{{brand.logo}}` l'exige. |

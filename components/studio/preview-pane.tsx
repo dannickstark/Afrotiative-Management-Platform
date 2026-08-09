@@ -36,6 +36,13 @@ export interface PreviewPaneProps {
   context: TemplateContext;
   scene: Scene;
   articles?: PreviewArticleOption[];
+  // Tâche 15 (spec §8) : quand le stockage R2 n'est pas configuré, le studio entier bascule en
+  // lecture seule (voir components/studio/storage-banner.tsx) — l'aperçu en fait partie même s'il
+  // n'écrit lui-même NI ligne `renders` NI objet R2 (garantie STRUCTURELLE, vérifiée par
+  // tests/studio-preview.test.ts) : c'est une simplification d'UX délibérée (un studio entièrement
+  // inerte plutôt que « certaines actions marchent, d'autres pas » — spec §8, « Le studio s'affiche
+  // en lecture seule »), pas une nécessité technique de previewTemplateCore lui-même.
+  disabled?: boolean;
 }
 
 type PreviewState =
@@ -44,7 +51,7 @@ type PreviewState =
   | { status: "ready"; dataUri: string; degraded: boolean }
   | { status: "error"; message: string };
 
-export function PreviewPane({ templateId, context, scene, articles }: PreviewPaneProps) {
+export function PreviewPane({ templateId, context, scene, articles, disabled }: PreviewPaneProps) {
   const [articleId, setArticleId] = useState<string | null>(null);
   const [state, setState] = useState<PreviewState>({ status: "idle" });
   // Protège contre une réponse PÉRIMÉE (une requête plus récente — *Actualiser*, ou un nouveau
@@ -75,10 +82,11 @@ export function PreviewPane({ templateId, context, scene, articles }: PreviewPan
   // volontairement plus court (800 ms) : l'aperçu ne modifie rien côté serveur, un différé plus
   // court n'a donc pas le même coût qu'un autosave trop fréquent.
   useEffect(() => {
+    if (disabled) return; // lecture seule (Tâche 15) : jamais d'appel automatique à previewTemplate.
     const t = setTimeout(() => { void runPreview(); }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scene, articleId, templateId]);
+  }, [scene, articleId, templateId, disabled]);
 
   const showArticlePicker = ARTICLE_SELECTABLE_CONTEXTS.includes(context) && !!articles?.length;
 
@@ -91,9 +99,10 @@ export function PreviewPane({ templateId, context, scene, articles }: PreviewPan
             <Badge variant="secondary" data-testid="preview-degraded-badge">Rendu dégradé</Badge>
           )}
           <Button
-            type="button" variant="outline" size="icon-sm" title="Actualiser l'aperçu"
+            type="button" variant="outline" size="icon-sm"
+            title={disabled ? "Indisponible : stockage R2 non configuré." : "Actualiser l'aperçu"}
             data-action="refresh-preview"
-            disabled={state.status === "loading"}
+            disabled={disabled || state.status === "loading"}
             onClick={() => void runPreview()}
           >
             <RefreshCw className={state.status === "loading" ? "animate-spin" : undefined} />
@@ -102,7 +111,10 @@ export function PreviewPane({ templateId, context, scene, articles }: PreviewPan
       </div>
 
       {showArticlePicker && (
-        <Select value={articleId ?? SAMPLE_OPTION} onValueChange={(v) => setArticleId(v === SAMPLE_OPTION ? null : v)}>
+        <Select
+          value={articleId ?? SAMPLE_OPTION} disabled={disabled}
+          onValueChange={(v) => setArticleId(v === SAMPLE_OPTION ? null : v)}
+        >
           <SelectTrigger className="w-full" data-action="preview-article-select">
             {/* Base UI's <SelectValue> ne dérive PAS automatiquement le libellé affiché du
                 <SelectItem> correspondant (contrairement à un <select> natif) — il faut le
@@ -125,13 +137,21 @@ export function PreviewPane({ templateId, context, scene, articles }: PreviewPan
         className="flex items-center justify-center overflow-hidden rounded-lg border bg-muted/30"
         style={{ aspectRatio: `${scene.canvas.width} / ${scene.canvas.height}` }}
       >
-        {state.status === "ready" && (
-          <img src={state.dataUri} alt="Aperçu du gabarit" className="h-full w-full object-contain" />
-        )}
-        {state.status === "loading" && <span className="text-xs text-muted-foreground">Génération de l&rsquo;aperçu…</span>}
-        {state.status === "idle" && <span className="text-xs text-muted-foreground">En attente…</span>}
-        {state.status === "error" && (
-          <p className="p-3 text-center text-xs text-destructive" data-testid="preview-error">{state.message}</p>
+        {disabled ? (
+          <p className="p-3 text-center text-xs text-muted-foreground" data-testid="preview-disabled">
+            Aperçu indisponible — stockage R2 non configuré.
+          </p>
+        ) : (
+          <>
+            {state.status === "ready" && (
+              <img src={state.dataUri} alt="Aperçu du gabarit" className="h-full w-full object-contain" />
+            )}
+            {state.status === "loading" && <span className="text-xs text-muted-foreground">Génération de l&rsquo;aperçu…</span>}
+            {state.status === "idle" && <span className="text-xs text-muted-foreground">En attente…</span>}
+            {state.status === "error" && (
+              <p className="p-3 text-center text-xs text-destructive" data-testid="preview-error">{state.message}</p>
+            )}
+          </>
         )}
       </div>
     </div>

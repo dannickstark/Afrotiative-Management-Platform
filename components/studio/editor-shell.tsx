@@ -18,6 +18,7 @@ import { createAutosaveController, type AutosaveState } from "@/lib/studio/autos
 import { shouldShowUnpublishedBadge } from "@/lib/studio/scene-diff";
 import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
 import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions";
+import { StorageBanner } from "./storage-banner";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
 import type { TemplateVersionRow, PreviewArticleOption } from "@/lib/queries/studio";
@@ -67,6 +68,11 @@ export interface EditorShellProps {
   // components/studio/property-panel.tsx. Défaut [] pour ne pas casser un appelant qui n'aurait pas
   // encore cette prop (aucun aujourd'hui hors ce fichier, mais même filet que PropertyPanel lui-même).
   assets?: AssetRow[];
+  // Tâche 15 (spec §8) : getStudioConfig() redescendu par le Server Component (app/(app)/studio/
+  // [id]/page.tsx) — bannière + aperçu et publication désactivés quand le stockage R2 n'est pas
+  // configuré, plutôt que d'échouer au clic. Défaut `true` : les appelants historiques (aucun
+  // aujourd'hui hors cette page) restent pleinement fonctionnels sans cette prop.
+  storageConfigured?: boolean;
 }
 
 // Composant EXTÉRIEUR : ne porte AUCUN état d'édition lui-même, seulement le mécanisme de
@@ -95,6 +101,7 @@ export function EditorShell(props: EditorShellProps) {
       versions={props.versions}
       previewArticles={props.previewArticles}
       assets={props.assets ?? []}
+      storageConfigured={props.storageConfigured ?? true}
       onRestore={handleRestore}
     />
   );
@@ -104,7 +111,10 @@ interface EditorShellInnerProps extends EditorShellProps {
   onRestore: (scene: Scene) => void;
 }
 
-function EditorShellInner({ template, initialScene, publishedScene, versions, previewArticles, assets = [], onRestore }: EditorShellInnerProps) {
+function EditorShellInner({
+  template, initialScene, publishedScene, versions, previewArticles, assets = [],
+  storageConfigured = true, onRestore,
+}: EditorShellInnerProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
 
@@ -250,11 +260,17 @@ function EditorShellInner({ template, initialScene, publishedScene, versions, pr
             templateId={template.id} publishedVersion={template.publishedVersion} versions={versions}
             onRestore={onRestore}
           />
-          <Button type="button" data-action="publish" disabled={publishing} onClick={() => void handlePublish()}>
+          <Button
+            type="button" data-action="publish" disabled={!storageConfigured || publishing}
+            title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
+            onClick={() => void handlePublish()}
+          >
             {publishing ? "Publication…" : "Publier"}
           </Button>
         </div>
       </header>
+
+      {!storageConfigured && <StorageBanner />}
 
       {publishErrors && (
         <div
@@ -285,7 +301,10 @@ function EditorShellInner({ template, initialScene, publishedScene, versions, pr
             />
           </div>
           <div className="rounded-lg border p-2">
-            <PreviewPane templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles} />
+            <PreviewPane
+              templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles}
+              disabled={!storageConfigured}
+            />
           </div>
         </div>
       </div>

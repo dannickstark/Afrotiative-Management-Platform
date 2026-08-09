@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { uploadAsset, deleteAsset } from "@/lib/actions/asset-actions";
 import { fontFaceFamily, fontProxyUrl } from "@/lib/studio/font-face";
+import { StorageBanner } from "./storage-banner";
 import type { AssetRow } from "@/lib/queries/assets";
 
 // components/studio/asset-library.tsx — Tâche 11 : la page bibliothèque, deux formulaires de
@@ -36,7 +37,7 @@ const FONT_WEIGHTS = [
   { value: "900", label: "900 — Noir" },
 ];
 
-function ImageUploadCard({ onUploaded }: { onUploaded: () => void }) {
+function ImageUploadCard({ onUploaded, disabled }: { onUploaded: () => void; disabled: boolean }) {
   const [pending, startTransition] = useTransition();
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
@@ -70,14 +71,18 @@ function ImageUploadCard({ onUploaded }: { onUploaded: () => void }) {
           <Label className="text-xs font-normal text-muted-foreground">Fichier (PNG, JPEG, WebP ou SVG — 5 Mo max)</Label>
           <Input
             type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" data-field="image-file"
+            disabled={disabled}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </div>
         <div className="space-y-1">
           <Label className="text-xs font-normal text-muted-foreground">Nom (optionnel)</Label>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={file?.name ?? "logo-marque.png"} />
+          <Input value={name} disabled={disabled} onChange={(e) => setName(e.target.value)} placeholder={file?.name ?? "logo-marque.png"} />
         </div>
-        <Button type="button" onClick={submit} disabled={pending || !file} data-action="upload-image">
+        <Button
+          type="button" onClick={submit} disabled={disabled || pending || !file} data-action="upload-image"
+          title={disabled ? "Indisponible : stockage R2 non configuré." : undefined}
+        >
           <UploadCloud />{pending ? "Téléversement…" : "Téléverser"}
         </Button>
       </CardContent>
@@ -85,7 +90,7 @@ function ImageUploadCard({ onUploaded }: { onUploaded: () => void }) {
   );
 }
 
-function FontUploadCard({ onUploaded }: { onUploaded: () => void }) {
+function FontUploadCard({ onUploaded, disabled }: { onUploaded: () => void; disabled: boolean }) {
   const [pending, startTransition] = useTransition();
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
@@ -131,23 +136,24 @@ function FontUploadCard({ onUploaded }: { onUploaded: () => void }) {
           <Input
             type="file" accept=".ttf,.otf,font/ttf,font/otf,application/x-font-ttf,application/vnd.ms-opentype"
             data-field="font-file"
+            disabled={disabled}
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div className="space-y-1">
             <Label className="text-xs font-normal text-muted-foreground">Nom</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={file?.name ?? "Ma police"} />
+            <Input value={name} disabled={disabled} onChange={(e) => setName(e.target.value)} placeholder={file?.name ?? "Ma police"} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-normal text-muted-foreground">Famille (nom affiché dans l&rsquo;éditeur)</Label>
-            <Input value={fontFamily} onChange={(e) => setFontFamily(e.target.value)} placeholder={name || "Ma police"} />
+            <Input value={fontFamily} disabled={disabled} onChange={(e) => setFontFamily(e.target.value)} placeholder={name || "Ma police"} />
           </div>
         </div>
         <div className="flex items-end gap-3">
           <div className="flex-1 space-y-1">
             <Label className="text-xs font-normal text-muted-foreground">Graisse</Label>
-            <Select value={fontWeight} onValueChange={(v) => v && setFontWeight(v)}>
+            <Select value={fontWeight} onValueChange={(v) => v && setFontWeight(v)} disabled={disabled}>
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Choisir…">
                   {(v: string | null) => FONT_WEIGHTS.find((o) => o.value === v)?.label ?? "Choisir…"}
@@ -159,10 +165,13 @@ function FontUploadCard({ onUploaded }: { onUploaded: () => void }) {
             </Select>
           </div>
           <label className="flex h-8 items-center gap-1.5 text-sm">
-            <Switch checked={italic} onCheckedChange={(v) => setItalic(!!v)} />Italique
+            <Switch checked={italic} onCheckedChange={(v) => setItalic(!!v)} disabled={disabled} />Italique
           </label>
         </div>
-        <Button type="button" onClick={submit} disabled={pending || !file} data-action="upload-font">
+        <Button
+          type="button" onClick={submit} disabled={disabled || pending || !file} data-action="upload-font"
+          title={disabled ? "Indisponible : stockage R2 non configuré." : undefined}
+        >
           <UploadCloud />{pending ? "Téléversement…" : "Téléverser"}
         </Button>
       </CardContent>
@@ -275,7 +284,12 @@ function AssetGrid({ assets, onDeleted }: { assets: AssetRow[]; onDeleted: () =>
   );
 }
 
-export function AssetLibrary({ assets }: { assets: AssetRow[] }) {
+// Tâche 15 (spec §8) : storageConfigured, redescendu depuis app/(app)/studio/assets/page.tsx
+// (getStudioConfig(), lu côté serveur). Désactive les DEUX cartes de téléversement plutôt que de
+// laisser uploadAssetCore échouer au clic avec son propre message gracieux (lib/studio/asset-core.ts)
+// — la suppression, elle, reste active : deleteAssetCore fonctionne sans R2 (elle saute simplement
+// le nettoyage de l'objet R2 quand cfg est null), donc rien à désactiver ici.
+export function AssetLibrary({ assets, storageConfigured }: { assets: AssetRow[]; storageConfigured: boolean }) {
   const router = useRouter();
   function refresh() { router.refresh(); }
 
@@ -288,9 +302,11 @@ export function AssetLibrary({ assets }: { assets: AssetRow[] }) {
         </p>
       </div>
 
+      {!storageConfigured && <StorageBanner />}
+
       <div className="grid gap-3 sm:grid-cols-2">
-        <ImageUploadCard onUploaded={refresh} />
-        <FontUploadCard onUploaded={refresh} />
+        <ImageUploadCard onUploaded={refresh} disabled={!storageConfigured} />
+        <FontUploadCard onUploaded={refresh} disabled={!storageConfigured} />
       </div>
 
       <AssetGrid assets={assets} onDeleted={refresh} />

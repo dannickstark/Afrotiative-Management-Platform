@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { getTemplateById, listArticlesForPreview } from "@/lib/queries/studio";
 import { listAssets } from "@/lib/queries/assets";
+import { getStudioConfig } from "@/lib/studio/config";
 import { EditorShell } from "@/components/studio/editor-shell";
 
 // Même forme canonique que app/(app)/article/[id]/page.tsx : Server Component, `params` est une
@@ -30,6 +31,9 @@ export default async function StudioTemplatePage({ params }: { params: Promise<{
   // redescendue en prop jusqu'aux sélecteurs de components/studio/property-panel.tsx — même schéma
   // que previewArticles ci-dessus, jamais rechargée depuis un composant client.
   const assets = await listAssets();
+  // Tâche 15 (spec §8) : bannière de lecture seule + aperçu/publication désactivés quand le
+  // stockage R2 n'est pas configuré, plutôt que d'échouer au clic avec une pile brute.
+  const storageConfigured = !!getStudioConfig();
 
   return (
     <EditorShell
@@ -40,6 +44,7 @@ export default async function StudioTemplatePage({ params }: { params: Promise<{
       versions={template.versions}
       previewArticles={previewArticles}
       assets={assets}
+      storageConfigured={storageConfigured}
     />
   );
 }
