@@ -184,9 +184,30 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
   await Promise.all(resolved.layers.map(async (layer) => {
     if (!layer.visible) return;
     if (layer.type === "image") {
-      const url = layer.source.kind === "url"
-        ? layer.source.url
-        : layer.source.kind === "asset" ? await assets.imageUrl(layer.source.assetId) : null;
+      let url: string | null;
+      if (layer.source.kind === "url") {
+        url = layer.source.url;
+      } else if (layer.source.kind === "asset") {
+        try {
+          url = await assets.imageUrl(layer.source.assetId);
+        } catch (e) {
+          // Tâche 12 : ce chemin n'était atteignable par AUCUN magasin réel avant DbAssetLoader — la
+          // revue de V1 avait déjà signalé qu'un magasin REJETANT ici laisserait fuir son message
+          // natif (anglais, détails d'implémentation R2/réseau) jusqu'à l'appelant, exactement la
+          // même politique que les trois autres frontières natives de ce fichier (satori/resvg/sharp
+          // plus bas, qrcode dans qrDataUri). Contrairement à une police d'asset manquante (§2
+          // ci-dessus, dégradation TOLÉRÉE), un magasin qui échoue à résoudre une IMAGE reste un
+          // échec FRANC — element.ts documente déjà ce contrat, voir "Finding 2" plus bas dans ce
+          // fichier et son test dans tests/studio-render.test.ts.
+          console.error(`[studio] résolution de l'URL de l'asset image « ${layer.source.assetId} » (calque « ${layer.name || layer.id} ») échouée :`, e);
+          throw new RenderError(
+            `Image introuvable pour le calque « ${layer.name || layer.id} » : le magasin d'assets est indisponible.`,
+            { cause: e },
+          );
+        }
+      } else {
+        url = null;
+      }
       if (!url) {
         // Contrairement à une police manquante, une IMAGE manquante n'est pas la dégradation
         // tolérée : element.ts documente explicitement que « render.ts a déjà échoué franchement si

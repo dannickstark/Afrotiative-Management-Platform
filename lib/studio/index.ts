@@ -13,6 +13,7 @@ import { ImageFetchError } from "./images";
 import { SceneError } from "./scene";
 import type { TemplateContext, Channel } from "./tokens";
 import type { AssetLoader } from "./fonts";
+import { DbAssetLoader } from "./asset-loader";
 
 export type RenderForArticleResult =
   | { ok: true; url: string; renderId: string; degraded: boolean }
@@ -33,9 +34,11 @@ export async function renderForArticle(
     // Injecté par les tests uniquement — voir lib/studio/images.ts : le garde SSRF n'est levé que
     // si fetchImpl est fourni ET process.env.NODE_ENV === "test", jamais par sa seule présence.
     fetchImpl?: typeof fetch;
-    // Optionnel — défaut NullAssetLoader (voir fonts.ts) : V1 n'a pas de bibliothèque d'assets, V2
-    // la peuplera (render_assets). Point d'injection pour que V2 branche un vrai chargeur sans
-    // toucher à cette fonction.
+    // Défaut DbAssetLoader (Tâche 12) — une instance FRAÎCHE par appel, exactement comme
+    // `store` juste au-dessus (`o.store ?? new R2RenderStore()`) : DbAssetLoader n'a pas vocation à
+    // survivre au-delà d'un seul rendu (voir son propre commentaire sur le cache en mémoire).
+    // Toujours overridable via cette option — les tests y injectent leurs propres implémentations
+    // (NullAssetLoader, un magasin REJETANT…) sans jamais toucher à la vraie base de données.
     assets?: AssetLoader;
   },
 ): Promise<RenderForArticleResult> {
@@ -67,7 +70,9 @@ export async function renderForArticle(
     const cached = await findCachedRender(inputHash);
     if (cached) return { ok: true, url: cached.url, renderId: cached.id, degraded: cached.degraded };
 
-    const out = await renderScene({ scene: template.scene, values, fetchImpl: o.fetchImpl, assets: o.assets });
+    const out = await renderScene({
+      scene: template.scene, values, fetchImpl: o.fetchImpl, assets: o.assets ?? new DbAssetLoader(),
+    });
     const key = storageKeyFor(inputHash, out.mime, new Date());
     const url = await store.put(key, out.bytes, out.mime);
 
@@ -124,6 +129,11 @@ export { MemoryRenderStore, type RenderStore } from "./store";
 // donc pas s'en servir pour l'aperçu de l'éditeur de gabarits.
 export { renderScene, RenderError } from "./render";
 export type { AssetLoader, LoadedFont } from "./fonts";
+// Tâche 12 : l'implémentation réelle de AssetLoader, pour les rares appelants qui veulent l'utiliser
+// explicitement (ex. previewTemplateCore, lib/studio/preview-core.ts) sans passer par
+// renderForArticle — voir sa propre note pour pourquoi il l'importe directement de "./asset-loader"
+// plutôt que de ce barrel.
+export { DbAssetLoader } from "./asset-loader";
 // Au-delà de la liste demandée : exporter renderScene sans exporter les erreurs typées qu'il lève
 // laisserait V2 incapable de distinguer un MissingTokensError d'un SceneError autrement qu'en
 // inspectant .constructor.name — exactement le contournement fragile que ces classes existent pour

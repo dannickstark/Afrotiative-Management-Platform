@@ -20,6 +20,14 @@ import { MissingTokensError, type TokenValues } from "./values";
 import { ImageFetchError } from "./images";
 import { SAMPLE_VALUES } from "./sample-values";
 import type { AssetLoader } from "./fonts";
+// Tâche 12 (Lot 3) : importé directement de "./asset-loader", PAS du barrel "./index" — index.ts
+// importe lib/studio/store.ts (R2RenderStore/saveRender), et
+// tests/studio-preview.test.ts:"garantie structurelle" vérifie que preview-core.ts n'atteint JAMAIS
+// store.ts ni index.ts, même transitivement, pour garder la garantie "l'aperçu n'écrit rien"
+// vérifiable sur le GRAPHE réel plutôt que simulée. asset-loader.ts n'importe que @/db et ./fonts
+// (types) — ni l'un ni l'autre ne remonte à store.ts ou index.ts — donc cet import ne menace pas
+// cette garantie.
+import { DbAssetLoader } from "./asset-loader";
 
 export type PreviewResult =
   | { ok: true; dataUri: string; degraded: boolean }
@@ -43,6 +51,12 @@ export interface PreviewTemplateInput {
   articleId?: string | null;
   // Injectés par les tests uniquement (voir lib/studio/render.ts / images.ts).
   fetchImpl?: typeof fetch;
+  // Défaut DbAssetLoader (Tâche 12, comme renderForArticle — lib/studio/index.ts) : sans ce
+  // branchement, un calque texte/image ajouté par le sélecteur d'assets (Tâche 13) se
+  // prévisualiserait TOUJOURS comme s'il n'avait aucun asset (police de repli silencieuse, ou une
+  // RenderError franche pour une image) — l'aperçu mentirait sur l'un des deux seuls chemins que
+  // Lot 3 introduit. Toujours overridable, comme avant : les tests y injectent leurs propres
+  // implémentations sans jamais toucher à R2.
   assets?: AssetLoader;
 }
 
@@ -91,7 +105,7 @@ export async function previewTemplateCore(input: PreviewTemplateInput): Promise<
 
   try {
     const out = await renderScene({
-      scene, values, assets: input.assets, fetchImpl: input.fetchImpl, encode: "jpeg",
+      scene, values, assets: input.assets ?? new DbAssetLoader(), fetchImpl: input.fetchImpl, encode: "jpeg",
     });
     return { ok: true, dataUri: `data:${out.mime};base64,${Buffer.from(out.bytes).toString("base64")}`, degraded: out.degraded };
   } catch (e) {
