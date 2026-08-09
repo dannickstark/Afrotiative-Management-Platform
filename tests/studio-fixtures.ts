@@ -74,6 +74,9 @@
 //                                    1) — il s'exécute en premier dans son describe et libère la
 //                                    portée dans un `finally` avant que le test du repli n'en ait
 //                                    besoin.
+//   tests/studio-templates-table.test.ts → (recap_card, "test-templates-table-create-happy", null)
+//                                    (recap_card, "test-templates-table-create-conflict", null)
+//                                    (recap_card, "test-templates-table-archive-toggle", null)
 //   tests/studio-autosave.test.ts → (recap_card, "test-autosave-publish-refuse", null)
 //   tests/studio-preview.test.ts  → (recap_card, "test-preview-actions", null)
 //                                    (social_post, "test-preview-fail", null)
