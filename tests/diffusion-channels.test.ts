@@ -53,9 +53,17 @@ describe("StubChannel.send — no network call (D1 §2)", () => {
     if (realFetch) globalThis.fetch = realFetch;
   });
 
-  it("resolves ok:true with a synthetic externalId even when fetch would throw if called", async () => {
+  // A fetch that THROWS-if-called only proves "send() didn't reject" — a hypothetical
+  // implementation that called fetch and swallowed the error internally (try/catch around a real
+  // network call) would still resolve ok:true and pass that check alone, while genuinely violating
+  // "no network call" (the exact "witness never actually exercised" shape flagged in this
+  // program's review history). A COUNTING spy closes that gap: it proves fetch was invoked zero
+  // times, which no internal try/catch can hide.
+  it("resolves ok:true with a synthetic externalId, and fetch is called exactly zero times", async () => {
     realFetch = globalThis.fetch;
-    globalThis.fetch = (() => {
+    let calls = 0;
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      calls++;
       throw new Error("StubChannel appelé le réseau — c'est un envoi FANTÔME (D1 §2).");
     }) as unknown as typeof fetch;
 
@@ -72,11 +80,14 @@ describe("StubChannel.send — no network call (D1 §2)", () => {
       expect(result.externalId.length).toBeGreaterThan(0);
       expect(result.externalId).toContain("facebook");
     }
+    expect(calls).toBe(0);
   });
 
-  it("every registered channel's send() also makes no network call (exercises the real registry wiring, not just the class directly)", async () => {
+  it("every registered channel's send() also makes no network call — fetch call count stays zero (exercises the real registry wiring, not just the class directly)", async () => {
     realFetch = globalThis.fetch;
-    globalThis.fetch = (() => {
+    let calls = 0;
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      calls++;
       throw new Error("Un canal du registre a appelé le réseau — D1 ne doit avoir aucun adaptateur réel.");
     }) as unknown as typeof fetch;
 
@@ -88,6 +99,7 @@ describe("StubChannel.send — no network call (D1 §2)", () => {
       });
       expect(result.ok).toBe(true);
     }
+    expect(calls).toBe(0);
   });
 
   it("two calls produce different externalIds (not a hardcoded constant)", async () => {
