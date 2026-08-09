@@ -1,4 +1,4 @@
-import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings, LayoutTemplate, Images } from "lucide-react";
+import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings, LayoutTemplate, Images, Wand2 } from "lucide-react";
 import type { Role } from "@/lib/auth";
 
 export type NavChild = { href: string; label: string; roles?: Role[] };
@@ -61,6 +61,9 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: "/studio", label: "Gabarits", icon: LayoutTemplate, roles: ["admin", "editor"] },
       // Tâche 11 (Lot 3) : la bibliothèque d'assets (téléversement images/polices, render_assets).
       { href: "/studio/assets", label: "Bibliothèque", icon: Images, roles: ["admin", "editor"] },
+      // Tâche 14 (Lot 4) : génération ponctuelle pour les contextes à saisie manuelle (citation,
+      // bandeau, récap — spec §7).
+      { href: "/studio/generer", label: "Génération", icon: Wand2, roles: ["admin", "editor"] },
     ],
   },
   {

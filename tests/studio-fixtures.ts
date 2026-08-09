@@ -77,6 +77,17 @@
 //   tests/studio-autosave.test.ts → (recap_card, "test-autosave-publish-refuse", null)
 //   tests/studio-preview.test.ts  → (recap_card, "test-preview-actions", null)
 //                                    (social_post, "test-preview-fail", null)
+//   tests/studio-manual.test.ts   → (recap_card, null, <categoryId frais>) pour le gabarit publié du
+//                                    chemin heureux — sans risque de collision (categoryId frais à
+//                                    chaque exécution, comme (article_image, null, <categoryId>)
+//                                    ci-dessous). (recap_card, null, null) — le repli final PAR
+//                                    CONSTRUCTION de resolveTemplate (lib/studio/resolve.ts), quel
+//                                    que soit le canal/la catégorie demandés — est utilisé
+//                                    TRANSITOIREMENT pour prouver le chemin « aucun gabarit publié » :
+//                                    supprimé défensivement en beforeAll (comme
+//                                    tests/studio-template-actions.test.ts pour la même portée),
+//                                    jamais réoccupé, rien à nettoyer en afterAll pour cette portée
+//                                    précise.
 //
 // (article_image, null, <categoryId>) et (social_post, "test-priorite-canal", <categoryId>) ne
 // figurent PAS dans le registre ci-dessus : leur categoryId est un UUID généré à chaque exécution

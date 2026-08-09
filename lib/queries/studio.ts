@@ -227,3 +227,15 @@ export async function listArticlesForPreview(limit = 30): Promise<PreviewArticle
   });
   return rows;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 14 — /studio/generer : sélecteur de catégorie du formulaire de saisie manuelle, même modèle
+// « canal / catégorie » (portée) que le reste du studio (spec §7). Projection minimale : ce
+// sélecteur n'a besoin ni de la couleur ni du slug, seulement de quoi peupler un <Select>.
+export type CategoryOption = { id: string; name: string };
+
+export async function listCategoriesForManual(): Promise<CategoryOption[]> {
+  return db.select({ id: wpCategories.id, name: wpCategories.name })
+    .from(wpCategories)
+    .orderBy(wpCategories.name);
+}
