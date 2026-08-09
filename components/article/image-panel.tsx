@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { ExternalLink, ImageOff, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ExternalLink, ImageOff, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -44,7 +44,14 @@ export function handleTabOpen(
   setState({ status: "loading" });
   fetchPreview(articleId).then(
     (result) => setState({ status: "done", result }),
-    () => setState({ status: "done", result: { ok: false, message: "Aperçu indisponible pour le moment." } }),
+    () => setState({
+      status: "done",
+      // reason: "render_failed" — un rejet de la promesse est un échec de TRANSPORT, jamais le
+      // signal "stockage R2 non configuré" (celui-là arrive toujours en `ok:false` résolu, jamais
+      // en rejet — voir renderForArticle, lib/studio/index.ts). Le rafraîchissement manuel
+      // (refreshPreview, ci-dessous dans ce fichier) est le seul moyen de sortir de cet état.
+      result: { ok: false, reason: "render_failed", message: "Aperçu indisponible pour le moment." },
+    }),
   );
 }
 
@@ -135,9 +142,13 @@ export function PreviewTabContent({ state }: { state: PreviewState }) {
 // missing image or a broken URL — both need a human to fix them before
 // publish (approveAndPublish blocks a set image without a credit).
 export function ImagePanel({
-  articleId, featuredImageUrl, imageCredit, imageSourceUrl, onImageChange, readOnly,
+  articleId, featuredImageUrl, imageCredit, imageSourceUrl, categoryId, onImageChange, readOnly,
 }: ImageFields & {
   articleId: string;
+  // Revue finale V3, Important 2 : le rendu article_image dépend AUSSI de la catégorie (jeton
+  // category.name, lib/studio/bindings.ts) — pas seulement de l'image — donc l'effet ci-dessous
+  // doit invalider l'aperçu sur un changement de l'un OU l'autre, pas seulement de l'image.
+  categoryId: string | null;
   onImageChange: (fields: ImageFields) => void;
   readOnly?: boolean;
 }) {
@@ -147,6 +158,35 @@ export function ImagePanel({
   const [draftCredit, setDraftCredit] = useState(imageCredit ?? "");
   const [draftSourceUrl, setDraftSourceUrl] = useState(imageSourceUrl ?? "");
   const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
+
+  // Revue finale V3, Important 2 : sans ceci, un aperçu déjà "done" (succès OU échec) ne pouvait
+  // JAMAIS être recalculé après une correction — handleTabOpen no-op sauf si status === "idle", et
+  // rouvrir l'onglet après avoir changé l'image/catégorie ne suffisait donc pas à faire disparaître
+  // un message « Informations manquantes » périmé. Cet effet réarme la garde à "idle" dès que l'une
+  // des DEUX entrées du rendu change ; le prochain passage sur l'onglet « Aperçu final » (Tabs.
+  // onValueChange -> handleTabOpen) redéclenche alors bien un appel. Le cache par inputHash de V1
+  // (lib/studio/store.ts) rend ce rappel bon marché quand les entrées sont en réalité identiques —
+  // ce qui préserve la garantie « exactement un rendu à l'ouverture, aucun à la réouverture » pour
+  // le cas où RIEN n'a changé (tests/article-preview.test.ts, Section 1) : cet effet ne s'exécute
+  // alors qu'au montage, où `preview` vaut déjà "idle" — un no-op sans second appel réseau.
+  useEffect(() => {
+    setPreview({ status: "idle" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- volontairement scindé sur les deux
+    // SEULES entrées du rendu article_image (image, catégorie), pas sur `articleId` : un changement
+    // d'article démonte/remonte ce composant (clé de route), donc ne passe jamais par cet effet.
+  }, [featuredImageUrl, categoryId]);
+
+  // Revue finale V3, Important 2 : affordance de rafraîchissement manuel — nécessaire en PLUS de
+  // l'effet ci-dessus, pour le cas qu'il ne couvre pas : un échec de TRANSPORT (réseau, promesse
+  // rejetée — handleTabOpen) sans que l'image ni la catégorie n'aient changé. Sans bouton, ce cas
+  // restait bloqué sur « Aperçu indisponible pour le moment. » jusqu'à un rechargement complet de
+  // la page. Réutilise handleTabOpen (déjà testé, tests/article-preview.test.ts) en forçant le
+  // statut passé à "idle" : la garde `status !== "idle"` ne porte que sur cet argument, pas sur
+  // `preview.status` réel, donc un appel explicite la contourne délibérément — exactement l'usage
+  // qu'un rafraîchissement demandé par l'utilisateur doit avoir.
+  function refreshPreview() {
+    handleTabOpen("final", "idle", setPreview, articleId, previewArticleImage);
+  }
 
   function openEditor() {
     setDraftUrl(featuredImageUrl ?? "");
@@ -255,7 +295,30 @@ export function ImagePanel({
         )}
       </TabsContent>
 
-      <TabsContent value="final">
+      <TabsContent value="final" className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          {/* Revue finale V3, Important 2 : décision explicite — l'aperçu lit l'article PERSISTÉ
+              (renderForArticle interroge `articles`, lib/studio/index.ts) alors que ce panneau
+              affiche l'état LOCAL, pas encore enregistré (EditorShell, useState). Plutôt que de
+              suivre précisément un état "modifié depuis le dernier enregistrement" (aucun signal de
+              ce type n'existe ailleurs dans l'éditeur — "Enregistrer" est un bouton explicite, pas
+              un autosave), ce rappel reste affiché EN PERMANENCE sous l'onglet : toujours vrai,
+              jamais un faux négatif, et ne demande aucune plomberie de comparaison supplémentaire. */}
+          <p className="text-xs leading-tight text-muted-foreground">
+            Reflète la dernière version enregistrée de l&apos;image et de la catégorie.
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-6 shrink-0"
+            onClick={refreshPreview}
+            disabled={preview.status === "loading"}
+            aria-label="Rafraîchir l'aperçu final"
+          >
+            <RefreshCw className={`size-3.5 ${preview.status === "loading" ? "animate-spin" : ""}`} aria-hidden />
+          </Button>
+        </div>
         <PreviewTabContent state={preview} />
       </TabsContent>
     </Tabs>

@@ -101,6 +101,39 @@ describe("handleTabOpen — chargement à la demande de l'onglet « Aperçu fina
     if (box.state.status !== "done") throw new Error("état inattendu");
     expect(box.state.result.ok).toBe(false);
   });
+
+  // Revue finale V3, Important 2 : « Aperçu final » ne pouvait auparavant JAMAIS être recalculé —
+  // handleTabOpen no-op sauf si status === "idle", et chaque issue terminale pose "done" pour
+  // toujours (voir les tests ci-dessus). ImagePanel.refreshPreview (image-panel.tsx) corrige cela en
+  // rappelant handleTabOpen avec un statut FORCÉ à "idle", indépendamment du `preview.status` réel
+  // du composant — ce test exerce exactement ce mécanisme : un statut réel "done" (post-échec ou
+  // post-succès) n'empêche PAS un appel dont le paramètre `status` vaut explicitement "idle".
+  it("un rafraîchissement manuel (statut réel \"done\", mais status forcé à \"idle\") redéclenche bien un appel", async () => {
+    const box = makeBox();
+    const setState = (s: PreviewState) => { box.state = s; };
+    let calls = 0;
+    const fetchPreview = async (_articleId: string): Promise<RenderForArticleResult> => {
+      calls++;
+      return { ok: false, reason: "render_failed", message: "Aperçu indisponible pour le moment." };
+    };
+
+    handleTabOpen("final", "idle", setState, "article-1", fetchPreview);
+    await flushMicrotasks();
+    expect(calls).toBe(1);
+    expect(box.state.status).toBe("done");
+
+    // Une réouverture normale (status réel "done" transmis tel quel) ne redéclenche rien — même
+    // garantie que les tests ci-dessus, reconfirmée ici pour bien contraster avec la ligne suivante.
+    handleTabOpen("final", box.state.status, setState, "article-1", fetchPreview);
+    expect(calls).toBe(1);
+
+    // Rafraîchissement manuel : le composant appelle handleTabOpen avec "idle" FORCÉ (ImagePanel.
+    // refreshPreview), pas avec box.state.status — c'est ce qui doit redéclencher un second appel.
+    handleTabOpen("final", "idle", setState, "article-1", fetchPreview);
+    expect(calls).toBe(2);
+    await flushMicrotasks();
+    expect(box.state.status).toBe("done");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,7 +175,11 @@ describe("PreviewTabContent — les quatre états explicites", () => {
   it("informations manquantes (ok:false) affiche les champs reconnaissables, pas les jetons techniques", () => {
     const html = renderPreview({
       status: "done",
-      result: { ok: false, message: "Génération de l'image échouée — Valeurs manquantes pour : article.image, category.name." },
+      result: {
+        ok: false,
+        reason: "render_failed",
+        message: "Génération de l'image échouée — Valeurs manquantes pour : article.image, category.name.",
+      },
     });
     expect(html).toContain("Informations manquantes");
     expect(html.toLowerCase()).toContain("image à la une");
@@ -152,7 +189,10 @@ describe("PreviewTabContent — les quatre états explicites", () => {
   });
 
   it("stockage R2 non configuré (ok:false) affiche EXACTEMENT le message du moteur", () => {
-    const html = renderPreview({ status: "done", result: { ok: false, message: "Stockage R2 non configuré." } });
+    const html = renderPreview({
+      status: "done",
+      result: { ok: false, reason: "storage_unconfigured", message: "Stockage R2 non configuré." },
+    });
     expect(html).toContain("Stockage R2 non configuré.");
   });
 
