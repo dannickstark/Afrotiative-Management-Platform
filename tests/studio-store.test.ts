@@ -1,7 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { computeInputHash, storageKeyFor, MemoryRenderStore, R2RenderStore, findCachedRender, saveRender } from "@/lib/studio/store";
 import { db, renders } from "@/db";
 import { eq } from "drizzle-orm";
+
+// Isolate R2 env vars for testing
+const R2_KEYS = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "R2_PUBLIC_BASE_URL"] as const;
+const r2Saved: Record<string, string | undefined> = {};
+for (const k of R2_KEYS) r2Saved[k] = process.env[k];
+
+function setAllR2(v: string | undefined) {
+  for (const k of R2_KEYS) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+}
 
 const baseInput = {
   templateId: "11111111-1111-1111-1111-111111111111",
@@ -36,6 +45,13 @@ describe("storageKeyFor", () => {
     expect(storageKeyFor("abc123", "image/webp", new Date("2026-01-02T10:00:00Z")))
       .toBe("renders/2026/01/abc123.webp");
   });
+
+  it("utilise UTC et ne bascule pas au fuseau local à la limite des mois", () => {
+    // 2026-01-31T23:30:00Z is late in January UTC.
+    // This would roll to February in some local timezones; the test ensures we use UTC.
+    expect(storageKeyFor("abc123", "image/jpeg", new Date("2026-01-31T23:30:00Z")))
+      .toBe("renders/2026/01/abc123.jpg");
+  });
 });
 
 describe("MemoryRenderStore", () => {
@@ -48,6 +64,9 @@ describe("MemoryRenderStore", () => {
 });
 
 describe("R2RenderStore", () => {
+  beforeEach(() => setAllR2(undefined));
+  afterAll(() => { for (const k of R2_KEYS) { if (r2Saved[k] === undefined) delete process.env[k]; else process.env[k] = r2Saved[k]!; } });
+
   it("lève une erreur si R2 n'est pas configuré", async () => {
     const store = new R2RenderStore();
     try {
