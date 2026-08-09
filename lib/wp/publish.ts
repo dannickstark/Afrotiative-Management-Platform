@@ -91,6 +91,20 @@ function wpErrorMessage(prefix: string, err: unknown): string {
 // cause nommée par le moteur (V1 §3 dette assignée à V3 — voir aussi Task 4/completeness.ts).
 class RenderFailedError extends Error {}
 
+// PURE — decides, from renderForArticle's TYPED discriminator (lib/studio/index.ts,
+// RenderForArticleResult["reason"]), whether a failed article_image render should fall back
+// silently to the raw image ("fallback") or hard-fail the whole publish ("fail"). Revue finale V3,
+// Important 1 : extraite en fonction pure et exportée précisément pour être testée contre les DEUX
+// valeurs de `reason` indépendamment du texte français de `message` (tests/wp-publish-render.test.ts)
+// — avant cette extraction, buildPublishPayload comparait `render.message` au texte exact
+// « Stockage R2 non configuré. », si bien qu'un simple changement de copie aurait pu faire basculer
+// silencieusement tout le comportement de publication (fail-open ↔ fail-closed). Même discipline que
+// buildPostBody/handleTabOpen (image-panel.tsx) dans ce dépôt : la décision vit hors de la fonction
+// qui l'utilise, pas dans une branche opaque au milieu d'un try/catch.
+export function renderFailureOutcome(reason: "storage_unconfigured" | "render_failed"): "fallback" | "fail" {
+  return reason === "storage_unconfigured" ? "fallback" : "fail";
+}
+
 // Lightweight SSRF guard for the featured-image fetch below. featuredImageUrl is article data
 // (LLM-produced or editor-entered) that ends up passed straight to server-side fetch() — without
 // a check, a crafted/careless value could be used to probe internal services (localhost, cloud
@@ -217,12 +231,17 @@ async function resolveTaxonomy(
 // tests). Un MemoryRenderStore ou tout autre RenderStore de test permet d'exercer le VRAI rendu
 // article_image sans compte R2 réel. Les vrais appelants (approveAndPublish, publishDueArticles,
 // republier depuis /article) ne le fournissent jamais — production laisse renderForArticle choisir
-// son R2RenderStore par défaut.
+// son R2RenderStore par défaut. Revue finale V3, Minor 3 : ignoré hors `bun test` (gate
+// process.env.NODE_ENV === "test", même convention que lib/studio/images.ts:prepareImage) — sans
+// ça, ce paramètre de test s'étendait à deux fonctions EXPORTÉES de production comme un simple
+// positionnel, sans aucune protection contre un futur appelant de production qui le fournirait par
+// erreur (même si, ce fichier n'ayant pas de directive "use server", il n'est pas RPC-accessible).
 async function buildPublishPayload(
   wp: WordPressClient,
   article: ArticleForPublish,
   renderStore?: RenderStore,
 ): Promise<WpPostPayload> {
+  const store = process.env.NODE_ENV === "test" ? renderStore : undefined;
   const { categoryId, tagIds } = await resolveTaxonomy(wp, article);
 
   // V3 §2 — l'image réellement PUBLIÉE est désormais celle GÉNÉRÉE par le gabarit article_image
@@ -233,14 +252,14 @@ async function buildPublishPayload(
   // l'image d'origine (crédit, lien source), et c'est ce dont le gabarit repart à CHAQUE rendu (le
   // cache par inputHash de V1 s'en charge — un rendu identique ne relance jamais renderScene).
   let featuredImageUrl = article.featuredImageUrl;
-  const render = await renderForArticle(article.id, { context: "article_image", store: renderStore });
+  const render = await renderForArticle(article.id, { context: "article_image", store });
   if (render.ok) {
     // { ok: true, url } : un rendu a été produit — c'est CETTE url qui sera téléversée ci-dessous,
     // à la place de l'image brute. { ok: true, url: null } : aucun gabarit résolu pour ce
     // contexte/cette catégorie — cas normal, pas une erreur (spec §2 point 2) ; featuredImageUrl
     // garde sa valeur d'origine, comportement inchangé depuis avant V3.
     if (render.url) featuredImageUrl = render.url;
-  } else if (render.message !== "Stockage R2 non configuré.") {
+  } else if (renderFailureOutcome(render.reason) === "fail") {
     // DURCISSEMENT délibéré (V3 §2 point 3), à bien distinguer de uploadFeaturedImage ci-dessous
     // qui reste FAIL-SOFT : une fois un gabarit article_image configuré, l'image générée EST
     // l'illustration de l'article, et publier sans elle produirait un article visiblement cassé
@@ -250,14 +269,27 @@ async function buildPublishPayload(
     // publication ici, avec le message français du moteur (lib/studio), TEL QUEL — voir
     // RenderFailedError plus haut.
     throw new RenderFailedError(render.message);
+  } else {
+    // Seule exception au durcissement ci-dessus : le stockage R2 n'est pas configuré DU TOUT
+    // (render.reason === "storage_unconfigured", PAS une comparaison sur render.message — revue
+    // finale V3, Important 1 : voir renderFailureOutcome ci-dessus). C'est un réglage d'OPÉRATEUR
+    // (le studio visuel n'est pas activé), pas un échec par article — le tableau d'erreurs du
+    // design (§4) ne liste d'ailleurs cette situation que côté onglet Aperçu, jamais côté
+    // Publication. Tant que R2 n'est pas configuré, aucun gabarit n'a jamais pu être prévisualisé
+    // ni validé non plus, donc rien à durcir : on retombe sur l'image brute, exactement comme avant
+    // V3 — c'est le chemin qu'exercent tests/wp-publish.test.ts et tests/publish-due.test.ts (aucun
+    // des deux ne configure R2 ni n'injecte de renderStore).
+    //
+    // Ce repli n'était auparavant TRACÉ NULLE PART (revue finale V3, Important 1) : un opérateur
+    // ayant configuré des gabarits puis perdu ses identifiants R2 (variables effacées, pas
+    // seulement invalidées) voyait chaque publication réussir avec l'image brute, sans le moindre
+    // indice que le rendu avait été court-circuité. Ce log est cette trace — même politique que
+    // renderForArticle (lib/studio/index.ts), qui logue déjà tout échec de rendu franc.
+    console.error(
+      `[wp/publish] Stockage R2 non configuré — repli sur l'image brute pour l'article ${article.id} ` +
+      "(contrôle de stockage échoué avant toute tentative de rendu article_image).",
+    );
   }
-  // Seule exception au durcissement ci-dessus : le stockage R2 n'est pas configuré DU TOUT. C'est
-  // un réglage d'OPÉRATEUR (le studio visuel n'est pas activé), pas un échec par article — le
-  // tableau d'erreurs du design (§4) ne liste d'ailleurs cette situation que côté onglet Aperçu,
-  // jamais côté Publication. Tant que R2 n'est pas configuré, aucun gabarit n'a jamais pu être
-  // prévisualisé ni validé non plus, donc rien à durcir : on retombe sur l'image brute, exactement
-  // comme avant V3 — c'est le chemin qu'exercent tests/wp-publish.test.ts et
-  // tests/publish-due.test.ts (aucun des deux ne configure R2 ni n'injecte de renderStore).
 
   const mediaId = featuredImageUrl
     ? await uploadFeaturedImage(wp, featuredImageUrl)

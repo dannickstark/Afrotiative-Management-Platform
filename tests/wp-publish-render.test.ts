@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, spyOn } from "bun:test";
 import sharp from "sharp";
 import {
   db, articles, articleSources, wpCategories, renderTemplates, renderTemplateVersions, renders,
   distributions, articleRevisions,
 } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { publishArticle, republishArticle } from "@/lib/wp/publish";
+import { publishArticle, republishArticle, renderFailureOutcome } from "@/lib/wp/publish";
 import type { RenderStore } from "@/lib/studio";
 import { ARTICLE_IMAGE_TEMPLATE } from "@/db/studio-templates";
 
@@ -339,15 +339,29 @@ describe("rendu en échec — la publication échoue, l'article reste `approved`
 });
 
 describe("R2 non configuré (aucun renderStore injecté) — repli sur l'image brute, comportement inchangé", () => {
-  it("publie l'image brute sans jamais tenter de rendu — même chemin qu'avant V3", async () => {
+  it("publie l'image brute sans jamais tenter de rendu — même chemin qu'avant V3 — ET laisse une trace (revue finale V3, Important 1)", async () => {
     const before = mediaCalls.length;
     const fetchedBefore = fetchedUrls.length;
+
+    // Revue finale V3, Important 1 : avant ce correctif, ce repli était complètement SILENCIEUX —
+    // aucun console.error, aucune ligne en base au-delà de la publication elle-même. Cette espionne
+    // prouve que le repli laisse désormais une trace (même politique que renderForArticle,
+    // lib/studio/index.ts, qui logue déjà tout échec de rendu franc).
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 
     // Pas de 3e argument : reproduit exactement l'appel de tests/wp-publish.test.ts et de
     // lib/wp/publish-due.ts — aucun store injecté, et R2_* n'est jamais posé sous `bun test`
     // (test-setup.ts ne le charge pas).
     const res = await publishArticle(articleNoStoreId);
     expect(res.ok).toBe(true);
+
+    // La trace mentionne l'article concerné et le mot « R2 » — un opérateur qui grep ses logs de
+    // production doit pouvoir la retrouver.
+    const loggedFallback = errorSpy.mock.calls.some(
+      (call) => call.some((arg) => typeof arg === "string" && arg.includes("[wp/publish]") && arg.includes(articleNoStoreId)),
+    );
+    expect(loggedFallback).toBe(true);
+    errorSpy.mockRestore();
 
     // L'image brute a été téléchargée et téléversée — jamais une URL de rendu (aucun rendu n'a été
     // tenté du tout, puisque R2 n'est pas configuré dans cet environnement de test).
@@ -363,5 +377,32 @@ describe("R2 non configuré (aucun renderStore injecté) — repli sur l'image b
     // du contrôle de stockage.
     const rows = await db.select().from(renders).where(eq(renders.subjectId, articleNoStoreId));
     expect(rows).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Revue finale V3, Important 1 — renderFailureOutcome (lib/wp/publish.ts) : la fonction PURE qui
+// décide, à partir du DISCRIMINANT TYPÉ `reason`, si un rendu en échec doit se replier
+// silencieusement sur l'image brute ou faire échouer toute la publication. Testée directement,
+// SANS passer par la base ni par renderForArticle, avec un message délibérément TROMPEUR pour
+// prouver que c'est `reason` — jamais le texte français de `message` — qui pilote la décision :
+// avant l'extraction de cette fonction, buildPublishPayload comparait `render.message` au texte
+// exact « Stockage R2 non configuré. », si bien qu'un simple changement de copie aurait pu inverser
+// silencieusement le comportement de publication.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("renderFailureOutcome — le DISCRIMINANT typé pilote la décision, jamais le texte du message", () => {
+  it("« storage_unconfigured » se replie sur l'image brute", () => {
+    expect(renderFailureOutcome("storage_unconfigured")).toBe("fallback");
+  });
+
+  // C'est ce test — avec « render_failed » et RIEN d'autre — qui prouve la propriété demandée par
+  // la revue finale (« changer le texte du message ne doit jamais changer l'issue de publication ») :
+  // renderFailureOutcome ne PREND MÊME PAS `message` en paramètre, seulement `reason`. Un
+  // changement de copie française n'a donc littéralement AUCUN chemin pour atteindre cette
+  // décision, garanti par la SIGNATURE de la fonction (vérifié par tsc), pas seulement par son
+  // comportement observé à l'exécution — la version d'avant cette revue, elle, comparait
+  // directement `render.message` au texte exact « Stockage R2 non configuré. ».
+  it("« render_failed » fait échouer la publication, quel que soit le texte de message associé ailleurs", () => {
+    expect(renderFailureOutcome("render_failed")).toBe("fail");
   });
 });

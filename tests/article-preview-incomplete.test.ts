@@ -46,7 +46,9 @@ describe("friendlyPreviewMessage — traduit les jetons manquants en champs reco
 
 function renderPreviewFailure(message: string): string {
   return renderToStaticMarkup(
-    React.createElement(PreviewTabContent, { state: { status: "done", result: { ok: false, message } } }),
+    React.createElement(PreviewTabContent, {
+      state: { status: "done", result: { ok: false, reason: "render_failed", message } },
+    }),
   );
 }
 

@@ -259,6 +259,6 @@ describe("renderForArticle", () => {
     const res = await renderForArticle("00000000-0000-0000-0000-000000000000", {
       context: "article_image", store: new MemoryRenderStore(),
     });
-    expect(res).toEqual({ ok: false, message: "Article introuvable." });
+    expect(res).toEqual({ ok: false, reason: "render_failed", message: "Article introuvable." });
   });
 });

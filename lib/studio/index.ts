@@ -15,10 +15,19 @@ import type { TemplateContext, Channel } from "./tokens";
 import type { AssetLoader } from "./fonts";
 import { DbAssetLoader } from "./asset-loader";
 
+// `reason` (revue finale V3, Important 1) discrimine les DEUX familles d'échec par leur NATURE,
+// pas par le texte affiché : "storage_unconfigured" est un réglage d'OPÉRATEUR (le studio visuel
+// n'est pas configuré DU TOUT — voir le commentaire de buildPublishPayload, lib/wp/publish.ts), qui
+// tolère un repli silencieux sur l'image brute ; "render_failed" couvre tout le reste (article
+// introuvable, jetons manquants, échec du moteur de rendu…) et doit rester un échec dur. Avant ce
+// champ, lib/wp/publish.ts distinguait les deux en comparant `message` au texte français exact
+// « Stockage R2 non configuré. » — un simple changement de copie suffisait à faire basculer le
+// comportement de publication (fail-open ↔ fail-closed) sans que rien ne le signale.
 export type RenderForArticleResult =
   | { ok: true; url: string; renderId: string; degraded: boolean }
   | { ok: true; url: null; renderId: null; degraded: false }
-  | { ok: false; message: string };
+  | { ok: false; reason: "storage_unconfigured"; message: string }
+  | { ok: false; reason: "render_failed"; message: string };
 
 // API publique de V1. V3 (onglet Aperçu) et D1 (panneau Diffusion) n'appellent que ceci.
 export async function renderForArticle(
@@ -44,14 +53,14 @@ export async function renderForArticle(
 ): Promise<RenderForArticleResult> {
   const store = o.store ?? new R2RenderStore();
   if (!o.store && !getStudioConfig()) {
-    return { ok: false, message: "Stockage R2 non configuré." };
+    return { ok: false, reason: "storage_unconfigured", message: "Stockage R2 non configuré." };
   }
 
   const [article] = await db
     .select({ categoryId: articles.categoryId })
     .from(articles)
     .where(eq(articles.id, articleId));
-  if (!article) return { ok: false, message: "Article introuvable." };
+  if (!article) return { ok: false, reason: "render_failed", message: "Article introuvable." };
 
   const template = await resolveTemplate({
     context: o.context, channel: o.channel ?? null, categoryId: article.categoryId,
@@ -107,9 +116,9 @@ export async function renderForArticle(
       e instanceof MissingTokensError || e instanceof ImageFetchError ||
       e instanceof SceneError || e instanceof RenderError
     ) {
-      return { ok: false, message: `Génération de l'image échouée — ${e.message}` };
+      return { ok: false, reason: "render_failed", message: `Génération de l'image échouée — ${e.message}` };
     }
-    return { ok: false, message: `Génération de l'image échouée : ${(e as Error).message}` };
+    return { ok: false, reason: "render_failed", message: `Génération de l'image échouée : ${(e as Error).message}` };
   }
 }
 
