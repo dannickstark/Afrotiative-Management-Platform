@@ -9,6 +9,10 @@ describe("loadFallbackFonts", () => {
       expect(f.name).toBe(FALLBACK_FONT_FAMILY);
       expect(f.data.byteLength).toBeGreaterThan(10_000);
       expect(f.style).toBe("normal");
+
+      // Vérifie que les données sont un vrai TTF en commençant par la signature TrueType « 00 01 00 00 »
+      const header = new Uint8Array(f.data, 0, 4);
+      expect(Array.from(header)).toEqual([0x00, 0x01, 0x00, 0x00]);
     }
   });
 
