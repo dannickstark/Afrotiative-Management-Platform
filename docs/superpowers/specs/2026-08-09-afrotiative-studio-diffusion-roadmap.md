@@ -158,6 +158,51 @@ dont la perte serait une régression non demandée.
 
 ---
 
+## Dette reportée à l'issue de V1
+
+V1 est livré et jugé prêt à fusionner (revue de branche complète, 2026-08-09). Les points ci-dessous
+ont été **délibérément reportés** après triage — ils ne bloquent pas la fusion, mais ils ne doivent
+pas se perdre. Chacun indique le sous-projet qui devra le traiter.
+
+### À traiter au démarrage de V2 (studio / éditeur)
+
+| Point | Pourquoi maintenant |
+|---|---|
+| `parseScene` ne remonte que la **première** erreur Zod | Un éditeur visuel doit afficher toutes les erreurs d'une scène d'un coup ; acceptable sans interface, bloquant avec. |
+| `lib/studio/render.ts` — `assets.imageUrl()` laisse fuir l'erreur brute (anglais) | Inatteignable tant que `NullAssetLoader` est le seul chargeur ; devient atteignable dès que V2 branche un chargeur sur `render_assets`. |
+| `asSatoriFonts` est un cast non vérifié | V2 devra valider au téléversement que la graisse d'une police est dans {100…900}, sinon le cast devient un mensonge. |
+| `computeInputHash` ne couvre ni `encode` ni l'état des polices | Sans objet en V1 ; dès qu'une police est téléversée, les rendus `degraded: true` déjà en cache continueraient d'être servis. |
+| `wp_categories.color` n'a **aucun chemin d'écriture** | Ni interface, ni seed, ni synchronisation taxonomie. Toutes les catégories rendent donc `DEFAULT_CATEGORY_COLOR` — le jeton `{{category.color}}` reste théorique jusqu'à ce que V2 livre l'éditeur. |
+| Dimensions de canevas non bornées (`lib/studio/scene.ts`) | Un canevas 20000×20000 traverse satori *et* resvg (~1,6 Go alloués) avant que sharp ne refuse. Entrée d'administrateur seulement ; à borner quand V2 pose ses propres limites. |
+
+### À traiter au démarrage de V3 (aperçu dans l'article)
+
+| Point | Pourquoi maintenant |
+|---|---|
+| `next.config.ts` ne liste pas `sharp`, `@resvg/resvg-js` ni `satori` dans `serverExternalPackages` | Aucun code applicatif n'importe `lib/studio` aujourd'hui. V3 sera le premier à le faire depuis une server action, et heurtera le regroupement Turbopack des binaires natifs `.node`. |
+| Un article **sans image à la une** ou **sans catégorie** fait échouer le rendu | Comportement conforme au spec (§6, échec dur), mais l'interface devra le dire intelligiblement plutôt que d'afficher une erreur technique. |
+| `process.cwd()` pour le chemin des polices | Incompatible avec `output: "standalone"` dans `next.config.ts`. À revoir si/quand V3 change la stratégie de build. |
+
+### À traiter au démarrage de D1 (socle de diffusion)
+
+| Point | Pourquoi maintenant |
+|---|---|
+| Faut-il conditionner `article.url` à `articles.status === "published"` ? | Un article dépublié conserve aujourd'hui un permalien WordPress résolvable mais périmé dans le contexte `social_post`. C'est D1 qui définit la convention de partage, donc D1 qui tranche. |
+
+### Hygiène des tests (transverse)
+
+Les suites `tests/studio-*.test.ts` écrivent dans la branche Neon **dev partagée**. Le motif de
+collision de portée est désormais contenu par `tests/studio-fixtures.ts` (suppression défensive
+avant insertion, portées distinctes par fichier, plus aucun nom de canal réel utilisé comme
+sentinelle). **Ne jamais lancer deux `bun test` en parallèle** — voir `test-setup.ts:38-40`.
+
+Deux échecs **préexistants** subsistent, sans rapport avec ce programme, attribués en rejouant les
+fichiers sur le point de départ de la branche : `tests/pipeline-web-search.test.ts` cas (a) et
+`tests/pipeline-pause-resume.test.ts` point de contrôle (b). Les deux sont sensibles à l'état
+accumulé de la base de développement partagée.
+
+---
+
 ## Suivi
 
 Exécution autonome, un sous-projet à la fois, commit par sous-projet, revue par tâche puis revue
