@@ -64,31 +64,63 @@ function tokensInString(value: string): string[] {
 
 function usesInLayer(layer: Layer): TokenUse[] {
   const where = `calque « ${layer.name || layer.id} »`;
+  const uses: TokenUse[] = [];
+
   switch (layer.type) {
     case "image":
-      return layer.source.kind === "slot"
-        ? [{ token: layer.source.slot, expected: "image", where }]
-        : [];
+      if (layer.source.kind === "slot") {
+        uses.push({ token: layer.source.slot, expected: "image", where });
+      }
+      // Scan imageLayer.overlay
+      if (layer.overlay) {
+        uses.push(...tokensInString(layer.overlay).map((t) => ({ token: t, expected: "color" as const, where })));
+      }
+      break;
     case "qr":
-      return [{ token: layer.slot, expected: "url", where }];
+      uses.push({ token: layer.slot, expected: "url", where });
+      // Scan qrLayer.fg and qrLayer.bg
+      uses.push(...tokensInString(layer.fg).map((t) => ({ token: t, expected: "color" as const, where })));
+      uses.push(...tokensInString(layer.bg).map((t) => ({ token: t, expected: "color" as const, where })));
+      break;
     case "text":
-      return [
-        ...tokensInString(layer.content).map((t) => ({ token: t, expected: "text" as const, where })),
-        ...tokensInString(layer.color).map((t) => ({ token: t, expected: "color" as const, where })),
-      ];
+      uses.push(...tokensInString(layer.content).map((t) => ({ token: t, expected: "text" as const, where })));
+      uses.push(...tokensInString(layer.color).map((t) => ({ token: t, expected: "color" as const, where })));
+      // Scan textLayer.shadow.color
+      if (layer.shadow) {
+        uses.push(...tokensInString(layer.shadow.color).map((t) => ({ token: t, expected: "color" as const, where })));
+      }
+      // Scan textLayer.stroke.color
+      if (layer.stroke) {
+        uses.push(...tokensInString(layer.stroke.color).map((t) => ({ token: t, expected: "color" as const, where })));
+      }
+      break;
     case "shape": {
       const colors = typeof layer.fill === "string" ? [layer.fill] : layer.fill.stops.map((s) => s.color);
       if (layer.border) colors.push(layer.border.color);
-      return colors.flatMap((c) => tokensInString(c).map((t) => ({ token: t, expected: "color" as const, where })));
+      uses.push(...colors.flatMap((c) => tokensInString(c).map((t) => ({ token: t, expected: "color" as const, where }))));
+      break;
     }
   }
+
+  return uses;
 }
 
 // Les slots d'un gabarit sont DÉRIVÉS de sa scène, jamais déclarés à côté. Une liste parallèle
 // dériverait tôt ou tard de la scène réelle ; ici c'est structurellement impossible.
 export function extractTokens(scene: Scene): TokenUse[] {
-  return scene.layers.flatMap(usesInLayer);
+  const uses = scene.layers.flatMap(usesInLayer);
+  // Scan scene.canvas.background
+  uses.push(...tokensInString(scene.canvas.background).map((t) => ({ token: t, expected: "color" as const, where: "arrière-plan du canevas" })));
+  return uses;
 }
+
+// French labels for TokenKind values
+const TOKEN_KIND_LABELS: Record<TokenKind, string> = {
+  text: "texte",
+  image: "image",
+  color: "couleur",
+  url: "URL",
+};
 
 // Renvoie la liste des problèmes, en français, prête à afficher. Tableau vide = valide.
 export function validateScene(scene: Scene, context: TemplateContext): string[] {
@@ -109,8 +141,8 @@ export function validateScene(scene: Scene, context: TemplateContext): string[] 
     }
     if (kind !== use.expected) {
       errors.push(
-        `${use.where} : le jeton « ${use.token} » est de type « ${kind} », ` +
-        `or un « ${use.expected} » est attendu ici.`,
+        `${use.where} : le jeton « ${use.token} » est de type « ${TOKEN_KIND_LABELS[kind]} », ` +
+        `or un « ${TOKEN_KIND_LABELS[use.expected]} » est attendu ici.`,
       );
     }
   }
