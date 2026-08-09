@@ -1,5 +1,4 @@
 import { z } from "zod";
-// @ts-ignore - Zod locale imports are not typed
 import frLocale from "zod/v4/locales/fr.js";
 
 export const SCENE_SCHEMA_VERSION = 1 as const;

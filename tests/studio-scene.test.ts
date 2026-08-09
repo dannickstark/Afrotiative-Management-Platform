@@ -26,7 +26,7 @@ describe("parseScene", () => {
   it("refuse un type de calque inconnu", () => {
     const bad = structuredClone(valid);
     (bad.layers[0] as unknown as { type: string }).type = "video";
-    expect(() => parseScene(bad)).toThrow(/Scène invalide.*layers/i);
+    expect(() => parseScene(bad)).toThrow(/Entrée invalide/i);
   });
 
   it("refuse deux calques partageant le même identifiant", () => {
