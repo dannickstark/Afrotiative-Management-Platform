@@ -20,25 +20,31 @@ describe("parseScene", () => {
   });
 
   it("refuse une version de schéma inconnue", () => {
-    expect(() => parseScene({ ...structuredClone(valid), schemaVersion: 2 })).toThrow(SceneError);
+    expect(() => parseScene({ ...structuredClone(valid), schemaVersion: 2 })).toThrow(/Scène invalide.*attendu/i);
   });
 
   it("refuse un type de calque inconnu", () => {
     const bad = structuredClone(valid);
     (bad.layers[0] as unknown as { type: string }).type = "video";
-    expect(() => parseScene(bad)).toThrow(SceneError);
+    expect(() => parseScene(bad)).toThrow(/Scène invalide.*layers/i);
   });
 
   it("refuse deux calques partageant le même identifiant", () => {
     const bad = structuredClone(valid);
     bad.layers[1].id = "l1";
-    expect(() => parseScene(bad)).toThrow(/identifiant/i);
+    expect(() => parseScene(bad)).toThrow(/identifiant.*double/i);
   });
 
   it("refuse une couleur hexadécimale malformée", () => {
     const bad = structuredClone(valid);
     bad.canvas.background = "rouge";
-    expect(() => parseScene(bad)).toThrow(SceneError);
+    expect(() => parseScene(bad)).toThrow(/Couleur invalide/i);
+  });
+
+  it("refuse un fit value invalide", () => {
+    const bad = structuredClone(valid);
+    (bad.layers[0] as unknown as { fit: string }).fit = "stretch";
+    expect(() => parseScene(bad)).toThrow(/Scène invalide.*valeur parmi/i);
   });
 });
 

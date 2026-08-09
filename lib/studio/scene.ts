@@ -1,9 +1,14 @@
 import { z } from "zod";
+// @ts-ignore - Zod locale imports are not typed
+import frLocale from "zod/v4/locales/fr.js";
 
 export const SCENE_SCHEMA_VERSION = 1 as const;
 
 // Erreur typée : tout message porté par SceneError est en français et affichable tel quel.
 export class SceneError extends Error {}
+
+// Get French error messages from Zod's locale (no global configuration)
+const frenchZodMessages = frLocale().localeError;
 
 // #RGB, #RRGGBB ou #RRGGBBAA. Les jetons ({{category.color}}) sont autorisés partout où une
 // couleur est attendue — c'est tokens.ts qui vérifiera qu'ils sont légaux dans ce contexte.
@@ -123,7 +128,10 @@ export function parseScene(input: unknown): Scene {
   const parsed = sceneSchema.safeParse(input);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
-    throw new SceneError(`Scène invalide : ${first.path.join(".") || "racine"} — ${first.message}`);
+    // For custom refine() messages (already in French), use them directly.
+    // For built-in Zod validations, use French locale translation.
+    const message = first.code === "custom" ? first.message : frenchZodMessages(first as Parameters<typeof frenchZodMessages>[0]);
+    throw new SceneError(`Scène invalide : ${first.path.join(".") || "racine"} — ${message}`);
   }
   const ids = new Set<string>();
   for (const l of parsed.data.layers) {
