@@ -40,7 +40,7 @@ export function SidePanel({
       <CardContent className="flex-1 space-y-5 overflow-y-auto">
         <section>
           <p className={SECTION_LABEL}>Image à la une</p>
-          <ImagePanel {...image} onImageChange={onImageChange} readOnly={readOnly} />
+          <ImagePanel {...image} articleId={article.id} onImageChange={onImageChange} readOnly={readOnly} />
         </section>
 
         <Separator />

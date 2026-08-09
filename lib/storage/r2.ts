@@ -20,10 +20,21 @@ export async function putObject(
     service: "s3",
     region: "auto",
   });
+  // PAS de "content-length" manuel ici (retiré, V3 Tâche 2) : `fetch` le calcule déjà correctement
+  // à partir du corps. Bug trouvé en pilotant un vrai navigateur contre le VRAI compte R2 (aucun
+  // test `bun test` ne pouvait le voir, MemoryRenderStore ne touchant jamais le réseau) — la
+  // Server Action passe par le `fetch` global PATCHÉ par Next.js (couche de cache App Router), qui
+  // finit par envoyer un corps dont la longueur ne correspond plus exactement à l'en-tête fourni
+  // ici : undici refuse alors la requête avec `InvalidArgumentError: invalid content-length header`
+  // AVANT même qu'elle ne parte — jamais reproduit par un script Node nu (même pipeline satori →
+  // resvg → sharp, mêmes octets), seulement à travers l'enveloppe fetch de Next.js. C'était le
+  // PREMIER appel de ce module à passer par du réseau réel plutôt que par un mock (renderForArticle
+  // n'avait jamais été exercé en dehors de `bun test`, où lib/studio/store.ts:MemoryRenderStore
+  // remplace toujours R2RenderStore) — donc invisible jusqu'à V3.
   const res = await client.fetch(endpointFor(cfg, key), {
     method: "PUT",
     body: bytes as unknown as BodyInit,
-    headers: { "content-type": mime, "content-length": String(bytes.byteLength) },
+    headers: { "content-type": mime },
   });
   if (!res.ok) {
     throw new Error(`Téléversement R2 échoué (HTTP ${res.status}).`);
