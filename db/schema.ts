@@ -339,7 +339,7 @@ export const pipelineSettings = pgTable("pipeline_settings", {
 // single associated entity.
 export const alerts = pgTable("alerts", {
   id: uuid("id").primaryKey().defaultRandom(),
-  type: text("type").notNull(), // 'run_failed' | 'feed_dark' — see lib/alerts/notify.ts's AlertType
+  type: text("type").notNull(), // 'run_failed' | 'feed_dark' | 'diffusion_blocked' — see lib/alerts/notify.ts's AlertType
   title: text("title").notNull(), // French, short — e.g. "Exécution du pipeline échouée"
   detail: text("detail").notNull(), // French, one-sentence specifics (counts / feed name)
   entityId: uuid("entity_id"), // the run or feed id this alert is about

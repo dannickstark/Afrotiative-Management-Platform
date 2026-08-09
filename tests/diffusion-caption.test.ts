@@ -68,6 +68,32 @@ describe("truncateCaption (pure, word-boundary truncation)", () => {
     expect(result.length).toBeLessThanOrEqual(20);
     expect(result.endsWith("…")).toBe(true);
   });
+
+  // D1 final review, "Also fix — cheap": .length/.slice count UTF-16 CODE UNITS, not visible
+  // characters — an emoji like 😀 (U+1F600, realistic in an X/Instagram caption) is a SURROGATE
+  // PAIR, two code units wide. No spaces anywhere near the cut (deliberately, so the word-boundary
+  // backup above can't accidentally paper over a split pair) — this isolates the surrogate-pair
+  // fix specifically.
+  describe("surrogate pairs (emoji) — never split across a hard cut", () => {
+    const emoji = "\u{1F600}"; // 😀, high surrogate 0xD83D + low surrogate 0xDE00
+    const text = `${"a".repeat(10)}${emoji}${"b".repeat(50)}`; // emoji occupies code units 10-11
+
+    it("backs up PAST the whole pair when the raw cut would land between its two halves", () => {
+      // budget = maxChars - 1 = 11 → a naive slice(0, 11) would end in the pair's lone high
+      // surrogate (index 10) without its low surrogate (index 11) — invalid UTF-16.
+      const result = truncateCaption(text, 12);
+      expect(result.isWellFormed()).toBe(true);
+      expect(result).toBe("aaaaaaaaaa…"); // the whole emoji dropped, not half of it
+    });
+
+    it("keeps the pair INTACT when the cut lands exactly after it — no over-correction", () => {
+      // budget = maxChars - 1 = 12 → slice(0, 12) ends exactly on the pair's low surrogate: a
+      // complete pair, nothing to back up from.
+      const result = truncateCaption(text, 13);
+      expect(result.isWellFormed()).toBe(true);
+      expect(result).toBe(`${"a".repeat(10)}${emoji}…`);
+    });
+  });
 });
 
 describe("buildCaptionPrompt", () => {
@@ -105,6 +131,11 @@ describe("buildCaptionPrompt", () => {
 describe("generateCaption (D1 §3, Task 4)", () => {
   let articleId: string;
   let categoryId: string;
+  // Save/restore LLM_ORDER around this describe block — same convention as
+  // tests/ai-improve.test.ts:58-70 and tests/ai-fallback.test.ts:73-80. Without this, every `it`
+  // below setting process.env.LLM_ORDER = "openrouter" leaks into whichever OTHER test file runs
+  // next in this single-process `bun test` run (D1 final review, "Also fix — cheap").
+  const originalOrder = process.env.LLM_ORDER;
 
   beforeAll(async () => {
     await db.delete(socialChannelSettings).where(eq(socialChannelSettings.channel, TEST_CHANNEL));
@@ -137,6 +168,8 @@ describe("generateCaption (D1 §3, Task 4)", () => {
   afterAll(() => {
     buildModelImpl = realBuildModel as unknown as typeof buildModelImpl;
     generateTextImpl = realGenerateText as unknown as typeof generateTextImpl;
+    if (originalOrder === undefined) delete process.env.LLM_ORDER;
+    else process.env.LLM_ORDER = originalOrder;
     mock.restore();
   });
 

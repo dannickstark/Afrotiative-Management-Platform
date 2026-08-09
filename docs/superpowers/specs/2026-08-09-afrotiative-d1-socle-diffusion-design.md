@@ -119,9 +119,18 @@ La règle de l'utilisateur, généralisée à tous les canaux :
 
 **Sélection :** `articles.status = 'published'`, `publishedAt` dans
 `[now - autoMaxBacklogDays, now]`, sans ligne `distributions` pour ce canal en statut
-`pending`/`sent`, triés par `publishedAt` **croissant**, `LIMIT 1`. Ce tri croissant *est* la règle
-« du plus ancien au plus récent » et le rattrapage jour par jour : un article d'hier non envoyé
-précède naturellement un article d'aujourd'hui.
+`pending`/`sent`, triés par `date_trunc('day', published_at)` **décroissant** puis `publishedAt`
+**croissant**, `LIMIT 1`.
+>
+> **Correction post-revue finale (2026-08-09) :** la version initialement livrée de ce paragraphe
+> affirmait qu'un tri croissant *unique* sur `publishedAt` suffisait — « un article d'hier non
+> envoyé précède naturellement un article d'aujourd'hui ». C'était **faux dans l'autre sens** : ce
+> tri fait aussi précéder un article vieux de plusieurs jours à TOUT ce qui est publié aujourd'hui,
+> inversant la priorité que l'utilisateur a explicitement demandée (le jour même d'abord, la veille
+> seulement si le jour même est épuisé). C'est un défaut de cette spec, pas de l'implémentation qui
+> l'a suivie à la lettre — corrigé dans `lib/diffusion/schedule-core.ts` (revue finale D1,
+> Important 1) avec le tri à deux clés ci-dessus : le JOUR calendaire d'abord (le plus récent en
+> premier), le tri croissant par heure ne départageant qu'À L'INTÉRIEUR d'un même jour.
 
 **Échéance :** `lastAutoSendAt` est null, ou `now - lastAutoSendAt >= autoIntervalHours`.
 
@@ -165,7 +174,7 @@ vers l'interface.
 | Cible | Ce qui est vérifié |
 |---|---|
 | Index unique | deux envois concurrents sur le même (article, canal) — un seul passe |
-| Sélection du planificateur | ordre croissant ; article déjà envoyé exclu ; rattrapage sur la veille ; respect de `autoMaxBacklogDays` |
+| Sélection du planificateur | le jour même d'abord (le plus ancien du jour), la veille seulement si le jour même est épuisé ; article déjà envoyé exclu ; respect de `autoMaxBacklogDays` |
 | Fenêtre horaire | hors fenêtre, aucun envoi **et** l'intervalle n'est pas consommé |
 | Échéance | avant `autoIntervalHours`, rien ; après, un envoi |
 | Redémarrage | `lastAutoSendAt` persisté empêche la rafale |
@@ -182,3 +191,29 @@ vers l'interface.
 2. **Envoi & panneau** — `sendToChannel`, génération de légende, panneau Diffusion dans l'article.
 3. **Réglages** — `/settings/social` et la sous-page par canal.
 4. **Planificateur** — sélection, échéance, fenêtre, anti-doublon, branchement sur le tic existant.
+
+## Post-revue (revue finale, 2026-08-09)
+
+Verdict : **prêt avec corrections** — aucun Critical, la barrière de revue humaine vérifiée intacte,
+cinq Important corrigés (voir `.superpowers/sdd/2026-08-09-afrotiative-d1-socle-diffusion/
+final-fix-report.md` pour le détail). Deux points à ne pas rouvrir en D2 :
+
+- **Le second job croner (§5, "Pilotage") est confirmé, pas un défaut.** L'implémentation Tâche 9
+  a démarré un DEUXIÈME `Cron` dédié à la diffusion (`lib/pipeline/scheduler.ts`'s
+  `diffusionJob`/`DIFFUSION_TICK_CRON`) plutôt que de brancher un second callback sur le job
+  pipeline existant, et avait elle-même signalé cet écart pour un second avis (voir
+  `.superpowers/sdd/2026-08-09-afrotiative-d1-socle-diffusion/progress.md`). La revue finale l'a
+  confirmé justifié, sans risque identifié : le job pipeline n'existe QUE si
+  `pipeline_settings.scheduleCron` est configuré, donc y accrocher la diffusion automatique
+  l'aurait rendue silencieusement dépendante d'un réglage optionnel et sans rapport. **Ne pas
+  re-débattre ce choix en D2.**
+
+- **Obligation D2 — `externalId` tôt, et revisiter le seuil de récupération `pending`.** Le seuil
+  (paramétré `DIFFUSION_STALE_PENDING_MINUTES`, défaut 10 min — revue finale, Important 5) est sûr
+  aujourd'hui car `StubChannel.send` ne fait aucun I/O. Dès qu'un adaptateur réel existe, ce seuil
+  devient une hypothèse de latence, et un crash survenant APRÈS qu'un vrai POST a réussi laisserait
+  une ligne que le récupérateur marque `failed` — une relance produirait alors un **doublon public**.
+  Chaque adaptateur D2 → D6 doit donc écrire `externalId` **le plus tôt possible** (dès que l'appel
+  réseau confirme l'acceptation, avant même le retour complet de `send()` si l'API le permet) pour
+  qu'une relance puisse un jour être court-circuitée par sa présence, et le seuil lui-même doit être
+  revisité contre la latence réelle du premier adaptateur livré, pas laissé à 10 min par défaut.

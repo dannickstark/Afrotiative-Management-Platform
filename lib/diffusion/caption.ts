@@ -28,6 +28,13 @@ const ELLIPSIS = "…";
 // hand-verified boundary case): if the hard cut at `budget` chars lands EXACTLY on a space in the
 // original text, the slice already ends on a complete word — backing up further would needlessly
 // drop that whole last word. Only back up when the cut genuinely landed mid-word.
+//
+// `.length`/`.slice` count UTF-16 CODE UNITS, not visible characters — most emoji (realistic in an
+// X/Instagram caption) are a SURROGATE PAIR, two code units wide. A hard cut at `budget` can land
+// exactly between a pair's high and low half, leaving a lone unpaired surrogate at the end — not
+// mangled text but genuinely INVALID UTF-16 (renders as a replacement character, or worse, once
+// re-encoded by a real channel adapter's own request encoding). Detected and backed up ONE MORE
+// code unit before the word-boundary check above even runs, so a split pair never reaches it.
 export function truncateCaption(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
@@ -35,8 +42,12 @@ export function truncateCaption(text: string, maxChars: number): string {
   const budget = Math.max(0, maxChars - ELLIPSIS.length);
   if (budget === 0) return ELLIPSIS.slice(0, Math.max(0, maxChars));
 
-  let cut = trimmed.slice(0, budget);
-  if (trimmed[budget] !== " ") {
+  let effectiveBudget = budget;
+  const codeAtCut = trimmed.charCodeAt(effectiveBudget - 1);
+  if (codeAtCut >= 0xd800 && codeAtCut <= 0xdbff) effectiveBudget -= 1; // high surrogate, pair split by the cut
+
+  let cut = trimmed.slice(0, effectiveBudget);
+  if (trimmed[effectiveBudget] !== " ") {
     const lastSpace = cut.lastIndexOf(" ");
     // lastSpace > 0 (not just >= 0): a space at index 0 would leave an EMPTY word before it — no
     // real boundary to back up to, so the hard cut stands (a single word longer than the budget).

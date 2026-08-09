@@ -17,7 +17,8 @@ import { isDue, selectNextArticle } from "./schedule-core";
 import { getChannelSettings, setLastAutoSendAt } from "./settings-core";
 import { sendToChannelCore } from "./send-core";
 import { generateCaption } from "./caption";
-import type { SocialChannel } from "./channels";
+import { SOCIAL_CHANNELS, type SocialChannel } from "./channels";
+import { createAlert } from "@/lib/alerts/notify";
 import type { RenderStore } from "@/lib/studio/store";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,12 +37,30 @@ import type { RenderStore } from "@/lib/studio/store";
 // slow send. This tick is the natural place to reclaim it, mirroring lib/pipeline/overlap.ts's
 // reclaimStaleRuns (reap first, then act) — deliberately simpler, though: a straight age cutoff, no
 // liveness signal to cross-check (a distributions row has no per-step activity table the way
-// pipeline_runs has pipeline_steps), and not wired through an env var like RUN_STALE_MINUTES — D1
-// has exactly one caller for this and no operator-facing knob for it yet.
-const STALE_PENDING_MINUTES = 10;
+// pipeline_runs has pipeline_steps).
+//
+// Parameterized via DIFFUSION_STALE_PENDING_MINUTES (default 10, unchanged), same env-var
+// convention as RUN_STALE_MINUTES (lib/config/pipeline-config.ts's runStaleMinutes) — D1 final
+// review, Important 5. Read fresh on every call (not cached at module load) so a test can override
+// it via process.env without re-importing this module, same reasoning as
+// parsePipelineConfig(process.env) being called fresh per read rather than once at startup.
+//
+// D1 ships zero real adapters, so 10 minutes is safe today by construction — StubChannel.send does
+// no I/O at all. The moment a real adapter (D2+) lands, this cutoff becomes a correctness
+// assumption about that adapter's own latency, and it cuts BOTH ways: too short reclaims a
+// genuinely in-flight send (a second attempt could double-post before the first's response even
+// lands); too long leaves a channel needlessly wedged after a real crash. Revisit this value against
+// real adapter latency once one exists — see the D1 spec's own "Post-revue" note for the matching
+// D2 obligation (write `externalId` as early as the API allows, so a resend can be short-circuited
+// instead of relying on this cutoff alone).
+function stalePendingMinutes(): number {
+  const raw = process.env.DIFFUSION_STALE_PENDING_MINUTES;
+  const n = raw !== undefined ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 10;
+}
 
 export async function reclaimStalePendingDistributions(): Promise<void> {
-  const staleBefore = new Date(Date.now() - STALE_PENDING_MINUTES * 60_000);
+  const staleBefore = new Date(Date.now() - stalePendingMinutes() * 60_000);
   await db.update(distributions)
     .set({
       status: "failed",
@@ -96,6 +115,32 @@ export async function triggerDiffusionTick(opts: DiffusionTickOptions = {}): Pro
   }
 }
 
+// Important 2 (D1 final review): bounds how many candidates ONE tick may try on a single channel.
+// sendToChannelCore can refuse BEFORE it ever writes a distributions row (render failure, R2
+// unconfigured, no `social_post` template configured) — left alone, that candidate stays the
+// eligible one selectNextArticle keeps returning and gets reselected IDENTICALLY on every future
+// due tick, forever, silently wedging the whole channel (nothing else can ever go out while it
+// sits there, since nothing marks it as "tried"). Skipping past it lets healthy candidates behind
+// it still ship. Bounded rather than "walk the whole backlog" because each attempt still costs a
+// real caption LLM call before this tick even reaches sendToChannelCore — 3 gives a channel a real
+// chance to route around ONE bad article without a run of several consecutive misconfigured
+// articles turning a single tick into an unbounded LLM-spending loop; whatever is left unattempted
+// is picked up again (with a fresh alert) on the channel's next due tick.
+const MAX_CANDIDATES_PER_TICK = 3;
+
+// Does a distributions row exist at all for (articleId, channel), regardless of status? Used only
+// to tell apart send-core.ts's two kinds of refusal after the fact: a row means the refusal
+// happened at/after step 4 (a real send attempt was recorded — 'failed', already audited via
+// article_revisions, and deliberately left retryable by selectNextArticle); no row means the
+// refusal happened BEFORE step 4 and left no trace anywhere except the console.error below — the
+// Important 2 "pre-row refusal" case.
+async function hasDistributionRow(articleId: string, channel: Channel): Promise<boolean> {
+  const [row] = await db.select({ id: distributions.id }).from(distributions)
+    .where(and(eq(distributions.articleId, articleId), eq(distributions.channel, channel)))
+    .limit(1);
+  return row !== undefined;
+}
+
 async function tickChannel(
   channel: Channel,
   now: Date,
@@ -104,7 +149,15 @@ async function tickChannel(
   fetchImpl: typeof fetch | undefined,
 ): Promise<void> {
   const settings = await getChannelSettings(channel);
-  if (!settings.autoEnabled) return;
+  // Important 3 (D1 final review): `enabled` (manual-send gate, checked by sendToChannelCore
+  // itself) and `autoEnabled` (this scheduler's own gate) are two UNCOUPLED switches on the same
+  // form (components/settings/social-channel-form.tsx) — autoEnabled:true + enabled:false is
+  // reachable, and checking only autoEnabled here left it silently expensive: every due tick still
+  // selected a candidate, persisted lastAutoSendAt, made a PAID LLM caption call, and only THEN got
+  // refused by sendToChannelCore's own `enabled` check — indefinitely, with no distributions row
+  // ever written (the exact Important 2 "pre-row refusal" wedge, on every tick, forever). Checking
+  // both here closes it off before any of that work starts.
+  if (!settings.enabled || !settings.autoEnabled) return;
 
   const due = isDue({
     now,
@@ -115,35 +168,68 @@ async function tickChannel(
   });
   if (!due) return; // outside the window or the interval hasn't elapsed — lastAutoSendAt untouched, spec §5
 
-  const candidate = await selectNextArticle({ channel, now, maxBacklogDays: settings.autoMaxBacklogDays });
-  if (!candidate) {
-    console.log(`[scheduler] diffusion automatique (${channel}) : rien à publier`);
-    return;
-  }
+  const excludeIds: string[] = [];
 
-  // Set BEFORE sending (spec §5's anti-doublon guarantee — see setLastAutoSendAt's own comment in
-  // settings-core.ts). From here on, this channel has "used" this tick regardless of what happens
-  // next below (caption fallback, send failure, or success) — its next due moment is a full
-  // autoIntervalHours away, not simply "whenever this function next happens to run".
-  await setLastAutoSendAt(channel, now);
+  for (let attempt = 0; attempt < MAX_CANDIDATES_PER_TICK; attempt++) {
+    const candidate = await selectNextArticle({
+      channel, now, maxBacklogDays: settings.autoMaxBacklogDays, excludeIds,
+    });
+    if (!candidate) {
+      if (attempt === 0) console.log(`[scheduler] diffusion automatique (${channel}) : rien à publier`);
+      return;
+    }
 
-  const caption = await generateCaption({ articleId: candidate.id, channel });
-  if (!caption.ok) {
-    // Only reachable if the article vanished between selectNextArticle and here — generateCaption
-    // itself treats "no usable AI provider" as success (a deterministic title-truncation fallback,
-    // lib/diffusion/caption.ts), never as this failure branch.
-    console.error(`[scheduler] diffusion automatique (${channel}) : légende impossible pour l'article ${candidate.id} : ${caption.message}`);
-    return;
-  }
+    if (attempt === 0) {
+      // Set BEFORE sending (spec §5's anti-doublon guarantee — see setLastAutoSendAt's own comment
+      // in settings-core.ts). From here on, this channel has "used" this tick regardless of what
+      // happens next below (caption fallback, send failure(s), or success) — its next due moment is
+      // a full autoIntervalHours away, not simply "whenever this function next happens to run". Set
+      // exactly ONCE, on the first candidate only — a skip-and-retry within the SAME tick (below)
+      // must not re-consume the interval a second time.
+      await setLastAutoSendAt(channel, now);
+    }
 
-  const result = await sendToChannelCore({
-    articleId: candidate.id, channel, caption: caption.caption,
-    triggeredBy: "scheduled", actorId: null, channelOverride, renderStore, fetchImpl,
-  });
+    const caption = await generateCaption({ articleId: candidate.id, channel });
+    if (!caption.ok) {
+      // Only reachable if the article vanished between selectNextArticle and here — generateCaption
+      // itself treats "no usable AI provider" as success (a deterministic title-truncation fallback,
+      // lib/diffusion/caption.ts), never as this failure branch.
+      console.error(`[scheduler] diffusion automatique (${channel}) : légende impossible pour l'article ${candidate.id} : ${caption.message}`);
+      return;
+    }
 
-  if (result.ok) {
-    console.log(`[scheduler] diffusion automatique (${channel}) : article ${candidate.id} envoyé (externalId=${result.externalId})`);
-  } else {
+    const result = await sendToChannelCore({
+      articleId: candidate.id, channel, caption: caption.caption,
+      triggeredBy: "scheduled", actorId: null, channelOverride, renderStore, fetchImpl,
+    });
+
+    if (result.ok) {
+      console.log(`[scheduler] diffusion automatique (${channel}) : article ${candidate.id} envoyé (externalId=${result.externalId})`);
+      return;
+    }
+
     console.error(`[scheduler] diffusion automatique (${channel}) : échec pour l'article ${candidate.id} : ${result.message}`);
+
+    if (await hasDistributionRow(candidate.id, channel)) {
+      // A "real" attempt reached step 4+ of send-core.ts and left its own trace (a 'failed' row,
+      // already audited via article_revisions) — stays retryable per selectNextArticle's own
+      // exclusion rules (a 'failed' row never excludes). Do NOT skip past it: unlike the pre-row
+      // case below, an operator already has visibility via that row, and skipping ahead of a
+      // possibly-transient failure would send candidates out of order for no real gain.
+      return;
+    }
+
+    // Important 2: sendToChannelCore refused BEFORE writing any distributions row (render failure,
+    // R2 unconfigured, no `social_post` template — never "channel disabled", closed off by the
+    // settings.enabled check above). No trace exists anywhere except the console.error just above.
+    // Alert so an operator actually sees it, then try the next candidate instead of leaving this
+    // channel silently wedged on this one article forever.
+    await createAlert({
+      type: "diffusion_blocked",
+      title: `Diffusion bloquée — ${SOCIAL_CHANNELS[channel].label}`,
+      detail: `« ${candidate.title} » ne peut pas être diffusé automatiquement sur ${SOCIAL_CHANNELS[channel].label} : ${result.message}`,
+      entityId: candidate.id,
+    });
+    excludeIds.push(candidate.id);
   }
 }

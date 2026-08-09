@@ -52,19 +52,41 @@ afterEach(async () => {
   createdArticleIds = [];
 });
 
-describe("selectNextArticle — ordering (D1 §5, Task 8)", () => {
-  it("returns the OLDEST eligible article first (ascending publishedAt), not just any eligible one", async () => {
+describe("selectNextArticle — ordering (D1 §5, Task 8 — corrected by the D1 final review, Important 1)", () => {
+  // The review's own required assertion, verbatim: "with articles from today and from three days
+  // ago, all unsent, the next selection must be today's oldest, not the three-day-old one." Also
+  // folds in the within-day tie-break (todayLate exists specifically so "today wins" can't be
+  // satisfied by accident by a test with only one candidate for today).
+  //
+  // The ORIGINAL implementation (a single ORDER BY publishedAt ASC across the whole backlog
+  // window) would have picked `threeDaysAgo` here — its publishedAt is earlier than either of
+  // today's — which is exactly the inverted-priority bug this test exists to catch.
+  it("today's OLDEST wins over both today's later article AND an older backlog day", async () => {
     const now = FAR_FUTURE;
-    const oldest = await createArticle({ publishedAt: new Date(now.getTime() - 3 * DAY_MS), title: "Le plus ancien" });
-    const middle = await createArticle({ publishedAt: new Date(now.getTime() - 2 * DAY_MS), title: "Au milieu" });
-    const newest = await createArticle({ publishedAt: new Date(now.getTime() - 1 * DAY_MS), title: "Le plus récent" });
+    const threeDaysAgo = await createArticle({ publishedAt: new Date(now.getTime() - 3 * DAY_MS), title: "Il y a 3 jours" });
+    const todayLate = await createArticle({ publishedAt: new Date(now.getTime() - 1 * HOUR_MS), title: "Aujourd'hui, plus tard" });
+    const todayEarly = await createArticle({ publishedAt: new Date(now.getTime() - 3 * HOUR_MS), title: "Aujourd'hui, plus tôt" });
 
     const result = await selectNextArticle({ channel: CHANNEL, now, maxBacklogDays: 7 });
 
     expect(result).not.toBeNull();
-    expect(result!.id).toBe(oldest);
-    expect(result!.id).not.toBe(middle);
-    expect(result!.id).not.toBe(newest);
+    expect(result!.id).toBe(todayEarly);
+    expect(result!.id).not.toBe(todayLate); // within-day tie-break: oldest TIME wins
+    expect(result!.id).not.toBe(threeDaysAgo); // cross-day priority: today's day wins outright
+  });
+
+  it("once today is exhausted (all sent), falls back to yesterday's oldest — the day-walk still works", async () => {
+    const now = FAR_FUTURE;
+    const yesterdayLate = await createArticle({ publishedAt: new Date(now.getTime() - 1 * DAY_MS + 2 * HOUR_MS), title: "Hier, plus tard" });
+    const yesterdayEarly = await createArticle({ publishedAt: new Date(now.getTime() - 1 * DAY_MS - 2 * HOUR_MS), title: "Hier, plus tôt" });
+    const todayAlreadySent = await createArticle({ publishedAt: new Date(now.getTime() - 1 * HOUR_MS), title: "Aujourd'hui, déjà envoyé" });
+    await markDistribution(todayAlreadySent, "sent");
+
+    const result = await selectNextArticle({ channel: CHANNEL, now, maxBacklogDays: 7 });
+
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe(yesterdayEarly); // yesterday's oldest, not yesterday's later article
+    expect(result!.id).not.toBe(yesterdayLate);
   });
 });
 

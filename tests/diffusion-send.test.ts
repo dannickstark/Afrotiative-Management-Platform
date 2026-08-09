@@ -12,14 +12,19 @@ import { FB_TEMPLATE } from "@/db/studio-templates";
 import type { Channel, TemplateContext, FormatKey } from "@/lib/studio";
 
 // This file's EXCLUSIVE static social_channel_settings scope: "tiktok" (lazy-enabled default,
-// used for every render-reaching test below) and "x" (explicitly disabled). Neither is a static
-// settings-row scope owned by tests/diffusion-settings.test.ts (tiktok/facebook/instagram there
-// are deleted in ITS OWN beforeAll/afterAll — self-healing, same convention documented in
+// used for every render-reaching test below), "x" (explicitly disabled), and "whatsapp" (lazy-
+// enabled default, used ONLY for the "no template configured" test below). None of the three is a
+// static settings-row scope owned by tests/diffusion-settings.test.ts (tiktok/facebook/instagram
+// there are deleted in ITS OWN beforeAll/afterAll — self-healing, same convention documented in
 // tests/studio-fixtures.ts). render_templates scope: (social_post, "tiktok", <fresh categoryId>) —
 // collision-free by construction (categoryId is a freshly generated UUID each run), same pattern
-// tests/studio-e2e.test.ts and tests/studio-bindings.test.ts already rely on.
+// tests/studio-e2e.test.ts and tests/studio-bindings.test.ts already rely on. "whatsapp" gets NO
+// render_templates row at all, anywhere, on purpose (db/studio-templates.ts only seeds starter
+// defaults for facebook/instagram — see its STARTERS array — so whatsapp/x/tiktok start with none):
+// that absence is exactly what the "no template configured" test needs resolveTemplate to hit.
 const TEMPLATE_CHANNEL = "tiktok" as const;
 const DISABLED_CHANNEL = "x" as const;
+const NO_TEMPLATE_CHANNEL = "whatsapp" as const;
 
 // Controllable SocialChannel double — every REGISTERED channel's `send` delegates to StubChannel
 // (lib/diffusion/channels.ts), which always succeeds and can never be made to fail. sendToChannelCore
@@ -48,9 +53,10 @@ let articleRenderFails: string;
 let articleSuccess: string;
 let articleRetry: string;
 let articleSecondSend: string;
+let articleNoTemplate: string;
 
 async function deleteSettingsRows() {
-  await db.delete(socialChannelSettings).where(inArray(socialChannelSettings.channel, [TEMPLATE_CHANNEL, DISABLED_CHANNEL]));
+  await db.delete(socialChannelSettings).where(inArray(socialChannelSettings.channel, [TEMPLATE_CHANNEL, DISABLED_CHANNEL, NO_TEMPLATE_CHANNEL]));
 }
 
 beforeAll(async () => {
@@ -88,11 +94,15 @@ beforeAll(async () => {
   [{ id: articleSuccess }] = await mk("Diffusion — envoi réussi", { status: "published", publishedAt, categoryId, featuredImageUrl: imageUrl });
   [{ id: articleRetry }] = await mk("Diffusion — échec puis réessai", { status: "published", publishedAt, categoryId, featuredImageUrl: imageUrl });
   [{ id: articleSecondSend }] = await mk("Diffusion — second envoi bloqué", { status: "published", publishedAt, categoryId, featuredImageUrl: imageUrl });
+  // categoryId reused deliberately (not a fresh one): no render_templates row exists anywhere for
+  // (social_post, "whatsapp", *) — see NO_TEMPLATE_CHANNEL's comment above — so which category this
+  // article carries is irrelevant to which template resolveTemplate lands on (there is none).
+  [{ id: articleNoTemplate }] = await mk("Diffusion — aucun gabarit configuré", { status: "published", publishedAt, categoryId, featuredImageUrl: imageUrl });
 });
 
 afterAll(async () => {
   server?.stop(true);
-  const ids = [articleUnpublished, articleDisabled, articleRenderFails, articleSuccess, articleRetry, articleSecondSend].filter(Boolean);
+  const ids = [articleUnpublished, articleDisabled, articleRenderFails, articleSuccess, articleRetry, articleSecondSend, articleNoTemplate].filter(Boolean);
   if (ids.length) {
     await db.delete(renders).where(inArray(renders.subjectId, ids));
     await db.delete(distributions).where(inArray(distributions.articleId, ids));
@@ -136,6 +146,25 @@ describe("sendToChannelCore — ordonnancement (D1 §4/§7, Task 5)", () => {
     if (r.ok) return;
     expect(r.message.length).toBeGreaterThan(0);
     const rows = await db.select().from(distributions).where(and(eq(distributions.articleId, articleRenderFails), eq(distributions.channel, TEMPLATE_CHANNEL)));
+    expect(rows).toHaveLength(0);
+  });
+
+  // D1 final review, "Also fix — cheap": the {ok:true, url:null} branch of renderForArticle (no
+  // `social_post` template resolves for this channel at all — lib/studio/index.ts, "aucun gabarit
+  // n'est un cas NORMAL, pas une erreur") was previously verified only by reading send-core.ts's
+  // step 3, never by a test. It is distinct from "un rendu en échec" above: that test's article has
+  // a RESOLVED template that then fails during rendering (missing image token); this one never
+  // resolves a template at all.
+  it("aucun gabarit « post social » configuré (ok:true,url:null) refuse l'envoi, en nommant le canal — aucune ligne distributions écrite", async () => {
+    const r = await sendToChannelCore({
+      articleId: articleNoTemplate, channel: NO_TEMPLATE_CHANNEL, caption: "x", triggeredBy: "manual", actorId: null,
+      renderStore: new MemoryRenderStore(), fetchImpl: fetch,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message).toContain(SOCIAL_CHANNELS[NO_TEMPLATE_CHANNEL].label);
+    expect(r.message.toLowerCase()).toContain("gabarit");
+    const rows = await db.select().from(distributions).where(and(eq(distributions.articleId, articleNoTemplate), eq(distributions.channel, NO_TEMPLATE_CHANNEL)));
     expect(rows).toHaveLength(0);
   });
 

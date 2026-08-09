@@ -303,9 +303,16 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
   vérifiable de bout en bout, en attendant qu'un vrai adaptateur remplace `StubChannel` canal par
   canal dans une itération future.
 - **Récupération des envois bloqués** : le même tic marque `failed` toute ligne `distributions`
-  restée `pending` plus de 10 min (processus interrompu entre l'écriture `pending` et le résultat
-  final) — sans quoi cet article resterait bloqué indéfiniment sur ce canal (index unique partiel,
-  §1 de la conception D1).
+  restée `pending` plus de 10 min par défaut, configurable via `DIFFUSION_STALE_PENDING_MINUTES`
+  (processus interrompu entre l'écriture `pending` et le résultat final) — sans quoi cet article
+  resterait bloqué indéfiniment sur ce canal (index unique partiel, §1 de la conception D1).
+- **Diffusion bloquée avant tout envoi (alerte)** : si un tic dû se voit refuser AVANT même
+  d'écrire une ligne `distributions` (rendu en échec, stockage R2 non configuré, aucun gabarit
+  « post social » configuré pour ce canal), l'article resterait sinon sélectionné identiquement à
+  chaque tic suivant, bloquant silencieusement tout le canal. Le tic lève désormais une alerte
+  (« diffusion_blocked », visible dans la cloche de notifications et le tableau de bord) et essaie
+  jusqu'à deux autres candidats sur le même tic avant d'abandonner — de quoi contourner UN article
+  mal configuré sans laisser tout le canal à l'arrêt.
 
 ---
 

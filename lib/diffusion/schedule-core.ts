@@ -3,7 +3,7 @@
 // module owns the "quoi/quand" (pure due-check + candidate selection), the scheduler owns the
 // "comment" (looping channels, persisting lastAutoSendAt, calling sendToChannelCore). Neither
 // function here touches send-core.ts or writes anything.
-import { and, asc, eq, gte, inArray, lte, notExists, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, notExists, notInArray, sql } from "drizzle-orm";
 import { db, articles, distributions } from "@/db";
 import type { Channel } from "@/lib/studio";
 
@@ -45,23 +45,52 @@ export function isDue(input: IsDueInput): boolean {
   return now.getTime() - lastAutoSendAt.getTime() >= autoIntervalHours * HOUR_MS;
 }
 
-export type SelectNextArticleInput = { channel: Channel; now: Date; maxBacklogDays: number };
+export type SelectNextArticleInput = {
+  channel: Channel;
+  now: Date;
+  maxBacklogDays: number;
+  // Important 2 (2026-08-09 fix wave): candidate ids to skip even though they'd otherwise be
+  // eligible — used ONLY by lib/diffusion/scheduler.ts's tickChannel to route around a candidate
+  // that sendToChannelCore just refused BEFORE writing any distributions row (render failure, R2
+  // unconfigured, no `social_post` template). Left out of every other caller/test — an empty/
+  // omitted array is a no-op, identical to the pre-existing query.
+  excludeIds?: readonly string[];
+};
 export type NextArticleCandidate = { id: string; publishedAt: Date; title: string };
 
 // selectNextArticle — D1 §5's selection. `articles.status = 'published'`, `publishedAt` within
 // `[now - maxBacklogDays, now]` (both bounds inclusive), no `distributions` row for THIS channel in
 // status 'pending' or 'sent' (a 'failed' row does NOT exclude — a failure must stay retryable by
-// the scheduler), ordered by `publishedAt` ASCENDING, limit 1.
+// the scheduler), limit 1.
 //
-// That ascending sort IS the user's rule ("du plus ancien au plus récent... s'il n'y a plus rien
-// pour aujourd'hui, il regarde les articles de la veille, et ainsi de suite"): an unsent article
-// from yesterday has an earlier publishedAt than every one of today's, so it sorts first
-// automatically — the "walk back a day, then another" behavior falls out of ORDER BY + LIMIT 1 with
-// no extra code. DO NOT reintroduce day-by-day iteration (looping "check today, then yesterday,
-// then...") — that would hand-roll, with more code and more room for an off-by-one, exactly what
-// this single ascending sort already gives for free.
+// ORDER BY date_trunc('day', published_at) DESC, published_at ASC — the CALENDAR DAY comes first,
+// most-recent day first; only WITHIN a day does time break the tie, oldest first. This is the
+// user's actual rule ("choisit un article publié le jour même... du plus ancien au plus récent ;
+// si tout est déjà envoyé, remonte à la veille" — README.md, docs/DEPLOYMENT.md §6.5,
+// components/settings/social-channel-form.tsx): today's oldest-unsent article must outrank
+// EVERY unsent article from a previous day, no matter how much earlier it was published.
+//
+// A single global ORDER BY publishedAt ASC (this module's original implementation) does NOT give
+// that — it hands priority to whichever unsent article is oldest ACROSS THE WHOLE BACKLOG WINDOW,
+// so a 3-day-old unsent article would outrank everything published today. That inverted the user's
+// rule (caught in the D1 final review, 2026-08-09): today must be exhausted before yesterday is
+// even considered, not "sorted after" in a single flat ordering by timestamp.
+//
+// NOTE on "day", precisely: `articles.published_at` is `timestamp` WITHOUT time zone (db/schema.ts),
+// and this codebase's pg driver stores a JS Date's UTC digits into it verbatim (verified directly:
+// inserting a local-noon Date lands as that same instant's UTC wall-clock text in the column) — so
+// date_trunc('day', ...) here buckets by UTC calendar day, NOT the server process's local calendar
+// day the way isWithinWindow's `now.getHours()` reads local wall time. These two ARE different
+// clocks. Not fixed here: no per-tenant/per-channel timezone concept exists anywhere in this
+// codebase, and the D1 final review explicitly deferred the analogous "window hours are
+// server-local" looseness rather than asking for a timezone model — this ordering fix inherits
+// that same accepted simplification rather than expanding its scope.
+//
+// Still no day-by-day LOOP: ORDER BY + LIMIT 1 gives the whole "walk back a day, then another"
+// behavior in one query — reintroducing a day-by-day iteration would hand-roll, with more code and
+// more room for an off-by-one, exactly what this two-key sort already gives for free.
 export async function selectNextArticle(
-  { channel, now, maxBacklogDays }: SelectNextArticleInput,
+  { channel, now, maxBacklogDays, excludeIds }: SelectNextArticleInput,
 ): Promise<NextArticleCandidate | null> {
   const since = new Date(now.getTime() - maxBacklogDays * DAY_MS);
 
@@ -79,8 +108,9 @@ export async function selectNextArticle(
           inArray(distributions.status, ["pending", "sent"]),
         )),
       ),
+      excludeIds && excludeIds.length > 0 ? notInArray(articles.id, excludeIds as string[]) : undefined,
     ))
-    .orderBy(asc(articles.publishedAt))
+    .orderBy(desc(sql`date_trunc('day', ${articles.publishedAt})`), asc(articles.publishedAt))
     .limit(1);
 
   // publishedAt is nullable in the column type, but articles_published_has_date (db/schema.ts)

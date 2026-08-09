@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from "bun:test";
-import { db, articles, wpCategories, renderTemplates, renderTemplateVersions, renders, distributions, articleRevisions, socialChannelSettings } from "@/db";
+import { db, articles, wpCategories, renderTemplates, renderTemplateVersions, renders, distributions, articleRevisions, socialChannelSettings, alerts } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
 import sharp from "sharp";
 import { triggerDiffusionTick, reclaimStalePendingDistributions } from "@/lib/diffusion/scheduler";
@@ -110,6 +110,10 @@ afterAll(async () => {
 
 afterEach(async () => {
   if (createdArticleIds.length) {
+    // alerts.entityId is NOT a foreign key (db/schema.ts's own comment — history must outlive the
+    // entity), so it does not cascade-delete with the article the way distributions/articleRevisions
+    // do — clean it up explicitly, for the Important-2 "diffusion_blocked" tests below.
+    await db.delete(alerts).where(inArray(alerts.entityId, createdArticleIds));
     await db.delete(renders).where(inArray(renders.subjectId, createdArticleIds));
     await db.delete(articles).where(inArray(articles.id, createdArticleIds)); // cascades distributions + articleRevisions
   }
@@ -162,30 +166,54 @@ describe("triggerDiffusionTick — un canal non dû n'envoie rien", () => {
 
     expect(await distributionsFor(articleId, CH_A)).toHaveLength(0);
   });
+
+  // D1 final review, Important 3: enabled:false + autoEnabled:true is reachable (two uncoupled
+  // switches on the same form) — before this fix, the tick only checked autoEnabled, so it still
+  // selected a candidate, persisted lastAutoSendAt, and made a real (paid) caption LLM call, only
+  // to be refused by sendToChannelCore's OWN `enabled` check every single time. Checking both
+  // settings here closes that off before any of that work starts.
+  it("does nothing when the channel is manually disabled (enabled:false), even though autoEnabled is on — no candidate selected at all", async () => {
+    await insertChannelSettings(CH_A, { enabled: false, autoEnabled: true, autoIntervalHours: 6, lastAutoSendAt: null });
+    const articleId = await createArticle(1, "Article — canal désactivé manuellement");
+
+    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+
+    expect(await distributionsFor(articleId, CH_A)).toHaveLength(0);
+    // lastAutoSendAt untouched — the `enabled` check happens BEFORE isDue/selectNextArticle are
+    // even reached, so this tick never "used" its interval at all.
+    const after = await getChannelSettings(CH_A);
+    expect(after.lastAutoSendAt).toBeNull();
+  });
 });
 
 describe("triggerDiffusionTick — deux tics consécutifs n'envoient pas deux fois", () => {
-  // The sharpest test in this file: TWO eligible articles are available (older + newer), so a
-  // broken guard wouldn't just "resend the same article" — it would send the SECOND one on the
-  // second tick, an easy way for a weaker assertion (e.g. "the older article isn't sent twice") to
-  // pass by accident while double-sending is still happening. Asserting the TOTAL sent count stays
-  // at 1, and that the newer article specifically was never touched, catches that.
+  // The sharpest test in this file: TWO eligible articles are available, on DIFFERENT calendar
+  // days (offset 2 vs offset 1), so a broken guard wouldn't just "resend the same article" — it
+  // would send the SECOND one on the second tick, an easy way for a weaker assertion (e.g. "the
+  // first-picked article isn't sent twice") to pass by accident while double-sending is still
+  // happening. Asserting the TOTAL sent count stays at 1, and that the other article specifically
+  // was never touched, catches that.
+  //
+  // `moreRecentDay` (offset 1) is picked FIRST, not `olderDay` (offset 2) — day-desc, D1 final
+  // review Important 1: the more recent calendar day outranks an older one regardless of which
+  // has the earlier raw publishedAt. (Before that fix, a single ascending-publishedAt sort would
+  // have picked olderDay first instead — this test would have needed the opposite assertion.)
   it("the second tick (same `now`) sends nothing more — total stays at exactly 1 sent article", async () => {
     await insertChannelSettings(CH_A, { autoIntervalHours: 6, lastAutoSendAt: null });
-    const older = await createArticle(2, "Article — plus ancien");
-    const newer = await createArticle(1, "Article — plus récent");
+    const olderDay = await createArticle(2, "Article — jour plus ancien");
+    const moreRecentDay = await createArticle(1, "Article — jour plus récent");
 
     await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
-    const afterFirst = await distributionsFor(older, CH_A);
+    const afterFirst = await distributionsFor(moreRecentDay, CH_A);
     expect(afterFirst).toHaveLength(1);
     expect(afterFirst[0].status).toBe("sent");
-    expect(await distributionsFor(newer, CH_A)).toHaveLength(0); // not yet — only the oldest is due per tick
+    expect(await distributionsFor(olderDay, CH_A)).toHaveLength(0); // not yet — only one candidate is due per tick
 
     // Second tick, SAME instant — a slow/duplicated fire, or a naive re-poll.
     await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
-    expect(await distributionsFor(older, CH_A)).toHaveLength(1); // still just the one row
-    expect(await distributionsFor(newer, CH_A)).toHaveLength(0); // the second article was NEVER picked up
+    expect(await distributionsFor(moreRecentDay, CH_A)).toHaveLength(1); // still just the one row
+    expect(await distributionsFor(olderDay, CH_A)).toHaveLength(0); // the other article was NEVER picked up
   }, 20000); // two full tick round-trips over the network Neon connection
 });
 
@@ -212,17 +240,25 @@ describe("triggerDiffusionTick — lastAutoSendAt persisté, un redémarrage sim
 
 describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificateur", () => {
   it("a failing channel doesn't stop a healthy channel in the SAME tick, and the call itself never throws", async () => {
-    // Deliberately DIFFERENT offsets, not just different titles: selectNextArticle picks the
-    // globally-oldest article eligible for a GIVEN channel, with no built-in notion of "this
-    // article belongs to that channel's test". Two articles with the SAME publishedAt would leave
-    // it genuinely ambiguous which one each channel picks (found live — see this test's own report
-    // entry). failingArticle (offset 1) sits inside CH_A's tight 5-day backlog but outside CH_B's;
-    // healthyArticle (offset 100) sits inside CH_B's 150-day backlog but outside CH_A's — each
-    // channel therefore has EXACTLY one eligible candidate, deterministically.
+    // Deliberately DIFFERENT offsets, not just different titles: selectNextArticle has no built-in
+    // notion of "this article belongs to that channel's test", and day-desc ordering (D1 final
+    // review, Important 1) means CH_B's WIDE 150-day backlog would otherwise ALSO see
+    // failingArticle (offset 1, "yesterday" — a more recent day than healthyArticle's offset 100)
+    // and prefer it over healthyArticle, since nothing about `articles` itself is channel-scoped
+    // (found live — see this test's own report entry, both under the original ascending-sort
+    // design and again under the day-desc one). A pre-existing 'sent' row for failingArticle on
+    // CH_B SPECIFICALLY (not CH_A) closes that off the same way any other already-handled
+    // candidate would be excluded — CH_A's own selection is untouched, since exclusion is always
+    // per-channel. That leaves each channel with EXACTLY one eligible candidate, deterministically:
+    // failingArticle for CH_A (its 5-day backlog doesn't reach healthyArticle at offset 100 at
+    // all), healthyArticle for CH_B (failingArticle is excluded there by the row below).
     await insertChannelSettings(CH_A, { autoIntervalHours: 6, autoMaxBacklogDays: 5, lastAutoSendAt: null }); // will fail
     await insertChannelSettings(CH_B, { autoIntervalHours: 6, autoMaxBacklogDays: 150, lastAutoSendAt: null }); // will succeed
     const failingArticle = await createArticle(1, "Article — échec d'envoi simulé");
     const healthyArticle = await createArticle(100, "Article — envoi sain");
+    await db.insert(distributions).values({
+      articleId: failingArticle, channel: CH_B, status: "sent", sentAt: new Date(), externalId: "test-isolation-pre-existing",
+    });
 
     const failingChannel: SocialChannel = {
       ...SOCIAL_CHANNELS[CH_A],
@@ -250,10 +286,14 @@ describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificat
     expect((await getChannelSettings(CH_A)).lastAutoSendAt!.getTime()).toBe(FAR_FUTURE.getTime());
 
     // A LATER, separate call — proves the scheduler itself isn't wedged by the prior failure, not
-    // just that the loop happened to continue within one call. Older (offset 3) than failingArticle
-    // (offset 1, still sitting there 'failed' — which does NOT exclude it, by design) so THIS
-    // article is unambiguously the oldest eligible candidate for CH_A on this next tick.
-    const laterArticle = await createArticle(3, "Article — tic suivant, canal sain");
+    // just that the loop happened to continue within one call. offset 0 ("today"), a MORE RECENT
+    // calendar day than failingArticle's (offset 1, "yesterday" — still sitting there 'failed',
+    // which does NOT exclude it, by design): day-desc ordering (D1 final review, Important 1)
+    // means this is unambiguously the next candidate for CH_A, regardless of raw timestamp — an
+    // offset further back (e.g. offset 3) would instead have left failingArticle itself as the
+    // priority pick here (its day is more recent), which would still prove the point but less
+    // cleanly (it would exercise a RETRY of the earlier failure, not a fresh candidate).
+    const laterArticle = await createArticle(0, "Article — tic suivant, canal sain");
     await insertChannelSettings(CH_A, { autoIntervalHours: 6, autoMaxBacklogDays: 30, lastAutoSendAt: null }); // reset A, now healthy (no override)
     await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
     const laterRows = await distributionsFor(laterArticle, CH_A);
@@ -274,6 +314,11 @@ describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificat
     await insertChannelSettings(CH_B, { autoIntervalHours: 6, autoMaxBacklogDays: 150, lastAutoSendAt: null });
     const throwingArticle = await createArticle(1, "Article — send() lève une exception");
     const healthyArticle = await createArticle(100, "Article — envoi sain (throw voisin)");
+    // Same cross-channel isolation as the test above, same reason (day-desc ordering, Important 1,
+    // would otherwise let CH_B's wide backlog prefer throwingArticle over healthyArticle).
+    await db.insert(distributions).values({
+      articleId: throwingArticle, channel: CH_B, status: "sent", sentAt: new Date(), externalId: "test-isolation-pre-existing",
+    });
 
     const throwingChannel: SocialChannel = {
       ...SOCIAL_CHANNELS[CH_A],
@@ -298,6 +343,113 @@ describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificat
     expect(stuck).toHaveLength(1);
     expect(stuck[0].status).toBe("pending");
   }, 20000); // full render + send round-trip over the network Neon connection
+});
+
+describe("triggerDiffusionTick — un refus AVANT écriture ne bloque pas le canal indéfiniment (D1 final review, Important 2)", () => {
+  it("skips a pre-row refusal (render failure — no distributions row written) and still sends the next healthy candidate, raising a diffusion_blocked alert", async () => {
+    await insertChannelSettings(CH_A, { autoIntervalHours: 6, autoMaxBacklogDays: 30, lastAutoSendAt: null });
+
+    // Broken candidate: same templated category CH_A already has (this file's own beforeAll), but
+    // no featuredImageUrl — renderForArticle fails resolving {{article.image}}, so
+    // sendToChannelCore refuses at step 3, BEFORE any distributions row is ever written
+    // (send-core.ts's own documented step ordering — same technique as tests/diffusion-send.test.ts's
+    // "articleRenderFails"). Its calendar day (offset 1) is MORE RECENT than the healthy
+    // candidate's (offset 2), so day-desc ordering (Important 1) picks it FIRST — exactly the
+    // scenario that would silently wedge this channel forever without this fix.
+    const [{ id: brokenArticle }] = await db.insert(articles).values({
+      title: "Article — rendu impossible (image manquante)", bodyHtml: "<p>x</p>", status: "published",
+      publishedAt: new Date(FAR_FUTURE.getTime() - 1 * DAY_MS), categoryId, featuredImageUrl: null,
+    }).returning({ id: articles.id });
+    createdArticleIds.push(brokenArticle);
+
+    const healthyArticle = await createArticle(2, "Article — sain, jour plus ancien");
+
+    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+
+    // The broken candidate got NO distributions row at all — the exact pre-row-refusal case.
+    expect(await distributionsFor(brokenArticle, CH_A)).toHaveLength(0);
+
+    // The healthy candidate, behind it in priority, still shipped on this SAME tick.
+    const sent = await distributionsFor(healthyArticle, CH_A);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].status).toBe("sent");
+
+    // An operator now has a trace: an alert was raised for the skipped candidate.
+    const raised = await db.select().from(alerts).where(eq(alerts.entityId, brokenArticle));
+    expect(raised).toHaveLength(1);
+    expect(raised[0].type).toBe("diffusion_blocked");
+    expect(raised[0].detail.length).toBeGreaterThan(0);
+  }, 20000);
+
+  it("bounds how many candidates a single tick will skip — stops after 3, never sends, never hangs", async () => {
+    await insertChannelSettings(CH_A, { autoIntervalHours: 6, autoMaxBacklogDays: 30, lastAutoSendAt: null });
+
+    // FOUR broken candidates, one per calendar day (day=1 is "yesterday", ..., day=4 is "4 days
+    // ago") — day-desc ordering tries them in that exact sequence, and NONE of them ever writes a
+    // distributions row, so nothing here can naturally stop the loop except the
+    // MAX_CANDIDATES_PER_TICK bound (lib/diffusion/scheduler.ts) itself.
+    const brokenByDay: Record<number, string> = {};
+    for (const day of [1, 2, 3, 4]) {
+      const [{ id }] = await db.insert(articles).values({
+        title: `Article — rendu impossible (jour ${day})`, bodyHtml: "<p>x</p>", status: "published",
+        publishedAt: new Date(FAR_FUTURE.getTime() - day * DAY_MS), categoryId, featuredImageUrl: null,
+      }).returning({ id: articles.id });
+      createdArticleIds.push(id);
+      brokenByDay[day] = id;
+    }
+
+    await expect(triggerDiffusionTick({
+      now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch,
+    })).resolves.toBeUndefined();
+
+    for (const day of [1, 2, 3, 4]) {
+      expect(await distributionsFor(brokenByDay[day], CH_A)).toHaveLength(0); // none ever gets a row
+    }
+
+    // The 3 MOST RECENT days (1, 2, 3) were tried and alerted on; day 4 was never even reached.
+    for (const day of [1, 2, 3]) {
+      const rows = await db.select().from(alerts).where(eq(alerts.entityId, brokenByDay[day]));
+      expect(rows).toHaveLength(1);
+    }
+    const untried = await db.select().from(alerts).where(eq(alerts.entityId, brokenByDay[4]));
+    expect(untried).toHaveLength(0);
+
+    // The tick still "used" this cycle — lastAutoSendAt is set even though nothing ultimately sent.
+    const after = await getChannelSettings(CH_A);
+    expect(after.lastAutoSendAt!.getTime()).toBe(FAR_FUTURE.getTime());
+  }, 20000);
+});
+
+describe("reclaimStalePendingDistributions — cutoff configurable via DIFFUSION_STALE_PENDING_MINUTES (D1 final review, Important 5)", () => {
+  const originalEnv = process.env.DIFFUSION_STALE_PENDING_MINUTES;
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.DIFFUSION_STALE_PENDING_MINUTES;
+    else process.env.DIFFUSION_STALE_PENDING_MINUTES = originalEnv;
+  });
+
+  it("honors a SHORTER cutoff from the env var — a row the default 10-minute cutoff would leave untouched gets reclaimed", async () => {
+    const articleId = await createArticle(1, "Article — pending, cutoff réduit");
+    const at = new Date(Date.now() - 3 * 60_000); // 3 minutes ago — inside the default 10-min window, outside a 1-min one
+    await db.insert(distributions).values({ articleId, channel: CH_A, status: "pending", at, attempts: 0 });
+
+    process.env.DIFFUSION_STALE_PENDING_MINUTES = "1";
+    await reclaimStalePendingDistributions();
+
+    const [row] = await distributionsFor(articleId, CH_A);
+    expect(row.status).toBe("failed");
+  });
+
+  it("falls back to the default (10) on an invalid value — never silently disables the reaper", async () => {
+    const articleId = await createArticle(1, "Article — pending, cutoff invalide");
+    const staleAt = new Date(Date.now() - 20 * 60_000);
+    await db.insert(distributions).values({ articleId, channel: CH_A, status: "pending", at: staleAt, attempts: 0 });
+
+    process.env.DIFFUSION_STALE_PENDING_MINUTES = "not-a-number";
+    await reclaimStalePendingDistributions();
+
+    const [row] = await distributionsFor(articleId, CH_A);
+    expect(row.status).toBe("failed"); // still reaped — an invalid value falls back to the default, not to "never reap"
+  });
 });
 
 describe("reclaimStalePendingDistributions — récupère les envois bloqués (D1 §7, folded into Task 9)", () => {

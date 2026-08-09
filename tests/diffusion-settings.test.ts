@@ -5,6 +5,7 @@ import { can } from "@/lib/rbac";
 import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
 import { getChannelSettings, updateChannelSettingsCore } from "@/lib/diffusion/settings-core";
 import { listDistributionsForArticle } from "@/lib/queries/diffusion";
+import { socialChannelSettingsSchema } from "@/lib/validation";
 
 // Channels this file owns exclusively as test fixtures (deleted in beforeAll/afterAll — same
 // defensive-cleanup convention as tests/distributions-unique.test.ts). Picking DISTINCT channels
@@ -131,6 +132,73 @@ describe("updateChannelSettingsCore — general patch (Task 3)", () => {
     expect(res.settings.autoIntervalHours).toBe(12);
     expect(res.settings.captionPrompt).toBe("Ton plus formel.");
     expect(res.settings.updatedAt.getTime()).toBeGreaterThanOrEqual(t0);
+  });
+});
+
+// D1 final review, Important 4: updateChannelSettings (the Server Action — a PUBLIC network
+// endpoint) validated only captionMaxChars server-side; every other field relied entirely on
+// components/settings/social-channel-form.tsx's CLIENT-side guards, bypassable by any direct
+// caller. Mirrors tests/pipeline-settings.test.ts's own "pipelineSettingsSchema validation"
+// describe block: exercises the schema directly (unit-level), not through the guarded action
+// itself (which needs a real session — see that file's own comment on why).
+describe("socialChannelSettingsSchema validation (D1 final review, Important 4)", () => {
+  it("accepts a fully valid patch", () => {
+    const r = socialChannelSettingsSchema.safeParse({
+      enabled: true, captionMaxChars: 280, captionPrompt: null,
+      autoEnabled: true, autoIntervalHours: 6, autoMaxBacklogDays: 3,
+      autoWindowStartHour: 8, autoWindowEndHour: 20,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts a PARTIAL patch — every field is optional, matching UpdateChannelSettingsPatch", () => {
+    expect(socialChannelSettingsSchema.safeParse({ enabled: false }).success).toBe(true);
+    expect(socialChannelSettingsSchema.safeParse({}).success).toBe(true);
+  });
+
+  // The concrete failure the review called out by name: autoIntervalHours: 0 made isDue
+  // (lib/diffusion/schedule-core.ts) unconditionally true — `now - lastAutoSendAt >= 0` always
+  // holds — so a channel would fire on EVERY scheduler tick instead of once per configured
+  // interval.
+  it("refuses autoIntervalHours: 0, in French", () => {
+    const r = socialChannelSettingsSchema.safeParse({ autoIntervalHours: 0 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/positif/i);
+  });
+
+  it("refuses a negative autoIntervalHours", () => {
+    expect(socialChannelSettingsSchema.safeParse({ autoIntervalHours: -1 }).success).toBe(false);
+  });
+
+  // The other concrete failure: a non-integer would have reached an `integer` Postgres column and
+  // surfaced as a raw, untranslated driver error rather than a clean French message.
+  it("refuses a non-integer autoIntervalHours, in French", () => {
+    const r = socialChannelSettingsSchema.safeParse({ autoIntervalHours: 2.5 });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]?.message).toMatch(/entier/i);
+  });
+
+  it("refuses a non-integer captionMaxChars", () => {
+    expect(socialChannelSettingsSchema.safeParse({ captionMaxChars: 100.5 }).success).toBe(false);
+  });
+
+  it("refuses autoMaxBacklogDays: 0 or negative", () => {
+    expect(socialChannelSettingsSchema.safeParse({ autoMaxBacklogDays: 0 }).success).toBe(false);
+    expect(socialChannelSettingsSchema.safeParse({ autoMaxBacklogDays: -3 }).success).toBe(false);
+  });
+
+  it("refuses an out-of-range window hour (only 0-23 is valid)", () => {
+    expect(socialChannelSettingsSchema.safeParse({ autoWindowStartHour: 24 }).success).toBe(false);
+    expect(socialChannelSettingsSchema.safeParse({ autoWindowStartHour: -1 }).success).toBe(false);
+    expect(socialChannelSettingsSchema.safeParse({ autoWindowEndHour: 24 }).success).toBe(false);
+  });
+
+  it("accepts window hours at the boundaries (0 and 23)", () => {
+    expect(socialChannelSettingsSchema.safeParse({ autoWindowStartHour: 0, autoWindowEndHour: 23 }).success).toBe(true);
+  });
+
+  it("accepts a null captionPrompt (clears the override)", () => {
+    expect(socialChannelSettingsSchema.safeParse({ captionPrompt: null }).success).toBe(true);
   });
 });
 
