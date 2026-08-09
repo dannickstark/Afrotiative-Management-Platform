@@ -1,7 +1,14 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FORMAT_PRESETS, TEMPLATE_CONTEXTS, type TemplateContext } from "@/lib/studio";
+// Imports directs (PAS le barrel @/lib/studio) : ce barrel tire @/db (le pool `pg`) dans le graphe
+// de ce module (voir lib/studio/index.ts, qui importe { db } depuis "@/db"). Sans conséquence tant
+// que ce fichier reste un Server Component, mais il deviendra un Client Component dès qu'il gagnera
+// de l'interactivité (SP1, création/duplication/archivage) — exactement le risque que
+// lib/studio/default-category-color.ts a été extrait pour éviter (voir sa propre note). Même
+// convention que lib/queries/studio.ts, qui importe déjà ces deux symboles directement.
+import { FORMAT_PRESETS } from "@/lib/studio/formats";
+import { TEMPLATE_CONTEXTS, type TemplateContext } from "@/lib/studio/tokens";
 import type { TemplateRow } from "@/lib/queries/studio";
 
 // Purement présentationnel, sans état ni gestionnaire — Server Component par défaut (aucun

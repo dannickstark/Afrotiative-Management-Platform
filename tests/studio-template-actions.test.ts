@@ -59,6 +59,7 @@ const CH_DUP_ARCHIVED = "test-template-actions-duplicate-archived";
 const CH_SAVE = "test-template-actions-save";
 const CH_PUBLISH_INVALID = "test-template-actions-publish-invalid";
 const CH_PUBLISH_FLOW = "test-template-actions-publish-flow";
+const CH_PUBLISH_SNAPSHOT = "test-template-actions-publish-snapshot";
 
 function buildScene(content: string) {
   return {
@@ -103,6 +104,7 @@ let dupArchivedRow: { id: string; name: string };
 let saveRow: { id: string; name: string };
 let publishInvalidRow: { id: string; name: string };
 let publishFlowRow: { id: string; name: string };
+let publishSnapshotRow: { id: string; name: string };
 
 beforeAll(async () => {
   // DELETE-THEN-INSERT (tests/studio-fixtures.ts, règle 1) : répare une exécution précédente
@@ -110,7 +112,7 @@ beforeAll(async () => {
   // SQLSTATE 23505 pour toutes les exécutions suivantes.
   for (const ch of [
     CH_CREATE_HAPPY, CH_CREATE_CONFLICT, CH_RENAME, CH_ARCHIVE,
-    CH_DUP_SOURCE, CH_DUP_ARCHIVED, CH_SAVE, CH_PUBLISH_INVALID, CH_PUBLISH_FLOW,
+    CH_DUP_SOURCE, CH_DUP_ARCHIVED, CH_SAVE, CH_PUBLISH_INVALID, CH_PUBLISH_FLOW, CH_PUBLISH_SNAPSHOT,
   ]) {
     await deleteTemplateScope("recap_card", ch, null);
   }
@@ -129,6 +131,7 @@ beforeAll(async () => {
     sceneOverride: buildScene("{{article.url}}"),
   });
   publishFlowRow = await insertTemplate({ name: "Gabarit Flux Publication", channel: CH_PUBLISH_FLOW, sceneContent: "Contenu v1" });
+  publishSnapshotRow = await insertTemplate({ name: "Gabarit Instantané Publication", channel: CH_PUBLISH_SNAPSHOT, sceneContent: "Avant modification" });
 });
 
 afterAll(async () => {
@@ -248,6 +251,43 @@ describe("archiveTemplate", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe("duplicateTemplate", () => {
+  // Revue lot 1, Important 1 : quand la SOURCE occupe déjà (recap_card, null, null) — la portée par
+  // défaut du contexte — le repli habituel retomberait sur cette portée EXACTE, donc sur la source
+  // elle-même : c'est le cas précis qui produisait l'ancien message auto-contradictoire (le gabarit
+  // nommé trois fois) et qui refusait la duplication entièrement. db/studio-templates.ts:63 sème un
+  // gabarit exactement dans ce cas (channel: null, categoryId: null) ; ce test le reproduit sans
+  // toucher aux données semées.
+  //
+  // S'exécute EN PREMIER dans ce describe et libère explicitement (recap_card, null, null) en
+  // sortie (delete direct dans le `finally`, pas seulement templateIds côté afterAll global) : le
+  // test suivant dépend de cette même portée étant libre pour son propre repli.
+  it("duplique une source déjà à la portée par défaut du contexte — la copie est créée archivée", async () => {
+    const defaultScopedRow = await insertTemplate({ name: "Gabarit Défaut Recap", channel: null });
+    try {
+      const res = await duplicateTemplate(defaultScopedRow.id);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      // Le message ne doit nommer le gabarit source qu'UNE fois, jamais trois (bug corrigé).
+      expect(res.message).toBeDefined();
+      const occurrences = res.message!.split(defaultScopedRow.name).length - 1;
+      expect(occurrences).toBe(1);
+
+      const [row] = await db.select().from(renderTemplates).where(eq(renderTemplates.id, res.id));
+      expect(row.name).toBe("Gabarit Défaut Recap (copie)");
+      expect(row.channel).toBeNull();
+      expect(row.categoryId).toBeNull();
+      // Faute de portée libre (la portée par défaut EST déjà celle de la source), la copie est
+      // créée archivée plutôt que refusée — render_templates_scope (db/schema.ts) ignore les
+      // lignes archivées, donc aucun conflit n'est possible ici.
+      expect(row.archived).toBe(true);
+
+      await db.delete(renderTemplates).where(eq(renderTemplates.id, res.id));
+    } finally {
+      await db.delete(renderTemplates).where(eq(renderTemplates.id, defaultScopedRow.id));
+    }
+  });
+
   it("repli sur une portée libre quand la portée de la source est prise — par la source elle-même", async () => {
     const res = await duplicateTemplate(dupSourceRow.id);
     expect(res.ok).toBe(true);
@@ -315,6 +355,35 @@ describe("publishTemplate — refuse sur scène invalide", () => {
     expect(versions).toHaveLength(0);
     const [row] = await db.select({ publishedVersion: renderTemplates.publishedVersion }).from(renderTemplates).where(eq(renderTemplates.id, publishInvalidRow.id));
     expect(row.publishedVersion).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Revue lot 1, Important 2 : publishTemplateCore doit lire la scène à instantané À L'INTÉRIEUR de
+// la transaction (verrouillée avec .for("update")), pas avant — sinon un saveTemplateScene qui
+// committe entre une lecture PRÉALABLE et l'ouverture de la transaction publierait silencieusement
+// un instantané périmé. Une vraie course (deux publications concurrentes) n'est pas testée ici :
+// bun:test n'offre pas de primitive pour garantir qu'une deuxième transaction commence pendant
+// qu'une première tient encore son verrou FOR UPDATE, et une tentative avec deux promesses non
+// attendues serait non déterministe (dépendante de l'ordonnanceur du pool de connexions) — donc pas
+// un test fiable. Ce test vérifie plutôt la propriété observable qui aurait été violée par le bug :
+// l'instantané publié correspond au brouillon TEL QU'IL EST au moment de l'appel, pas tel qu'il
+// était à la création du gabarit.
+describe("publishTemplate — l'instantané reflète la scène au moment de la transaction", () => {
+  it("publie le contenu du brouillon actuel, pas celui de la création du gabarit", async () => {
+    expect(await draftContentOf(publishSnapshotRow.id)).toBe("Avant modification");
+
+    const saveRes = await saveTemplateScene(publishSnapshotRow.id, buildScene("Juste avant publication"));
+    expect(saveRes.ok).toBe(true);
+
+    const res = await publishTemplate(publishSnapshotRow.id);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.version).toBe(1);
+
+    const [snap] = await db.select().from(renderTemplateVersions)
+      .where(and(eq(renderTemplateVersions.templateId, publishSnapshotRow.id), eq(renderTemplateVersions.version, 1)));
+    expect((snap.scene as { layers: { content: string }[] }).layers[0].content).toBe("Juste avant publication");
   });
 });
 

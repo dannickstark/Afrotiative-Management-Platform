@@ -121,6 +121,23 @@ export async function renameTemplateCore(id: string, name: string): Promise<Acti
 // traitement spécial : pas besoin de distinguer "conflit avec la source" de "conflit avec un autre
 // gabarit", le même repli s'applique. Si la source est archivée, sa portée est déjà libre (l'index
 // unique ignore les lignes archivées) et la copie s'y installe directement, non archivée.
+//
+// Repli à deux niveaux — portée par défaut du contexte, puis copie archivée :
+//   - Si la source n'occupe PAS déjà la portée par défaut (context, null, null), on y tente le
+//     repli habituel.
+//   - Si la source occupe DÉJÀ cette portée par défaut (cas des gabarits de départ,
+//     db/studio-templates.ts:63, ou de tout gabarit re-dupliqué une deuxième fois une fois le
+//     premier repli consommé), retenter EXACTEMENT la même requête serait absurde : elle retrouverait
+//     la source elle-même, un conflit avec elle-même nommé deux fois de plus dans le message (bug
+//     corrigé ici — revue lot 1, Important 1). Il n'y a alors structurellement AUCUNE portée libre
+//     à essayer.
+//   - Dans les deux cas où aucune portée libre n'existe, la copie est quand même créée, mais
+//     ARCHIVÉE : `render_templates_scope` (db/schema.ts) est un index UNIQUE PARTIEL WHERE
+//     archived = false, donc une ligne archivée ne peut jamais entrer en conflit, quelle que soit sa
+//     portée. L'utilisateur re-scope la copie puis la désarchive — archiveTemplateCore(id, false)
+//     revérifie déjà ce conflit à ce moment-là (V1), donc ce chemin est sûr. Bloquer la duplication
+//     entièrement (ancien comportement) coupait le chemin PRINCIPAL par lequel un utilisateur crée
+//     son deuxième gabarit : partir d'un gabarit de départ et le re-scoper.
 export async function duplicateTemplateCore(
   id: string,
   userId: string,
@@ -130,31 +147,44 @@ export async function duplicateTemplateCore(
 
   let channel = source.channel;
   let categoryId = source.categoryId;
+  let archived = false;
   let message: string | undefined;
 
   const conflict = await findScopeConflict(source.context, channel, categoryId);
   if (conflict) {
-    channel = null;
-    categoryId = null;
-    const fallbackConflict = await findScopeConflict(source.context, channel, categoryId);
-    if (fallbackConflict) {
-      return {
-        ok: false,
-        message:
-          `Impossible de dupliquer « ${source.name} » : sa portée est occupée par « ${conflict.name} » ` +
-          `et la portée par défaut du contexte l'est aussi, par « ${fallbackConflict.name} ». ` +
-          `Archivez l'un des deux gabarits avant de réessayer.`,
-      };
+    const sourceIsDefaultScope = channel === null && categoryId === null;
+    if (sourceIsDefaultScope) {
+      // Le repli "portée par défaut" EST la portée de la source : rien de nouveau à essayer. channel
+      // et categoryId restent donc à null (la portée de la source), et c'est l'archivage qui évite
+      // le conflit, pas un changement de portée.
+      archived = true;
+      message =
+        `« ${source.name} » occupe déjà la portée par défaut du contexte : aucune autre portée ` +
+        `n'est disponible, la copie a été créée archivée. Changez sa portée puis désarchivez-la.`;
+    } else {
+      const fallbackConflict = await findScopeConflict(source.context, null, null);
+      if (fallbackConflict) {
+        // Aucune portée libre non plus : channel/categoryId restent ceux de la source (peu importe
+        // lesquels, l'archivage les rend tous les deux sans danger).
+        archived = true;
+        message =
+          `« ${conflict.name} » occupe déjà la portée de « ${source.name} », et la portée par défaut ` +
+          `du contexte est occupée par « ${fallbackConflict.name} » : aucune portée libre, la copie ` +
+          `a été créée archivée. Changez sa portée puis désarchivez-la.`;
+      } else {
+        channel = null;
+        categoryId = null;
+        message =
+          `« ${conflict.name} » occupe déjà la portée de « ${source.name} » : la copie a été créée ` +
+          `sans canal ni catégorie (portée par défaut du contexte).`;
+      }
     }
-    message =
-      `« ${conflict.name} » occupe déjà la portée de « ${source.name} » : la copie a été créée ` +
-      `sans canal ni catégorie (portée par défaut du contexte).`;
   }
 
   const [copy] = await db.insert(renderTemplates).values({
     name: `${source.name} (copie)`, context: source.context, channel, categoryId,
     format: source.format, width: source.width, height: source.height,
-    scene: source.scene, publishedVersion: null, archived: false, createdBy: userId,
+    scene: source.scene, publishedVersion: null, archived, createdBy: userId,
   }).returning({ id: renderTemplates.id });
 
   return message ? { ok: true, id: copy.id, message } : { ok: true, id: copy.id };
@@ -218,20 +248,39 @@ export async function saveTemplateSceneCore(id: string, sceneInput: unknown): Pr
 // seule transaction, un processus interrompu entre l'insertion de l'instantané et la pose de
 // publishedVersion laisserait une version orpheline (jamais désignée comme publiée) ou, pire,
 // publishedVersion pointant vers une version qui n'a en réalité jamais été insérée.
+//
+// La lecture de `existing` (donc de `existing.scene`, la valeur écrite dans
+// render_template_versions) DOIT se faire À L'INTÉRIEUR de la transaction, verrouillée avec
+// `.for("update")` — pas avant, comme un premier essai l'avait fait (revue lot 1, Important 2) :
+//   - Instantané périmé : l'éditeur autosauvegarde 1,5 s après la dernière frappe (Tâche 9) pendant
+//     que Publier reste actionnable juste à côté. Un saveTemplateScene qui committe entre une lecture
+//     PRÉALABLE et l'ouverture de la transaction publierait silencieusement un instantané sans la
+//     dernière modification.
+//   - Publications concurrentes : sous READ COMMITTED (Postgres par défaut), deux publications qui
+//     liraient `max(version)` chacune de leur côté avant de verrouiller pourraient toutes deux voir
+//     la même version et tenter d'insérer le même `nextVersion` — `render_template_versions_unique`
+//     (db/schema.ts) empêche la corruption mais la perdante remonterait un SQLSTATE 23505 brut au
+//     lieu d'un `{ ok: false, message }` français.
+// `.for("update")` sur CETTE ligne sérialise les deux cas : toute autre transaction qui touche cette
+// même ligne (un autre publishTemplateCore, ou un saveTemplateSceneCore réécrit un jour pour
+// verrouiller lui aussi) attend que celle-ci committe avant de lire à son tour — elle voit alors soit
+// le brouillon d'avant, soit celui d'après, jamais un état lu à cheval sur les deux écritures.
 export async function publishTemplateCore(
   id: string,
   userId: string,
 ): Promise<ActionResult<{ version: number }>> {
-  const [existing] = await db.select().from(renderTemplates).where(eq(renderTemplates.id, id)).limit(1);
-  if (!existing) return { ok: false, message: "Gabarit introuvable." };
+  return db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(renderTemplates)
+      .where(eq(renderTemplates.id, id))
+      .for("update");
+    if (!existing) return { ok: false, message: "Gabarit introuvable." };
 
-  const parsed = parseSceneSafely(existing.scene);
-  if (!parsed.ok) return parsed;
+    const parsed = parseSceneSafely(existing.scene);
+    if (!parsed.ok) return parsed;
 
-  const errors = validateScene(parsed.scene, existing.context as TemplateContext);
-  if (errors.length) return { ok: false, message: errors.join(" ") };
+    const errors = validateScene(parsed.scene, existing.context as TemplateContext);
+    if (errors.length) return { ok: false, message: errors.join(" ") };
 
-  const version = await db.transaction(async (tx) => {
     const [latest] = await tx.select({ version: renderTemplateVersions.version })
       .from(renderTemplateVersions)
       .where(eq(renderTemplateVersions.templateId, id))
@@ -245,10 +294,8 @@ export async function publishTemplateCore(
     await tx.update(renderTemplates).set({ publishedVersion: nextVersion, updatedAt: new Date() })
       .where(eq(renderTemplates.id, id));
 
-    return nextVersion;
+    return { ok: true, version: nextVersion };
   });
-
-  return { ok: true, version };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

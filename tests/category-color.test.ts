@@ -73,7 +73,9 @@ describe("setCategoryColor", () => {
   it("refuses a named colour (rouge), in French, and leaves the stored colour unchanged", async () => {
     const res = await setCategoryColor(categoryId, "rouge");
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.message.length).toBeGreaterThan(0);
+    // Asserts FRENCH content specifically — the binding constraint this test's own name claims —
+    // not just a non-empty string, which would pass just as well against an English message.
+    if (!res.ok) expect(res.message).toContain("hexadécimal");
     expect(await colorInDb()).toBe("#1B7F4A"); // unchanged from the previous accepted write
   });
 

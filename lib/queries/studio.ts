@@ -20,9 +20,14 @@ export type TemplateRow = {
 };
 
 // Comparaison structurelle, PAS une comparaison texte brute : les clés sont triées récursivement
-// avant stringify, comme lib/studio/store.ts:computeInputHash — sans ce tri, deux valeurs jsonb
-// sémantiquement égales mais reconstruites avec un ordre de clé différent (jsonb ne garantit pas
-// l'ordre — voir la doc PostgreSQL sur le type jsonb) donneraient un faux positif de changement.
+// avant stringify, comme lib/studio/store.ts:computeInputHash. Ceinture-et-bretelles, PAS une
+// protection éprouvée : dans ce dépôt, PostgreSQL canonicalise déjà l'ordre des clés jsonb au
+// stockage (vérifié empiriquement dans tests/studio-rbac.test.ts, "false quand seul l'ordre des
+// clés diffère…" — retirer ce tri ne fait échouer aucun test), donc ce tri ne change rien en
+// pratique ICI. Il reste utile pour deux raisons : (1) une garantie contre une future migration qui
+// changerait le type de colonne de `jsonb` vers `json` (qui, lui, préserve l'ordre textuel d'origine
+// et ferait un vrai faux positif sans ce tri) et (2) une protection si canonicalJson() est un jour
+// réutilisée sur des valeurs n'ayant jamais transité par une colonne jsonb.
 function sortKeysDeep(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeysDeep);
   if (value !== null && typeof value === "object") {

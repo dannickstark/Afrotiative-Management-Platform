@@ -58,6 +58,7 @@
 //                                    (recap_card, "test-template-actions-save", null)
 //                                    (recap_card, "test-template-actions-publish-invalid", null)
 //                                    (recap_card, "test-template-actions-publish-flow", null)
+//                                    (recap_card, "test-template-actions-publish-snapshot", null)
 //                                    (recap_card, null, null) ← portée d'atterrissage du repli
 //                                    "portée libre" de duplicateTemplate ; libre par construction
 //                                    puisque recap_card n'a aucun gabarit de départ semé
@@ -67,7 +68,12 @@
 //                                    ET dans l'afterAll, exactement comme les portées à canal fixe
 //                                    ci-dessus, pour ne jamais laisser une ligne active qui casserait
 //                                    l'hypothèse "recap_card n'a pas de gabarit par défaut" des
-//                                    fichiers voisins.
+//                                    fichiers voisins. Un DEUXIÈME test (« duplique une source déjà à
+//                                    la portée par défaut ») insère aussi, temporairement, sa PROPRE
+//                                    ligne active directement à cette portée (Important 1, revue lot
+//                                    1) — il s'exécute en premier dans son describe et libère la
+//                                    portée dans un `finally` avant que le test du repli n'en ait
+//                                    besoin.
 //
 // (article_image, null, <categoryId>) et (social_post, "test-priorite-canal", <categoryId>) ne
 // figurent PAS dans le registre ci-dessus : leur categoryId est un UUID généré à chaque exécution

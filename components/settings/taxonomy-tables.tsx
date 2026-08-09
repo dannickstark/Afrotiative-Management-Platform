@@ -137,6 +137,12 @@ function CategoryColorCell({ id, color }: { id: CategoryRow["id"]; color: Catego
           setSaved(trimmed);
           toast.success("Couleur enregistrée.");
         } else {
+          // Revient à la dernière valeur PERSISTÉE, pas à l'ancienne saisie refusée : sans ce
+          // reset, `value` restait sur le texte refusé ("rouge") pendant que `saved` gardait
+          // l'ancienne couleur — chaque blur suivant re-déclenchait alors la même action refusée
+          // (trimmed !== saved reste vrai indéfiniment) et re-toastait, et le swatch rendait
+          // `backgroundColor: "rouge"`, une valeur CSS invalide, donc vide.
+          setValue(saved);
           toast.error(res.message);
         }
       } catch (err) {
