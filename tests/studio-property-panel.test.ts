@@ -91,6 +91,23 @@ describe("PropertyPanel — calque texte", () => {
     const withTokens = render([textLayer], "t", "social_post");
     expect(withTokens).toContain('data-kind="text"');
   });
+
+  // Repéré en vérifiant l'écran réel dans un navigateur (bun test seul ne l'aurait jamais détecté,
+  // renderToStaticMarkup exécute pourtant la même fonction de rendu que le vrai navigateur ici) :
+  // Base UI <SelectValue> n'affiche PAS automatiquement le libellé du <SelectItem> sélectionné —
+  // sans mappeur explicite, le sélecteur affichait sa valeur technique brute ("left", "bottom",
+  // "700") au lieu du libellé français ("Gauche", "Bas", "700 — Gras").
+  it("les sélecteurs affichent le LIBELLÉ FRANÇAIS choisi, jamais la valeur technique brute", () => {
+    const html = render([textLayer], "t", "social_post"); // align: "center", vAlign: "middle", weight: 700
+    expect(html).toContain("Centre");
+    expect(html).toContain("Milieu");
+    expect(html).toContain("700 — Gras");
+    // Négatif : la valeur technique nue ne doit apparaître nulle part comme texte affiché (elle
+    // peut légitimement apparaître dans un attribut value="…" d'un <option>, ce que ce test ne
+    // cible pas — il cible le TEXTE affiché par SelectValue, capturé ci-dessus).
+    expect(html).not.toContain(">center<");
+    expect(html).not.toContain(">middle<");
+  });
 });
 
 describe("PropertyPanel — calque image", () => {

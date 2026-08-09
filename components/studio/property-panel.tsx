@@ -212,7 +212,17 @@ function SelectField({
   return (
     <FieldRow label={label}>
       <Select value={value} onValueChange={(v) => { if (v) onCommit(v); }}>
-        <SelectTrigger className="w-full"><SelectValue placeholder={placeholder ?? "Choisir…"} /></SelectTrigger>
+        <SelectTrigger className="w-full">
+          {/* Base UI's <SelectValue> ne dérive PAS automatiquement le libellé du <SelectItem>
+              correspondant (contrairement à un <select> natif) — repéré en vérifiant l'écran réel
+              dans un navigateur : sans ce mappeur explicite, chaque sélecteur de ce panneau
+              (alignement, graisse de police, ajustement d'image…) affichait sa valeur technique
+              brute ("left", "700"…) au lieu de son libellé français — même piège déjà corrigé dans
+              components/studio/preview-pane.tsx, voir sa note. */}
+          <SelectValue placeholder={placeholder ?? "Choisir…"}>
+            {(v: string | null) => options.find((o) => o.value === v)?.label ?? placeholder ?? "Choisir…"}
+          </SelectValue>
+        </SelectTrigger>
         <SelectContent>
           {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
         </SelectContent>
