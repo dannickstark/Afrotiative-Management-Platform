@@ -23,6 +23,18 @@ const nextConfig: NextConfig = {
   // le graphe d'une Server Action — bun test ne l'a jamais détecté puisque bun exécute lib/studio/
   // render.ts nativement, sans jamais passer par le bundler Turbopack des Server Actions.
   serverExternalPackages: ["jsdom", "css-tree", "@mozilla/readability", "isomorphic-dompurify", "@resvg/resvg-js"],
+  // Studio V2 Tâche 11 (bibliothèque d'assets) : uploadAsset (lib/actions/asset-actions.ts) reçoit
+  // un fichier binaire — jusqu'à 5 Mo pour une image (spec §5) — dans le corps d'une Server Action.
+  // Next.js plafonne ce corps à 1 Mo par défaut (node_modules/next/dist/docs/01-app/03-api-reference/
+  // 05-config/01-next-config-js/serverActions.md — lu avant d'écrire cette action, voir AGENTS.md) :
+  // sans cette limite relevée, TOUTE image de plus d'environ 700 Ko (le corps multipart ajoute des
+  // limites de partie/en-têtes en plus des octets du fichier) serait rejetée par le FRAMEWORK avant
+  // même d'atteindre uploadAssetCore — un échec qu'aucun test `bun test` ne peut détecter (bun
+  // exécute lib/studio/asset-core.ts nativement, jamais à travers le serveur Next.js), seulement une
+  // vérification en navigateur réel.
+  experimental: {
+    serverActions: { bodySizeLimit: "6mb" },
+  },
 };
 
 export default nextConfig;

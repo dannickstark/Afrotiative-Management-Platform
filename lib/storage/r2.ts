@@ -30,3 +30,19 @@ export async function putObject(
   }
   return publicUrlFor(cfg, key);
 }
+
+// Tâche 11 (bibliothèque d'assets) : deleteAsset() supprime l'objet R2 APRÈS avoir supprimé la
+// ligne render_assets (spec §5). Un 404 est traité comme un succès — l'objet est déjà absent, ce
+// qui est exactement l'état visé ; le distinguer d'un "vrai" succès n'apporterait rien à l'appelant.
+export async function deleteObject(cfg: StudioConfig, key: string): Promise<void> {
+  const client = new AwsClient({
+    accessKeyId: cfg.accessKeyId,
+    secretAccessKey: cfg.secretAccessKey,
+    service: "s3",
+    region: "auto",
+  });
+  const res = await client.fetch(endpointFor(cfg, key), { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Suppression R2 échouée (HTTP ${res.status}).`);
+  }
+}
