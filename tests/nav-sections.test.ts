@@ -1,5 +1,13 @@
 import { describe, it, expect } from "bun:test";
-import { NAV_SECTIONS, NAV_ITEMS, visibleNavSections, deriveCrumbs, ROUTE_LABELS } from "@/components/shell/nav-items";
+import {
+  NAV_SECTIONS,
+  NAV_ITEMS,
+  visibleNavSections,
+  filterSections,
+  deriveCrumbs,
+  ROUTE_LABELS,
+  type NavSection,
+} from "@/components/shell/nav-items";
 
 describe("NAV_SECTIONS", () => {
   it("expose des sections non vides avec des identifiants uniques", () => {
@@ -49,6 +57,51 @@ describe("visibleNavSections", () => {
     const before = JSON.stringify(NAV_SECTIONS.map((s) => ({ id: s.id, n: s.items.length })));
     visibleNavSections("journalist");
     expect(JSON.stringify(NAV_SECTIONS.map((s) => ({ id: s.id, n: s.items.length })))).toBe(before);
+  });
+});
+
+describe("filterSections (fixtures synthétiques)", () => {
+  // Les données réelles de NAV_SECTIONS ne peuvent pas exercer le 3e niveau du filtre (la
+  // suppression d'une section devenue vide) : aujourd'hui, chaque section restreinte par rôle a
+  // exactement les mêmes rôles que son unique élément, donc les deux niveaux se vident toujours
+  // ensemble. Cette fixture construit le cas que les données réelles ne peuvent pas produire :
+  // une section SANS restriction de rôle qui l'exposerait, dont TOUS les éléments sont admin-only.
+  const fixture: NavSection[] = [
+    {
+      id: "vide-pour-editeur",
+      label: "Section vidée",
+      items: [
+        { href: "/synthetic/a", label: "A", icon: NAV_ITEMS[0].icon, roles: ["admin"] },
+        { href: "/synthetic/b", label: "B", icon: NAV_ITEMS[0].icon, roles: ["admin"] },
+      ],
+    },
+    {
+      id: "conservee",
+      label: "Section conservée",
+      items: [
+        { href: "/synthetic/c", label: "C", icon: NAV_ITEMS[0].icon, roles: ["admin"] },
+        { href: "/synthetic/d", label: "D", icon: NAV_ITEMS[0].icon },
+      ],
+    },
+  ];
+
+  it("supprime entièrement une section dont tous les éléments ont été filtrés, plutôt que de la renvoyer vide", () => {
+    const result = filterSections(fixture, "editor");
+    expect(result.find((s) => s.id === "vide-pour-editeur")).toBeUndefined();
+    for (const s of result) expect(s.items.length).toBeGreaterThan(0);
+  });
+
+  it("conserve une section sœur qui garde au moins un élément visible — la purge ne touche que la section vidée", () => {
+    const result = filterSections(fixture, "editor");
+    const kept = result.find((s) => s.id === "conservee");
+    expect(kept).toBeDefined();
+    expect(kept!.items.map((i) => i.href)).toEqual(["/synthetic/d"]);
+  });
+
+  it("ne mute pas la fixture passée en paramètre", () => {
+    const before = JSON.stringify(fixture);
+    filterSections(fixture, "editor");
+    expect(JSON.stringify(fixture)).toBe(before);
   });
 });
 

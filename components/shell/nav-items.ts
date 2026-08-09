@@ -71,9 +71,14 @@ export const NAV_SECTIONS: NavSection[] = [
 export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
 
 // Filtrage par rôle sur TROIS niveaux : sous-éléments, éléments, puis sections devenues vides.
-// Retourne toujours de nouveaux objets — NAV_SECTIONS n'est jamais muté.
-export function visibleNavSections(role: Role): NavSection[] {
-  return NAV_SECTIONS
+// Retourne toujours de nouveaux objets — `sections` n'est jamais muté. Extrait en fonction pure
+// (paramètre `sections` plutôt que NAV_SECTIONS en dur) pour rester testable contre des fixtures
+// synthétiques : avec les données réelles actuelles, aucun rôle ne fait jamais survivre une
+// section à son propre filtre de rôle pour ensuite se vider entièrement au niveau des éléments —
+// ça ne dira rien tant qu'une section future (ex. Studio, Diffusion) n'aura pas des droits plus
+// larges au niveau section qu'au niveau de chacun de ses éléments.
+export function filterSections(sections: NavSection[], role: Role): NavSection[] {
+  return sections
     .filter((section) => !section.roles || section.roles.includes(role))
     .map((section) => ({
       ...section,
@@ -87,6 +92,10 @@ export function visibleNavSections(role: Role): NavSection[] {
         .filter((item) => !item.items || item.items.length > 0),
     }))
     .filter((section) => section.items.length > 0);
+}
+
+export function visibleNavSections(role: Role): NavSection[] {
+  return filterSections(NAV_SECTIONS, role);
 }
 
 // Conservé pour les appelants qui veulent la liste plate visible (aucun aujourd'hui hors tests,
