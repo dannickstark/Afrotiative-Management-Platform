@@ -75,17 +75,44 @@ describe("ManualGenerate — le formulaire RENDU affiche un data-field par jeton
     expect(html).toContain('data-testid="storage-banner"');
     const btn = /<button[^>]*data-action="generate"[^>]*>/.exec(html);
     expect(btn).not.toBeNull();
-    expect(btn![0]).toContain("disabled");
+    // `disabled=""` PRÉCISÉMENT, pas juste `.toContain("disabled")` — la classe utilitaire
+    // "disabled:pointer-events-none" est TOUJOURS présente sur ce bouton et ferait passer cette
+    // assertion trivialement, désactivé ou non (piège repéré en corrigeant l'Important 3 ci-dessous).
+    expect(btn![0]).toContain('disabled=""');
   });
 
-  it("le bouton *Générer* n'est PAS désactivé par storageConfigured quand le stockage est configuré (mais reste désactivé tant que les champs sont vides — comportement séparé)", () => {
+  it("le bouton *Générer* n'est PAS désactivé par storageConfigured quand le stockage est configuré", () => {
     const html = renderToStaticMarkup(
       React.createElement(ManualGenerate, { assets: [], categories: [], storageConfigured: true }),
     );
-    // Toujours désactivé ICI (aucun champ rempli), mais la RAISON ne doit pas être storageConfigured
-    // — vérifié en confirmant l'absence de la bannière, seul signal visible de cette cause-là.
+    // La RAISON de désactivation storageConfigured ne s'applique pas ici — vérifié en confirmant
+    // l'absence de la bannière, seul signal visible de cette cause-là.
     expect(html).not.toContain('data-testid="storage-banner"');
   });
+
+  // Revue finale V2, Important 3 : lib/studio/tokens.ts place `brand.logo` (image) dans les TROIS
+  // contextes manuels, et ImageAssetPicker (son seul widget) n'a pas de repli texte libre — avec
+  // une bibliothèque d'assets VIDE (`assets: []`, comme ci-dessus), `allFilled` ne peut alors
+  // JAMAIS valoir true. Avant ce correctif, `disabled={!storageConfigured || pending || !allFilled}`
+  // rendait donc *Générer* structurellement inatteignable au premier passage sur CHACUN des trois
+  // contextes, quel que soit le gabarit publié — y compris un `recap_card` dont la scène ne
+  // référence même pas `{{brand.logo}}`. Test de non-régression : le bouton doit rester ACTIONNABLE
+  // (non désactivé) même bibliothèque vide et aucun champ rempli, pour CHAQUE contexte manuel — la
+  // précision revient au message français de renderManualCore (MissingTokensError, vérifié plus bas
+  // par la section C), pas à un gate côté UI.
+  for (const context of MANUAL_CONTEXTS) {
+    it(`« Générer » reste actionnable bibliothèque vide et aucun champ rempli — contexte « ${context} »`, () => {
+      const html = renderToStaticMarkup(
+        React.createElement(ManualGenerate, { assets: [], categories: [], storageConfigured: true, initialContext: context }),
+      );
+      const btn = /<button[^>]*data-action="generate"[^>]*>/.exec(html);
+      expect(btn).not.toBeNull();
+      // `disabled=""` PRÉCISÉMENT (React SSR sérialise ainsi l'attribut booléen quand il vaut
+      // true) — pas un simple `.toContain("disabled")`, qui matcherait aussi la classe utilitaire
+      // "disabled:pointer-events-none" toujours présente sur ce bouton, désactivé ou non.
+      expect(btn![0]).not.toContain('disabled=""');
+    });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

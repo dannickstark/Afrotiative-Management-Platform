@@ -146,10 +146,18 @@ export function ManualGenerate({ assets, categories, storageConfigured, initialC
     setValues((prev) => ({ ...prev, [token]: v }));
   }
 
+  // Correctif Important 3 (revue finale V2) : lib/studio/tokens.ts place `brand.logo` (kind
+  // "image") dans les TROIS contextes manuels, et son seul widget (ImageAssetPicker) n'a pas de
+  // repli texte libre — avec une bibliothèque vide, `allFilled` ne pouvait donc JAMAIS valoir true,
+  // quel que soit le gabarit publié. `allFilled` reste un indice visuel (voir le paragraphe
+  // d'aide plus bas) mais NE gate plus ni la soumission ni le bouton : c'est renderManualCore qui
+  // tranche, avec le message français précis de MissingTokensError nommant les jetons que la SCÈNE
+  // référence réellement (jamais tous les jetons du contexte) — le chemin que
+  // tests/studio-manual.test.ts vérifie déjà côté action, mais que ce gate rendait inatteignable
+  // depuis le bouton.
   const allFilled = fields.every((f) => (values[f.token] ?? "").trim().length > 0);
 
   function submit() {
-    if (!allFilled) { toast.error("Remplissez tous les champs avant de générer."); return; }
     setState({ status: "loading" });
     startTransition(async () => {
       const res = await renderManual({ context, channel, categoryId, values });
@@ -275,28 +283,24 @@ export function ManualGenerate({ assets, categories, storageConfigured, initialC
 
       <Button
         type="button" data-action="generate"
-        disabled={!storageConfigured || pending || !allFilled}
-        // Repéré en pilotant un vrai navigateur (Tâche 14) : le bouton pouvait rester désactivé
-        // sans AUCUNE explication visible — notamment quand seul le champ image (ex. « Logo de la
-        // marque ») manquait, une bibliothèque d'assets vide n'ayant elle-même aucun signal visuel
-        // de champ "requis". Le titre couvre maintenant les DEUX causes de désactivation propres à
-        // ce bouton (storageConfigured en est une troisième, déjà gérée par la bannière au-dessus).
-        title={
-          !storageConfigured ? "Indisponible : stockage R2 non configuré."
-            : !allFilled ? "Remplissez tous les champs avant de générer."
-              : undefined
-        }
+        disabled={!storageConfigured || pending}
+        // Correctif Important 3 : allFilled n'entre plus dans `disabled` (voir plus haut) — seul
+        // storageConfigured (une vraie condition bloquante, la bannière R2 ci-dessus) désactive
+        // encore ce bouton. Un contexte dont la scène publiée ne référence pas tous les jetons
+        // (ex. `recap_card` sans `{{brand.logo}}`) est déjà générable sans que RIEN ne soit rempli.
+        title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
         onClick={submit}
       >
         <Wand2 />{pending ? "Génération…" : "Générer"}
       </Button>
       {storageConfigured && !allFilled && (
-        // Le `title` du bouton n'est visible qu'au survol (peu découvrable, surtout au tactile) —
-        // ce texte le rend visible EN PERMANENCE tant qu'un champ manque, y compris le champ image
-        // (aucun autre signal visuel ne distingue un champ "requis" d'un champ facultatif ici).
+        // Pur indice visuel, ne bloque plus rien : certains champs vides sont sans conséquence si
+        // le gabarit publié pour ce contexte ne les référence pas ; sinon, cliquer sur *Générer*
+        // affiche le message français précis de MissingTokensError (jetons manquants nommés un par
+        // un), pas ce texte générique.
         <p className="text-xs text-muted-foreground" data-testid="manual-generate-incomplete-hint">
-          Remplissez tous les champs ci-dessus (y compris l&rsquo;image, le cas échéant) pour activer
-          la génération.
+          Certains champs sont vides. S&rsquo;ils sont utilisés par le gabarit publié pour ce
+          contexte, la génération l&rsquo;indiquera précisément.
         </p>
       )}
     </div>

@@ -387,6 +387,13 @@ function ImageFields({
   // Premier asset image disponible — sert de valeur de repli VALIDE au premier passage sur l'onglet
   // "Bibliothèque" (voir onValueChange ci-dessous, correctif Tâche 13).
   const firstImageAssetId = assets.find((a) => a.kind === "image")?.id;
+  // Correctif Minor 4 (revue finale V2) : bibliothèque vide → PLUS de repli sur un identifiant
+  // connu pour ne résoudre à rien ("bibliotheque-vide") — validateScene est pure et ne peut pas
+  // détecter une référence d'asset pendante, donc un tel repli pouvait atteindre *publié* et faire
+  // échouer TOUT rendu du gabarit. L'onglet est désactivé tant qu'aucune image n'est disponible ;
+  // `source.kind === "asset"` reste autorisé pour PRÉSERVER un choix déjà valide (calque chargé
+  // avec un assetId existant), jamais pour en fabriquer un nouveau à partir de rien.
+  const canUseAssetTab = !!firstImageAssetId || source.kind === "asset";
   return (
     <>
       <Section title="Source de l'image">
@@ -406,16 +413,14 @@ function ImageFields({
             // Même piège, même correctif : assetId "" échoue z.string().min(1) — l'onglet
             // "Bibliothèque" (Tâche 13) était, lui aussi, silencieusement inutilisable au premier
             // clic. Repli sur le PREMIER asset image disponible (sélection immédiatement valide et
-            // utile, pas un simple bouchon) ; à défaut (bibliothèque vide), un identifiant
-            // délibérément non-vide mais introuvable : l'onglet reste utilisable (le panneau se
-            // rend, ImageAssetPicker affiche son message "aucune image" — Tâche 11/13), et un rendu
-            // tenté sur cette valeur échoue franchement (RenderError, lib/studio/render.ts) plutôt
-            // que de rester bloqué sur "slot" sans explication.
-            else if (v === "asset") {
+            // utile, pas un simple bouchon). Correctif Minor 4 : PLUS de repli sur un identifiant
+            // connu pour ne résoudre à rien quand la bibliothèque est vide — ce cas n'atteint plus
+            // cette branche du tout, l'onglet étant alors DÉSACTIVÉ ci-dessous (canUseAssetTab).
+            else if (v === "asset" && canUseAssetTab) {
               patch({
                 source: {
                   kind: "asset",
-                  assetId: source.kind === "asset" ? source.assetId : (firstImageAssetId ?? "bibliotheque-vide"),
+                  assetId: source.kind === "asset" ? source.assetId : firstImageAssetId!,
                 },
               });
             }
@@ -424,9 +429,17 @@ function ImageFields({
           <TabsList>
             <TabsTrigger value="slot" data-action="image-source-slot">Jeton</TabsTrigger>
             <TabsTrigger value="url" data-action="image-source-url">URL</TabsTrigger>
-            <TabsTrigger value="asset" data-action="image-source-asset">Bibliothèque</TabsTrigger>
+            <TabsTrigger value="asset" data-action="image-source-asset" disabled={!canUseAssetTab}>
+              Bibliothèque
+            </TabsTrigger>
           </TabsList>
         </Tabs>
+        {!canUseAssetTab && (
+          <p className="text-[11px] text-muted-foreground">
+            Aucune image dans la bibliothèque — téléversez-en une depuis Studio → Bibliothèque pour
+            utiliser cette source.
+          </p>
+        )}
 
         {source.kind === "slot" && (
           imageTokens.length > 0 ? (

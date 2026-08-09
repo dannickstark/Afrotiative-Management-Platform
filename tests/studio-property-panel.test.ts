@@ -2,6 +2,7 @@ import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene, Layer } from "@/lib/studio/scene";
+import type { AssetRow } from "@/lib/queries/assets";
 import { PropertyPanel } from "@/components/studio/property-panel";
 
 // Même convention que tests/studio-layer-panel.test.ts : pas de DOM sous `bun test`, donc un rendu
@@ -54,12 +55,21 @@ const qrLayer: Layer = {
   type: "qr", slot: "article.url", fg: "#000000", bg: "#FFFFFF", margin: 4,
 };
 
-function render(layers: Layer[], selectedId: string | null, context: Parameters<typeof PropertyPanel>[0]["context"]) {
+function render(
+  layers: Layer[], selectedId: string | null, context: Parameters<typeof PropertyPanel>[0]["context"],
+  assets: AssetRow[] = [],
+) {
   const noop = () => {};
   return renderToStaticMarkup(
-    React.createElement(PropertyPanel, { scene: scene(layers), selectedId, context, dispatch: noop }),
+    React.createElement(PropertyPanel, { scene: scene(layers), selectedId, context, dispatch: noop, assets }),
   );
 }
+
+const imageAsset: AssetRow = {
+  id: "asset-1", kind: "image", name: "Logo", url: "https://exemple.com/logo.png",
+  mime: "image/png", bytes: 1024, width: 200, height: 200,
+  fontFamily: null, fontWeight: null, fontStyle: null, uploadedByName: null, createdAt: new Date(),
+};
 
 describe("PropertyPanel — état vide", () => {
   it("invite à sélectionner un calque quand rien n'est sélectionné", () => {
@@ -125,6 +135,30 @@ describe("PropertyPanel — calque image", () => {
         // tokensFor(context, "image") passerait le test du token-picker mais échouerait ICI.
     const html = render([imageLayer], "i", "article_image");
     expect(html).not.toContain("article.url");
+  });
+
+  // Revue finale V2, Minor 4 : l'onglet "Bibliothèque" servait auparavant un identifiant
+  // délibérément introuvable ("bibliotheque-vide") comme repli quand la bibliothèque d'assets était
+  // vide — une valeur AUTOSAUVEGARDABLE et PUBLIABLE (validateScene est pure, elle ne résout aucun
+  // asset), donc un gabarit pouvait atteindre *publié* dans un état où tout rendu échouait. Le
+  // correctif désactive l'onglet plutôt que de fabriquer un identifiant : ces deux tests couvrent
+  // les deux bornes.
+  it("bibliothèque vide : l'onglet « Bibliothèque » est désactivé, jamais l'identifiant de repli introuvable", () => {
+    const html = render([imageLayer], "i", "article_image", []);
+    const tab = /<button[^>]*data-action="image-source-asset"[^>]*>/.exec(html);
+    expect(tab).not.toBeNull();
+    // `disabled=""` PRÉCISÉMENT (React SSR sérialise l'attribut booléen ainsi) — pas un simple
+    // `.toContain("disabled")`, qui matcherait aussi les classes utilitaires "disabled:…" et
+    // l'attribut `aria-disabled="false"` toujours présents sur ce bouton, désactivé ou non.
+    expect(tab![0]).toContain('disabled=""');
+    expect(html).not.toContain("bibliotheque-vide");
+  });
+
+  it("bibliothèque non vide : l'onglet « Bibliothèque » reste actionnable", () => {
+    const html = render([imageLayer], "i", "article_image", [imageAsset]);
+    const tab = /<button[^>]*data-action="image-source-asset"[^>]*>/.exec(html);
+    expect(tab).not.toBeNull();
+    expect(tab![0]).not.toContain('disabled=""');
   });
 });
 
