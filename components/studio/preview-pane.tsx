@@ -86,7 +86,15 @@ export function PreviewPane({ templateId, context, scene, articles }: PreviewPan
       {showArticlePicker && (
         <Select value={articleId ?? SAMPLE_OPTION} onValueChange={(v) => setArticleId(v === SAMPLE_OPTION ? null : v)}>
           <SelectTrigger className="w-full" data-action="preview-article-select">
-            <SelectValue placeholder="Valeurs d'exemple" />
+            {/* Base UI's <SelectValue> ne dérive PAS automatiquement le libellé affiché du
+                <SelectItem> correspondant (contrairement à un <select> natif) — il faut le
+                mapper explicitement, comme components/queue/fix-popover.tsx le fait déjà pour
+                son sélecteur de catégorie. Sans ce mappeur, le combobox affichait la valeur
+                technique brute ("__sample__") au lieu de « Valeurs d'exemple » — repéré en
+                vérifiant l'écran réel, pas seulement en lisant le code. */}
+            <SelectValue placeholder="Valeurs d'exemple">
+              {(v: string | null) => (v && v !== SAMPLE_OPTION ? articles!.find((a) => a.id === v)?.title ?? v : "Valeurs d'exemple")}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={SAMPLE_OPTION}>Valeurs d&rsquo;exemple</SelectItem>
