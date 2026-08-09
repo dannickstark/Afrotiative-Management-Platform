@@ -42,7 +42,11 @@ export function TaxonomyTables({ data }: { data: Taxonomy }) {
   );
 }
 
-type Row = Taxonomy["categories"][number];
+// Common shape shared with wpTags rows (only these fields are rendered). Narrowed rather than
+// aliased to Taxonomy["categories"][number] directly: the studio's `color` column (db/schema.ts)
+// lives only on wp_categories, not wp_tags, so the full categories row type is no longer
+// structurally assignable from tags data.
+type Row = Pick<Taxonomy["categories"][number], "id" | "wpId" | "name" | "articleCount">;
 
 function TaxonomyCard({ title, emptyLabel, rows }: { title: string; emptyLabel: string; rows: Row[] }) {
   return (
