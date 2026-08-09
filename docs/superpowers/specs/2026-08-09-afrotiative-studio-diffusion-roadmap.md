@@ -95,16 +95,18 @@ couleur de thème sur les catégories, gabarits de départ écrits à la main en
 avant d'investir dans l'éditeur. Spec dédiée :
 `2026-08-09-afrotiative-v1-moteur-gabarits-design.md`.
 
-### V2 — Studio (éditeur visuel)
+### V2 — Studio (éditeur visuel) — ✅ Livré (2026-08-09)
 `/studio` : CRUD de gabarits, éditeur de canevas (glisser/redimensionner), panneau de calques,
 interface de liaison des slots, bibliothèque d'assets et de polices, brouillon/publié + versions.
-Aperçu « vrai rendu » via le moteur V1, en différé. Dépend de V1.
+Aperçu « vrai rendu » via le moteur V1, en différé. Spec :
+`2026-08-09-afrotiative-v2-studio-design.md`. Quinze tâches en quatre lots, toutes revues.
 
-### V3 — Aperçu dans l'article
+### V3 — Aperçu dans l'article — ✅ Livré (2026-08-09)
 Onglets **Image originale** / **Aperçu final** dans `components/article/image-panel.tsx`. L'onglet
 « original » garde l'existant (URL, crédit, lien source) ; l'onglet « aperçu » montre le rendu du
 gabarit **du site**. Les aperçus par réseau social vivent dans le panneau Diffusion (D1), pas ici.
-Dépend de V1.
+Spec : `2026-08-09-afrotiative-v3-apercu-article-design.md`. L'image effectivement publiée sur
+WordPress est désormais **le rendu**, produit au clic sur « Approuver & publier ».
 
 ### D1 — Socle de diffusion
 `distributions` v2 (une ligne par canal, statut, réessais, charge utile, `render_id`, `externalId`),
@@ -189,6 +191,34 @@ pas se perdre. Chacun indique le sous-projet qui devra le traiter.
 |---|---|
 | Faut-il conditionner `article.url` à `articles.status === "published"` ? | Un article dépublié conserve aujourd'hui un permalien WordPress résolvable mais périmé dans le contexte `social_post`. C'est D1 qui définit la convention de partage, donc D1 qui tranche. |
 
+### Dette reportée à l'issue de V2 et V3
+
+Triage des revues de lot, conservé ici parce que les répertoires de travail SDD sont gitignorés.
+
+| Point | Où | Pour qui |
+|---|---|---|
+| `previewTemplate` transmet son objet d'arguments en bloc au cœur, qui porte les crochets de test `fetchImpl`/`assets` | `lib/actions/studio-preview-actions.ts` | V2+ — déstructurer explicitement |
+| `getTemplateById` lève brutalement sur une scène illisible → 500 sans retour possible | `lib/queries/studio.ts` | V2+ — bannière française plutôt qu'une trace |
+| « Annuler » vers la scène de montage saute l'auto-enregistrement par égalité de référence : le brouillon en base peut désynchroniser d'une interface affichant « Enregistré » | `components/studio/editor-shell.tsx` | V2+ |
+| Un geste de redimensionnement/rotation sans mouvement pousse quand même une entrée d'annulation | `hooks/use-layer-drag.ts` | V2+ |
+| Pas de réessai ni d'affordance « Réessayer » après un auto-enregistrement en échec | `lib/studio/autosave.ts` | V2+ |
+| Les flèches et `Suppr` n'agissent que si le canevas a le focus DOM | `components/studio/canvas.tsx` | V2+ |
+| Le canevas ignore `image.overlay`, que le moteur composite bien | `components/studio/layer-view.tsx` | V2+ |
+| La bannière « lecture seule » sans R2 surestime ce qui est réellement désactivé (l'auto-enregistrement et `deleteAsset` fonctionnent toujours) | `components/studio/storage-banner.tsx` | V2+ |
+| `docs/DEPLOYMENT.md` ne donne aucune **procédure** R2 : création du bucket, portée du jeton, exposition publique | doc | ops |
+| Réessai illimité du cron sur un rendu durablement en échec, motif persisté nulle part | `lib/wp/publish-due.ts` | D1 |
+| Aucune couverture d'intégration du cas « aucun gabarit » (`url:null`) : le gabarit par défaut semé le rend inatteignable | `tests/wp-publish-render.test.ts` | D1 |
+| Le commentaire de `putObject` présente le diagnostic `content-length` comme inconditionnel ; les preuves du lot 3 le contredisent | `lib/storage/r2.ts` | à adoucir |
+
+**Point ouvert, non résolu.** Le bogue `content-length` de `lib/storage/r2.ts` (en-tête posé à la main
+→ `undici InvalidArgumentError` une fois passé par le `fetch` patché de Next) était présent depuis le
+premier commit du fichier, alors que le lot 3 a bel et bien téléversé des assets depuis un
+navigateur. La relecture finale a identifié un mécanisme plausible — le chemin de reconstruction du
+corps dans `patch-fetch.js` de Next 16.3 n'est emprunté que sous certaines conditions de contexte —
+sans pouvoir le prouver. `putObject` n'a **aucune** couverture automatisée et ne peut pas en avoir
+sous `bun test` (le patch de Next n'y est pas actif) : la seule défense reste la vérification
+navigateur de l'étape 11 de `docs/DEPLOYMENT.md`.
+
 ### Hygiène des tests (transverse)
 
 Les suites `tests/studio-*.test.ts` écrivent dans la branche Neon **dev partagée**. Le motif de
@@ -196,8 +226,9 @@ collision de portée est désormais contenu par `tests/studio-fixtures.ts` (supp
 avant insertion, portées distinctes par fichier, plus aucun nom de canal réel utilisé comme
 sentinelle). **Ne jamais lancer deux `bun test` en parallèle** — voir `test-setup.ts:38-40`.
 
-Deux échecs **préexistants** subsistent, sans rapport avec ce programme, attribués en rejouant les
-fichiers sur le point de départ de la branche : `tests/pipeline-web-search.test.ts` cas (a) et
+Trois échecs **préexistants** subsistent, sans rapport avec ce programme, chacun attribué en
+rejouant le fichier sur le point de départ de la branche (`09b8e4e`), où aucun de ces travaux
+n'existe : `tests/pipeline-web-search.test.ts` cas (a) et cas (d), et
 `tests/pipeline-pause-resume.test.ts` point de contrôle (b). Les deux sont sensibles à l'état
 accumulé de la base de développement partagée.
 
