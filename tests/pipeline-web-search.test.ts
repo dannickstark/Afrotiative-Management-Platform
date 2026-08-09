@@ -302,8 +302,21 @@ describe("executeRun — web-search augmentation (SP4 Task 6b)", () => {
       expect(webStep?.errorMessage).toBe("0 source(s) web ajoutée(s).");
       // The member's URL was already fetched via jina for member extraction; make sure that
       // wasn't double-counted as a "web-search extraction" call for the SAME url a second time.
+      // TWO calls are the expected truth (still 2 after pipeline completeness Task 4b's per-source
+      // origin marking, though the SECOND call's mechanism changed): (1) the initial member
+      // extraction (lib/pipeline/run.ts's member loop, always the raw extract()); (2) the
+      // "Vérification & complétion" stage's repairDraft fallback, which re-extracts every unique
+      // source when génération produced no candidate image (the case here — the fixture markdown
+      // has none). This member source carries `origin: "feed"` (Task 4b), so repairDraft now picks
+      // `extract` (raw, backfill included) rather than `extractExternal` for it — but `extract`
+      // still calls jina FIRST, so the jina hit count for this URL is unchanged at 2; what DID
+      // change (untested here) is that the fallback's own raw-fetch image backfill now also runs a
+      // SECOND time (once per full extract() call) since it's no longer routed through
+      // extractExternal's externalOnly mode. The ORIGINAL concern this assertion guards against —
+      // the web hit (same URL as the member) being extracted as if it were a SEPARATE, distinct web
+      // source — is still disproved: 2, not 3.
       const jinaCallsForUrl = fetchCalls.filter((u) => u === `${JINA_READER_PREFIX}${MEMBER_URL}`);
-      expect(jinaCallsForUrl.length).toBe(1);
+      expect(jinaCallsForUrl.length).toBe(2);
     } finally {
       await cleanupStory(runId, feedId, [MEMBER_URL]);
       stop();

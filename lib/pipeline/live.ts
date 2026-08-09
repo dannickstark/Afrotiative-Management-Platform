@@ -1,15 +1,24 @@
 // Pure, DB-free view helpers for the live run panel. Unit-tested in tests/live-panel.test.ts.
 
-// The 5 per-item stages, by their EXACT pipeline_steps.name (must match lib/pipeline/stages.ts).
-// Array order == true CHRONOLOGICAL execution order (SP4 Task 6a): stageSources embeds the
-// GENERATED title+body, so Génération IA runs BEFORE Calcul de l'embedding / Regroupement. This
-// ordering is load-bearing for deriveStepperNodes below — it renders and freezes strictly
-// left-to-right, so a stage's array position MUST equal the order it actually fires in, or a
-// completed node would render to the right of a still-spinning one (and freeze the wrong nodes on
-// a mid-pipeline failure).
+// Les 6 étapes par article, par leur nom EXACT pipeline_steps.name (doit correspondre à
+// lib/pipeline/stages.ts). Array order == true CHRONOLOGICAL execution order (SP4 Task 6a, then
+// the completeness stage below): stageSources embeds the GENERATED title+body, so Génération IA
+// runs BEFORE Calcul de l'embedding / Regroupement, and Vérification & complétion runs right after
+// génération (so a repaired image is scored correctly) and before the embedding. This ordering is
+// load-bearing for deriveStepperNodes below — it renders and freezes strictly left-to-right, so a
+// stage's array position MUST equal the order it actually fires in, or a completed node would
+// render to the right of a still-spinning one (and freeze the wrong nodes on a mid-pipeline
+// failure).
+// Named so ITEM_STAGES and deriveStepperNodes's non-freezing check below can never drift apart —
+// this is the ONE stage whose failure (lib/pipeline/stages.ts's own comment: "SEULE étape de cette
+// fonction dont l'échec n'avorte PAS l'article") must still render as "failed" without freezing
+// every later node to "pending" — see the sawFailure guard below.
+export const COMPLETENESS_STAGE_NAME = "Vérification & complétion" as const;
+
 export const ITEM_STAGES = [
   "Extraction du contenu",
   "Génération IA",
+  COMPLETENESS_STAGE_NAME,
   "Calcul de l'embedding",
   "Regroupement (clustering)",
   "Dépôt en revue",
@@ -18,17 +27,22 @@ export const ITEM_STAGES = [
 // Short labels for the stepper nodes (the long names don't fit under a 24px circle).
 const STAGE_LABEL: Record<string, string> = {
   "Extraction du contenu": "Extraction",
+  "Génération IA": "Génération IA",
+  "Vérification & complétion": "Complétion",
   "Calcul de l'embedding": "Embedding",
   "Regroupement (clustering)": "Clustering",
-  "Génération IA": "Génération IA",
   "Dépôt en revue": "Dépôt",
 };
 
 export type StepperNode = { name: string; label: string; state: "done" | "current" | "pending" | "failed" };
 
 /**
- * Map an item's already-completed steps + the run's current_stage onto the 5 fixed nodes.
- * A failed stage stays failed and everything after it stays pending (the stepper freezes there).
+ * Map an item's already-completed steps + the run's current_stage onto the 6 fixed nodes.
+ * A failed stage stays failed and everything after it stays pending (the stepper freezes there) —
+ * EXCEPT COMPLETENESS_STAGE_NAME ("Vérification & complétion"), the one stage stageSources lets
+ * fail without aborting the article (see its own comment in lib/pipeline/stages.ts): a timed-out
+ * or failed repair still renders that node "failed", but does NOT freeze the nodes after it, since
+ * the run genuinely continues past it (embedding, clustering, dépôt can all still succeed).
  */
 export function deriveStepperNodes(
   itemSteps: { name: string; status: string }[],
@@ -44,7 +58,7 @@ export function deriveStepperNodes(
       state = "pending";
     } else if (status === "failed") {
       state = "failed";
-      sawFailure = true;
+      if (name !== COMPLETENESS_STAGE_NAME) sawFailure = true;
     } else if (status === "success") {
       state = "done";
     } else if (name === currentStage) {

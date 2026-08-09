@@ -98,6 +98,7 @@ describe("persistArticle — SP6 auto-approve wiring (direct, crafted draft, rea
       sources: SOURCES,
       categoryNames: ["Test SP6 Auto-Publish"],
       autoPublish: { enabled: true, scoreThreshold: 70, minSources: 2 },
+      missingFields: [],
     });
     createdArticleIds.push(result.articleId);
     expect(result.autoApproved).toBe(true);
@@ -135,6 +136,7 @@ describe("persistArticle — SP6 auto-approve wiring (direct, crafted draft, rea
       sources: SOURCES,
       categoryNames: ["Test SP6 Auto-Publish"],
       autoPublish: { enabled: false, scoreThreshold: 70, minSources: 2 },
+      missingFields: [],
     });
     createdArticleIds.push(result.articleId);
     expect(result.autoApproved).toBe(false);
@@ -159,6 +161,7 @@ describe("persistArticle — SP6 auto-approve wiring (direct, crafted draft, rea
       sources: SOURCES,
       categoryNames: ["Test SP6 Auto-Publish"],
       autoPublish: { enabled: true, scoreThreshold: 70, minSources: 2 },
+      missingFields: [],
     });
     createdArticleIds.push(result.articleId);
     expect(result.autoApproved).toBe(false);
@@ -183,6 +186,7 @@ describe("persistArticle — SP6 auto-approve wiring (direct, crafted draft, rea
       sources: [SOURCES[0]], // only 1 source, minSources requires 2
       categoryNames: ["Test SP6 Auto-Publish"],
       autoPublish: { enabled: true, scoreThreshold: 70, minSources: 2 },
+      missingFields: [],
     });
     createdArticleIds.push(result.articleId);
     expect(result.autoApproved).toBe(false);

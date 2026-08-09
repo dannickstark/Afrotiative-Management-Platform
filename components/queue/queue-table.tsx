@@ -1,84 +1,66 @@
 "use client";
-import { useState } from "react";
-import {
-  flexRender, getCoreRowModel, getFilteredRowModel, getPaginationRowModel, getSortedRowModel,
-  useReactTable, type ColumnFiltersState, type SortingState,
-} from "@tanstack/react-table";
-import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { useEffect, useState } from "react";
+import { flexRender, getCoreRowModel, useReactTable, type RowSelectionState } from "@tanstack/react-table";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Button } from "@/components/ui/button";
-import { columns } from "./columns";
-import { QueueFilters } from "./queue-filters";
+import { buildColumns } from "./columns";
+import { BulkActionBar } from "./bulk-action-bar";
 import type { QueueRow } from "@/lib/queries/queue";
 
-export function QueueTable({ data }: { data: QueueRow[] }) {
-  // Data arrives oldest-first from getQueue(); mirror that as the default sort.
-  const [sorting, setSorting] = useState<SortingState>([{ id: "generatedAt", desc: false }]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-  const [globalFilter, setGlobalFilter] = useState("");
+export function QueueTable({
+  rows, categories,
+}: {
+  rows: QueueRow[];
+  categories: { id: string; name: string }[];
+}) {
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const cols = buildColumns(categories);
 
   const table = useReactTable({
-    data,
-    columns,
-    state: { sorting, columnFilters, globalFilter },
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
-    onGlobalFilterChange: setGlobalFilter,
+    data: rows,
+    columns: cols,
+    state: { rowSelection },
+    onRowSelectionChange: setRowSelection,
+    getRowId: (row) => row.id, // l'identifiant d'article EST la clé de sélection
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    initialState: { pagination: { pageSize: 15 } },
   });
+  const model = table.getRowModel().rows;
 
-  const rows = table.getRowModel().rows;
+  // Toute nouvelle page de données (changement de filtre, de tri ou de page) vide la sélection :
+  // agir en lot sur des lignes qu'on ne voit plus serait dangereux.
+  useEffect(() => { setRowSelection({}); }, [rows]);
+
+  const selectedIds = Object.keys(rowSelection).filter((id) => rowSelection[id]);
+  const selectedRows = rows.filter((r) => selectedIds.includes(r.id));
 
   return (
-    <div className="space-y-3">
-      <QueueFilters table={table} data={data} />
-
+    <>
       <div className="rounded-lg border">
         <Table>
           <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
-                  const sortable = header.column.getCanSort();
-                  const sortDir = header.column.getIsSorted();
-                  return (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder ? null : sortable ? (
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 hover:text-foreground"
-                          onClick={header.column.getToggleSortingHandler()}
-                        >
-                          {flexRender(header.column.columnDef.header, header.getContext())}
-                          {sortDir === "asc" && <ChevronUp className="size-3.5" />}
-                          {sortDir === "desc" && <ChevronDown className="size-3.5" />}
-                          {!sortDir && <ChevronsUpDown className="size-3.5 text-muted-foreground/50" />}
-                        </button>
-                      ) : (
-                        flexRender(header.column.columnDef.header, header.getContext())
-                      )}
-                    </TableHead>
-                  );
-                })}
+            {table.getHeaderGroups().map((hg) => (
+              <TableRow key={hg.id}>
+                {hg.headers.map((h) => (
+                  <TableHead key={h.id}>
+                    {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                  </TableHead>
+                ))}
               </TableRow>
             ))}
           </TableHeader>
           <TableBody>
-            {rows.length ? (
-              rows.map((row) => (
+            {model.length ? (
+              model.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    <TableCell key={cell.id}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
                   ))}
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={columns.length} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={cols.length} className="h-24 text-center text-muted-foreground">
                   Aucun article ne correspond à ces filtres.
                 </TableCell>
               </TableRow>
@@ -86,23 +68,7 @@ export function QueueTable({ data }: { data: QueueRow[] }) {
           </TableBody>
         </Table>
       </div>
-
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
-          {table.getFilteredRowModel().rows.length} article{table.getFilteredRowModel().rows.length > 1 ? "s" : ""}
-        </span>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-            Précédent
-          </Button>
-          <span>
-            Page {table.getState().pagination.pageIndex + 1} / {Math.max(table.getPageCount(), 1)}
-          </span>
-          <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-            Suivant
-          </Button>
-        </div>
-      </div>
-    </div>
+      <BulkActionBar rows={selectedRows} onDone={() => setRowSelection({})} />
+    </>
   );
 }

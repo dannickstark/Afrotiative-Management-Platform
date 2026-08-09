@@ -6,6 +6,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { RoleGate } from "@/components/role-gate";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { quickApprove, quickReject } from "@/lib/actions/queue-actions";
+import { PreviewSheet } from "@/components/queue/preview-sheet";
 import type { QueueRow } from "@/lib/queries/queue";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,8 @@ export function RowActions({ row }: { row: QueueRow }) {
 
   return (
     <div className="flex items-center justify-end gap-1">
+      <PreviewSheet row={row} />
+
       <Link href={`/article/${row.id}`} className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
         Ouvrir
       </Link>

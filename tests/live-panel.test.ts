@@ -1,33 +1,34 @@
 import { describe, it, expect } from "bun:test";
 import { ITEM_STAGES, deriveStepperNodes, computeEta, deriveHeader, formatClock } from "@/lib/pipeline/live";
 
-// Fixtures below use only REACHABLE step sequences under the SP4 Task 6a execution order
-// (ITEM_STAGES = Extraction → Génération IA → Calcul de l'embedding → Regroupement → Dépôt): a
-// completed stage implies every earlier stage also completed, since each stage runs only after the
-// previous one succeeds. (Before Task 6a these fixtures encoded now-unreachable states like
-// "embedding done before génération".)
+// Fixtures below use only REACHABLE step sequences under the true execution order (ITEM_STAGES =
+// Extraction → Génération IA → Vérification & complétion → Calcul de l'embedding → Regroupement →
+// Dépôt): a completed stage implies every earlier stage also completed, since each stage runs only
+// after the previous one succeeds. (Before SP4 Task 6a these fixtures encoded now-unreachable
+// states like "embedding done before génération".)
 describe("deriveStepperNodes", () => {
   it("marks completed stages done, the current stage current, the rest pending", () => {
     const nodes = deriveStepperNodes(
       [{ name: "Extraction du contenu", status: "success" }, { name: "Génération IA", status: "success" }],
-      "Calcul de l'embedding",
+      "Vérification & complétion",
     );
-    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "current", "pending", "pending"]);
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "current", "pending", "pending", "pending"]);
     expect(nodes).toHaveLength(ITEM_STAGES.length);
     expect(nodes[1].label).toBe("Génération IA"); // short label preserved for the long stage too
   });
 
-  it("marks a failed stage failed and freezes the rest as pending (post-generation embed failure)", () => {
-    // The realistic freeze case: extraction + génération succeeded, then the embedding stage failed.
+  it("marks a failed stage failed and freezes the rest as pending (post-completion embed failure)", () => {
+    // The realistic freeze case: extraction + génération + complétion succeeded, then embedding failed.
     const nodes = deriveStepperNodes(
       [
         { name: "Extraction du contenu", status: "success" },
         { name: "Génération IA", status: "success" },
+        { name: "Vérification & complétion", status: "success" },
         { name: "Calcul de l'embedding", status: "failed" },
       ],
       null,
     );
-    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "failed", "pending", "pending"]);
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "done", "failed", "pending", "pending"]);
   });
 
   it("keeps a stage AFTER a failure pending even when it is the currentStage (freeze wins)", () => {
@@ -35,12 +36,51 @@ describe("deriveStepperNodes", () => {
       [
         { name: "Extraction du contenu", status: "success" },
         { name: "Génération IA", status: "success" },
+        { name: "Vérification & complétion", status: "success" },
         { name: "Calcul de l'embedding", status: "failed" },
       ],
       "Regroupement (clustering)", // a stale pointer at a stage after the failed one — must NOT become "current"
     );
-    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "failed", "pending", "pending"]);
-    expect(nodes[3].state).toBe("pending"); // "Regroupement (clustering)" frozen, not "current"
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "done", "failed", "pending", "pending"]);
+    expect(nodes[4].state).toBe("pending"); // "Regroupement (clustering)" frozen, not "current"
+  });
+
+  it("une exécution antérieure à l'étape de complétion rend ce nœud en attente sans casser le gel", () => {
+    // Effet connu et assumé : les lignes pipeline_steps écrites avant l'ajout de l'étape n'ont
+    // pas ce nom, le nœud reste donc « pending » à perpétuité sur les exécutions passées.
+    const legacySteps = [
+      { name: "Extraction du contenu", status: "success" },
+      { name: "Génération IA", status: "success" },
+      { name: "Calcul de l'embedding", status: "success" },
+      { name: "Regroupement (clustering)", status: "success" },
+      { name: "Dépôt en revue", status: "success" },
+    ];
+    const nodes = deriveStepperNodes(legacySteps, null);
+    expect(nodes).toHaveLength(6);
+    expect(nodes.find((n) => n.name === "Vérification & complétion")!.state).toBe("pending");
+    expect(nodes.find((n) => n.name === "Dépôt en revue")!.state).toBe("done");
+  });
+
+  it("a failed « Vérification & complétion » does NOT freeze the stepper — stageSources continues past it", () => {
+    // stageSources deliberately lets ONLY this stage fail without aborting the article: repairDraft
+    // is best-effort, and stageSources's own try/catch around it swallows a timeout/failure,
+    // continuing with the unrepaired draft into embedding/clustering/dépôt (see the comment on the
+    // repairDraft call site in lib/pipeline/stages.ts). The stepper must reflect that reality: this
+    // node renders "failed", but every later node must show its REAL recorded outcome — not a
+    // frozen "pending" describing a run that never happened.
+    const nodes = deriveStepperNodes(
+      [
+        { name: "Extraction du contenu", status: "success" },
+        { name: "Génération IA", status: "success" },
+        { name: "Vérification & complétion", status: "failed" },
+        { name: "Calcul de l'embedding", status: "success" },
+        { name: "Regroupement (clustering)", status: "success" },
+        { name: "Dépôt en revue", status: "success" },
+      ],
+      null,
+    );
+    expect(nodes.map((n) => n.state)).toEqual(["done", "done", "failed", "done", "done", "done"]);
+    expect(nodes.find((n) => n.name === "Dépôt en revue")!.state).toBe("done");
   });
 });
 

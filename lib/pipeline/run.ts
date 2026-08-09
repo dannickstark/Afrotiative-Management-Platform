@@ -391,7 +391,7 @@ export async function executeRun(
             // Non-empty text only — falls back to the RSS snippet when extraction yields nothing
             // (r.via === "none" or empty body); a member with no usable text contributes no source
             // (rather than an empty article_sources row) but is still recorded/seen above.
-            if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images });
+            if (text.length > 0) sources.push({ mediaName: m.feedName, url: m.item.url, text, images: r.images, origin: "feed" });
           } catch (e) {
             lastExtractError = e as Error;
             // Best-effort skip (SP5 Task 2 review, Finding 3): a member whose extraction failed OR
@@ -461,7 +461,7 @@ export async function executeRun(
                       // were extracted text.
                       const text = r.text.trim();
                       if (text.length > 0) {
-                        sources.push({ mediaName: hostOf(hit.url) || hit.title, url: hit.url, text, images: r.images });
+                        sources.push({ mediaName: hostOf(hit.url) || hit.title, url: hit.url, text, images: r.images, origin: "web" });
                         webAdded++;
                       }
                     } catch {
