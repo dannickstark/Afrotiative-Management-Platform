@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import sharp from "sharp";
-import { renderScene, fitFontSize } from "@/lib/studio/render";
+import { renderScene, fitFontSize, RenderError } from "@/lib/studio/render";
 import { MissingTokensError } from "@/lib/studio/values";
 import { loadFallbackFonts, type AssetLoader, type LoadedFont } from "@/lib/studio/fonts";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
@@ -169,6 +169,149 @@ describe("renderScene", () => {
       expect(longSize).toBeLessThan(shortSize);
       expect(longSize).toBeLessThan(30); // très en dessous des 64px de départ
     });
+
+    // Round 1 de revue — Finding 3 : la sonde d'autoFit mesurait un style texte reconstruit à la
+    // main (sans letterSpacing ni fontStyle), différent de celui réellement peint par element.ts.
+    // Un texte avec un espacement de lettres large mesurait "tient" alors qu'il débordait
+    // réellement une fois rendu. Vérifié empiriquement avant le correctif : à 1040×220, taille 64,
+    // la hauteur mesurée SANS letterSpacing est 140px (tient), et AVEC letterSpacing:20 est 350px
+    // (déborde largement un cadre de 220px) — donc la taille retenue doit être nettement plus
+    // petite avec un tel espacement.
+    it("mesure la même boîte que le rendu final : un letterSpacing large réduit la taille retenue", async () => {
+      const content = "Le cacao camerounais bat un record d'exportation en 2026";
+      const withoutLS = await fitFontSize(baseLayer(content), fonts);
+      const withLS = await fitFontSize({ ...baseLayer(content), letterSpacing: 20 }, fonts);
+      expect(withLS).toBeLessThan(withoutLS);
+    });
+
+    // Round 1 de revue — bug annexe : AUTOFIT_PASSES=5 sur [12, taille] laisse un résidu (la
+    // recherche dichotomique ne teste jamais la borne haute elle-même), donc un texte qui tenait
+    // DÉJÀ à la taille demandée ressortait quand même rétréci de quelques pixels sans raison.
+    it("ne rétrécit PAS un texte qui tient déjà à la taille demandée (pas de résidu)", async () => {
+      const size = await fitFontSize(baseLayer("Titre court"), fonts);
+      expect(size).toBe(64); // la taille demandée elle-même, pas 63 ou une valeur voisine
+    });
+
+    // Round 1 de revue — bug annexe : avec une taille de base déjà inférieure à AUTOFIT_MIN, la
+    // recherche ne s'exécutait jamais et renvoyait AUTOFIT_MIN (12) tel quel — un agrandissement,
+    // alors qu'autoFit ne doit jamais dépasser la taille demandée par le gabarit.
+    it("n'agrandit jamais au-delà de la taille demandée, même en dessous du plancher AUTOFIT_MIN", async () => {
+      const size = await fitFontSize({ ...baseLayer("Titre court"), font: { family: "Noto Sans", size: 10, weight: 700 } }, fonts);
+      expect(size).toBe(10);
+    });
+  });
+});
+
+describe("renderScene — erreurs natives (pas de fuite anglaise, échec franc)", () => {
+  // Finding 1 (revue round 1) : une valeur de jeton qui n'est PAS une couleur valable
+  // (validateScene ne vérifie que le TYPE du jeton, jamais sa valeur d'exécution) atteint satori
+  // telle quelle et fait planter le rendu avec un message anglais interne
+  // ("Failed to parse declaration…"). render.ts doit intercepter et reformuler en français, sans
+  // reproduire ce texte brut.
+  it("category.color lié à une valeur qui n'est pas une couleur échoue franchement, en français", async () => {
+    const s = agribusinessScene();
+    const badValues = { ...values, "category.color": "pas-une-couleur" };
+    const err = await renderScene({ scene: s, values: badValues, fetchImpl: fixtureFetch }).catch((e) => e);
+    expect(err).toBeInstanceOf(RenderError);
+    expect((err as Error).message).not.toContain("Failed to parse");
+    expect((err as Error).message.toLowerCase()).toContain("invalide");
+  });
+
+  // Finding 1 (revue round 1) : QRCode.toString lève une erreur anglaise ("The amount of data is
+  // too big…") quand le contenu dépasse la capacité d'un QR code. render.ts doit reformuler.
+  it("un contenu QR trop volumineux échoue franchement, en français", async () => {
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 400, height: 400, background: "#FFFFFF" },
+      layers: [
+        { ...b, id: "qr", name: "QR", frame: { x: 20, y: 20, w: 360, h: 360 },
+          type: "qr", slot: "article.url", fg: "#000000", bg: "#FFFFFF", margin: 1 },
+      ],
+    };
+    const err = await renderScene({ scene, values: { "article.url": "x".repeat(5000) } }).catch((e) => e);
+    expect(err).toBeInstanceOf(RenderError);
+    expect((err as Error).message).not.toContain("too big");
+  });
+});
+
+describe("renderScene — magasin d'assets défaillant (Finding 1)", () => {
+  function textOnlyScene(): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 300, height: 200, background: "#000000" },
+      layers: [
+        { ...b, id: "title", name: "Titre", frame: { x: 10, y: 10, w: 280, h: 180 },
+          type: "text", content: "Bonjour",
+          font: { assetId: "asset-1", family: "Police Perso", size: 40, weight: 400 },
+          color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2 },
+      ],
+    };
+  }
+
+  // Finding 1 (revue round 1) : un magasin d'assets qui LÈVE (panne réseau, R2 injoignable) au lieu
+  // de renvoyer null crashait tout le rendu au lieu de dégrader — la seule défaillance tolérée du
+  // pipeline (police manquante) devenait un échec dur précisément quand le magasin va mal.
+  const throwingFontLoader: AssetLoader = {
+    async font() { throw new Error("R2 GetObject failed: connection reset"); },
+    async imageUrl() { return null; },
+  };
+
+  it("un magasin d'assets qui lève au lieu de renvoyer null dégrade quand même, sans planter", async () => {
+    const out = await renderScene({ scene: textOnlyScene(), values: {}, assets: throwingFontLoader });
+    expect(out.degraded).toBe(true);
+    expect(out.width).toBe(300);
+    expect(out.height).toBe(200);
+  });
+});
+
+describe("renderScene — image de calque introuvable (Finding 2)", () => {
+  // Finding 2 (revue round 1) : un calque image visible dont la source ne peut pas être résolue en
+  // URL (ex. `source: {kind:"asset"}` sous le NullAssetLoader par défaut — aucun gabarit V1 n'utilise
+  // cette source, donc ceci ne peut pas casser les gabarits déjà semés) était auparavant traité
+  // comme la dégradation tolérée (police manquante) au lieu d'un échec franc, produisant un rendu
+  // "réussi" avec le calque silencieusement absent. element.ts documente lui-même le contrat inverse
+  // : "render.ts a déjà échoué franchement si la préparation était obligatoire".
+  it("un calque image dont la source ne peut pas être résolue échoue franchement", async () => {
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 300, height: 200, background: "#000000" },
+      layers: [
+        { ...b, id: "logo", name: "Logo", frame: { x: 0, y: 0, w: 300, h: 200 },
+          type: "image", source: { kind: "asset", assetId: "logo-1" }, fit: "cover" },
+      ],
+    };
+    const err = await renderScene({ scene, values: {} }).catch((e) => e);
+    expect(err).toBeInstanceOf(RenderError);
+  });
+});
+
+describe("renderScene — autoFit appliqué au pipeline complet (Finding 4)", () => {
+  // Finding 4 (revue round 1) : les 12 tests précédents restaient tous verts même en supprimant
+  // entièrement la phase autoFit de renderScene — fitFontSize était prouvé correct en isolation,
+  // mais rien ne prouvait qu'il était réellement appelé par le pipeline. Vérifié manuellement : en
+  // commentant la phase autoFit, la même scène rendue avec autoFit:true et sans autoFit produit
+  // EXACTEMENT le même nombre d'octets (28510 = 28510) ; avec la phase en place, ces deux rendus
+  // divergent nettement (mesuré : 53302 avec autoFit vs 28510 sans). C'est ce test qui distingue
+  // les deux situations.
+  function longTitleScene(autoFit: boolean): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 1200, height: 675, background: "#000000" },
+      layers: [
+        { ...b, id: "title", name: "Titre", frame: { x: 80, y: 380, w: 1040, h: 220 },
+          type: "text", content: "{{article.title}}",
+          font: { family: "Noto Sans", size: 64, weight: 700 },
+          color: "#FFFFFF", align: "left", vAlign: "bottom", lineHeight: 1.1,
+          ...(autoFit ? { autoFit: true } : {}) },
+      ],
+    };
+  }
+
+  it("un rendu avec autoFit produit une image mesurablement différente du même rendu sans autoFit", async () => {
+    const longValues = { "article.title": "Titre ".repeat(80) } as const;
+    const withFit = await renderScene({ scene: longTitleScene(true), values: longValues });
+    const without = await renderScene({ scene: longTitleScene(false), values: longValues });
+    expect(withFit.bytes.length).not.toBe(without.bytes.length);
   });
 });
 

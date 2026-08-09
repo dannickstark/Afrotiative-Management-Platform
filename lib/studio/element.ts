@@ -24,33 +24,48 @@ function frameStyle(layer: Layer): Record<string, unknown> {
   };
 }
 
-function textNode(layer: TextLayer): SatoriNode {
+// Style TEXTE PUR (police, couleur, alignement, effets) — SANS positionnement (frame). Extrait pour
+// que render.ts (fitFontSize/autoFit) mesure EXACTEMENT la même boîte de texte que celle réellement
+// peinte ici. Avant cette extraction, la sonde d'autoFit reconstruisait sa propre liste de
+// propriétés à la main et en oubliait deux (letterSpacing, fontStyle) — un titre avec un
+// espacement de lettres large mesurait alors une hauteur trop petite et débordait silencieusement
+// une fois réellement peint (vérifié empiriquement : 63px mesuré « tient », mais le même texte
+// réellement rendu avec letterSpacing:20 atteint 345px de haut sur un cadre de 220px). Une seule
+// source de vérité pour ces propriétés est le seul correctif qui reste correctif : toute nouvelle
+// propriété de style texte ajoutée ici profite automatiquement à la mesure d'autoFit.
+export function textStyleFor(layer: TextLayer): Record<string, unknown> {
   const justify = layer.align === "center" ? "center" : layer.align === "right" ? "flex-end" : "flex-start";
   const align = layer.vAlign === "middle" ? "center" : layer.vAlign === "bottom" ? "flex-end" : "flex-start";
+  return {
+    justifyContent: justify,
+    alignItems: align,
+    fontFamily: layer.font.family,
+    fontSize: layer.font.size,
+    fontWeight: layer.font.weight,
+    fontStyle: layer.font.italic ? "italic" : "normal",
+    color: layer.color,
+    lineHeight: layer.lineHeight,
+    textAlign: layer.align,
+    overflow: "hidden",
+    ...(layer.letterSpacing !== undefined ? { letterSpacing: layer.letterSpacing } : {}),
+    ...(layer.maxLines ? { lineClamp: layer.maxLines } : {}),
+    ...(layer.shadow
+      ? { textShadow: `${layer.shadow.x}px ${layer.shadow.y}px ${layer.shadow.blur}px ${layer.shadow.color}` }
+      : {}),
+    ...(layer.stroke
+      ? { WebkitTextStroke: `${layer.stroke.width}px ${layer.stroke.color}` }
+      : {}),
+  };
+}
+
+function textNode(layer: TextLayer): SatoriNode {
   return {
     type: "div",
     props: {
       "data-layer": layer.id,
       style: {
         ...frameStyle(layer),
-        justifyContent: justify,
-        alignItems: align,
-        fontFamily: layer.font.family,
-        fontSize: layer.font.size,
-        fontWeight: layer.font.weight,
-        fontStyle: layer.font.italic ? "italic" : "normal",
-        color: layer.color,
-        lineHeight: layer.lineHeight,
-        textAlign: layer.align,
-        overflow: "hidden",
-        ...(layer.letterSpacing !== undefined ? { letterSpacing: layer.letterSpacing } : {}),
-        ...(layer.maxLines ? { lineClamp: layer.maxLines } : {}),
-        ...(layer.shadow
-          ? { textShadow: `${layer.shadow.x}px ${layer.shadow.y}px ${layer.shadow.blur}px ${layer.shadow.color}` }
-          : {}),
-        ...(layer.stroke
-          ? { WebkitTextStroke: `${layer.stroke.width}px ${layer.stroke.color}` }
-          : {}),
+        ...textStyleFor(layer),
       },
       children: layer.content,
     },

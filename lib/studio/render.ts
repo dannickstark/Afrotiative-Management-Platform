@@ -6,7 +6,7 @@ import type { Scene, TextLayer } from "./scene";
 import { resolveTokens, type TokenValues } from "./values";
 import { prepareImage } from "./images";
 import { loadFallbackFonts, NullAssetLoader, type AssetLoader, type LoadedFont } from "./fonts";
-import { sceneToElement, type SatoriNode } from "./element";
+import { sceneToElement, textStyleFor, type SatoriNode } from "./element";
 import type { TokenId } from "./tokens";
 
 export type RenderOutcome = {
@@ -25,6 +25,12 @@ export type RenderSceneOptions = {
   // Tests uniquement — voir prepareImage.
   fetchImpl?: typeof fetch;
 };
+
+// Erreur typée : message en français, SANS le texte brut de l'erreur native sous-jacente (satori,
+// resvg, sharp et qrcode parlent anglais et exposent des détails d'implémentation non actionables
+// pour un rédacteur) — même politique que ImageFetchError dans images.ts. Tout échec de ce module
+// qui n'est pas la dégradation tolérée (police d'asset introuvable) sort sous cette forme.
+export class RenderError extends Error {}
 
 const AUTOFIT_MIN = 12;
 const AUTOFIT_PASSES = 5;
@@ -49,27 +55,59 @@ function asSatoriFonts(fonts: LoadedFont[]): SatoriFont[] {
 // transmettant QUE `width`, satori calcule la hauteur intrinsèque du contenu (avec retour à la
 // ligne sur cette largeur) et l'expose dans l'attribut height= — c'est cette valeur-là qu'il faut
 // comparer au cadre.
+//
+// La sonde utilise textStyleFor (element.ts) — LA MÊME fonction que le rendu final — pour construire
+// son style. Avant ce partage, la sonde reconstruisait la liste des propriétés à la main et en
+// oubliait deux (letterSpacing, fontStyle) : un texte avec un espacement de lettres large mesurait
+// une hauteur trop petite, « tenait » selon la sonde, puis débordait silencieusement une fois
+// réellement peint (overflow: hidden coupe le surplus sans avertir personne). Vérifié empiriquement
+// avant correction : à 1040×220, taille 64, letterSpacing 20, la sonde d'origine (qui ignorait
+// letterSpacing) mesurait une hauteur qui tient, alors que le texte réellement peint atteint 345px.
 export async function fitFontSize(layer: TextLayer, fonts: LoadedFont[]): Promise<number> {
-  let low = AUTOFIT_MIN;
-  let high = layer.font.size;
-  let best = AUTOFIT_MIN;
+  const satoriFonts = asSatoriFonts(fonts);
 
-  for (let i = 0; i < AUTOFIT_PASSES && low <= high; i++) {
-    const mid = Math.floor((low + high) / 2);
+  async function fitsAt(size: number): Promise<boolean> {
     const probe: SatoriNode = {
       type: "div",
       props: {
-        style: {
-          display: "flex", width: layer.frame.w,
-          fontFamily: layer.font.family, fontSize: mid, fontWeight: layer.font.weight,
-          lineHeight: layer.lineHeight,
-        },
+        style: { display: "flex", width: layer.frame.w, ...textStyleFor({ ...layer, font: { ...layer.font, size } }) },
         children: layer.content,
       },
     };
-    const svg = await satori(probe as never, { width: layer.frame.w, fonts: asSatoriFonts(fonts), embedFont: false });
+    let svg: string;
+    try {
+      svg = await satori(probe as never, { width: layer.frame.w, fonts: satoriFonts, embedFont: false });
+    } catch {
+      throw new RenderError(
+        `Mesure du texte du calque « ${layer.name || layer.id} » impossible : une valeur (couleur, police) est invalide.`,
+      );
+    }
     const height = Number(/height="(\d+(?:\.\d+)?)"/.exec(svg)?.[1] ?? layer.frame.h);
-    if (height <= layer.frame.h) { best = mid; low = mid + 1; } else { high = mid - 1; }
+    return height <= layer.frame.h;
+  }
+
+  // Ne JAMAIS agrandir au-delà de la taille demandée par le gabarit. Si celle-ci est déjà en dessous
+  // du plancher de lisibilité (AUTOFIT_MIN), il n'y a rien à chercher — la renvoyer telle quelle.
+  // Bug constaté empiriquement dans la version précédente : avec font.size=10, low(12) > high(10),
+  // la boucle ne s'exécutait jamais, et `best` restait à sa valeur initiale AUTOFIT_MIN=12 — un
+  // texte agrandi au lieu d'être laissé tel quel, exactement l'inverse de ce qu'autoFit doit faire.
+  if (layer.font.size <= AUTOFIT_MIN) return layer.font.size;
+
+  // Teste D'ABORD la taille demandée elle-même. Si le texte tient déjà, on la renvoie TELLE QUELLE.
+  // Bug constaté empiriquement dans la version précédente : la recherche dichotomique, bornée à
+  // AUTOFIT_PASSES=5 itérations sur l'intervalle [AUTOFIT_MIN, taille], ne teste jamais la borne
+  // haute elle-même et converge sur une valeur résiduelle systématiquement inférieure — un titre qui
+  // tenait déjà à 64px ressortait rétréci à 63px sans raison, l'écart croissant avec la taille de
+  // base (mesuré : base 96 -> 94, base 160 -> 156). AutoFit ne doit RÉDUIRE que si le texte déborde
+  // réellement.
+  if (await fitsAt(layer.font.size)) return layer.font.size;
+
+  let low = AUTOFIT_MIN;
+  let high = layer.font.size - 1;
+  let best = AUTOFIT_MIN;
+  for (let i = 0; i < AUTOFIT_PASSES && low <= high; i++) {
+    const mid = Math.floor((low + high) / 2);
+    if (await fitsAt(mid)) { best = mid; low = mid + 1; } else { high = mid - 1; }
   }
   return best;
 }
@@ -80,7 +118,16 @@ export async function fitFontSize(layer: TextLayer, fonts: LoadedFont[]): Promis
 // `<image>` imbriquée (les pixels du QR apparaissent bien dans le PNG final) — pas besoin de
 // rasteriser nous-mêmes avec sharp au préalable.
 async function qrDataUri(text: string, fg: string, bg: string, margin: number): Promise<string> {
-  const svg = await QRCode.toString(text, { type: "svg", margin, color: { dark: fg, light: bg } });
+  let svg: string;
+  try {
+    svg = await QRCode.toString(text, { type: "svg", margin, color: { dark: fg, light: bg } });
+  } catch {
+    // Cas reproduit : un contenu trop long ("The amount of data is too big to be stored in a QR
+    // Code") — message anglais et non actionable pour un rédacteur, on ne le propage pas tel quel.
+    throw new RenderError(
+      "Génération du QR code impossible : le contenu du jeton est invalide ou trop volumineux pour être encodé.",
+    );
+  }
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
 }
 
@@ -92,14 +139,23 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
   // 1. Résolution des jetons — lève MissingTokensError en nommant ce qui manque.
   const resolved = resolveTokens(opts.scene, opts.values);
 
-  // 2. Polices. Une police d'asset introuvable retombe sur le repli embarqué et marque le rendu
-  //    dégradé — c'est la SEULE défaillance tolérée du pipeline, tout le reste échoue franchement.
+  // 2. Polices. Une police d'asset introuvable — ou dont le CHARGEMENT ÉCHOUE (le magasin d'assets
+  //    est temporairement injoignable, par exemple) — retombe sur le repli embarqué et marque le
+  //    rendu dégradé : c'est la SEULE défaillance tolérée du pipeline, tout le reste échoue
+  //    franchement. Un magasin d'assets qui LÈVE au lieu de renvoyer null doit dégrader exactement
+  //    comme un magasin qui renvoie null poliment — le jour où R2 a une panne ne doit pas être le
+  //    jour où le rendu casse au lieu de simplement perdre la police personnalisée.
   const fonts: LoadedFont[] = [...(await loadFallbackFonts())];
   const seen = new Set<string>();
   for (const layer of resolved.layers) {
     if (layer.type !== "text" || !layer.font.assetId || seen.has(layer.font.assetId)) continue;
     seen.add(layer.font.assetId);
-    const font = await assets.font(layer.font.assetId);
+    let font: LoadedFont | null;
+    try {
+      font = await assets.font(layer.font.assetId);
+    } catch {
+      font = null;
+    }
     if (font) fonts.push(font); else degraded = true;
   }
 
@@ -111,7 +167,16 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
       const url = layer.source.kind === "url"
         ? layer.source.url
         : layer.source.kind === "asset" ? await assets.imageUrl(layer.source.assetId) : null;
-      if (!url) { degraded = true; return; }
+      if (!url) {
+        // Contrairement à une police manquante, une IMAGE manquante n'est pas la dégradation
+        // tolérée : element.ts documente explicitement que « render.ts a déjà échoué franchement si
+        // la préparation était obligatoire » — un calque image visible sans URL résolue ne doit
+        // jamais atteindre le rendu final en silence (auparavant : `degraded = true; return;`,
+        // produisant un rendu « réussi » avec le calque simplement absent).
+        throw new RenderError(
+          `Image introuvable pour le calque « ${layer.name || layer.id} » : l'asset référencé n'a pas pu être résolu.`,
+        );
+      }
       prepared.set(layer.id, await prepareImage({
         url, width: layer.frame.w, height: layer.frame.h, fit: layer.fit,
         blur: layer.blur, overlay: layer.overlay, fetchImpl: opts.fetchImpl,
@@ -133,15 +198,32 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
     )),
   };
 
-  // 5. satori -> SVG -> resvg -> PNG -> sharp.
-  const svg = await satori(sceneToElement(scene, prepared) as never, {
-    width: scene.canvas.width,
-    height: scene.canvas.height,
-    fonts: asSatoriFonts(fonts),
-    embedFont: true, // glyphes convertis en tracés : resvg n'a jamais besoin des polices
-  });
+  // 5. satori -> SVG -> resvg -> PNG -> sharp. Trois bibliothèques natives, trois façons de faire
+  //    fuir de l'anglais non actionable vers un rédacteur (reproduit empiriquement : une couleur de
+  //    jeton invalide fait échouer satori avec "Failed to parse declaration…" ; un canevas
+  //    surdimensionné passe satori et resvg mais fait échouer sharp avec "Input image exceeds pixel
+  //    limit"). Chaque étape est isolée dans son propre try/catch pour un message français distinct
+  //    et actionable, sans jamais reproduire le texte brut de l'erreur native.
+  let svg: string;
+  try {
+    svg = await satori(sceneToElement(scene, prepared) as never, {
+      width: scene.canvas.width,
+      height: scene.canvas.height,
+      fonts: asSatoriFonts(fonts),
+      embedFont: true, // glyphes convertis en tracés : resvg n'a jamais besoin des polices
+    });
+  } catch {
+    throw new RenderError(
+      "Rendu de la scène impossible : une valeur du gabarit (couleur, police ou disposition) est invalide.",
+    );
+  }
 
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: scene.canvas.width } }).render().asPng();
+  let png: Buffer;
+  try {
+    png = new Resvg(svg, { fitTo: { mode: "width", value: scene.canvas.width } }).render().asPng();
+  } catch {
+    throw new RenderError("Rasterisation de la scène impossible.");
+  }
 
   // removeAlpha() n'est appliqué qu'en JPEG : le format n'a structurellement pas de canal alpha
   // (sharp l'aplatit de toute façon automatiquement sur du noir si on ne le fait pas — vérifié
@@ -157,11 +239,20 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
   // canevas « attendue » par l'utilisateur, ce qui est cohérent avec le fait qu'un canevas
   // "transparent" exporté vers un format sans alpha n'a de toute façon pas de couleur de repli
   // définie ailleurs dans le schéma.
-  const bytes = new Uint8Array(
-    encode === "webp"
-      ? await sharp(png).webp({ quality: 88 }).toBuffer()
-      : await sharp(png).removeAlpha().jpeg({ quality: 86, mozjpeg: true }).toBuffer(),
-  );
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(
+      encode === "webp"
+        ? await sharp(png).webp({ quality: 88 }).toBuffer()
+        : await sharp(png).removeAlpha().jpeg({ quality: 86, mozjpeg: true }).toBuffer(),
+    );
+  } catch {
+    // Cas reproduit : un canevas surdimensionné (ex. 20000x20000) passe satori et resvg mais fait
+    // échouer sharp au décodage du PNG intermédiaire ("Input image exceeds pixel limit").
+    throw new RenderError(
+      "Encodage de l'image finale impossible : les dimensions du canevas sont probablement excessives.",
+    );
+  }
 
   return {
     bytes,
