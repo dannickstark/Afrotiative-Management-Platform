@@ -1,4 +1,4 @@
-import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings } from "lucide-react";
+import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings, LayoutTemplate } from "lucide-react";
 import type { Role } from "@/lib/auth";
 
 export type NavChild = { href: string; label: string; roles?: Role[] };
@@ -51,6 +51,14 @@ export const NAV_SECTIONS: NavSection[] = [
     roles: ["admin", "editor"],
     items: [
       { href: "/runs", label: "Exécutions", icon: Activity, roles: ["admin", "editor"] },
+    ],
+  },
+  {
+    id: "studio",
+    label: "Studio",
+    roles: ["admin", "editor"],
+    items: [
+      { href: "/studio", label: "Gabarits", icon: LayoutTemplate, roles: ["admin", "editor"] },
     ],
   },
   {

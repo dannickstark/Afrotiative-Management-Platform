@@ -41,6 +41,14 @@
 //   tests/studio-bindings.test.ts → aucune portée statique : distingue ses gabarits par un
 //                                    categoryId frais (UUID généré à chaque exécution), comme
 //                                    (article_image, null, <categoryId>) ci-dessous.
+//   tests/studio-rbac.test.ts     → (recap_card, "test-studio-fondations-identique", null)
+//                                    (recap_card, "test-studio-fondations-jamais-publie", null)
+//                                    (recap_card, "test-studio-fondations-cles-reordonnees", null)
+//                                    "test-studio-fondations-modifie" n'y figure PAS : ce canal est
+//                                    toujours utilisé avec un categoryId frais (UUID généré à
+//                                    chaque exécution), donc structurellement sans risque de
+//                                    collision, comme (article_image, null, <categoryId>)
+//                                    ci-dessous.
 //
 // (article_image, null, <categoryId>) et (social_post, "test-priorite-canal", <categoryId>) ne
 // figurent PAS dans le registre ci-dessus : leur categoryId est un UUID généré à chaque exécution

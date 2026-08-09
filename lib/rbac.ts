@@ -7,11 +7,13 @@ const MATRIX: Matrix = {
   editor: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
     feed: ["read", "manage"], taxonomy: ["read", "manage"], pipeline: ["read"],
+    template: ["read", "manage", "publish"],
   },
   admin: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
     feed: ["read", "manage"], taxonomy: ["read", "manage"],
     team: ["read", "manage"], pipeline: ["read", "configure"],
+    template: ["read", "manage", "publish"],
   },
 };
 
