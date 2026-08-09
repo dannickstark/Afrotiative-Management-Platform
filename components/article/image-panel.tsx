@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { previewArticleImage } from "@/lib/actions/article-preview-actions";
 import type { RenderForArticleResult } from "@/lib/studio";
+import { MISSING_LABEL } from "@/lib/pipeline/completeness";
 
 export type ImageFields = {
   featuredImageUrl: string | null;
@@ -47,6 +48,37 @@ export function handleTabOpen(
   );
 }
 
+// V3 Tâche 4 (dette V1 §3 assignée à V3) : le moteur (MissingTokensError, lib/studio/values.ts)
+// nomme déjà les jetons manquants dans son message, mais sous leur forme TECHNIQUE
+// (« article.image », « category.name ») — un rédacteur ne reconnaît pas ce vocabulaire. Cette
+// table ne couvre QUE les deux jetons que V1 §6 fait échouer par construction pour le contexte
+// article_image (image à la une, catégorie) et réutilise délibérément lib/pipeline/completeness.ts
+// ::MISSING_LABEL — le MÊME vocabulaire que la garde de complétude de la publication
+// (lib/wp/publish.ts) et la file /queue, pour qu'un rédacteur ne voie jamais deux noms différents
+// pour le même manque.
+const RENDER_TOKEN_LABEL: Record<string, string> = {
+  "article.image": MISSING_LABEL.featuredImageUrl,
+  "category.name": MISSING_LABEL.categoryId,
+};
+
+const MISSING_TOKENS_PATTERN = /Valeurs manquantes pour : (.+)\.$/;
+
+// PURE — traduit le message technique de MissingTokensError, tel que renderForArticle le renvoie
+// (« Génération de l'image échouée — Valeurs manquantes pour : article.image, category.name. »),
+// en une liste de champs qu'un rédacteur reconnaît (« Image à la une, Catégorie »), au lieu des
+// jetons bruts. Un jeton sans traduction connue (hors V1 §6 : cette table ne couvre QUE
+// image/catégorie) reste affiché sous sa forme brute plutôt que d'être silencieusement avalé — un
+// futur gabarit référençant un jeton optionnel manquant (ex. brand.logo) doit rester diagnosticable.
+// Les messages qui ne nomment PAS de jetons manquants (stockage non configuré, article introuvable,
+// échec réseau de l'image…) ressortent inchangés : seul ce motif précis est un vocabulaire à
+// traduire, tout le reste est déjà un message français directement affichable.
+export function friendlyPreviewMessage(message: string): string {
+  const match = MISSING_TOKENS_PATTERN.exec(message);
+  if (!match) return message;
+  const labels = match[1].split(",").map((t) => RENDER_TOKEN_LABEL[t.trim()] ?? t.trim());
+  return `Informations manquantes : ${labels.join(", ")}.`;
+}
+
 // Rendu pur des états de l'onglet « Aperçu final » — composant séparé pour être testable en HTML
 // statique (react-dom/server), même convention que TokenPicker/LayerPanel (tests/studio-token-
 // picker.test.ts, tests/studio-layer-panel.test.ts). Les quatre états explicites du tableau spec
@@ -65,14 +97,16 @@ export function PreviewTabContent({ state }: { state: PreviewState }) {
   const { result } = state;
 
   // Recouvre à la fois « informations manquantes » et « stockage R2 non configuré » (spec V3 §1) :
-  // les deux arrivent par la même forme { ok: false, message } — le moteur (lib/studio/index.ts)
-  // choisit déjà un message français qui NOMME ce qui manque plutôt qu'une trace technique ; cet
-  // onglet l'affiche tel quel, sans relecture d'erreur ni icône d'alerte rouge.
+  // les deux arrivent par la même forme { ok: false, message }. Le moteur (lib/studio/index.ts)
+  // choisit déjà un message français, mais pour les jetons manquants il les nomme sous leur forme
+  // TECHNIQUE (« article.image ») — friendlyPreviewMessage (Tâche 4, V1 §3 dette assignée à V3) le
+  // traduit en un champ qu'un rédacteur reconnaît (« Image à la une ») ; les autres messages (déjà
+  // du français directement affichable) ressortent inchangés.
   if (!result.ok) {
     return (
       <div className="flex aspect-video w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-[var(--status-pending)]/50 bg-[var(--status-pending)]/10 p-3 text-center text-xs font-medium text-[var(--status-pending)]">
         <ImageOff className="size-5" aria-hidden />
-        <span>{result.message}</span>
+        <span>{friendlyPreviewMessage(result.message)}</span>
       </div>
     );
   }

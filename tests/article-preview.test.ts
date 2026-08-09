@@ -135,14 +135,20 @@ describe("PreviewTabContent — les quatre états explicites", () => {
     expect(html).toContain("gabarit");
   });
 
-  it("informations manquantes (ok:false) affiche le message français du moteur tel quel", () => {
+  // Tâche 4 (V1 §3 dette assignée à V3) a remplacé l'affichage "tel quel" du message technique par
+  // une traduction en champs reconnaissables (friendlyPreviewMessage, image-panel.tsx) — voir
+  // tests/article-preview-incomplete.test.ts pour la couverture dédiée de cette traduction. Ce test
+  // vérifie ici seulement que PreviewTabContent y fait bien appel (pas les jetons bruts à l'écran).
+  it("informations manquantes (ok:false) affiche les champs reconnaissables, pas les jetons techniques", () => {
     const html = renderPreview({
       status: "done",
-      result: { ok: false, message: "Génération de l'image échouée — Valeurs manquantes pour : article.image, article.category." },
+      result: { ok: false, message: "Génération de l'image échouée — Valeurs manquantes pour : article.image, category.name." },
     });
-    expect(html).toContain("Valeurs manquantes pour");
-    expect(html).toContain("article.image");
-    expect(html).toContain("article.category");
+    expect(html).toContain("Informations manquantes");
+    expect(html.toLowerCase()).toContain("image à la une");
+    expect(html).toContain("Catégorie");
+    expect(html).not.toContain("article.image");
+    expect(html).not.toContain("category.name");
   });
 
   it("stockage R2 non configuré (ok:false) affiche EXACTEMENT le message du moteur", () => {

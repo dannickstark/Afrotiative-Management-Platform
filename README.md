@@ -19,6 +19,17 @@ intégrations.
 > point d'application de la barrière ne change pas : seuls les articles `status='approved'` sont
 > jamais publiés (`publishDueArticles`) — l'auto-publication ne fait qu'ajouter une seconde façon,
 > strictement contrôlée, d'atteindre ce statut sans clic humain.
+>
+> **Image publiée = image générée au moment de publier (V3) :** les images ne sont **pas**
+> générées pendant le pipeline normal ; si un gabarit `article_image` est configuré (Studio),
+> l'image poussée dans la médiathèque WordPress est produite au moment précis du clic sur
+> *Approuver & publier* (ou de l'exécution planifiée), pas avant. `articles.featuredImageUrl`
+> (l'image brute, avec son crédit et son lien source) n'est **jamais** réécrit — c'est la trace de
+> l'image d'origine, et c'est ce dont le gabarit repart à chaque rendu. Sans gabarit configuré pour
+> la catégorie de l'article, l'image brute est publiée telle quelle, comme avant V3. Avec un
+> gabarit configuré, un rendu en échec (informations manquantes, moteur en erreur) fait **échouer
+> toute la publication** — l'article reste `approved`, donc réessayable — plutôt que de publier un
+> article visiblement cassé sans son illustration.
 
 ## Chaîne de valeur
 
@@ -33,11 +44,11 @@ Flux RSS  →  Extraction  →  Réécriture IA (FR)  →  File de revue  →  �
 | Domaine | Surfaces |
 |---|---|
 | **Authentification & rôles** | `/login`, RBAC serveur (Admin / Éditeur / Journaliste) via Better-Auth. |
-| **Revue & édition** | `/dashboard`, `/queue` (file), `/article/[id]` (éditeur Tiptap contraint), `/published`, `/calendar`. |
+| **Revue & édition** | `/dashboard`, `/queue` (file), `/article/[id]` (éditeur Tiptap contraint — panneau image à onglets « Image originale » / « Aperçu final », V3), `/published`, `/calendar`. |
 | **Pipeline (SP3)** | ingestion RSS, extraction, réécriture IA, embeddings pgvector, clustering sémantique. |
 | **Observabilité (SP4)** | `/runs` — exécutions, étapes, retraitement d'un item, relance d'un run. |
-| **Publication (SP5)** | publier / dépublier / republier WordPress + publication planifiée. |
-| **Studio (V1 + V2)** | moteur de gabarits + éditeur visuel. `/studio` (liste, groupée par contexte), `/studio/[id]` (éditeur : canevas, calques, jetons, aperçu réel, publication, historique), `/studio/assets` (bibliothèque images/polices), `/studio/generer` (génération ponctuelle citation / bandeau newsletter / récap). Lecture seule avec bannière explicite si le stockage R2 n'est pas configuré (voir `docs/DEPLOYMENT.md`). |
+| **Publication (SP5)** | publier / dépublier / republier WordPress + publication planifiée. Image à la une **générée au moment de publier** si un gabarit `article_image` est configuré (V3 — voir l'encadré ci-dessus) ; sinon image brute inchangée. |
+| **Studio (V1 + V2 + V3)** | moteur de gabarits + éditeur visuel. `/studio` (liste, groupée par contexte), `/studio/[id]` (éditeur : canevas, calques, jetons, aperçu réel, publication, historique), `/studio/assets` (bibliothèque images/polices), `/studio/generer` (génération ponctuelle citation / bandeau newsletter / récap). Lecture seule avec bannière explicite si le stockage R2 n'est pas configuré (voir `docs/DEPLOYMENT.md`). V3 : `/article/[id]` prévisualise le rendu `article_image` à la demande (onglet « Aperçu final ») et la publication l'utilise réellement (voir « Publication »). |
 | **Réglages (SP2)** | `/settings/{feeds, taxonomy, team, integrations}` — sources, taxonomie miroir, équipe, statut des intégrations. |
 | **Crons** | `POST /api/pipeline/run` (ingestion) · `POST /api/publish/due` (publication planifiée), tous deux bearer-gardés. |
 
