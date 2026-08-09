@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { db, renderTemplates, renderTemplateVersions, wpCategories } from "@/db";
 import { inArray, eq } from "drizzle-orm";
 import { resolveTemplate } from "@/lib/studio/resolve";
+import type { TemplateContext } from "@/lib/studio/tokens";
 
 const templateIds: string[] = [];
 let categoryId: string;
@@ -19,10 +20,15 @@ function sceneWithTitle(title: string) {
 }
 
 async function makeTemplate(o: {
+  // Défaut "social_post" pour ne pas toucher les tests existants ; un contexte distinct
+  // ("article_image") est utilisé pour le repli catégorie-sans-canal, afin d'éviter tout conflit
+  // avec les portées "social_post" déjà occupées par les fixtures précédentes (index d'unicité
+  // NULLS NOT DISTINCT sur (context, channel, category_id)).
+  context?: TemplateContext;
   channel: string | null; categoryId: string | null; publish: string | null; draft: string; archived?: boolean;
 }) {
   const [t] = await db.insert(renderTemplates).values({
-    name: o.draft, context: "social_post", channel: o.channel, categoryId: o.categoryId,
+    name: o.draft, context: o.context ?? "social_post", channel: o.channel, categoryId: o.categoryId,
     format: "fb_link", width: 1200, height: 630, scene: sceneWithTitle(o.draft),
     archived: o.archived ?? false,
   }).returning();
@@ -107,5 +113,34 @@ describe("resolveTemplate", () => {
     const layer = r!.scene.layers[0];
     if (layer.type !== "text") throw new Error("type");
     expect(layer.content).toBe("défaut-contexte");
+  });
+
+  // ---- Quatrième palier (context, null, categoryId) — repli catégorie SANS canal. C'est le
+  // chemin PRINCIPAL du contexte "article_image" : une image à la une n'a pas de canal (ce n'est
+  // pas un post social), toute résolution y arrive donc comme { context: "article_image",
+  // channel: null, categoryId: <catégorie de l'article> }. Contexte dédié pour ne pas entrer en
+  // conflit avec les portées "social_post" déjà occupées plus haut.
+  it("résout (contexte, null, catégorie) sans canal", async () => {
+    await makeTemplate({
+      context: "article_image", channel: null, categoryId, publish: "catégorie-sans-canal", draft: "d",
+    });
+    const r = await resolveTemplate({ context: "article_image", categoryId });
+    const layer = r!.scene.layers[0];
+    if (layer.type !== "text") throw new Error("type");
+    expect(layer.content).toBe("catégorie-sans-canal");
+  });
+
+  it("préfère (contexte, null, catégorie) au défaut de contexte quand les deux existent", async () => {
+    // Ajoute maintenant le défaut de contexte pour "article_image" : les deux paliers coexistent
+    // pour cette même requête (categoryId fourni, pas de canal). Le test précédent ne pouvait pas
+    // prouver la préséance — aucun défaut de contexte n'existait encore pour le départager d'un
+    // résolveur qui aurait sauté directement au niveau (context, null, null).
+    await makeTemplate({
+      context: "article_image", channel: null, categoryId: null, publish: "article-image-défaut-contexte", draft: "d",
+    });
+    const r = await resolveTemplate({ context: "article_image", categoryId });
+    const layer = r!.scene.layers[0];
+    if (layer.type !== "text") throw new Error("type");
+    expect(layer.content).toBe("catégorie-sans-canal");
   });
 });
