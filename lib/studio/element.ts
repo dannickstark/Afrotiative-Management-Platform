@@ -125,6 +125,10 @@ export function sceneToElement(scene: Scene, images: Map<string, string>): Sator
     }
   }
 
+  const background = scene.canvas.background === "transparent"
+    ? {}
+    : { backgroundColor: scene.canvas.background };
+
   return {
     type: "div",
     props: {
@@ -133,7 +137,7 @@ export function sceneToElement(scene: Scene, images: Map<string, string>): Sator
         position: "relative",
         width: scene.canvas.width,
         height: scene.canvas.height,
-        backgroundColor: scene.canvas.background === "transparent" ? undefined : scene.canvas.background,
+        ...background,
       },
       children,
     },

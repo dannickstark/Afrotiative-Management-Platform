@@ -209,4 +209,51 @@ describe("sceneToElement", () => {
     expect(ids[1]).toBe("c");
     expect(ids[2]).toBe("d");
   });
+
+  it("omet la clé backgroundColor du canevas quand le fond est transparent", () => {
+    const transparentCanvasScene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 100, height: 100, background: "transparent" },
+      layers: [],
+    };
+    const root = sceneToElement(transparentCanvasScene, new Map());
+    const style = (root.props as { style: Record<string, unknown> }).style;
+    expect("backgroundColor" in style).toBe(false);
+  });
+
+  it("inclut backgroundColor du canevas quand le fond est une couleur réelle", () => {
+    const realBackgroundScene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 100, height: 100, background: "#ABC123" },
+      layers: [],
+    };
+    const root = sceneToElement(realBackgroundScene, new Map());
+    const style = (root.props as { style: Record<string, unknown> }).style;
+    expect("backgroundColor" in style).toBe(true);
+    expect(style.backgroundColor).toBe("#ABC123");
+  });
+
+  it("rend les calques QR avec fit par défaut « contain » et sans radius", () => {
+    const qrScene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 200, height: 200, background: "#FFF" },
+      layers: [
+        {
+          visible: true, locked: false, id: "qr1", name: "QR Code",
+          frame: { x: 50, y: 50, w: 100, h: 100 },
+          type: "qr", slot: "contact", fg: "#000", bg: "#FFF", margin: 2,
+        },
+      ],
+    };
+    const qrMap = new Map([["qr1", "data:image/png;base64,QRCODE"]]);
+    const root = sceneToElement(qrScene, qrMap);
+    const children = (root.props as { children: { props: { "data-layer": string; style: Record<string, unknown> } }[] }).children;
+    expect(children).toHaveLength(1);
+    expect(children[0].props["data-layer"]).toBe("qr1");
+    const qrContainerProps = children[0].props as Record<string, unknown>;
+    const qrStyle = qrContainerProps.style as Record<string, unknown>;
+    const imgChild = qrContainerProps.children as { props: { style: Record<string, unknown> } };
+    expect(imgChild.props.style.objectFit).toBe("contain");
+    expect("borderRadius" in qrStyle).toBe(false);
+  });
 });
