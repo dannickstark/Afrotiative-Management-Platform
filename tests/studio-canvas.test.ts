@@ -178,3 +178,63 @@ describe("Canvas — image, forme, QR", () => {
     expect(layerNode(html, "qr1")).not.toContain("<img");
   });
 });
+
+// Isole la valeur de l'attribut `style="…"` de la balise dont `marker` (ex. `data-handle="e"`) est un
+// attribut — même stratégie de recherche que layerNode() ci-dessus, mais pour un seul attribut plutôt
+// que tout le sous-arbre : `marker` précède directement `style=` dans le JSX source (data-handle puis
+// style, dans cet ordre de déclaration), donc le PROCHAIN `style="` après `marker` appartient
+// forcément à la MÊME balise.
+function styleAttr(html: string, marker: string): string {
+  const idx = html.indexOf(marker);
+  if (idx === -1) throw new Error(`marqueur introuvable dans le HTML rendu : ${marker}`);
+  const styleIdx = html.indexOf('style="', idx);
+  const end = html.indexOf('"', styleIdx + 7);
+  return html.slice(styleIdx + 7, end);
+}
+
+describe("Canvas — poignées et contour de sélection gardent une taille ÉCRAN constante quelle que soit l'échelle (Important 3, revue Lot 2)", () => {
+  function renderSelected(scale: number) {
+    const scene = makeScene();
+    return renderToStaticMarkup(
+      React.createElement(Canvas, { scene, selectedId: "title", dispatch: () => {}, scale }),
+    );
+  }
+
+  it("à l'échelle 1 (référence), poignées et contour gardent leur taille nominale", () => {
+    const html = renderSelected(1);
+    const eHandle = styleAttr(html, 'data-handle="e"');
+    expect(eHandle).toContain("width:8px");
+    expect(eHandle).toContain("height:8px");
+    expect(eHandle).toContain("margin-left:-4px");
+    expect(eHandle).toContain("margin-top:-4px");
+    expect(styleAttr(html, 'data-handle="rotate"')).toContain("top:-24px");
+    expect(styleAttr(html, 'data-layer-id="title"')).toContain("outline:2px solid #2563eb");
+  });
+
+  // La régression Lot 2 : ces longueurs sont en pixels GABARIT à l'intérieur du conteneur
+  // `transform: scale(k)` de Canvas — non compensées, elles restaient FIGÉES quelle que soit `scale`
+  // et rendaient donc à `Nk` px ÉCRAN (poignée de 2,5px pour `story`, k≈0,31). Ce test choisit
+  // scale = 0,5 (une division exacte, sans piège de virgule flottante) : le correctif doit DOUBLER
+  // chaque longueur en pixels gabarit pour compenser exactement — un code qui aurait gardé les
+  // valeurs figées (8, -4, -24, 2, 1) échouerait ici.
+  it("à l'échelle 0,5, chaque longueur DOUBLE en pixels gabarit pour compenser — poignées et contour restent visibles/saisissables à l'écran", () => {
+    const html = renderSelected(0.5);
+
+    const eHandle = styleAttr(html, 'data-handle="e"');
+    expect(eHandle).toContain("width:16px"); // 8 / 0.5
+    expect(eHandle).toContain("height:16px"); // 8 / 0.5
+    expect(eHandle).toContain("margin-left:-8px"); // -4 / 0.5
+    expect(eHandle).toContain("margin-top:-8px"); // -4 / 0.5
+
+    const rotateHandle = styleAttr(html, 'data-handle="rotate"');
+    // -24 / 0.5 : sans cette compensation, la poignée de rotation d'un calque proche du haut du
+    // canevas passe entièrement sous `overflow: hidden` du conteneur racine — impossible à saisir.
+    expect(rotateHandle).toContain("top:-48px");
+    expect(rotateHandle).toContain("width:16px");
+    expect(rotateHandle).toContain("margin-left:-8px");
+
+    const titleLayer = styleAttr(html, 'data-layer-id="title"');
+    expect(titleLayer).toContain("outline:4px solid #2563eb"); // 2 / 0.5
+    expect(titleLayer).toContain("outline-offset:2px"); // 1 / 0.5
+  });
+});

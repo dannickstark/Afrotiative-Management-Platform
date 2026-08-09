@@ -27,6 +27,15 @@ export type PreviewResult =
 
 export interface PreviewTemplateInput {
   templateId: string;
+  /** Scène COURANTE de l'éditeur, encore en mémoire côté client — pas forcément écrite en base
+   * (correctif Critique 1, revue Lot 2). Fournie, elle l'emporte SANS EXCEPTION sur le brouillon lu
+   * en base : c'est ce qui permet à l'aperçu de refléter l'édition en cours plutôt que de courir
+   * contre l'autosauvegarde (800 ms de différé côté aperçu, 1500 ms côté autosave — sans ce champ,
+   * l'aperçu pouvait se déclencher AVANT que l'édition n'atteigne la base et afficher la scène
+   * PRÉ-édition, en retard d'un cran, voir components/studio/preview-pane.tsx). Non typée `Scene` :
+   * c'est une donnée cliente non fiable comme n'importe quelle autre (voir parseScene ci-dessous),
+   * revalidée avant tout usage — jamais de confiance aveugle sur une valeur envoyée par le client. */
+  scene?: unknown;
   /** Valeurs saisies par l'appelant (contextes à saisie manuelle, spec §4 source 2) — PRIORITAIRES
    * sur toute autre source, jeton par jeton. */
   values?: TokenValues;
@@ -61,9 +70,11 @@ export async function previewTemplateCore(input: PreviewTemplateInput): Promise<
   let scene: Scene;
   try {
     // Le BROUILLON, jamais l'instantané publié — spec §4 : « appelle renderScene sur la scène
-    // brouillon ». Une scène lue en base est une donnée non fiable (V1) : re-validée ici comme
-        // partout ailleurs.
-    scene = parseScene(row.scene);
+    // brouillon ». `input.scene`, quand fourni, est CE brouillon — juste pas encore écrit en base
+    // (voir le commentaire sur PreviewTemplateInput.scene) — donc prioritaire sur `row.scene`.
+    // Une scène venue du client OU lue en base est une donnée non fiable (V1) dans les deux cas :
+    // re-validée ici comme partout ailleurs, quelle que soit sa provenance.
+    scene = parseScene(input.scene ?? row.scene);
   } catch (e) {
     return { ok: false, message: e instanceof SceneError ? e.message : "Scène invalide." };
   }

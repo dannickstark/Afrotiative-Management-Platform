@@ -1,10 +1,11 @@
 import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
 import sharp from "sharp";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import path from "node:path";
 import { db, renderTemplates, renders, user } from "@/db";
 import { eq, inArray, sql } from "drizzle-orm";
 import { parseScene, type Scene } from "@/lib/studio/scene";
 import { renderScene } from "@/lib/studio/render";
-import { MemoryRenderStore } from "@/lib/studio/store";
 import { previewTemplateCore } from "@/lib/studio/preview-core";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { ARTICLE_IMAGE_TEMPLATE, FB_TEMPLATE, IG_TEMPLATE } from "@/db/studio-templates";
@@ -101,9 +102,8 @@ async function rendersCount(): Promise<number> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe("previewTemplateCore — n'écrit RIEN (spec §4)", () => {
-  it("ni ligne `renders`, ni objet dans un RenderStore — et produit bien une image réelle", async () => {
+  it("aucune ligne `renders` — et produit bien une image réelle", async () => {
     const before = await rendersCount();
-    const witnessStore = new MemoryRenderStore(); // témoin : jamais transmis à previewTemplateCore
 
     const res = await previewTemplateCore({ templateId: actionsTemplateId, fetchImpl: fixtureFetch });
 
@@ -116,15 +116,15 @@ describe("previewTemplateCore — n'écrit RIEN (spec §4)", () => {
     expect(res.degraded).toBe(false);
 
     const after = await rendersCount();
-    expect(after).toBe(before); // AUCUNE ligne renders ajoutée
-    expect(witnessStore.objects.size).toBe(0); // aucun objet R2 (même simulé) créé
-
-    // Contrôle positif : le pipeline de rendu EST capable de peupler un store — renderForArticle
-    // s'en sert bel et bien (lib/studio/render.ts + store.ts). L'assertion ci-dessus n'est donc pas
-        // vraie "par construction" faute d'un chemin d'écriture qui existerait de toute façon ; c'est
-        // previewTemplateCore, spécifiquement, qui ne l'emprunte jamais.
-    await witnessStore.put("preuve/temoin.jpg", new Uint8Array([1, 2, 3]), "image/jpeg");
-    expect(witnessStore.objects.size).toBe(1);
+    expect(after).toBe(before); // AUCUNE ligne renders ajoutée — assertion GENUINE : toute écriture
+    // réelle de ce dépôt passe par saveRender(), qui insère systématiquement une ligne `renders`.
+    // La garantie « aucun objet R2 » n'est PAS revérifiée ici avec un RenderStore témoin : un tel
+    // témoin, jamais transmis à previewTemplateCore (qui n'a d'ailleurs aucun paramètre `store`),
+    // rendait l'ancienne assertion `expect(witnessStore.objects.size).toBe(0)` vraie PAR
+    // CONSTRUCTION — elle serait restée au vert même si ce code appelait `new R2RenderStore().put(...)`
+    // à chaque invocation (revue Lot 2, Important 2). Cette garantie R2 est désormais vérifiée
+    // STRUCTURELLEMENT ci-dessous (describe suivant), sur le graphe d'imports réel du module, pas
+    // simulée avec un objet jamais branché.
   });
 
   it("un aperçu répété n'accumule pas de lignes `renders` (à la différence du cache de renderForArticle)", async () => {
@@ -134,6 +134,137 @@ describe("previewTemplateCore — n'écrit RIEN (spec §4)", () => {
     await previewTemplateCore({ templateId: actionsTemplateId, fetchImpl: fixtureFetch });
     const after = await rendersCount();
     expect(after).toBe(before);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Garantie R2 — STRUCTURELLE, pas simulée (revue Lot 2, Important 2). previewTemplateCore n'a
+// aucun paramètre `store` : c'est un fait sur sa SIGNATURE, pas quelque chose qu'un test à
+// l'exécution peut espionner via un faux magasin jamais branché (voir le commentaire ci-dessus).
+// Ce qu'on PEUT vérifier honnêtement, et qui échouerait RÉELLEMENT sur une régression : que
+// lib/studio/store.ts (R2RenderStore/saveRender) n'est atteignable, PAR AUCUN CHEMIN d'import
+// statique, ni depuis preview-core.ts ni depuis renderScene() lui-même — exactement les deux faits
+// que le relecteur avait vérifiés à la main (« renderScene n'importe ni @/db ni de module R2 » et
+// « store.ts/saveRender ne sont atteignables que depuis renderForArticle, jamais importé par
+// preview-core.ts »). Un sabotage qui ajouterait `import { saveRender } from "./store"` (direct ou
+// via n'importe quel intermédiaire) dans preview-core.ts ou render.ts ferait apparaître store.ts
+// dans l'ensemble ci-dessous et casserait ce test — la garantie précédente, elle, n'aurait rien vu.
+describe("previewTemplateCore — garantie structurelle : store.ts (R2/saveRender) hors d'atteinte (Important 2, revue Lot 2)", () => {
+  const REPO_ROOT = path.resolve(import.meta.dir, "..");
+  const FROM_RE = /from\s*["']([^"']+)["']/g;
+  const BARE_IMPORT_RE = /import\s*["']([^"']+)["']/g;
+  const DYNAMIC_IMPORT_RE = /import\(\s*["']([^"']+)["']\s*\)/g;
+
+  // Résout un spécificateur d'import (relatif ou alias `@/…`) vers un fichier .ts/.tsx réel sur
+  // disque — ignore délibérément tout paquet externe (aucun des deux points de départ, "..." ou
+  // "@/", n'y mène jamais), donc le graphe tracé reste borné au code du dépôt.
+  function resolveModule(specifier: string, fromFile: string): string | null {
+    let base: string;
+    if (specifier.startsWith(".")) base = path.resolve(path.dirname(fromFile), specifier);
+    else if (specifier.startsWith("@/")) base = path.resolve(REPO_ROOT, specifier.slice(2));
+    else return null;
+    const candidates = [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), path.join(base, "index.tsx")];
+    for (const c of candidates) {
+      if (existsSync(c) && statSync(c).isFile()) return c;
+    }
+    return null;
+  }
+
+  function importsOf(file: string): string[] {
+    const src = readFileSync(file, "utf8");
+    const specs: string[] = [];
+    for (const re of [FROM_RE, BARE_IMPORT_RE, DYNAMIC_IMPORT_RE]) {
+      re.lastIndex = 0;
+      for (const m of src.matchAll(re)) specs.push(m[1]!);
+    }
+    return specs;
+  }
+
+  // Fermeture transitive des imports LOCAUX (relatifs / `@/…`) atteignables depuis `entry`, par
+  // parcours en profondeur — un cycle est simplement ignoré une seconde fois grâce à `visited`.
+  function transitiveClosure(entry: string): Set<string> {
+    const visited = new Set<string>();
+    const stack = [entry];
+    while (stack.length) {
+      const file = stack.pop()!;
+      if (visited.has(file)) continue;
+      visited.add(file);
+      for (const spec of importsOf(file)) {
+        const resolved = resolveModule(spec, file);
+        if (resolved && !visited.has(resolved)) stack.push(resolved);
+      }
+    }
+    return visited;
+  }
+
+  const storeModule = path.join(REPO_ROOT, "lib/studio/store.ts");
+  const renderForArticleModule = path.join(REPO_ROOT, "lib/studio/index.ts");
+  const dbModule = path.join(REPO_ROOT, "db/index.ts");
+
+  it("store.ts n'est importé, directement ou transitivement, par AUCUN fichier du graphe de preview-core.ts", () => {
+    const graph = transitiveClosure(path.join(REPO_ROOT, "lib/studio/preview-core.ts"));
+    expect(graph.has(storeModule)).toBe(false);
+    // Corollaire : renderForArticle (lib/studio/index.ts), seul appelant réel de saveRender, n'est
+    // lui-même jamais importé — previewTemplateCore ne délègue jamais à lui.
+    expect(graph.has(renderForArticleModule)).toBe(false);
+  });
+
+  it("renderScene() lui-même (lib/studio/render.ts) n'importe ni store.ts ni @/db", () => {
+    const graph = transitiveClosure(path.join(REPO_ROOT, "lib/studio/render.ts"));
+    expect(graph.has(storeModule)).toBe(false);
+    expect(graph.has(dbModule)).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Critique 1 (revue Lot 2) : l'aperçu réel doit refléter la scène COURANTE de l'éditeur — celle
+// encore en mémoire côté client — pas le dernier brouillon écrit en base. Avant ce correctif,
+// previewTemplateCore lisait TOUJOURS `row.scene` : le panneau d'aperçu (composants/studio/
+// preview-pane.tsx) se déclenche 800 ms après stabilisation de la scène, l'autosauvegarde
+// (components/studio/editor-shell.tsx) 1500 ms après — donc la requête d'aperçu part ~700 ms AVANT
+// que l'édition n'atteigne la base, et l'effet ne redéclenche sur aucun signal de sauvegarde
+// réussie : l'aperçu affichait la scène PRÉ-édition, en retard d'un cran, de façon arbitrairement
+// cumulative sur des éditions consécutives. Ce test prouve que `previewTemplateCore`, appelée avec
+// une scène cliente qui diffère du brouillon en base, rend CETTE scène-là — sans jamais l'écrire.
+describe("previewTemplateCore — reflète la scène COURANTE fournie par l'appelant, pas le brouillon en base (Critique 1, revue Lot 2)", () => {
+  it("une scène cliente différente du brouillon en base l'emporte, et n'est jamais écrite", async () => {
+    const before = await rendersCount();
+
+    // recapScene() (brouillon réellement stocké pour actionsTemplateId) fait 1080×1080. La scène
+    // cliente ci-dessous ne diffère QUE par les dimensions du canevas — un marqueur vérifiable sans
+    // inspecter les pixels : les dimensions de l'image RENDUE trahissent sans ambiguïté laquelle des
+    // deux scènes a réellement été utilisée.
+    const clientScene = recapScene();
+    clientScene.canvas = { ...clientScene.canvas, width: 700, height: 500 };
+
+    const res = await previewTemplateCore({ templateId: actionsTemplateId, scene: clientScene, fetchImpl: fixtureFetch });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const bytes = Buffer.from(res.dataUri.split(",")[1]!, "base64");
+    const meta = await sharp(bytes).metadata();
+    expect(meta.width).toBe(700); // scène CLIENTE — échouerait ici si le code relisait la base
+    expect(meta.height).toBe(500);
+
+    // Le brouillon en base n'a pas bougé (toujours 1080×1080, recapScene() inchangée) : la scène
+    // cliente n'a écrasé RIEN côté serveur, exactement comme la garantie « n'écrit rien » ci-dessus.
+    const [row] = await db.select({ scene: renderTemplates.scene })
+      .from(renderTemplates).where(eq(renderTemplates.id, actionsTemplateId));
+    expect((row!.scene as Scene).canvas.width).toBe(1080);
+    expect((row!.scene as Scene).canvas.height).toBe(1080);
+
+    const after = await rendersCount();
+    expect(after).toBe(before);
+  });
+
+  it("sans scène cliente fournie, le comportement historique persiste : le brouillon en base sert de repli", async () => {
+    const res = await previewTemplateCore({ templateId: actionsTemplateId, fetchImpl: fixtureFetch });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const bytes = Buffer.from(res.dataUri.split(",")[1]!, "base64");
+    const meta = await sharp(bytes).metadata();
+    expect(meta.width).toBe(1080); // recapScene(), la scène en base
+    expect(meta.height).toBe(1080);
   });
 });
 

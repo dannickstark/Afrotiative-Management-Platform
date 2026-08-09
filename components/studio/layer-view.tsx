@@ -5,10 +5,15 @@ import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
-// `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle). Pas de
-// logique de glisser/redimensionner/rotation ici : ça reste dans canvas.tsx + hooks/use-layer-drag
-// (Tâche 6), pour que ce fichier ne fasse qu'une seule chose et la fasse bien — le contrat de la
-// Tâche 5 est « affiche la scène », pas « rend la scène manipulable ».
+// `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
+// EXCEPTION PRÈS : `scale`, ci-dessous, sert UNIQUEMENT à compenser la largeur du contour de
+// sélection (voir son usage dans le style plus bas). Ce contour vit, comme toute la géométrie de ce
+// composant, à l'intérieur du conteneur `transform: scale(k)` de canvas.tsx — une largeur de
+// contour en pixels GABARIT non compensée rend donc à `2k` px écran, imperceptible pour un format
+// comme `story` (k≈0,31), exactement le même défaut que les poignées de canvas.tsx (revue Lot 2,
+// Important 3). Pas de logique de glisser/redimensionner/rotation ici : ça reste dans canvas.tsx +
+// hooks/use-layer-drag (Tâche 6), pour que ce fichier ne fasse qu'une seule chose et la fasse bien —
+// le contrat de la Tâche 5 est « affiche la scène », pas « rend la scène manipulable ».
 export interface LayerViewProps {
   layer: Layer;
   /** Cadre à peindre — celui du calque par défaut, ou une prévisualisation live pendant un geste
@@ -21,6 +26,10 @@ export interface LayerViewProps {
    * pour un calque `source.kind === "slot"` : l'éditeur n'a jamais de valeur de jeton (voir le
    * commentaire de imageContent ci-dessous). */
   image?: string;
+  /** Échelle du canevas parent — sert SEULEMENT à compenser le contour de sélection (voir plus
+   * haut). Par défaut 1 (contour à sa taille nominale) pour tout appelant qui n'a pas d'échelle à
+   * fournir. */
+  scale?: number;
   onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
 }
 
@@ -139,7 +148,7 @@ function LayerContent({ layer, image }: { layer: Layer; image?: string }) {
   }
 }
 
-export function LayerView({ layer, frame, rotation, selected, image, onPointerDown }: LayerViewProps) {
+export function LayerView({ layer, frame, rotation, selected, image, scale = 1, onPointerDown }: LayerViewProps) {
   const interactive = !layer.locked;
   return (
     <div
@@ -149,8 +158,11 @@ export function LayerView({ layer, frame, rotation, selected, image, onPointerDo
       onPointerDown={interactive ? onPointerDown : undefined}
       style={{
         ...frameStyle(frame, rotation, layer),
-        outline: selected ? "2px solid #2563eb" : layer.locked ? "1px dashed #9ca3af" : undefined,
-        outlineOffset: selected ? 1 : undefined,
+        // `2 / scale` (revue Lot 2, Important 3) : voir le commentaire en tête de fichier — sans
+        // cette compensation, le contour de sélection s'amenuise avec l'échelle du canevas jusqu'à
+        // devenir un liseré à peine visible pour les formats étroits (`story`).
+        outline: selected ? `${2 / scale}px solid #2563eb` : layer.locked ? "1px dashed #9ca3af" : undefined,
+        outlineOffset: selected ? 1 / scale : undefined,
         cursor: interactive ? "move" : "not-allowed",
         // Un calque verrouillé « ne répond ni au clic ni au glisser » (spec §2) — appliqué au
         // niveau CSS, pas seulement en omettant le gestionnaire React, pour qu'aucun enfant ne

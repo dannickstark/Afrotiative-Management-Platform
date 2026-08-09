@@ -14,6 +14,19 @@ import type { PreviewArticleOption } from "@/lib/queries/studio";
 // V1 (renderScene) via la Server Action gardée previewTemplate, JAMAIS par renderForArticle (qui
 // écrirait `renders` + R2 — voir lib/studio/preview-core.ts). Le canevas de l'éditeur sert au
 // placement (fidélité DOM approximative) ; ce panneau sert à la vérité.
+//
+// Correctif Critique 1 (revue Lot 2) : ce panneau envoie la scène COURANTE (prop `scene`, tenue par
+// le réducteur de l'éditeur) à previewTemplate à CHAQUE appel — jamais seulement templateId/articleId
+// en laissant le serveur relire le brouillon en base. Avant ce correctif, previewTemplateCore lisait
+// TOUJOURS la base : avec un différé de 800 ms ici contre 1500 ms pour l'autosauvegarde
+// (components/studio/editor-shell.tsx:AUTOSAVE_DELAY_MS), la requête d'aperçu partait ~700 ms AVANT
+// que l'édition n'atteigne la base — et les deps de l'effet ci-dessous ([scene, articleId,
+// templateId]) ne se redéclenchent sur aucun signal de sauvegarde réussie, donc rien ne rattrapait
+// l'écart : l'aperçu affichait la scène PRÉ-édition, en retard d'un cran, arbitrairement cumulatif
+// sur des éditions consécutives, jusqu'au prochain changement (qui prévisualise alors l'édition
+// PRÉCÉDENTE) ou un clic manuel sur *Actualiser*. En envoyant `scene` directement, l'aperçu n'a plus
+// aucune dépendance de timing envers l'autosauvegarde : previewTemplateCore revalide (parseScene) et
+// rend CETTE scène-là, sans jamais l'écrire (lib/studio/preview-core.ts) — donc pas de course.
 const PREVIEW_DEBOUNCE_MS = 800;
 const ARTICLE_SELECTABLE_CONTEXTS: TemplateContext[] = ["article_image", "social_post"];
 const SAMPLE_OPTION = "__sample__";
@@ -43,7 +56,12 @@ export function PreviewPane({ templateId, context, scene, articles }: PreviewPan
     const id = ++requestIdRef.current;
     setState({ status: "loading" });
     try {
-      const res = await previewTemplate({ templateId, articleId: articleId ?? undefined });
+      // `scene` est TOUJOURS la scène courante de l'éditeur (props, capturée par la fermeture de ce
+      // rendu) — jamais le brouillon en base, qui peut être en retard de ~1500 ms (délai d'autosave)
+      // sur cette valeur. Voir le commentaire au-dessus de PREVIEW_DEBOUNCE_MS (correctif Critique 1,
+      // revue Lot 2) : c'est ce qui rend ce panneau vrai à propos de « maintenant », pas d'un
+      // instantané enregistré côté serveur.
+      const res = await previewTemplate({ templateId, scene, articleId: articleId ?? undefined });
       if (id !== requestIdRef.current) return;
       setState(res.ok ? { status: "ready", dataUri: res.dataUri, degraded: res.degraded } : { status: "error", message: res.message });
     } catch (e) {

@@ -10,7 +10,15 @@ import { requirePermission } from "@/lib/rbac";
 import { previewTemplateCore } from "@/lib/studio/preview-core";
 import type { TokenValues } from "@/lib/studio/values";
 
-export async function previewTemplate(input: { templateId: string; values?: TokenValues; articleId?: string | null }) {
+export async function previewTemplate(input: {
+  templateId: string;
+  /** Scène courante de l'éditeur (client) — voir lib/studio/preview-core.ts:PreviewTemplateInput.scene
+   * (correctif Critique 1, revue Lot 2) : prioritaire sur le brouillon en base, revalidée par
+   * previewTemplateCore comme n'importe quelle autre donnée cliente. */
+  scene?: unknown;
+  values?: TokenValues;
+  articleId?: string | null;
+}) {
   const user = await requireUser();
   requirePermission(user.role, "template", "read");
   return previewTemplateCore(input);

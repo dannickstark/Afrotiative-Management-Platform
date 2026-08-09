@@ -32,6 +32,17 @@ const HANDLE_CURSOR: Record<HandleId, string> = {
 // Position de chaque poignée, en % du cadre du calque (coin ou milieu de côté) — indépendant de
 // l'échelle puisque exprimé en pourcentage du conteneur, lui-même déjà mis à l'échelle par le
 // parent.
+//
+// ATTENTION (revue Lot 2, Important 3) : ceci ne couvre QUE la position en %. La TAILLE de chaque
+// poignée (width/height/margin ci-dessous, plus le décalage `top: -24` de la poignée de rotation)
+// est en pixels ABSOLUS du gabarit, à l'intérieur du même conteneur `transform: scale(k)` que le
+// reste du canevas — donc ces longueurs-là NE SONT PAS indépendantes de l'échelle, contrairement à
+// ce qu'affirmait ce commentaire avant correction : elles rendent à `8k`/`24k` px écran. Pour
+// `story` (1080×1920, k≈0,31) une poignée de 8px gabarit tombe à ~2,5px écran, et la poignée de
+// rotation, décalée de -24px gabarit au-dessus du cadre, peut être entièrement recouverte par
+// `overflow: hidden` du conteneur pour tout calque proche du haut du canevas — donc impossible à
+// saisir. Corrigé en divisant chaque longueur par `scale` dans handleStyleFor()/le rendu ci-dessous,
+// pour qu'elles gardent une taille ÉCRAN constante quel que soit le format édité.
 const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
   n: { top: 0, left: "50%" }, s: { bottom: 0, left: "50%" },
   e: { right: 0, top: "50%" }, w: { left: 0, top: "50%" },
@@ -117,6 +128,7 @@ export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasPro
               rotation={rotationFor(layer)}
               selected={layer.id === selectedId}
               image={images?.get(layer.id)}
+              scale={scale}
               onPointerDown={(e) => {
                 dispatch(select(layer.id));
                 rootRef.current?.focus();
@@ -143,7 +155,14 @@ export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasPro
                 data-handle={h}
                 onPointerDown={getResizeHandler(selectedLayer, h)}
                 style={{
-                  position: "absolute", width: 8, height: 8, marginLeft: -4, marginTop: -4,
+                  // Divisées par `scale` (revue Lot 2, Important 3) : ce conteneur vit à l'intérieur
+                  // du même `transform: scale(k)` que le reste du canevas (voir plus haut), donc une
+                  // longueur en pixels GABARIT non compensée rend à `Nk` px écran — imperceptible et
+                  // inattrapable pour `story` (k≈0,31 → poignée de 2,5 px). Diviser par `scale` ici
+                  // annule ce facteur pour obtenir une taille ÉCRAN constante, quel que soit le
+                  // format édité.
+                  position: "absolute", width: 8 / scale, height: 8 / scale,
+                  marginLeft: -4 / scale, marginTop: -4 / scale,
                   background: "#fff", border: "1px solid #2563eb", cursor: HANDLE_CURSOR[h],
                   pointerEvents: "auto", ...HANDLE_STYLE[h],
                 }}
@@ -153,7 +172,12 @@ export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasPro
               data-handle="rotate"
               onPointerDown={handleRotateDown(selectedLayer)}
               style={{
-                position: "absolute", top: -24, left: "50%", marginLeft: -4, width: 8, height: 8,
+                // `top: -24` compensé de la même façon — sans quoi, pour un calque proche du haut du
+                // canevas, la poignée de rotation peut se retrouver entièrement sous
+                // `overflow: hidden` du conteneur racine et devenir impossible à saisir (revue Lot 2,
+                // Important 3).
+                position: "absolute", top: -24 / scale, left: "50%", marginLeft: -4 / scale,
+                width: 8 / scale, height: 8 / scale,
                 borderRadius: "50%", background: "#fff", border: "1px solid #2563eb",
                 cursor: "grab", pointerEvents: "auto",
               }}
