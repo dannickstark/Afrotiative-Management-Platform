@@ -12,7 +12,9 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
 import { type EditorAction, setLayerProp } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
+import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
+import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
 // les champs que l'union Layer autorise (spec Tâche 8). Deux principes traversent tout ce fichier :
@@ -34,6 +36,12 @@ export interface PropertyPanelProps {
   selectedId: string | null;
   context: TemplateContext;
   dispatch: Dispatch<EditorAction>;
+  // Tâche 13 (Lot 3) : la bibliothèque d'assets (Tâche 11), chargée UNE FOIS par le composant
+  // Server au sommet (app/(app)/studio/[id]/page.tsx) et redescendue en prop — même schéma que
+  // `context` ci-dessus, jamais rechargée depuis ce panneau lui-même. Défaut `[]` : les appelants
+  // historiques (tests, Storybook éventuel) qui ne fournissent pas encore cette prop continuent de
+  // rendre un panneau fonctionnel, simplement sans rien à choisir dans les sélecteurs d'assets.
+  assets?: AssetRow[];
 }
 
 type Patch = (p: Record<string, unknown>) => void;
@@ -257,7 +265,9 @@ const VALIGN_OPTIONS = [{ value: "top", label: "Haut" }, { value: "middle", labe
 const SIDE_LABEL: Record<"top" | "right" | "bottom" | "left", string> = { top: "Haut", right: "Droite", bottom: "Bas", left: "Gauche" };
 const SIDES = ["top", "right", "bottom", "left"] as const;
 
-function TextFields({ layer, context, patch }: { layer: TextLayer; context: TemplateContext; patch: Patch }) {
+function TextFields({
+  layer, context, patch, assets,
+}: { layer: TextLayer; context: TemplateContext; patch: Patch; assets: AssetRow[] }) {
   return (
     <>
       <Section title="Texte">
@@ -282,6 +292,17 @@ function TextFields({ layer, context, patch }: { layer: TextLayer; context: Temp
       </Section>
 
       <Section title="Police">
+        <FieldRow label="Police téléversée">
+          {/* Tâche 13 : choisir parmi les polices téléversées (Tâche 11), la police embarquée
+              (Noto Sans) restant toujours sélectionnable en premier — pickFont() écrit à la fois
+              font.assetId ET font.family, donc le champ "Famille" juste en dessous reflète
+              immédiatement le choix fait ici (et reste éditable à la main pour un ajustement fin). */}
+          <FontAssetPicker
+            assets={assets}
+            value={layer.font.assetId}
+            onPick={(pick) => patch({ font: pickFont(layer.font, pick) })}
+          />
+        </FieldRow>
         <TextField label="Famille" value={layer.font.family} onCommit={(v) => patch({ font: { ...layer.font, family: v } })} />
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="Taille" value={layer.font.size} min={1} onCommit={(v) => patch({ font: { ...layer.font, size: Math.max(1, v) } })} />
@@ -358,9 +379,14 @@ function TextFields({ layer, context, patch }: { layer: TextLayer; context: Temp
   );
 }
 
-function ImageFields({ layer, context, patch }: { layer: ImageLayer; context: TemplateContext; patch: Patch }) {
+function ImageFields({
+  layer, context, patch, assets,
+}: { layer: ImageLayer; context: TemplateContext; patch: Patch; assets: AssetRow[] }) {
   const source = layer.source;
   const imageTokens = tokensFor(context, "image");
+  // Premier asset image disponible — sert de valeur de repli VALIDE au premier passage sur l'onglet
+  // "Bibliothèque" (voir onValueChange ci-dessous, correctif Tâche 13).
+  const firstImageAssetId = assets.find((a) => a.kind === "image")?.id;
   return (
     <>
       <Section title="Source de l'image">
@@ -368,8 +394,31 @@ function ImageFields({ layer, context, patch }: { layer: ImageLayer; context: Te
           value={source.kind}
           onValueChange={(v) => {
             if (v === "slot") patch({ source: { kind: "slot", slot: imageTokens[0] ?? "article.image" } });
-            else if (v === "url") patch({ source: { kind: "url", url: source.kind === "url" ? source.url : "https://" } });
-            else if (v === "asset") patch({ source: { kind: "asset", assetId: source.kind === "asset" ? source.assetId : "" } });
+            // "https://" seul échoue z.string().url() (aucun hôte) — repéré en pilotant un vrai
+            // navigateur : le premier clic sur l'onglet "URL" ne faisait STRICTEMENT rien à l'écran,
+            // sans la moindre erreur console. lib/studio/editor-state.ts:commit() valide CHAQUE
+            // correctif avec parseScene et rejette SILENCIEUSEMENT toute scène invalide (state
+            // inchangé, même référence) — un rejet par conception, mais qui rendait ici l'onglet
+            // entier inutilisable : `value={source.kind}` restait bloqué sur "slot" pour toujours,
+            // le clic semblant chaque fois sans effet. Un exemple d'URL complet et valide dès le
+            // premier passage évite ce piège.
+            else if (v === "url") patch({ source: { kind: "url", url: source.kind === "url" ? source.url : "https://exemple.com/image.jpg" } });
+            // Même piège, même correctif : assetId "" échoue z.string().min(1) — l'onglet
+            // "Bibliothèque" (Tâche 13) était, lui aussi, silencieusement inutilisable au premier
+            // clic. Repli sur le PREMIER asset image disponible (sélection immédiatement valide et
+            // utile, pas un simple bouchon) ; à défaut (bibliothèque vide), un identifiant
+            // délibérément non-vide mais introuvable : l'onglet reste utilisable (le panneau se
+            // rend, ImageAssetPicker affiche son message "aucune image" — Tâche 11/13), et un rendu
+            // tenté sur cette valeur échoue franchement (RenderError, lib/studio/render.ts) plutôt
+            // que de rester bloqué sur "slot" sans explication.
+            else if (v === "asset") {
+              patch({
+                source: {
+                  kind: "asset",
+                  assetId: source.kind === "asset" ? source.assetId : (firstImageAssetId ?? "bibliotheque-vide"),
+                },
+              });
+            }
           }}
         >
           <TabsList>
@@ -395,12 +444,15 @@ function ImageFields({ layer, context, patch }: { layer: ImageLayer; context: Te
           <TextField label="URL de l'image" value={source.url} onCommit={(v) => patch({ source: { kind: "url", url: v } })} />
         )}
         {source.kind === "asset" && (
-          <TextField
-            label="Identifiant d'asset"
-            value={source.assetId}
-            onCommit={(v) => patch({ source: { kind: "asset", assetId: v } })}
-            hint="La bibliothèque d'assets (téléversement, Lot 3) n'est pas encore branchée — collez ici l'identifiant d'un asset existant."
-          />
+          <FieldRow label="Image de la bibliothèque">
+            {/* Tâche 13 : la bibliothèque d'assets (Tâche 11) est désormais branchée — plus besoin
+                de coller un identifiant à la main (ancien texte d'aide, retiré). */}
+            <ImageAssetPicker
+              assets={assets}
+              value={source.assetId}
+              onPick={(assetId) => patch({ source: pickImageAsset(assetId) })}
+            />
+          </FieldRow>
         )}
       </Section>
 
@@ -557,7 +609,7 @@ function QrFields({ layer, context, patch }: { layer: QrLayer; context: Template
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function PropertyPanel({ scene, selectedId, context, dispatch }: PropertyPanelProps) {
+export function PropertyPanel({ scene, selectedId, context, dispatch, assets = [] }: PropertyPanelProps) {
   const layer = scene.layers.find((l) => l.id === selectedId) ?? null;
 
   if (!layer) {
@@ -600,8 +652,8 @@ export function PropertyPanel({ scene, selectedId, context, dispatch }: Property
         </div>
       </Section>
 
-      {layer.type === "text" && <TextFields layer={layer} context={context} patch={patch} />}
-      {layer.type === "image" && <ImageFields layer={layer} context={context} patch={patch} />}
+      {layer.type === "text" && <TextFields layer={layer} context={context} patch={patch} assets={assets} />}
+      {layer.type === "image" && <ImageFields layer={layer} context={context} patch={patch} assets={assets} />}
       {layer.type === "shape" && <ShapeFields layer={layer} context={context} patch={patch} />}
       {layer.type === "qr" && <QrFields layer={layer} context={context} patch={patch} />}
     </div>

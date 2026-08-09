@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { getTemplateById, listArticlesForPreview } from "@/lib/queries/studio";
+import { listAssets } from "@/lib/queries/assets";
 import { EditorShell } from "@/components/studio/editor-shell";
 
 // Même forme canonique que app/(app)/article/[id]/page.tsx : Server Component, `params` est une
@@ -25,6 +26,11 @@ export default async function StudioTemplatePage({ params }: { params: Promise<{
       ? await listArticlesForPreview()
       : [];
 
+  // Tâche 13 (Lot 3) : la bibliothèque d'assets, chargée UNE FOIS ici (Server Component) et
+  // redescendue en prop jusqu'aux sélecteurs de components/studio/property-panel.tsx — même schéma
+  // que previewArticles ci-dessus, jamais rechargée depuis un composant client.
+  const assets = await listAssets();
+
   return (
     <EditorShell
       key={template.id}
@@ -33,6 +39,7 @@ export default async function StudioTemplatePage({ params }: { params: Promise<{
       publishedScene={template.publishedScene}
       versions={template.versions}
       previewArticles={previewArticles}
+      assets={assets}
     />
   );
 }

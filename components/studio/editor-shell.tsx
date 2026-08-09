@@ -21,6 +21,7 @@ import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
 import type { TemplateVersionRow, PreviewArticleOption } from "@/lib/queries/studio";
+import type { AssetRow } from "@/lib/queries/assets";
 
 // components/studio/editor-shell.tsx — Tâche 9 : compose canevas + panneau de calques + panneau de
 // propriétés + aperçu réel + historique, et porte l'autosauvegarde et la publication (spec §3).
@@ -62,6 +63,10 @@ export interface EditorShellProps {
   publishedScene: Scene | null;
   versions: TemplateVersionRow[];
   previewArticles: PreviewArticleOption[];
+  // Tâche 13 (Lot 3) : la bibliothèque d'assets (Tâche 11), pour les sélecteurs de
+  // components/studio/property-panel.tsx. Défaut [] pour ne pas casser un appelant qui n'aurait pas
+  // encore cette prop (aucun aujourd'hui hors ce fichier, mais même filet que PropertyPanel lui-même).
+  assets?: AssetRow[];
 }
 
 // Composant EXTÉRIEUR : ne porte AUCUN état d'édition lui-même, seulement le mécanisme de
@@ -89,6 +94,7 @@ export function EditorShell(props: EditorShellProps) {
       publishedScene={props.publishedScene}
       versions={props.versions}
       previewArticles={props.previewArticles}
+      assets={props.assets ?? []}
       onRestore={handleRestore}
     />
   );
@@ -98,7 +104,7 @@ interface EditorShellInnerProps extends EditorShellProps {
   onRestore: (scene: Scene) => void;
 }
 
-function EditorShellInner({ template, initialScene, publishedScene, versions, previewArticles, onRestore }: EditorShellInnerProps) {
+function EditorShellInner({ template, initialScene, publishedScene, versions, previewArticles, assets = [], onRestore }: EditorShellInnerProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
 
@@ -273,7 +279,10 @@ function EditorShellInner({ template, initialScene, publishedScene, versions, pr
 
         <div className="flex flex-col gap-3 overflow-auto">
           <div className="rounded-lg border">
-            <PropertyPanel scene={state.scene} selectedId={state.selectedId} context={template.context} dispatch={dispatch} />
+            <PropertyPanel
+              scene={state.scene} selectedId={state.selectedId} context={template.context}
+              dispatch={dispatch} assets={assets}
+            />
           </div>
           <div className="rounded-lg border p-2">
             <PreviewPane templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles} />
