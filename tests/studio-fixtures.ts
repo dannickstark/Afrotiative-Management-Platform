@@ -74,6 +74,7 @@
 //                                    1) — il s'exécute en premier dans son describe et libère la
 //                                    portée dans un `finally` avant que le test du repli n'en ait
 //                                    besoin.
+//   tests/studio-autosave.test.ts → (recap_card, "test-autosave-publish-refuse", null)
 //
 // (article_image, null, <categoryId>) et (social_post, "test-priorite-canal", <categoryId>) ne
 // figurent PAS dans le registre ci-dessus : leur categoryId est un UUID généré à chaque exécution

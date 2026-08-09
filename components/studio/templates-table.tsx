@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -96,7 +97,12 @@ export function TemplatesTable({ templates }: { templates: TemplateRow[] }) {
                   <TableBody>
                     {group.rows.map((row) => (
                       <TableRow key={row.id}>
-                        <TableCell className="font-medium">{row.name}</TableCell>
+                        <TableCell className="font-medium">
+                          {/* Tâche 9 : /studio/[id] (l'éditeur) existe désormais — c'est ce lien qui
+                              le rend atteignable depuis la liste, sans quoi la page ne serait
+                              accessible qu'en tapant son URL à la main. */}
+                          <Link href={`/studio/${row.id}`} className="hover:underline">{row.name}</Link>
+                        </TableCell>
                         <TableCell className="text-muted-foreground">{scopeLabel(row)}</TableCell>
                         <TableCell className="text-muted-foreground">{formatLabel(row)}</TableCell>
                         <TableCell>

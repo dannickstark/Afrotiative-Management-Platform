@@ -1,5 +1,6 @@
-import { db, renderTemplates, renderTemplateVersions, wpCategories } from "@/db";
-import { and, eq } from "drizzle-orm";
+import { db, renderTemplates, renderTemplateVersions, wpCategories, user } from "@/db";
+import { and, desc, eq } from "drizzle-orm";
+import { parseScene, type Scene } from "@/lib/studio/scene";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { FormatKey } from "@/lib/studio/formats";
 
@@ -110,4 +111,119 @@ export async function listTemplates(): Promise<TemplateRow[]> {
       r.publishedVersion === null ? true : canonicalJson(r.scene) !== canonicalJson(r.publishedScene),
     updatedAt: r.updatedAt,
   }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 9 — données de /studio/[id] : le gabarit, son brouillon PARSÉ (jamais la valeur jsonb brute
+// — parseScene() est le seul chemin de lecture d'une scène, scene.ts:parseScene), l'instantané
+// PUBLIÉ le cas échéant, et l'historique complet des versions (nom de l'auteur inclus, pour
+// components/studio/version-history.tsx).
+export type TemplateVersionRow = {
+  version: number;
+  publishedAt: Date;
+  publishedByName: string | null;
+  // L'instantané COMPLET de cette version (PAS seulement ses métadonnées) : components/studio/
+  // version-history.tsx le repasse directement à l'éditeur au clic sur *Restaurer*, pour recharger
+  // le canevas côté client SANS second aller-retour serveur — restoreVersion() (Server Action) ne
+  // renvoie qu'un simple { ok } et reste la SEULE écriture réelle ; ceci n'est qu'une lecture.
+  scene: Scene;
+};
+
+export type TemplateEditorData = {
+  id: string;
+  name: string;
+  context: TemplateContext;
+  channel: string | null;
+  categoryId: string | null;
+  format: FormatKey;
+  width: number;
+  height: number;
+  archived: boolean;
+  publishedVersion: number | null;
+  updatedAt: Date;
+  scene: Scene;
+  publishedScene: Scene | null;
+  versions: TemplateVersionRow[];
+};
+
+export async function getTemplateById(id: string): Promise<TemplateEditorData | null> {
+  const [row] = await db
+    .select({
+      id: renderTemplates.id,
+      name: renderTemplates.name,
+      context: renderTemplates.context,
+      channel: renderTemplates.channel,
+      categoryId: renderTemplates.categoryId,
+      format: renderTemplates.format,
+      width: renderTemplates.width,
+      height: renderTemplates.height,
+      archived: renderTemplates.archived,
+      publishedVersion: renderTemplates.publishedVersion,
+      updatedAt: renderTemplates.updatedAt,
+      scene: renderTemplates.scene,
+      publishedScene: renderTemplateVersions.scene,
+    })
+    .from(renderTemplates)
+    // Même jointure colonne-à-colonne que listTemplates() ci-dessus, et pour la même raison : un
+    // gabarit jamais publié (publishedVersion NULL) ne matche aucune ligne (NULL = NULL n'est
+    // jamais vrai en SQL), donc publishedScene reste null — exactement le signal attendu par
+        // lib/studio/scene-diff.ts:shouldShowUnpublishedBadge.
+    .leftJoin(
+      renderTemplateVersions,
+      and(
+        eq(renderTemplateVersions.templateId, renderTemplates.id),
+        eq(renderTemplateVersions.version, renderTemplates.publishedVersion),
+      ),
+    )
+    .where(eq(renderTemplates.id, id));
+  if (!row) return null;
+
+  const versionRows = await db
+    .select({
+      version: renderTemplateVersions.version,
+      publishedAt: renderTemplateVersions.publishedAt,
+      publishedByName: user.name,
+      scene: renderTemplateVersions.scene,
+    })
+    .from(renderTemplateVersions)
+    .leftJoin(user, eq(user.id, renderTemplateVersions.publishedBy))
+    .where(eq(renderTemplateVersions.templateId, id))
+    .orderBy(desc(renderTemplateVersions.version));
+
+  return {
+    id: row.id,
+    name: row.name,
+    context: row.context as TemplateContext,
+    channel: row.channel,
+    categoryId: row.categoryId,
+    format: row.format as FormatKey,
+    width: row.width,
+    height: row.height,
+    archived: row.archived,
+    publishedVersion: row.publishedVersion,
+    updatedAt: row.updatedAt,
+    // Une scène lue en base est une donnée non fiable (elle a pu être écrite par une version
+    // antérieure du code) — parseScene est le seul chemin de lecture, comme partout ailleurs dans
+    // lib/studio/. Elle a de toute façon déjà été validée à l'écriture (template-core.ts), donc ce
+    // n'est normalement jamais qu'une reconstruction du même objet, jamais un rejet.
+    scene: parseScene(row.scene),
+    publishedScene: row.publishedScene ? parseScene(row.publishedScene) : null,
+    versions: versionRows.map((v) => ({ ...v, scene: parseScene(v.scene) })),
+  };
+}
+
+// Liste courte des articles récents, pour le sélecteur d'aperçu (Tâche 10, contextes
+// article_image / social_post — spec §4). Volontairement minimal : ni recherche ni pagination,
+// juste de quoi prévisualiser un gabarit sur un VRAI article sans avoir à en saisir l'identifiant à
+// la main. Tous statuts confondus (un rédacteur veut prévisualiser un gabarit sur SON brouillon en
+// cours, pas seulement sur des articles déjà publiés).
+export type PreviewArticleOption = { id: string; title: string };
+
+export async function listArticlesForPreview(limit = 30): Promise<PreviewArticleOption[]> {
+  const rows = await db.query.articles.findMany({
+    columns: { id: true, title: true },
+    orderBy: (a, { desc: descOrder }) => [descOrder(a.updatedAt)],
+    limit,
+  });
+  return rows;
 }
