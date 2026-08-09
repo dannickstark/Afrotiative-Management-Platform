@@ -13,6 +13,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { sendToChannelCore } from "@/lib/diffusion/send-core";
+import { generateCaption, type GenerateCaptionResult } from "@/lib/diffusion/caption";
 import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
 import type { Channel } from "@/lib/studio";
 
@@ -43,4 +44,17 @@ export async function sendToChannel(input: SendToChannelActionInput): Promise<Se
 
   if (res.ok) return { ok: true, message: `Diffusé sur ${SOCIAL_CHANNELS[input.channel].label}.` };
   return { ok: false, message: res.message };
+}
+
+// Task 6's on-demand "Générer une légende" button — the Diffusion panel calls this instead of
+// generating on page load: it costs a model call per channel, and most article views never send
+// (Task 6 brief). Guarded on social:send (not social:read, which journalists don't have either):
+// generating a caption is only useful in service of a send this same role can actually perform,
+// same reasoning as gating the button itself on that permission (computeSendDisabledReason,
+// components/article/diffusion-panel.tsx). No DB write, so no revalidatePath — the client sets its
+// own caption draft state directly from the return value.
+export async function generateCaptionForArticle(input: { articleId: string; channel: Channel }): Promise<GenerateCaptionResult> {
+  const user = await requireUser();
+  requirePermission(user.role, "social", "send");
+  return generateCaption(input);
 }

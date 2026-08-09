@@ -10,6 +10,7 @@ import { SidePanel } from "./side-panel";
 import { PublishControls } from "./publish-controls";
 import { acquireLock, refreshLock, releaseLock } from "@/lib/actions/article-actions";
 import type { ArticleDetail } from "@/lib/queries/article";
+import type { ChannelDiffusionState } from "@/lib/queries/diffusion";
 import type { Role } from "@/lib/auth";
 
 const HEARTBEAT_MS = 60_000;
@@ -18,12 +19,19 @@ const HEARTBEAT_MS = 60_000;
 // (title, body, excerpt, category, tags, image fields) so that the SidePanel
 // in the right column can consume/mutate this same state.
 export function EditorShell({
-  article, lockedByOther, wpTagNames,
+  article, lockedByOther, wpTagNames, diffusionChannels, canSendDiffusion, r2Configured,
 }: {
   article: ArticleDetail;
   role: Role; // accepted for prop-contract parity with the page; RoleGate reads the live session client-side instead
   lockedByOther: boolean;
   wpTagNames: string[];
+  // D1 §4 — Diffusion panel: server-computed once here (page.tsx), threaded through to SidePanel,
+  // never recomputed client-side. canSendDiffusion/r2Configured are GLOBAL/session facts (not
+  // per-field editor state like the props above), which is why they're passed straight through
+  // rather than lifted into this component's own useState.
+  diffusionChannels: ChannelDiffusionState[];
+  canSendDiffusion: boolean;
+  r2Configured: boolean;
 }) {
   const isPublished = article.status === "published";
 
@@ -111,6 +119,9 @@ export function EditorShell({
           excerpt={excerpt}
           onExcerptChange={setExcerpt}
           readOnly={readOnly}
+          diffusionChannels={diffusionChannels}
+          canSendDiffusion={canSendDiffusion}
+          r2Configured={r2Configured}
         />
       </div>
 
