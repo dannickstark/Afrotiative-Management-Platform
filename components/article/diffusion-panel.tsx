@@ -45,7 +45,15 @@ export function computeSendDisabledReason(input: {
   r2Configured: boolean;
   canSend: boolean;
   channelLabel: string;
+  // Found live (not by a unit test) while verifying Task 6 in a browser: without this check, a
+  // successful send left the "Publier sur {canal}" button fully clickable — sendToChannelCore
+  // itself refuses the resulting second send (send-core.ts's `existing?.status === "sent"` guard),
+  // but the UI showed no reason beforehand, exactly the "click-time error" Task 6 explicitly rules
+  // out for every OTHER gate. Defaults to false so every existing call site (and the four
+  // originally-required cases) keeps behaving exactly as before.
+  alreadySent?: boolean;
 }): string | null {
+  if (input.alreadySent) return `Déjà diffusé sur ${input.channelLabel}.`;
   if (!input.canSend) return "Vous n'avez pas la permission de diffuser sur les réseaux sociaux.";
   if (!input.isPublished) return "L'article doit d'abord être publié sur WordPress avant d'être diffusé.";
   if (!input.channelEnabled) return `Le canal ${input.channelLabel} est désactivé dans les réglages de diffusion.`;
@@ -137,7 +145,10 @@ function DiffusionChannelCard({
   const [isGenerating, startGenerate] = useTransition();
 
   const view = distributionStateView(distribution as DiffusionDistributionView | null);
-  const reason = computeSendDisabledReason({ isPublished, channelEnabled: true, r2Configured, canSend, channelLabel: label });
+  const reason = computeSendDisabledReason({
+    isPublished, channelEnabled: true, r2Configured, canSend, channelLabel: label,
+    alreadySent: view.kind === "sent",
+  });
 
   function handleSend() {
     startSend(async () => {

@@ -44,14 +44,30 @@ describe("computeSendDisabledReason — les quatre cas requis", () => {
     expect(reason!.toLowerCase()).toMatch(/permission|autoris/);
   });
 
+  // Found live, not by a unit test: verifying Task 6 in a real browser (see task-4-6-report.md)
+  // showed the "Publier sur Facebook" button still fully clickable right after a successful send —
+  // sendToChannelCore refuses the resulting second send server-side, but the button gave no visible
+  // reason beforehand, exactly the click-time-error shape Task 6 rules out for every other gate.
+  it("déjà envoyé (alreadySent) — nomme le canal, prioritaire sur les autres gates", () => {
+    const reason = computeSendDisabledReason({ ...allGood, alreadySent: true });
+    expect(reason).not.toBeNull();
+    expect(reason).toContain("Facebook");
+    expect(reason!.toLowerCase()).toContain("déjà");
+  });
+
+  it("alreadySent absent (undefined) se comporte comme false — n'affecte pas les quatre cas requis", () => {
+    expect(computeSendDisabledReason(allGood)).toBeNull();
+  });
+
   it("chaque cas produit un message DIFFÉRENT (pas un seul message générique recyclé)", () => {
     const reasons = new Set([
       computeSendDisabledReason({ ...allGood, isPublished: false }),
       computeSendDisabledReason({ ...allGood, channelEnabled: false }),
       computeSendDisabledReason({ ...allGood, r2Configured: false }),
       computeSendDisabledReason({ ...allGood, canSend: false }),
+      computeSendDisabledReason({ ...allGood, alreadySent: true }),
     ]);
-    expect(reasons.size).toBe(4);
+    expect(reasons.size).toBe(5);
   });
 });
 
