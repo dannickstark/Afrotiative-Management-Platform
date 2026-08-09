@@ -101,6 +101,9 @@ export const wpCategories = pgTable("wp_categories", {
   name: text("name").notNull(),
   slug: text("slug").notNull(),
   articleCount: integer("article_count").notNull().default(0),
+  // Jeton {{category.color}} du studio (V1). Nullable : une catégorie sans couleur retombe sur
+  // DEFAULT_CATEGORY_COLOR côté rendu, jamais sur une erreur.
+  color: text("color"),
 });
 
 export const wpTags = pgTable("wp_tags", {
@@ -358,4 +361,103 @@ export const distributions = pgTable("distributions", {
   // row in the /published list. Partial (WHERE channel = 'wordpress') so other channels are
   // unconstrained — modeled on pipeline_runs_one_running above.
   uniqueIndex("distributions_one_wordpress_per_article").on(t.articleId).where(sql`${t.channel} = 'wordpress'`),
+]);
+
+// ---- V1 studio de gabarits ----
+// AUCUN nouvel enum PostgreSQL, volontairement : colonnes `text` + unions TypeScript. Même
+// raisonnement que `alerts.type` plus haut — un ALTER TYPE ... ADD VALUE est un piège dans le
+// migrate() mono-transaction de drizzle sur une base neuve. Les unions vivent dans
+// lib/studio/tokens.ts (TemplateContext, Channel) et lib/studio/formats.ts (FormatKey).
+export const renderTemplates = pgTable("render_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  context: text("context").notNull(),
+  // null = gabarit par défaut du contexte (tous canaux). Les valeurs viennent de CHANNELS.
+  channel: text("channel"),
+  // null = gabarit par défaut du couple (contexte, canal).
+  categoryId: uuid("category_id").references(() => wpCategories.id, { onDelete: "cascade" }),
+  format: text("format").notNull(),
+  // FIGÉES à la création depuis FORMAT_PRESETS : modifier un préréglage ne doit jamais changer
+  // les dimensions d'un gabarit existant, cela casserait sa mise en page.
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  // COPIE DE TRAVAIL (le brouillon). Le résolveur ne lit JAMAIS cette colonne — il lit
+  // render_template_versions. C'est ce qui donne un sens réel au couple brouillon/publié.
+  scene: jsonb("scene").notNull(),
+  // Numéro (pas identifiant) de la version en vigueur ; null = jamais publié. Volontairement SANS
+  // clé étrangère : une FK créerait un cycle render_templates -> versions -> render_templates,
+  // pénible à migrer et sans bénéfice, puisque (template_id, version) est déjà unique.
+  // « Publié » ⟺ publishedVersion IS NOT NULL — pas de colonne `status`, qui serait une seconde
+  // source de vérité : un gabarit publié AVEC des modifications en cours est l'état normal.
+  publishedVersion: integer("published_version"),
+  archived: boolean("archived").notNull().default(false),
+  createdBy: text("created_by").references(() => user.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  // Unicité de la portée de résolution. ATTENTION : drizzle 0.45 n'expose PAS .nullsNotDistinct()
+  // sur uniqueIndex(), et sans ce modificateur l'index est INEFFICACE ici — PostgreSQL traite les
+  // NULL comme distincts, donc deux gabarits (social_post, facebook, NULL) coexisteraient. Le
+  // modificateur est ajouté à la main dans la migration (CREATE UNIQUE INDEX ... NULLS NOT
+  // DISTINCT ..., db/migrations/0015_slow_selene.sql — la table est neuve dans cette migration,
+  // donc un simple CREATE suffit ; pas de DROP INDEX préalable ici). Une régénération naïve de la
+  // migration (bun run db:generate) PERDRAIT ce modificateur : si le schéma bouge à nouveau, il
+  // faudra le rajouter à la main dans la nouvelle migration générée.
+  uniqueIndex("render_templates_scope")
+    .on(t.context, t.channel, t.categoryId)
+    .where(sql`${t.archived} = false`),
+  index("render_templates_lookup_idx").on(t.context, t.channel),
+]);
+
+export const renderTemplateVersions = pgTable("render_template_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  templateId: uuid("template_id").notNull().references(() => renderTemplates.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  // INSTANTANÉ IMMUABLE. Une fois écrite, cette scène ne change plus : c'est elle qui garantit
+  // qu'un rendu passé reste reproductible même après vingt modifications du brouillon.
+  scene: jsonb("scene").notNull(),
+  publishedBy: text("published_by").references(() => user.id),
+  publishedAt: timestamp("published_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("render_template_versions_unique").on(t.templateId, t.version)]);
+
+export const renderAssets = pgTable("render_assets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  kind: text("kind").notNull(), // 'image' | 'font'
+  name: text("name").notNull(),
+  storageKey: text("storage_key").notNull(),
+  url: text("url").notNull(),
+  mime: text("mime").notNull(),
+  bytes: integer("bytes").notNull(),
+  width: integer("width"),
+  height: integer("height"),
+  fontFamily: text("font_family"),
+  fontWeight: integer("font_weight"),
+  fontStyle: text("font_style"),
+  uploadedBy: text("uploaded_by").references(() => user.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Cache IMMUABLE des sorties. Deux propriétés en découlent : un appel identique renvoie la ligne
+// existante sans re-rendre, et « on ne re-rend pas après diffusion » s'applique tout seul — D1
+// posera un render_id sur la ligne distributions, et cette ligne-là ne bouge plus jamais.
+export const renders = pgTable("renders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  templateId: uuid("template_id").notNull(),
+  templateVersion: integer("template_version").notNull(),
+  context: text("context").notNull(),
+  subjectType: text("subject_type").notNull(), // 'article' | 'manual'
+  // PAS une clé étrangère vers articles : un rendu doit survivre à la suppression de son article
+  // (historique de diffusion, pas jointure vivante) — même raisonnement que alerts.entityId.
+  subjectId: uuid("subject_id"),
+  inputHash: text("input_hash").notNull(),
+  storageKey: text("storage_key").notNull(),
+  url: text("url").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  bytes: integer("bytes").notNull(),
+  degraded: boolean("degraded").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("renders_input_hash_unique").on(t.inputHash),
+  index("renders_subject_idx").on(t.subjectType, t.subjectId),
 ]);

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings } from "lucide-react";
+import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings, LayoutTemplate, Images, Wand2 } from "lucide-react";
 import type { Role } from "@/lib/auth";
 
 export type NavChild = { href: string; label: string; roles?: Role[] };
@@ -27,31 +27,94 @@ export const SETTINGS_CHILDREN: NavChild[] = [
 // n'a qu'un layout.tsx et des sous-dossiers). Ce href ne sert JAMAIS de lien — NavMain rend un
 // parent avec enfants comme déclencheur de repli, pas comme <Link>. Il sert uniquement à la
 // détection d'état actif (pathname.startsWith) et au fil d'Ariane.
-export const NAV_ITEMS: NavItem[] = [
-  { href: "/dashboard", label: "Tableau de bord", icon: LayoutDashboard },
-  { href: "/queue", label: "File de revue", icon: Inbox, badgeKey: "pending" },
-  { href: "/calendar", label: "Calendrier", icon: Calendar },
-  { href: "/published", label: "Articles publiés", icon: Newspaper },
-  { href: "/runs", label: "Exécutions", icon: Activity, roles: ["admin", "editor"] },
+
+// ---- Sections de premier niveau (structure sidebar-02) ----
+// Un groupe repliable par section. Motivation : le programme « Studio visuel & diffusion »
+// ajoute ~8 entrées de navigation ; une liste plate deviendrait illisible. Les sections Studio et
+// Diffusion seront ajoutées ici par V2 et D1 — c'est le seul endroit à modifier.
+export type NavSection = { id: string; label: string; roles?: Role[]; items: NavItem[] };
+
+export const NAV_SECTIONS: NavSection[] = [
   {
-    href: "/settings", label: "Réglages", icon: Settings,
-    roles: ["admin", "editor"], items: SETTINGS_CHILDREN,
+    id: "redaction",
+    label: "Rédaction",
+    items: [
+      { href: "/dashboard", label: "Tableau de bord", icon: LayoutDashboard },
+      { href: "/queue", label: "File de revue", icon: Inbox, badgeKey: "pending" },
+      { href: "/calendar", label: "Calendrier", icon: Calendar },
+      { href: "/published", label: "Articles publiés", icon: Newspaper },
+    ],
+  },
+  {
+    id: "supervision",
+    label: "Supervision",
+    roles: ["admin", "editor"],
+    items: [
+      { href: "/runs", label: "Exécutions", icon: Activity, roles: ["admin", "editor"] },
+    ],
+  },
+  {
+    id: "studio",
+    label: "Studio",
+    roles: ["admin", "editor"],
+    items: [
+      { href: "/studio", label: "Gabarits", icon: LayoutTemplate, roles: ["admin", "editor"] },
+      // Tâche 11 (Lot 3) : la bibliothèque d'assets (téléversement images/polices, render_assets).
+      { href: "/studio/assets", label: "Bibliothèque", icon: Images, roles: ["admin", "editor"] },
+      // Tâche 14 (Lot 4) : génération ponctuelle pour les contextes à saisie manuelle (citation,
+      // bandeau, récap — spec §7).
+      { href: "/studio/generer", label: "Génération", icon: Wand2, roles: ["admin", "editor"] },
+    ],
+  },
+  {
+    id: "reglages",
+    label: "Réglages",
+    roles: ["admin", "editor"],
+    items: [
+      {
+        href: "/settings", label: "Réglages", icon: Settings,
+        roles: ["admin", "editor"], items: SETTINGS_CHILDREN,
+      },
+    ],
   },
 ];
 
-// Filtrage par rôle sur DEUX niveaux : les enfants d'abord, puis les parents devenus vides.
-// Un éditeur voit « Réglages » (il a accès aux flux et à la taxonomie) ; si un jour tous les
-// enfants passaient admin-only, le parent disparaîtrait au lieu de mener à un menu vide.
-// Retourne toujours de nouveaux objets — NAV_ITEMS n'est jamais muté.
+// DÉRIVÉ, jamais déclaré à part : ROUTE_LABELS et deriveCrumbs continuent de fonctionner sans
+// modification, et un lien ajouté à une section ne peut pas manquer dans le fil d'Ariane.
+export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap((s) => s.items);
+
+// Filtrage par rôle sur TROIS niveaux : sous-éléments, éléments, puis sections devenues vides.
+// Retourne toujours de nouveaux objets — `sections` n'est jamais muté. Extrait en fonction pure
+// (paramètre `sections` plutôt que NAV_SECTIONS en dur) pour rester testable contre des fixtures
+// synthétiques : avec les données réelles actuelles, aucun rôle ne fait jamais survivre une
+// section à son propre filtre de rôle pour ensuite se vider entièrement au niveau des éléments —
+// ça ne dira rien tant qu'une section future (ex. Studio, Diffusion) n'aura pas des droits plus
+// larges au niveau section qu'au niveau de chacun de ses éléments.
+export function filterSections(sections: NavSection[], role: Role): NavSection[] {
+  return sections
+    .filter((section) => !section.roles || section.roles.includes(role))
+    .map((section) => ({
+      ...section,
+      items: section.items
+        .filter((item) => !item.roles || item.roles.includes(role))
+        .map((item) =>
+          item.items
+            ? { ...item, items: item.items.filter((c) => !c.roles || c.roles.includes(role)) }
+            : item,
+        )
+        .filter((item) => !item.items || item.items.length > 0),
+    }))
+    .filter((section) => section.items.length > 0);
+}
+
+export function visibleNavSections(role: Role): NavSection[] {
+  return filterSections(NAV_SECTIONS, role);
+}
+
+// Conservé pour les appelants qui veulent la liste plate visible (aucun aujourd'hui hors tests,
+// mais l'API publique de ce module ne doit pas casser sans raison).
 export function visibleNavItems(role: Role): NavItem[] {
-  return NAV_ITEMS
-    .filter((item) => !item.roles || item.roles.includes(role))
-    .map((item) =>
-      item.items
-        ? { ...item, items: item.items.filter((c) => !c.roles || c.roles.includes(role)) }
-        : item,
-    )
-    .filter((item) => !item.items || item.items.length > 0);
+  return visibleNavSections(role).flatMap((s) => s.items);
 }
 
 export type Crumb = { href: string; label: string };

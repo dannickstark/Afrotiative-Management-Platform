@@ -21,7 +21,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
       className={`${inter.variable} ${lora.variable} h-full`}
     >
-      <body className="min-h-full flex flex-col font-sans antialiased group/body overscroll-none [--footer-height:--spacing(14)] xl:[--footer-height:--spacing(24)] theme-default">
+      {/* `h-full` + `overflow-hidden` : body est borné à la hauteur du viewport et ne défile pas
+          lui-même. C'est ce qui permet à <main className="overflow-auto"> (app/(app)/layout.tsx)
+          d'être le SEUL conteneur de défilement, laissant l'en-tête et la barre latérale
+          immobiles. Sans le `h-full` ici, `min-h-full` seul (plancher, pas plafond) laisse body
+          grandir avec son contenu : la page entière défile alors et l'en-tête part avec elle —
+          vérifié dans le navigateur avant d'ajouter `h-full` et de conserver `overflow-hidden`
+          plutôt que de le retirer. `overscroll-none` reste retiré (inutile une fois que body ne
+          défile plus du tout). */}
+      <body className="h-full min-h-full flex flex-col overflow-hidden font-sans antialiased group/body [--footer-height:--spacing(14)] xl:[--footer-height:--spacing(24)] theme-default">
         <ThemeProvider>
           <TooltipProvider>{children}</TooltipProvider>
           <Toaster richColors position="top-right" />

@@ -1,0 +1,241 @@
+# Afrotiative — Programme « Studio visuel & diffusion multicanale » — Feuille de route
+
+**Date :** 2026-08-09
+**Statut :** Décisions validées — exécution autonome sous-projet par sous-projet
+**Portée :** Deux besoins liés — (a) un module type « Canva » pour définir des gabarits d'images
+avec emplacements dynamiques, (b) la diffusion des articles vers WhatsApp, Facebook, Instagram, X
+et TikTok. Décomposés en huit sous-projets, chacun avec son propre spec → plan → exécution.
+
+Ce document est le registre durable des décisions. Il fait suite au programme « Pipeline &
+Observabilité v2 » (`2026-08-05-afrotiative-pipeline-program-roadmap.md`), désormais livré.
+
+---
+
+## Décisions produit (validées par l'utilisateur, 2026-08-09)
+
+| Sujet | Décision |
+|---|---|
+| **Moteur du studio** | **Interne.** Scène JSON maison + éditeur maison, plutôt que CE.SDK (licence sur devis, sans palier public) ou Polotno. Aucun coût de licence, contrôle total du schéma, pas de dépendance à un fournisseur. |
+| **Backend de rendu** | **Satori + resvg + sharp**, en Node, sans navigateur. ~100 ms par rendu, déterministe, exécutable en ligne dans une server action. Contrepartie assumée : l'éditeur reste dans le sous-ensemble CSS de Satori. |
+| **Stockage** | **Cloudflare R2** (S3-compatible). Instagram et TikTok exigent une URL publiquement accessible — ce n'est pas optionnel. |
+| **Thème par catégorie** | **Un gabarit par canal + jetons de thème de catégorie.** Le gabarit référence `{{category.color}}` ; la couleur vit sur la catégorie. ~5 gabarits au lieu de ~60. Une surcharge `(canal, catégorie)` reste possible pour une catégorie qui a besoin d'une *mise en page* différente, pas d'une couleur différente. |
+| **Formats** | **Un gabarit = un format fixe** choisi parmi des préréglages. Pas de redimensionnement multi-variantes. |
+| **Kit de marque** | **Assets et polices téléversables** (R2), administrables. Polices **TTF/OTF uniquement** — Satori ne lit pas le WOFF2. |
+| **Résolution du gabarit** | `(contexte, canal, catégorie)` → `(contexte, canal, ∅)` → `(contexte, ∅, ∅)` → `∅` = image brute inchangée. |
+| **Cycle de vie** | **Brouillon / publié + historique de versions.** Le résolveur ne lit **jamais** le brouillon de travail. |
+| **Qui conçoit** | **Admins et éditeurs.** |
+| **Contextes d'usage** | Quatre au-delà de l'image d'article : **cartes de citation**, **bandeaux de newsletter**, **cartes de récap/digest**. Impose des *slots nommés abstraits* plutôt qu'une liaison directe aux champs d'article. |
+| **Champs injectables** | `title`, `excerpt`, `category.name`, `category.color`, `article.image`, `brand.logo`, `article.date`, `article.byline`, `source.names`, **`article.url` en QR code**. |
+| **Déclenchement de la diffusion** | **Bouton explicite par canal**, avec légende éditable avant envoi. Pas d'envoi automatique au clic sur « Approuver & publier ». |
+| **Légendes** | **Générées par IA, par canal.** Chaque canal a ses contraintes (nombre max de caractères), configurables en réglages avec valeurs par défaut et bornes min/max issues des règles officielles de la plateforme. |
+| **Réglages par canal** | Chaque canal a **sa propre sous-page de réglages** : spécificités du canal + configuration de la publication automatique. |
+| **Re-rendu** | **Non.** Un rendu déjà diffusé est immuable. Modifier l'image d'un article après publication ne met à jour aucun post. |
+| **WhatsApp** | **whatsapp-web.js**, dans un **service worker séparé** (Chromium + session persistante). Choix assumé : bibliothèque non officielle, WhatsApp interdit les clients non officiels, le numéro peut être bloqué. Contrepartie : c'est le seul moyen de publier dans un **canal** ou un **groupe**. |
+| **TikTok** | **Optionnel** (« nice to have »). Dernier de la file, sous réserve d'audit de l'application par TikTok. |
+| **Comptes disponibles aujourd'hui** | **Page Facebook + compte Instagram Business lié** uniquement. Pas de compte développeur X (palier payant requis), pas d'application TikTok. |
+
+### Règle de publication automatique WhatsApp (à concevoir en D1)
+
+Énoncé de l'utilisateur, conservé verbatim comme exigence :
+
+> Toutes les X heures, un processus choisit automatiquement **un** article publié sur WordPress le
+> jour même et le publie dans le canal WhatsApp s'il ne l'a pas déjà été. L'ordre est **du plus
+> ancien au plus récent**. S'il n'y a plus rien à publier pour aujourd'hui, le processus regarde
+> les articles de la veille non encore publiés sur le canal WhatsApp, et ainsi de suite.
+
+Généralisable aux autres canaux ; la conception détaillée (fenêtre de rattrapage maximale,
+verrouillage, heures d'envoi autorisées, comportement au redémarrage) appartient à **D1**.
+
+---
+
+## Faits d'ancrage (issus de l'exploration du code, 2026-08-09)
+
+- **`distributions` est déjà le point d'extension** (`db/schema.ts:348`) : `channel` en texte avec
+  défaut `wordpress`, plus un index unique **partiel** (`WHERE channel = 'wordpress'`) — les autres
+  canaux sont volontairement non contraints. `lib/wp/channel.ts:7` déclare déjà l'interface
+  `PublishChannel` avec le commentaire « WhatsApp/social — plus tard ».
+- **La publication est mono-canal et synchrone.** `approveAndPublish`
+  (`lib/actions/article-actions.ts:142`) pose `approved` + `scheduledAt` ; le cron
+  `/api/publish/due` appelle `publishArticle` → WordPress. Ni file de travaux, ni réessai, ni
+  statut par canal.
+- **Aucun stockage d'objets n'existe dans le projet.** `articles.featuredImageUrl` est une URL
+  distante ; `uploadFeaturedImage` la télécharge au moment de publier et la pousse dans la
+  médiathèque WordPress. C'est la lacune principale pour tout ce programme.
+- **`sharp` est déjà installé** (`node_modules/sharp`, et listé dans `trustedDependencies`).
+- **Hébergement Railway**, un seul service web, sans volume (`railway.json`). Le worker WhatsApp
+  imposera un second service.
+- **`lib/url-guard.ts`** expose `isSafePublicHttpUrl`, déjà utilisé pour l'anti-SSRF côté
+  `uploadFeaturedImage` et `testFeed` — à réutiliser pour toute récupération d'image du studio.
+- **Interface en français** partout ; shadcn en preset `base-nova` (Base UI, prop `render` et non
+  `asChild`).
+
+### Contraintes de Satori vérifiées (documentation officielle)
+
+Supporté : flexbox, `position: absolute`, `transform` (rotate/scale/skew), `border-radius`,
+`box-shadow`, `text-shadow`, dégradés linéaires et radiaux, `objectFit`, `objectPosition`,
+`lineClamp`, `textWrap`, `opacity`, `overflow: hidden`, `filter`, `clipPath`, polices TTF/OTF/WOFF.
+
+**Non supporté :** CSS Grid, **`z-index`**, `calc()`, **`backdrop-filter` et les effets de flou**,
+`min-content`/`max-content`/`fit-content`, `flexBasis: auto`, **WOFF2**, langues RTL, ligatures et
+crénage OpenType.
+
+Deux conséquences structurantes : l'ordre de peinture est **l'ordre du tableau de calques** (ce
+qu'est déjà une liste de calques), et **le flou est appliqué en raster par `sharp`** avant
+composition, pas en CSS.
+
+---
+
+## Sous-projets (ordre de construction)
+
+### V1 — Moteur de gabarits (sans interface)
+Schéma de scène + validation Zod, registre des slots et liaisons par contexte, résolveur
+`(contexte, canal, catégorie)`, pipeline de rendu Satori/resvg/sharp, client R2, cache de rendus,
+couleur de thème sur les catégories, gabarits de départ écrits à la main en JSON et semés.
+**Livrable vérifiable sans aucune interface** : rendre un gabarit depuis du JSON. Dé-risque Satori
+avant d'investir dans l'éditeur. Spec dédiée :
+`2026-08-09-afrotiative-v1-moteur-gabarits-design.md`.
+
+### V2 — Studio (éditeur visuel) — ✅ Livré (2026-08-09)
+`/studio` : CRUD de gabarits, éditeur de canevas (glisser/redimensionner), panneau de calques,
+interface de liaison des slots, bibliothèque d'assets et de polices, brouillon/publié + versions.
+Aperçu « vrai rendu » via le moteur V1, en différé. Spec :
+`2026-08-09-afrotiative-v2-studio-design.md`. Quinze tâches en quatre lots, toutes revues.
+
+### V3 — Aperçu dans l'article — ✅ Livré (2026-08-09)
+Onglets **Image originale** / **Aperçu final** dans `components/article/image-panel.tsx`. L'onglet
+« original » garde l'existant (URL, crédit, lien source) ; l'onglet « aperçu » montre le rendu du
+gabarit **du site**. Les aperçus par réseau social vivent dans le panneau Diffusion (D1), pas ici.
+Spec : `2026-08-09-afrotiative-v3-apercu-article-design.md`. L'image effectivement publiée sur
+WordPress est désormais **le rendu**, produit au clic sur « Approuver & publier ».
+
+### D1 — Socle de diffusion
+`distributions` v2 (une ligne par canal, statut, réessais, charge utile, `render_id`, `externalId`),
+registre de canaux, sous-pages `/settings/social/{canal}`, génération IA des légendes avec limites
+par canal, panneau **Diffusion** sur la page article (bouton + légende éditable par canal), rendu à
+l'envoi, planificateur automatique (dont la règle WhatsApp ci-dessus), journal d'audit. Dépend de V1.
+
+### D2 — Adaptateur Facebook Page
+Graph API. Comptes déjà disponibles. Nécessite la revue d'application Meta pour
+`pages_manage_posts` — **à lancer immédiatement, en parallèle du développement**.
+
+### D3 — Adaptateur Instagram
+Content Publishing API, compte Business lié à la page Facebook. Exige une URL d'image publiquement
+accessible (d'où R2). Nécessite `instagram_content_publish` — même revue Meta que D2.
+
+### D4 — Adaptateur WhatsApp + service worker
+Second service Railway : whatsapp-web.js, Chromium, `RemoteAuth` avec session persistée en
+Postgres pour survivre aux redémarrages. Publication dans le canal/groupe + planificateur.
+
+### D5 — Adaptateur X
+API v2. **Bloqué** tant qu'un compte développeur sur palier payant n'existe pas.
+
+### D6 — Adaptateur TikTok
+Content Posting API, publication photo. **Bloqué** par l'audit d'application TikTok. Optionnel.
+
+---
+
+## Travaux hors code à lancer maintenant
+
+Ces démarches ont des délais longs et bloqueront D2/D3/D5/D6 quelle que soit la vitesse de
+développement :
+
+1. **Revue d'application Meta** pour `pages_manage_posts` et `instagram_content_publish`.
+2. **Compte développeur X** sur un palier payant (le palier gratuit est plafonné très bas en
+   écriture).
+3. **Audit d'application TikTok** pour la Content Posting API, si TikTok est confirmé.
+4. **Numéro de téléphone dédié** pour le worker WhatsApp — à considérer comme sacrifiable.
+5. **Compte Cloudflare R2** + bucket + clés (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+   `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`).
+6. **Polices de marque en TTF ou OTF** (pas WOFF2) et logos, pour le kit de marque.
+
+---
+
+## Sous-projet annexe — Barre latérale `sidebar-02`
+
+Indépendant du programme, demandé en même temps. La structure actuelle est `sidebar-07`
+(`variant="inset" collapsible="icon"`, sous-menus repliables). On adopte de `sidebar-02` les
+**sections de premier niveau repliables** — ce qui rend la navigation tenable alors que ce
+programme ajoute ~8 entrées — **en conservant** la variante `inset`, le repli en icônes et le rail,
+dont la perte serait une régression non demandée.
+
+---
+
+## Dette reportée à l'issue de V1
+
+V1 est livré et jugé prêt à fusionner (revue de branche complète, 2026-08-09). Les points ci-dessous
+ont été **délibérément reportés** après triage — ils ne bloquent pas la fusion, mais ils ne doivent
+pas se perdre. Chacun indique le sous-projet qui devra le traiter.
+
+### À traiter au démarrage de V2 (studio / éditeur)
+
+| Point | Pourquoi maintenant |
+|---|---|
+| `parseScene` ne remonte que la **première** erreur Zod | Un éditeur visuel doit afficher toutes les erreurs d'une scène d'un coup ; acceptable sans interface, bloquant avec. |
+| `lib/studio/render.ts` — `assets.imageUrl()` laisse fuir l'erreur brute (anglais) | Inatteignable tant que `NullAssetLoader` est le seul chargeur ; devient atteignable dès que V2 branche un chargeur sur `render_assets`. |
+| `asSatoriFonts` est un cast non vérifié | V2 devra valider au téléversement que la graisse d'une police est dans {100…900}, sinon le cast devient un mensonge. |
+| `computeInputHash` ne couvre ni `encode` ni l'état des polices | Sans objet en V1 ; dès qu'une police est téléversée, les rendus `degraded: true` déjà en cache continueraient d'être servis. |
+| `wp_categories.color` n'a **aucun chemin d'écriture** | Ni interface, ni seed, ni synchronisation taxonomie. Toutes les catégories rendent donc `DEFAULT_CATEGORY_COLOR` — le jeton `{{category.color}}` reste théorique jusqu'à ce que V2 livre l'éditeur. |
+| Dimensions de canevas non bornées (`lib/studio/scene.ts`) | Un canevas 20000×20000 traverse satori *et* resvg (~1,6 Go alloués) avant que sharp ne refuse. Entrée d'administrateur seulement ; à borner quand V2 pose ses propres limites. |
+
+### À traiter au démarrage de V3 (aperçu dans l'article)
+
+| Point | Pourquoi maintenant |
+|---|---|
+| `next.config.ts` ne liste pas `sharp`, `@resvg/resvg-js` ni `satori` dans `serverExternalPackages` | Aucun code applicatif n'importe `lib/studio` aujourd'hui. V3 sera le premier à le faire depuis une server action, et heurtera le regroupement Turbopack des binaires natifs `.node`. |
+| Un article **sans image à la une** ou **sans catégorie** fait échouer le rendu | Comportement conforme au spec (§6, échec dur), mais l'interface devra le dire intelligiblement plutôt que d'afficher une erreur technique. |
+| `process.cwd()` pour le chemin des polices | Incompatible avec `output: "standalone"` dans `next.config.ts`. À revoir si/quand V3 change la stratégie de build. |
+
+### À traiter au démarrage de D1 (socle de diffusion)
+
+| Point | Pourquoi maintenant |
+|---|---|
+| Faut-il conditionner `article.url` à `articles.status === "published"` ? | Un article dépublié conserve aujourd'hui un permalien WordPress résolvable mais périmé dans le contexte `social_post`. C'est D1 qui définit la convention de partage, donc D1 qui tranche. |
+
+### Dette reportée à l'issue de V2 et V3
+
+Triage des revues de lot, conservé ici parce que les répertoires de travail SDD sont gitignorés.
+
+| Point | Où | Pour qui |
+|---|---|---|
+| `previewTemplate` transmet son objet d'arguments en bloc au cœur, qui porte les crochets de test `fetchImpl`/`assets` | `lib/actions/studio-preview-actions.ts` | V2+ — déstructurer explicitement |
+| `getTemplateById` lève brutalement sur une scène illisible → 500 sans retour possible | `lib/queries/studio.ts` | V2+ — bannière française plutôt qu'une trace |
+| « Annuler » vers la scène de montage saute l'auto-enregistrement par égalité de référence : le brouillon en base peut désynchroniser d'une interface affichant « Enregistré » | `components/studio/editor-shell.tsx` | V2+ |
+| Un geste de redimensionnement/rotation sans mouvement pousse quand même une entrée d'annulation | `hooks/use-layer-drag.ts` | V2+ |
+| Pas de réessai ni d'affordance « Réessayer » après un auto-enregistrement en échec | `lib/studio/autosave.ts` | V2+ |
+| Les flèches et `Suppr` n'agissent que si le canevas a le focus DOM | `components/studio/canvas.tsx` | V2+ |
+| Le canevas ignore `image.overlay`, que le moteur composite bien | `components/studio/layer-view.tsx` | V2+ |
+| La bannière « lecture seule » sans R2 surestime ce qui est réellement désactivé (l'auto-enregistrement et `deleteAsset` fonctionnent toujours) | `components/studio/storage-banner.tsx` | V2+ |
+| `docs/DEPLOYMENT.md` ne donne aucune **procédure** R2 : création du bucket, portée du jeton, exposition publique | doc | ops |
+| Réessai illimité du cron sur un rendu durablement en échec, motif persisté nulle part | `lib/wp/publish-due.ts` | D1 |
+| Aucune couverture d'intégration du cas « aucun gabarit » (`url:null`) : le gabarit par défaut semé le rend inatteignable | `tests/wp-publish-render.test.ts` | D1 |
+| Le commentaire de `putObject` présente le diagnostic `content-length` comme inconditionnel ; les preuves du lot 3 le contredisent | `lib/storage/r2.ts` | à adoucir |
+
+**Point ouvert, non résolu.** Le bogue `content-length` de `lib/storage/r2.ts` (en-tête posé à la main
+→ `undici InvalidArgumentError` une fois passé par le `fetch` patché de Next) était présent depuis le
+premier commit du fichier, alors que le lot 3 a bel et bien téléversé des assets depuis un
+navigateur. La relecture finale a identifié un mécanisme plausible — le chemin de reconstruction du
+corps dans `patch-fetch.js` de Next 16.3 n'est emprunté que sous certaines conditions de contexte —
+sans pouvoir le prouver. `putObject` n'a **aucune** couverture automatisée et ne peut pas en avoir
+sous `bun test` (le patch de Next n'y est pas actif) : la seule défense reste la vérification
+navigateur de l'étape 11 de `docs/DEPLOYMENT.md`.
+
+### Hygiène des tests (transverse)
+
+Les suites `tests/studio-*.test.ts` écrivent dans la branche Neon **dev partagée**. Le motif de
+collision de portée est désormais contenu par `tests/studio-fixtures.ts` (suppression défensive
+avant insertion, portées distinctes par fichier, plus aucun nom de canal réel utilisé comme
+sentinelle). **Ne jamais lancer deux `bun test` en parallèle** — voir `test-setup.ts:38-40`.
+
+Trois échecs **préexistants** subsistent, sans rapport avec ce programme, chacun attribué en
+rejouant le fichier sur le point de départ de la branche (`09b8e4e`), où aucun de ces travaux
+n'existe : `tests/pipeline-web-search.test.ts` cas (a) et cas (d), et
+`tests/pipeline-pause-resume.test.ts` point de contrôle (b). Les deux sont sensibles à l'état
+accumulé de la base de développement partagée.
+
+---
+
+## Suivi
+
+Exécution autonome, un sous-projet à la fois, commit par sous-projet, revue par tâche puis revue
+finale (subagent-driven). Question à l'utilisateur uniquement sur un point bloquant qui ne peut pas
+être tranché depuis le code.

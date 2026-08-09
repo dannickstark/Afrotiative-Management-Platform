@@ -50,6 +50,58 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 
 > Les deux `*_TRIGGER_SECRET` doivent être **distincts** l'un de l'autre et de tout autre secret.
 
+**Studio de gabarits (V1 + V2 + V3) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
+renvoie `null`) :
+
+| Variable | Rôle |
+|---|---|
+| `R2_ACCOUNT_ID` | Identifiant de compte Cloudflare. |
+| `R2_ACCESS_KEY_ID` | Jeton API R2. |
+| `R2_SECRET_ACCESS_KEY` | Secret associé au jeton API R2. |
+| `R2_BUCKET` | Nom du bucket (ex. `afrotiative-media`). |
+| `R2_PUBLIC_BASE_URL` | Base des URLs publiques (ex. `https://media.afrotiative.com`). |
+
+Sans ces cinq variables, le studio bascule en **lecture seule** plutôt que d'échouer au clic avec une
+pile brute :
+
+- **Pipeline (V1)** : `renderForArticle` (déclenché par l'onglet « Aperçu final » de `/article/[id]`
+  et par `buildPublishPayload`, V3 — voir « Publication (V3) » ci-dessous) répond avec
+  `{ ok: false, message: "Stockage R2 non configuré." }`, jamais une exception. Côté publication,
+  ce cas précis **n'échoue pas** : c'est un réglage d'opérateur (le studio visuel n'est pas activé
+  du tout), pas un échec par article — la publication retombe sur l'image brute
+  (`articles.featuredImageUrl`), exactement comme avant V3.
+- **Interface (V2)** : `/studio`, `/studio/[id]`, `/studio/assets` et `/studio/generer` affichent
+  chacune une bannière française explicite (« Stockage R2 non configuré ») et désactivent
+  téléversement, aperçu, publication et génération — l'écran ne permet même pas de déclencher
+  l'action, plutôt que de la laisser échouer.
+- **Publication (V3) — le rendu devient une PRÉCONDITION de publier dès qu'un gabarit
+  `article_image` est configuré** : `buildPublishPayload` (`lib/wp/publish.ts`) demande à V1 le
+  rendu `article_image` (résolu pour la catégorie de l'article) avant de téléverser l'image à la
+  une. Si R2 **est** configuré et qu'un gabarit se résout (le gabarit de départ « Image à la une —
+  défaut », sans catégorie, couvre déjà toute catégorie qui n'a pas son propre gabarit — voir §7
+  point 3), c'est **son rendu** qui est publié, pas l'image brute — et un rendu en échec (jetons
+  manquants, ex. `{{brand.logo}}` sans `STUDIO_BRAND_LOGO_URL`, ou toute autre erreur du moteur)
+  **fait échouer toute la publication** avec le message français du moteur : l'article reste
+  `approved`, donc réessayable une fois la cause corrigée. C'est un durcissement délibéré par
+  rapport au fail-soft de l'image brute décrit juste en dessous (§8, « Image fail-soft ») : une
+  fois le gabarit en place, l'image générée **est** l'illustration de l'article, et publier sans
+  elle produirait un article visiblement cassé sur le site public. `articles.featuredImageUrl`
+  n'est jamais réécrit par la publication — voir l'encadré en tête du `README.md`.
+
+**Optionnel — jeton `{{brand.logo}}` :**
+
+| Variable | Rôle |
+|---|---|
+| `STUDIO_BRAND_LOGO_URL` | URL du logo de marque injecté dans le jeton `{{brand.logo}}` (`lib/studio/bindings.ts`). |
+
+Laissée vide, le jeton `{{brand.logo}}` est simplement **absent** des valeurs — comme n'importe quel
+autre jeton non fourni. Tout gabarit qui l'utilise (les trois contextes à saisie manuelle —
+citation, bandeau, récap — le référencent tous par défaut, voir `CONTEXT_TOKENS` dans
+`lib/studio/tokens.ts`) échoue alors avec **« Valeurs manquantes pour : brand.logo. »** plutôt que
+de planter silencieusement ou d'afficher un logo cassé. C'est la seule variable du studio qui est
+réellement optionnelle : les cinq `R2_*` ci-dessus sont tout-ou-rien, celle-ci dégrade gabarit par
+gabarit selon qu'il référence `{{brand.logo}}` ou non.
+
 ---
 
 ## 3. Mise en place de la base de données
@@ -113,7 +165,7 @@ bun run build
 bun run start            # sert la build de production sur le port 3000
 ```
 
-Vérification rapide : `bun test` (135 tests, sans réseau ni clés), `bun run typecheck`.
+Vérification rapide : `bun test` (~850 tests, sans réseau ni clés), `bun run typecheck`.
 
 ### 5.1 Déploiement sur Railway — migrations automatiques à chaque déploiement
 
@@ -231,15 +283,18 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 
 1. [ ] Variables d'env posées (§2) ; `DATABASE_URL`/`DIRECT_URL` valides ; les deux `*_TRIGGER_SECRET` générés et distincts.
 2. [ ] `bun install && bun run db:migrate` ; extension pgvector active.
-3. [ ] `bun run db:create-admin` → premier admin créé (§4).
-4. [ ] `bun run build && bun run start` (ou déploiement hôte) ; l'app répond sur `/login`.
-5. [ ] Connexion admin → **Réglages → Sources RSS** : ajouter les vrais flux, **« Vérifier ce flux »** avant d'activer.
-6. [ ] **Réglages → Intégrations** : « Tester » WordPress (doit être *configuré* + connexion OK) et les fournisseurs IA.
-7. [ ] **Réglages → Catégories & Tags** : « Synchroniser depuis WordPress » → la vraie taxonomie remplace les placeholders (l'IA choisit une catégorie dans ce miroir).
-8. [ ] **Réglages → Équipe** : créer les comptes éditeurs/journalistes (mot de passe temporaire communiqué à chacun).
-9. [ ] Déclencher **une** fois le pipeline manuellement (curl §6.1) → vérifier des brouillons dans **/queue**.
-10. [ ] Revue humaine : ouvrir un article dans l'éditeur, corriger, **« Approuver & publier »** → post WordPress en ligne (vérifier titre/catégorie/tags/image/crédit + pied de sources).
-11. [ ] Seulement ensuite : **activer les deux crons** (§6). L'automatisation tourne.
+3. [ ] `bun run db:studio-templates` → installe les 3 gabarits de départ du studio (**non destructif,
+   sûr en production**, contrairement à `db:seed` — se relance sans risque, un gabarit déjà présent
+   est laissé intact).
+4. [ ] `bun run db:create-admin` → premier admin créé (§4).
+5. [ ] `bun run build && bun run start` (ou déploiement hôte) ; l'app répond sur `/login`.
+6. [ ] Connexion admin → **Réglages → Sources RSS** : ajouter les vrais flux, **« Vérifier ce flux »** avant d'activer.
+7. [ ] **Réglages → Intégrations** : « Tester » WordPress (doit être *configuré* + connexion OK) et les fournisseurs IA.
+8. [ ] **Réglages → Catégories & Tags** : « Synchroniser depuis WordPress » → la vraie taxonomie remplace les placeholders (l'IA choisit une catégorie dans ce miroir).
+9. [ ] **Réglages → Équipe** : créer les comptes éditeurs/journalistes (mot de passe temporaire communiqué à chacun).
+10. [ ] Déclencher **une** fois le pipeline manuellement (curl §6.1) → vérifier des brouillons dans **/queue**.
+11. [ ] Revue humaine : ouvrir un article dans l'éditeur, corriger, **« Approuver & publier »** → post WordPress en ligne (vérifier titre/catégorie/tags/image/crédit + pied de sources).
+12. [ ] Seulement ensuite : **activer les deux crons** (§6). L'automatisation tourne.
 
 ---
 
@@ -248,7 +303,17 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 - **Observabilité** : `/runs` liste chaque exécution du pipeline (statut, étapes, items, erreurs) ; le tiroir de détail permet de **retraiter** un item ou **relancer** un run.
 - **Mode dégradé** : sans clés IA, les brouillons sont produits mais marqués dégradés (`confidenceFlags.aiDegraded`) — visibles en revue, jamais publiés automatiquement.
 - **WordPress non configuré** : toute tentative de publication renvoie « WordPress non configuré » et laisse l'article `approved` (jamais de faux succès).
-- **Image fail-soft** : si l'image à la une échoue, le post part **sans** image (jamais de post à moitié cassé) ; l'éditeur peut l'ajouter puis **Republier**.
+- **Image fail-soft — nuancé depuis V3** : le TÉLÉVERSEMENT WordPress de l'image reste fail-soft
+  (`uploadFeaturedImage`, inchangé) — si le téléchargement de l'image (brute ou générée) ou
+  l'envoi à la médiathèque WP échoue, le post part **sans** image (jamais de post à moitié cassé) ;
+  l'éditeur peut corriger puis **Republier**. Mais le RENDU du gabarit `article_image`, lui, n'est
+  **plus** fail-soft dès qu'un gabarit est configuré pour la catégorie : un rendu en échec bloque
+  **toute** la publication (voir §2, « Publication (V3) »), l'article restant `approved` pour un
+  nouvel essai — l'image générée est trop centrale à l'article publié pour partir silencieusement
+  sans elle.
+- **Studio — couleur de catégorie** : éditable depuis **Réglages → Catégories & Tags** (colonne *Couleur*, pastille + sélecteur `#RRGGBB` strict, vide = retour au défaut). Toute catégorie sans couleur posée rend avec `DEFAULT_CATEGORY_COLOR` (`lib/studio/bindings.ts`).
+- **Studio — surfaces V2** : `/studio` liste les gabarits par contexte (portée canal/catégorie, état brouillon/publié/modifications non publiées) ; `/studio/[id]` est l'éditeur (canevas DOM, calques, liaison de jetons, aperçu réel produit par le moteur V1, publication versionnée avec historique) ; `/studio/assets` téléverse et gère images (PNG/JPEG/WebP/SVG, 5 Mo max) et polices (TTF/OTF, 2 Mo max — **le WOFF2 est refusé**, Satori ne sait pas le lire) ; `/studio/generer` produit une image ponctuelle pour les trois contextes à saisie manuelle (citation, bandeau newsletter, récap), en choisissant éventuellement un canal/une catégorie de portée.
+- **Studio — `/studio/generer` sans gabarit publié** : les trois contextes à saisie manuelle (`quote_card`, `newsletter_header`, `recap_card`) n'ont **aucun gabarit de départ** (`bun run db:studio-templates` ne sème que `article_image`/`social_post`) — tant que personne n'en a créé un depuis **Studio → Gabarits** (`/studio`, bouton « Nouveau gabarit ») puis publié dans son éditeur (`/studio/[id]`), la génération répond « Aucun gabarit publié pour ce contexte. Créez-en un et publiez-le depuis Studio → Gabarits avant de générer. » plutôt qu'un état vide silencieux.
 - **Idempotence** : republier met à jour le post WP existant (via `distributions.externalId`), jamais de doublon.
 - **Dépublier / Republier** : depuis l'éditeur d'un article publié (rôles Éditeur/Admin).
 - **Sécurité** : secrets uniquement en `.env`/gestionnaire de secrets ; endpoints cron bearer-gardés ; RBAC appliqué **côté serveur** sur chaque action (pas seulement l'UI) ; un admin ne peut pas se verrouiller lui-même (anti-lockout).
@@ -275,3 +340,7 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 | « WordPress non configuré » à la publication | Une des 4 variables `WP_*` manque. Compléter puis « Tester » dans Intégrations. |
 | Publication planifiée qui ne part pas | L'article doit être `approved` **et** avoir un `scheduledAt` passé ; le cron `/api/publish/due` doit tourner. |
 | Erreur pgvector au build/migrate | Extension `vector` non activée sur la base. `CREATE EXTENSION IF NOT EXISTS vector;`. |
+| Studio en lecture seule, bannière « Stockage R2 non configuré » | Une des cinq variables `R2_*` manque (§2). Les compléter — aucun redémarrage de la base requis. |
+| « Aucun gabarit publié pour ce contexte » sur `/studio/generer` | Normal pour `quote_card`/`newsletter_header`/`recap_card` tant qu'aucun gabarit n'a été créé (**Studio → Gabarits**, `/studio`, bouton « Nouveau gabarit ») **et publié** dans son éditeur (`/studio/[id]`) pour ce contexte (aucun gabarit de départ ne les couvre). |
+| Gabarit qui échoue avec « Valeurs manquantes pour : brand.logo. » | `STUDIO_BRAND_LOGO_URL` n'est pas posée (§2) — optionnelle, mais tout gabarit qui référence `{{brand.logo}}` l'exige. |
+| Publication qui échoue avec « Génération de l'image échouée — … » (article laissé `approved`) | R2 **est** configuré et un gabarit `article_image` s'est résolu pour la catégorie de l'article, mais son rendu a échoué (V3, §2/§8) — le message nomme la cause (jetons manquants, échec moteur…). Corriger la cause (ex. compléter l'image/la catégorie de l'article, ou `STUDIO_BRAND_LOGO_URL` si le gabarit y fait référence) puis relancer la publication (« Approuver & publier » ou **Republier**) ; la barrière de revue n'est pas affectée, l'article reste réessayable. |

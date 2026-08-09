@@ -173,3 +173,22 @@ export const fixFieldsSchema = z.object({
     .refine(isSafePublicHttpUrl, "URL source non autorisée").optional(),
 });
 export type FixFieldsInput = z.infer<typeof fixFieldsSchema>;
+
+// wp_categories.color — the {{category.color}} token setCategoryColor writes (V2 Task 3, closing
+// the V1-documented gap: the column and the render read existed, nothing could write it). Strict
+// #RRGGBB only: no 3-digit shorthand (#FFF), no alpha channel, no CSS colour names — the studio's
+// own hexColor (lib/studio/scene.ts) is deliberately more permissive because IT normalizes at
+// render time; this is the single write path into the taxonomy, so it stays strict rather than
+// silently normalizing a looser input. null or an empty/whitespace-only string clears the colour
+// back to DEFAULT_CATEGORY_COLOR (lib/studio/default-category-color.ts) — never an error.
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+export function validateCategoryColor(
+  input: string | null,
+): { ok: true; data: string | null } | { ok: false; message: string } {
+  if (input === null || input.trim() === "") return { ok: true, data: null };
+  if (!HEX_COLOR_RE.test(input)) {
+    return { ok: false, message: "Couleur invalide : format hexadécimal strict attendu, ex. #1B7F4A." };
+  }
+  return { ok: true, data: input };
+}
