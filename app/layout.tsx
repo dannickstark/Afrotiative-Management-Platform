@@ -21,7 +21,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
       className={`${inter.variable} ${lora.variable} h-full`}
     >
-      <body className="min-h-full flex flex-col font-sans antialiased">
+      <body className="min-h-full flex flex-col font-sans antialiased group/body overscroll-none [--footer-height:--spacing(14)] xl:[--footer-height:--spacing(24)] theme-default">
         <ThemeProvider>
           <TooltipProvider>{children}</TooltipProvider>
           <Toaster richColors position="top-right" />
