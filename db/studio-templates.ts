@@ -68,14 +68,33 @@ const STARTERS: Starter[] = [
 // IDEMPOTENT et NON destructif — contrairement à db/seed.ts. Sûr à exécuter en production : un
 // gabarit déjà présent sur la même portée est laissé intact, jamais écrasé.
 //
-// Le SELECT ci-dessous doit respecter l'index unique de portée render_templates_scope
-// (context, channel, category_id) NULLS NOT DISTINCT parmi les lignes non archivées : ces trois
-// gabarits n'ont jamais de catégorie (categoryId toujours NULL), donc c'est bien
-// `isNull(renderTemplates.categoryId)` — et non une comparaison d'égalité — qui reproduit
-// fidèlement le comportement de l'index, où plusieurs NULL de category_id sur la même
-// (context, channel) sont traités comme UN SEUL groupe, pas comme des lignes distinctes.
-// Exécuter cette fonction deux fois de suite doit donc trouver la ligne créée au premier passage
-// et ne rien réinsérer.
+// Le SELECT ci-dessous doit reproduire EXACTEMENT l'index unique de portée render_templates_scope :
+// (context, channel, category_id) NULLS NOT DISTINCT, **WHERE archived = false**
+// (db/migrations/0015_slow_selene.sql). Deux conditions, toutes les deux nécessaires :
+//   - `isNull(renderTemplates.categoryId)` plutôt qu'une égalité : ces trois gabarits n'ont jamais
+//     de catégorie, et NULLS NOT DISTINCT traite plusieurs NULL de category_id sur la même
+//     (context, channel) comme UN SEUL groupe, pas comme des lignes distinctes.
+//   - `eq(renderTemplates.archived, false)` : SANS cette condition, une ligne ARCHIVÉE à cette
+//     portée (par ex. un admin qui archive le gabarit de départ Facebook depuis V2) ferait
+//     `existing` non vide alors que l'index unique l'ignore et laisserait une nouvelle insertion
+//     passer — le script rapporterait alors « déjà présents » sans que resolveTemplate (qui EXCLUT
+//     les lignes archivées) n'ait plus aucun gabarit à trouver à cette portée. Avec cette
+//     condition, une portée archivée est traitée comme absente et réinstallée au prochain passage :
+//     c'est ce qui rend la fonction réellement CONVERGENTE, pas seulement idempotente sur le cas
+//     nominal.
+// Délibérément PAS de `isNotNull(publishedVersion)` ici : si une ligne non archivée mais jamais
+// publiée occupe déjà cette portée (par ex. un brouillon créé à la main depuis V2, avant toute
+// publication), l'index unique l'empêchera de toute façon de coexister avec une nouvelle insertion
+// — la traiter comme « absente » ferait échouer l'INSERT plus bas avec une violation de contrainte
+// brute au lieu d'un skip propre. La traiter comme « présente » (skip) est le choix sûr : ce script
+// ne doit jamais écraser un brouillon existant, publié ou non.
+//
+// Les trois écritures (insertion du gabarit, insertion de sa version publiée, pose de
+// publishedVersion) sont regroupées dans UNE transaction : sans cela, un processus interrompu
+// entre deux écritures laisserait une ligne à moitié créée (non archivée, publishedVersion NULL) —
+// invisible à resolveTemplate MAIS occupant quand même la portée dans l'index unique, donc
+// bloquant DÉFINITIVEMENT toute réinsertion future à cette portée. La transaction garantit que les
+// trois écritures se produisent ensemble ou pas du tout.
 export async function seedStudioTemplates(): Promise<{ created: number; skipped: number }> {
   let created = 0, skipped = 0;
 
@@ -88,16 +107,19 @@ export async function seedStudioTemplates(): Promise<{ created: number; skipped:
       eq(renderTemplates.context, starter.context),
       starter.channel === null ? isNull(renderTemplates.channel) : eq(renderTemplates.channel, starter.channel),
       isNull(renderTemplates.categoryId),
+      eq(renderTemplates.archived, false),
     )).limit(1);
     if (existing) { skipped++; continue; }
 
     const preset = FORMAT_PRESETS[starter.format];
-    const [t] = await db.insert(renderTemplates).values({
-      name: starter.name, context: starter.context, channel: starter.channel, categoryId: null,
-      format: starter.format, width: preset.width, height: preset.height, scene,
-    }).returning();
-    await db.insert(renderTemplateVersions).values({ templateId: t.id, version: 1, scene });
-    await db.update(renderTemplates).set({ publishedVersion: 1 }).where(eq(renderTemplates.id, t.id));
+    await db.transaction(async (tx) => {
+      const [t] = await tx.insert(renderTemplates).values({
+        name: starter.name, context: starter.context, channel: starter.channel, categoryId: null,
+        format: starter.format, width: preset.width, height: preset.height, scene,
+      }).returning();
+      await tx.insert(renderTemplateVersions).values({ templateId: t.id, version: 1, scene });
+      await tx.update(renderTemplates).set({ publishedVersion: 1 }).where(eq(renderTemplates.id, t.id));
+    });
     created++;
   }
 

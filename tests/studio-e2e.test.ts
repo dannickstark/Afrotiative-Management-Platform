@@ -60,11 +60,30 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await db.delete(renders).where(eq(renders.subjectId, articleId));
-  await db.delete(renderTemplates).where(inArray(renderTemplates.id, [templateId]));
-  await db.delete(articles).where(inArray(articles.id, [articleId]));
-  await db.delete(wpCategories).where(eq(wpCategories.id, categoryId));
-  server.stop(true);
+  // server.stop() D'ABORD, inconditionnellement : si un beforeAll partiel ou une suppression
+  // ci-dessous lève, le serveur fixture ne doit jamais rester ouvert.
+  server?.stop(true);
+
+  // Chaque suppression est gardée par la présence de son id (un beforeAll qui échoue à mi-chemin —
+  // ex. l'insertion de renderTemplates — laisse templateId à undefined alors qu'articleId et
+  // categoryId sont déjà posés) ET isolée dans son propre try/catch : sans ça, la suppression d'un
+  // id manquant ou une erreur sur UNE ligne ferait échouer tout le reste de afterAll, laissant fuir
+  // les lignes suivantes dans la base partagée. L'ordre (renders -> renderTemplates -> articles ->
+  // wpCategories) respecte les contraintes de clé étrangère (articles.category_id et
+  // render_templates.category_id référencent wp_categories).
+  const steps: Array<[string, () => Promise<unknown>]> = [
+    ["renders", () => articleId ? db.delete(renders).where(eq(renders.subjectId, articleId)) : Promise.resolve()],
+    ["renderTemplates", () => templateId ? db.delete(renderTemplates).where(inArray(renderTemplates.id, [templateId])) : Promise.resolve()],
+    ["articles", () => articleId ? db.delete(articles).where(inArray(articles.id, [articleId])) : Promise.resolve()],
+    ["wpCategories", () => categoryId ? db.delete(wpCategories).where(eq(wpCategories.id, categoryId)) : Promise.resolve()],
+  ];
+  for (const [label, step] of steps) {
+    try {
+      await step();
+    } catch (e) {
+      console.error(`Nettoyage e2e — échec sur « ${label} » (base partagée, à vérifier manuellement) :`, e);
+    }
+  }
 });
 
 describe("gabarits de départ", () => {
@@ -98,12 +117,21 @@ describe("renderForArticle — bout en bout", () => {
     expect(meta.width).toBe(1200);
     expect(meta.height).toBe(675);
 
-    // La scène a réellement été PEINTE (photo de fond, bordure catégorie, titre blanc), pas
-    // seulement des dimensions correctes sur un canevas vide : un canevas non peint serait uni à
-    // la couleur de fond du gabarit (#0B0B0B) et aurait un écart-type de canal proche de zéro. Le
-    // titre en blanc plein sur un fond sombre, à lui seul, garantit un écart-type élevé.
+    // La PHOTO DE FOND spécifiquement a été peinte, pas seulement « quelque chose de non uniforme » :
+    // un écart-type de canal élevé ne le prouve PAS — le titre blanc seul sur fond sombre suffit à
+    // produire un écart-type élevé même si element.ts avait silencieusement ignoré le calque `bg`
+    // (voir le `continue` sur URI manquante, lib/studio/element.ts). Vérifié empiriquement : en
+    // rendant la même scène SANS le calque `bg`, l'écart-type du canal rouge reste à 43.6 (contre
+    // 43.5 avec) — un faux positif total pour ce genre de test.
+    // La couleur de la photo fixture ci-dessus (r:30, g:90, b:40 — nettement plus verte que rouge)
+    // laisse une signature que le reste de la scène n'a pas : bordure et texte de catégorie sont
+    // dans la même teinte verte que la photo mais couvrent une surface bien plus petite. Comparer
+    // canal G à canal R discrimine donc la présence réelle de la photo : ~44 vs ~20 (bg présent)
+    // contre ~26 vs ~20 (bg absent, écart insuffisant) — vérifié empiriquement en supprimant le
+    // calque `bg` de la scène et confirmant que cette assertion échoue alors (voir le rapport de
+    // tâche pour le détail des deux mesures).
     const stats = await sharp(Buffer.from(bytes)).stats();
-    expect(stats.channels[0].stdev).toBeGreaterThan(20);
+    expect(stats.channels[1].mean).toBeGreaterThan(stats.channels[0].mean + 10);
 
     // Deuxième appel : servi par le cache, aucun nouvel objet stocké — ET surtout aucun second
     // rendu déclenché. `store.objects.size` seul ne le prouverait pas (un second rendu produisant

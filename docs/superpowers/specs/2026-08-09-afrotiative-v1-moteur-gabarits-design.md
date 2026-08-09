@@ -300,12 +300,18 @@ publiée**, jamais `render_templates.scene`.
 ### API publique
 
 ```ts
-renderForArticle(articleId, { context, channel }): Promise<
+renderForArticle(articleId, { context, channel, store, fetchImpl }): Promise<
   | { ok: true; url: string; renderId: string; degraded: boolean }
-  | { ok: false; message: string }        // français, affichable tel quel
-  | { ok: true; url: null }               // aucun gabarit : utiliser l'image brute
+  | { ok: true; url: null; renderId: null; degraded: false }  // aucun gabarit : utiliser l'image brute
+  | { ok: false; message: string }                            // français, affichable tel quel
 >
 ```
+
+`store?: RenderStore` (défaut `R2RenderStore`) et `fetchImpl?: typeof fetch` sont des points
+d'injection réservés aux tests — `MemoryRenderStore` pour vérifier bout en bout sans compte R2, et
+`fetchImpl` pour atteindre un serveur fixture local sans jamais désactiver le garde SSRF partagé en
+dehors des tests (voir `lib/studio/store.ts` et `lib/studio/images.ts`). En production, V3 (onglet
+Aperçu) et D1 (panneau Diffusion) — les deux seuls appelants — ne fournissent ni l'un ni l'autre.
 
 ---
 
