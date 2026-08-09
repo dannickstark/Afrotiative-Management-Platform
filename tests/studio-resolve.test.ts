@@ -70,17 +70,22 @@ describe("resolveTemplate", () => {
     expect(layer.content).toBe("publié");
   });
 
+  // Canal "test-priorite-canal", PAS "instagram" : `bun run db:studio-templates`
+  // (db/studio-templates.ts) sème désormais en base un gabarit par défaut réel et permanent à la
+  // portée EXACTE (social_post, instagram, null) — le premier makeTemplate() ci-dessous entrerait
+  // en collision avec lui. La colonne `channel` est du texte libre (aucun enum Postgres, voir
+  // db/schema.ts), un canal synthétique qui n'existe dans aucun gabarit de départ est donc sûr ici.
   it("préfère (contexte, canal, catégorie) au défaut de canal", async () => {
-    await makeTemplate({ channel: "instagram", categoryId: null, publish: "défaut-canal", draft: "d" });
-    await makeTemplate({ channel: "instagram", categoryId, publish: "spécifique", draft: "d" });
-    const r = await resolveTemplate({ context: "social_post", channel: "instagram", categoryId });
+    await makeTemplate({ channel: "test-priorite-canal", categoryId: null, publish: "défaut-canal", draft: "d" });
+    await makeTemplate({ channel: "test-priorite-canal", categoryId, publish: "spécifique", draft: "d" });
+    const r = await resolveTemplate({ context: "social_post", channel: "test-priorite-canal", categoryId });
     const layer = r!.scene.layers[0];
     if (layer.type !== "text") throw new Error("type");
     expect(layer.content).toBe("spécifique");
   });
 
   it("retombe sur le défaut de canal quand la catégorie n'a pas de gabarit", async () => {
-    const r = await resolveTemplate({ context: "social_post", channel: "instagram", categoryId: null });
+    const r = await resolveTemplate({ context: "social_post", channel: "test-priorite-canal", categoryId: null });
     const layer = r!.scene.layers[0];
     if (layer.type !== "text") throw new Error("type");
     expect(layer.content).toBe("défaut-canal");
@@ -107,9 +112,15 @@ describe("resolveTemplate", () => {
     expect(layer.content).toBe("publié");
   });
 
+  // Réutilise le canal "x" — PAS "facebook" : "facebook" a désormais un gabarit de départ réel
+  // (non archivé, publié) permanent en base à (social_post, facebook, null), qui l'emporterait
+  // sur le repli attendu ici. "x" est sûr à réutiliser : le brouillon non publié créé par
+  // « ignore un gabarit jamais publié » ci-dessus occupe déjà cette portée mais reste invisible au
+  // résolveur (publishedVersion NULL) ; ce test y ajoute une ligne ARCHIVÉE, elle aussi invisible
+  // (archived = true), et l'index unique ne s'applique qu'aux lignes non archivées.
   it("ignore un gabarit archivé", async () => {
-    await makeTemplate({ channel: "facebook", categoryId: null, publish: "archivé", draft: "d", archived: true });
-    const r = await resolveTemplate({ context: "social_post", channel: "facebook" });
+    await makeTemplate({ channel: "x", categoryId: null, publish: "archivé", draft: "d", archived: true });
+    const r = await resolveTemplate({ context: "social_post", channel: "x" });
     const layer = r!.scene.layers[0];
     if (layer.type !== "text") throw new Error("type");
     expect(layer.content).toBe("défaut-contexte");
@@ -131,16 +142,23 @@ describe("resolveTemplate", () => {
   });
 
   it("préfère (contexte, null, catégorie) au défaut de contexte quand les deux existent", async () => {
-    // Ajoute maintenant le défaut de contexte pour "article_image" : les deux paliers coexistent
-    // pour cette même requête (categoryId fourni, pas de canal). Le test précédent ne pouvait pas
-    // prouver la préséance — aucun défaut de contexte n'existait encore pour le départager d'un
-    // résolveur qui aurait sauté directement au niveau (context, null, null).
+    // Contexte "quote_card", délibérément DIFFÉRENT de "article_image" utilisé par le test
+    // précédent : `bun run db:studio-templates` sème désormais en base un gabarit par défaut réel
+    // et permanent à la portée EXACTE (article_image, null, null) — y insérer un second gabarit
+    // (même pour un autre test) violerait l'index unique render_templates_scope. "quote_card" n'a
+    // aucun gabarit de départ semé, donc ce test construit lui-même, de façon autonome, les DEUX
+    // paliers qu'il compare (la logique de préséance testée est générique à resolveTemplate, pas
+    // spécifique à article_image — le choix du contexte importe seulement pour ne pas percuter les
+    // gabarits de départ réels).
     await makeTemplate({
-      context: "article_image", channel: null, categoryId: null, publish: "article-image-défaut-contexte", draft: "d",
+      context: "quote_card", channel: null, categoryId, publish: "quote-catégorie", draft: "d",
     });
-    const r = await resolveTemplate({ context: "article_image", categoryId });
+    await makeTemplate({
+      context: "quote_card", channel: null, categoryId: null, publish: "quote-défaut-contexte", draft: "d",
+    });
+    const r = await resolveTemplate({ context: "quote_card", categoryId });
     const layer = r!.scene.layers[0];
     if (layer.type !== "text") throw new Error("type");
-    expect(layer.content).toBe("catégorie-sans-canal");
+    expect(layer.content).toBe("quote-catégorie");
   });
 });

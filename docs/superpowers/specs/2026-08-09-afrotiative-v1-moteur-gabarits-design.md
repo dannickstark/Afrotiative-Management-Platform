@@ -276,14 +276,26 @@ révèle instable, le repli est `maxLines` + ellipse, déjà présent, et on ret
 
 ### Résolution du gabarit
 
+**Quatre niveaux de repli**, pas trois — le troisième compte, ce n'est pas un simple raffinement du
+deuxième :
+
 ```
 resolveTemplate({ context, channel, categoryId })
-  (context, channel, categoryId)  →  (context, channel, null)  →  (context, null, null)  →  null
+
+  avec canal  : (context, channel, categoryId)  →  (context, channel, null)  →  (context, null, null)
+  sans canal  : (context, null, categoryId)      →  (context, null, null)
 ```
 
+Les deux chemins convergent sur le même repli final `(context, null, null)` ; un `null` en sortie
+n'est pas une erreur, l'appelant utilise l'image brute inchangée.
+
+Le niveau `(context, null, categoryId)` n'est pas un cas marginal : c'est le chemin **principal** du
+contexte `article_image`, qui n'a **jamais** de canal (l'image à la une du site n'est diffusée sur
+aucun réseau) — c'est donc bien lui qui fait dépendre le rendu de la couleur de la catégorie, avant
+tout repli sur le gabarit générique du contexte.
+
 Non archivés, `publishedVersion IS NOT NULL`, et le résolveur renvoie **l'instantané de la version
-publiée**, jamais `render_templates.scene`. Un `null` n'est pas une erreur : l'appelant utilise
-l'image brute inchangée.
+publiée**, jamais `render_templates.scene`.
 
 ### API publique
 
@@ -326,7 +338,7 @@ silencieusement une carte au fond manquant est pire qu'une erreur claire et rée
 | `sceneToElement` | instantané de l'arbre ; ordre de peinture = ordre du tableau |
 | Résolution de jetons | valeurs manquantes, jeton inconnu, jeton dans une couleur, jeton dans un slot d'image |
 | `validateScene` | `article.url` dans `article_image` **refusé** ; incohérences de type refusées |
-| `resolveTemplate` | les trois niveaux de repli ; archivés exclus ; non publiés exclus ; c'est bien l'instantané publié qui sort, pas le brouillon |
+| `resolveTemplate` | les quatre niveaux de repli ; archivés exclus ; non publiés exclus ; c'est bien l'instantané publié qui sort, pas le brouillon |
 | `inputHash` | stable pour des entrées identiques ; change si la version ou une valeur change ; insensible à l'ordre des clés |
 | Formats | largeur/hauteur figées à la création, insensibles à une modification ultérieure du préréglage |
 | Rendu bout en bout | scène fixture + polices et images locales → dimensions PNG attendues + empreinte perceptuelle |

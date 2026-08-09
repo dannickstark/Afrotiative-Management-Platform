@@ -55,7 +55,10 @@ async function findAt(
   };
 }
 
-// Trois niveaux de repli. Un null final n'est PAS une erreur : l'appelant utilise l'image brute.
+// Quatre niveaux de repli (deux chemins exclusifs selon la présence d'un canal, qui convergent sur
+// (context, null, null)) : voir §5 du design pour le détail, notamment pourquoi
+// (context, null, categoryId) est le chemin PRINCIPAL d'article_image, pas un cas marginal. Un null
+// final n'est PAS une erreur : l'appelant utilise l'image brute.
 export async function resolveTemplate(q: {
   context: TemplateContext;
   channel?: string | null;

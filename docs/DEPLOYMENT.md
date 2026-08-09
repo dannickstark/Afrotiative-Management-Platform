@@ -50,6 +50,18 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 
 > Les deux `*_TRIGGER_SECRET` doivent être **distincts** l'un de l'autre et de tout autre secret.
 
+**Studio de gabarits (V1) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
+renvoie `null` ; `renderForArticle` répond alors avec un message français plutôt que de planter,
+même raisonnement que WordPress ci-dessus) :
+
+| Variable | Rôle |
+|---|---|
+| `R2_ACCOUNT_ID` | Identifiant de compte Cloudflare. |
+| `R2_ACCESS_KEY_ID` | Jeton API R2. |
+| `R2_SECRET_ACCESS_KEY` | Secret associé au jeton API R2. |
+| `R2_BUCKET` | Nom du bucket (ex. `afrotiative-media`). |
+| `R2_PUBLIC_BASE_URL` | Base des URLs publiques (ex. `https://media.afrotiative.com`). |
+
 ---
 
 ## 3. Mise en place de la base de données
@@ -231,15 +243,18 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 
 1. [ ] Variables d'env posées (§2) ; `DATABASE_URL`/`DIRECT_URL` valides ; les deux `*_TRIGGER_SECRET` générés et distincts.
 2. [ ] `bun install && bun run db:migrate` ; extension pgvector active.
-3. [ ] `bun run db:create-admin` → premier admin créé (§4).
-4. [ ] `bun run build && bun run start` (ou déploiement hôte) ; l'app répond sur `/login`.
-5. [ ] Connexion admin → **Réglages → Sources RSS** : ajouter les vrais flux, **« Vérifier ce flux »** avant d'activer.
-6. [ ] **Réglages → Intégrations** : « Tester » WordPress (doit être *configuré* + connexion OK) et les fournisseurs IA.
-7. [ ] **Réglages → Catégories & Tags** : « Synchroniser depuis WordPress » → la vraie taxonomie remplace les placeholders (l'IA choisit une catégorie dans ce miroir).
-8. [ ] **Réglages → Équipe** : créer les comptes éditeurs/journalistes (mot de passe temporaire communiqué à chacun).
-9. [ ] Déclencher **une** fois le pipeline manuellement (curl §6.1) → vérifier des brouillons dans **/queue**.
-10. [ ] Revue humaine : ouvrir un article dans l'éditeur, corriger, **« Approuver & publier »** → post WordPress en ligne (vérifier titre/catégorie/tags/image/crédit + pied de sources).
-11. [ ] Seulement ensuite : **activer les deux crons** (§6). L'automatisation tourne.
+3. [ ] `bun run db:studio-templates` → installe les 3 gabarits de départ du studio (**non destructif,
+   sûr en production**, contrairement à `db:seed` — se relance sans risque, un gabarit déjà présent
+   est laissé intact).
+4. [ ] `bun run db:create-admin` → premier admin créé (§4).
+5. [ ] `bun run build && bun run start` (ou déploiement hôte) ; l'app répond sur `/login`.
+6. [ ] Connexion admin → **Réglages → Sources RSS** : ajouter les vrais flux, **« Vérifier ce flux »** avant d'activer.
+7. [ ] **Réglages → Intégrations** : « Tester » WordPress (doit être *configuré* + connexion OK) et les fournisseurs IA.
+8. [ ] **Réglages → Catégories & Tags** : « Synchroniser depuis WordPress » → la vraie taxonomie remplace les placeholders (l'IA choisit une catégorie dans ce miroir).
+9. [ ] **Réglages → Équipe** : créer les comptes éditeurs/journalistes (mot de passe temporaire communiqué à chacun).
+10. [ ] Déclencher **une** fois le pipeline manuellement (curl §6.1) → vérifier des brouillons dans **/queue**.
+11. [ ] Revue humaine : ouvrir un article dans l'éditeur, corriger, **« Approuver & publier »** → post WordPress en ligne (vérifier titre/catégorie/tags/image/crédit + pied de sources).
+12. [ ] Seulement ensuite : **activer les deux crons** (§6). L'automatisation tourne.
 
 ---
 

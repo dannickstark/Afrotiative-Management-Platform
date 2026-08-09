@@ -37,6 +37,7 @@ Flux RSS  →  Extraction  →  Réécriture IA (FR)  →  File de revue  →  �
 | **Pipeline (SP3)** | ingestion RSS, extraction, réécriture IA, embeddings pgvector, clustering sémantique. |
 | **Observabilité (SP4)** | `/runs` — exécutions, étapes, retraitement d'un item, relance d'un run. |
 | **Publication (SP5)** | publier / dépublier / republier WordPress + publication planifiée. |
+| **Studio (V1)** | moteur de gabarits — rendu d'images depuis une scène JSON. |
 | **Réglages (SP2)** | `/settings/{feeds, taxonomy, team, integrations}` — sources, taxonomie miroir, équipe, statut des intégrations. |
 | **Crons** | `POST /api/pipeline/run` (ingestion) · `POST /api/publish/due` (publication planifiée), tous deux bearer-gardés. |
 
@@ -73,6 +74,7 @@ Comptes de démo (seed) : `admin@` / `editor@` / `journaliste@afrotiative.com`, 
 | `bun run db:migrate:deploy` | applique les migrations avec les seules deps de runtime (utilisé au déploiement). |
 | `bun run db:baseline` | réconcilie une base créée via `db:push` avec le journal de migration (one-time). |
 | `CONFIRM_SEED=1 bun run db:seed` | seed de démo (**efface les tables applicatives** ; garde-fous anti-production). |
+| `bun run db:studio-templates` | installe les 3 gabarits de départ (idempotent). |
 | `bun run db:create-admin` | crée **un** admin en production (voir runbook §4). |
 
 ## Déploiement & exploitation

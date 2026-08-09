@@ -16,9 +16,14 @@ describe("render_templates — unicité de la portée", () => {
   const created: string[] = [];
   const scene = { schemaVersion: 1, canvas: { width: 1, height: 1, background: "#000000" }, layers: [] };
 
+  // channel par défaut "whatsapp", PAS "facebook" : `bun run db:studio-templates`
+  // (db/studio-templates.ts) sème désormais en base un gabarit par défaut réel et permanent à la
+  // portée EXACTE (social_post, facebook, null) — le premier insertTemplate() ci-dessous entrerait
+  // en collision avec lui avant même d'atteindre le second insert que ce test veut exercer.
+  // "whatsapp" n'a aucun gabarit de départ semé.
   async function insertTemplate(over: Partial<typeof renderTemplates.$inferInsert> = {}) {
     const [row] = await db.insert(renderTemplates).values({
-      name: "test", context: "social_post", channel: "facebook", categoryId: null,
+      name: "test", context: "social_post", channel: "whatsapp", categoryId: null,
       format: "fb_link", width: 1200, height: 630, scene, ...over,
     }).returning();
     created.push(row.id);

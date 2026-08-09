@@ -14,6 +14,7 @@
     "db:baseline": "bun db/baseline.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "bun db/seed.ts",
+    "db:studio-templates": "bun db/studio-templates.ts",
     "db:create-admin": "bun db/create-admin.ts"
   },
   "dependencies": {

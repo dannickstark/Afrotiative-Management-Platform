@@ -21,7 +21,12 @@ export type RenderForArticleResult =
 // API publique de V1. V3 (onglet Aperçu) et D1 (panneau Diffusion) n'appellent que ceci.
 export async function renderForArticle(
   articleId: string,
-  o: { context: TemplateContext; channel?: string | null; store?: RenderStore },
+  o: {
+    context: TemplateContext; channel?: string | null; store?: RenderStore;
+    // Injecté par les tests uniquement — voir lib/studio/images.ts : le garde SSRF n'est levé que
+    // si fetchImpl est fourni ET process.env.NODE_ENV === "test", jamais par sa seule présence.
+    fetchImpl?: typeof fetch;
+  },
 ): Promise<RenderForArticleResult> {
   const store = o.store ?? new R2RenderStore();
   if (!o.store && !getStudioConfig()) {
@@ -51,7 +56,7 @@ export async function renderForArticle(
     const cached = await findCachedRender(inputHash);
     if (cached) return { ok: true, url: cached.url, renderId: cached.id, degraded: cached.degraded };
 
-    const out = await renderScene({ scene: template.scene, values });
+    const out = await renderScene({ scene: template.scene, values, fetchImpl: o.fetchImpl });
     const key = storageKeyFor(inputHash, out.mime, new Date());
     const url = await store.put(key, out.bytes, out.mime);
 
