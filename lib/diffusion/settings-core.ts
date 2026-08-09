@@ -113,3 +113,18 @@ export async function updateChannelSettingsCore(
 
   return { ok: true, settings: updated };
 }
+
+// System-only write, called EXCLUSIVELY by lib/diffusion/scheduler.ts (Task 9) — never reachable
+// from the guarded Server Action (UpdateChannelSettingsPatch above deliberately excludes
+// lastAutoSendAt: an operator has no field for it on /settings/social/[channel]). Written BEFORE
+// sendToChannelCore is even called (spec §5's anti-doublon guarantee): a slow send can then never
+// be picked up twice by the following tick, since the very next getChannelSettings() read already
+// sees the new value. Guarantees the row exists first (lazy creation) for the same reason
+// updateChannelSettingsCore does — an UPDATE against a not-yet-created row would silently affect 0
+// rows. Also bumps updatedAt, same convention as every other write in this module.
+export async function setLastAutoSendAt(channel: Channel, at: Date): Promise<void> {
+  await getChannelSettings(channel);
+  await db.update(socialChannelSettings)
+    .set({ lastAutoSendAt: at, updatedAt: at })
+    .where(eq(socialChannelSettings.channel, channel));
+}
