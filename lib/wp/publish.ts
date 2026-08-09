@@ -6,6 +6,7 @@ import { getWpConfig } from "./config";
 import { WordPressClient, WordPressError, type WpPostPayload } from "./client";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
 import { blockingGapsForArticle, MISSING_LABEL } from "@/lib/pipeline/completeness";
+import { renderForArticle, type RenderStore } from "@/lib/studio";
 
 export type PostSource = { mediaName: string; url: string };
 
@@ -81,6 +82,14 @@ function wpErrorMessage(prefix: string, err: unknown): string {
   const reason = err instanceof WordPressError ? err.message : err instanceof Error ? err.message : String(err);
   return `${prefix} : ${reason}`;
 }
+
+// Distingue un échec du RENDU (V3 §2 — durcissement délibéré, voir buildPublishPayload) d'un échec
+// de TRANSPORT WordPress (WordPressError, réseau…) : publishArticle/republishArticle renvoient le
+// message français du moteur (lib/studio) TEL QUEL pour celui-ci, sans le préfixe générique
+// "La publication sur WordPress a échoué :" de wpErrorMessage — ce n'est pas WordPress qui a
+// échoué ici, c'est l'image qui n'a pas pu être générée, et l'éditeur doit voir directement la
+// cause nommée par le moteur (V1 §3 dette assignée à V3 — voir aussi Task 4/completeness.ts).
+class RenderFailedError extends Error {}
 
 // Lightweight SSRF guard for the featured-image fetch below. featuredImageUrl is article data
 // (LLM-produced or editor-entered) that ends up passed straight to server-side fetch() — without
@@ -202,11 +211,56 @@ async function resolveTaxonomy(
 // SAME shape: republishing re-resolves taxonomy and re-uploads the featured image, so a taxonomy
 // or image correction made after the first publish propagates on the next republish, not just on
 // title/body/excerpt edits.
-async function buildPublishPayload(wp: WordPressClient, article: ArticleForPublish): Promise<WpPostPayload> {
+//
+// `renderStore` — injecté par les tests uniquement (même convention que renderForArticle,
+// lib/studio/index.ts : `store`/`fetchImpl`/`assets` y sont tous des overrides réservés aux
+// tests). Un MemoryRenderStore ou tout autre RenderStore de test permet d'exercer le VRAI rendu
+// article_image sans compte R2 réel. Les vrais appelants (approveAndPublish, publishDueArticles,
+// republier depuis /article) ne le fournissent jamais — production laisse renderForArticle choisir
+// son R2RenderStore par défaut.
+async function buildPublishPayload(
+  wp: WordPressClient,
+  article: ArticleForPublish,
+  renderStore?: RenderStore,
+): Promise<WpPostPayload> {
   const { categoryId, tagIds } = await resolveTaxonomy(wp, article);
 
-  const mediaId = article.featuredImageUrl
-    ? await uploadFeaturedImage(wp, article.featuredImageUrl)
+  // V3 §2 — l'image réellement PUBLIÉE est désormais celle GÉNÉRÉE par le gabarit article_image
+  // (résolu pour la catégorie de l'article), produite ICI, au moment de publier — pas pendant le
+  // pipeline normal : « les images ne sont pas générées pendant le pipeline normal ; elles le sont
+  // au moment où on approuve et publie » (demande utilisateur, design §Objectif).
+  // articles.featuredImageUrl n'est JAMAIS réécrit, ni ici ni ailleurs : il reste la trace de
+  // l'image d'origine (crédit, lien source), et c'est ce dont le gabarit repart à CHAQUE rendu (le
+  // cache par inputHash de V1 s'en charge — un rendu identique ne relance jamais renderScene).
+  let featuredImageUrl = article.featuredImageUrl;
+  const render = await renderForArticle(article.id, { context: "article_image", store: renderStore });
+  if (render.ok) {
+    // { ok: true, url } : un rendu a été produit — c'est CETTE url qui sera téléversée ci-dessous,
+    // à la place de l'image brute. { ok: true, url: null } : aucun gabarit résolu pour ce
+    // contexte/cette catégorie — cas normal, pas une erreur (spec §2 point 2) ; featuredImageUrl
+    // garde sa valeur d'origine, comportement inchangé depuis avant V3.
+    if (render.url) featuredImageUrl = render.url;
+  } else if (render.message !== "Stockage R2 non configuré.") {
+    // DURCISSEMENT délibéré (V3 §2 point 3), à bien distinguer de uploadFeaturedImage ci-dessous
+    // qui reste FAIL-SOFT : une fois un gabarit article_image configuré, l'image générée EST
+    // l'illustration de l'article, et publier sans elle produirait un article visiblement cassé
+    // sur le site public — contrairement à l'image brute injoignable d'aujourd'hui, que
+    // uploadFeaturedImage avale silencieusement. Un échec clair et réessayable (l'article reste
+    // `approved`, voir publishArticle/republishArticle) vaut mieux : on fait échouer toute la
+    // publication ici, avec le message français du moteur (lib/studio), TEL QUEL — voir
+    // RenderFailedError plus haut.
+    throw new RenderFailedError(render.message);
+  }
+  // Seule exception au durcissement ci-dessus : le stockage R2 n'est pas configuré DU TOUT. C'est
+  // un réglage d'OPÉRATEUR (le studio visuel n'est pas activé), pas un échec par article — le
+  // tableau d'erreurs du design (§4) ne liste d'ailleurs cette situation que côté onglet Aperçu,
+  // jamais côté Publication. Tant que R2 n'est pas configuré, aucun gabarit n'a jamais pu être
+  // prévisualisé ni validé non plus, donc rien à durcir : on retombe sur l'image brute, exactement
+  // comme avant V3 — c'est le chemin qu'exercent tests/wp-publish.test.ts et
+  // tests/publish-due.test.ts (aucun des deux ne configure R2 ni n'injecte de renderStore).
+
+  const mediaId = featuredImageUrl
+    ? await uploadFeaturedImage(wp, featuredImageUrl)
     : undefined;
 
   return {
@@ -251,8 +305,15 @@ async function uploadFeaturedImage(wp: WordPressClient, featuredImageUrl: string
 // createPost/updatePost call has actually succeeded (postId in hand) and the distributions row
 // has been recorded — never before, so a network failure mid-publish can never leave the article
 // half-published. On any failure the distributions row is marked 'failed' and the article is left
-// exactly as it was (still 'approved'), so the operation is safely retryable.
-export async function publishArticle(articleId: string, actorId?: string | null): Promise<PublishResult> {
+// exactly as it was (still 'approved'), so the operation is safely retryable — this now covers a
+// failing article_image render (V3 §2) exactly like a genuine WordPress transport failure.
+//
+// `renderStore` — voir le commentaire de buildPublishPayload : injecté par les tests uniquement.
+export async function publishArticle(
+  articleId: string,
+  actorId?: string | null,
+  renderStore?: RenderStore,
+): Promise<PublishResult> {
   const cfg = getWpConfig();
   if (!cfg) return { ok: false, message: "WordPress non configuré." };
 
@@ -284,7 +345,7 @@ export async function publishArticle(articleId: string, actorId?: string | null)
   const existingDist = await latestDistribution(articleId);
 
   try {
-    const payload = await buildPublishPayload(wp, article);
+    const payload = await buildPublishPayload(wp, article, renderStore);
 
     const result = existingDist?.externalId
       ? await wp.updatePost(Number(existingDist.externalId), payload)
@@ -304,7 +365,13 @@ export async function publishArticle(articleId: string, actorId?: string | null)
     return { ok: true, message: "Publié sur WordPress.", postId: result.id };
   } catch (err) {
     await upsertDistribution(articleId, existingDist, { status: "failed" });
-    return { ok: false, message: wpErrorMessage("La publication sur WordPress a échoué", err) };
+    // Un RenderFailedError porte déjà le message français du moteur (lib/studio) — le renvoyer TEL
+    // QUEL, sans le préfixe générique de wpErrorMessage réservé aux vraies erreurs de transport WP
+    // (voir le commentaire de RenderFailedError plus haut).
+    const message = err instanceof RenderFailedError
+      ? err.message
+      : wpErrorMessage("La publication sur WordPress a échoué", err);
+    return { ok: false, message };
   }
 }
 
@@ -340,8 +407,16 @@ export async function unpublishArticle(articleId: string, actorId?: string | nul
 // via the shared buildPublishPayload helper) to the SAME WordPress post. Since the user chose the
 // full republish lifecycle rather than a raw content PATCH, this lets a taxonomy or featured-image
 // correction made after the first publish propagate on republish too. The article stays
-// 'published'; publishedAt is left untouched.
-export async function republishArticle(articleId: string, actorId?: string | null): Promise<ActionResult> {
+// 'published'; publishedAt is left untouched — which also means the article_image render's
+// inputHash is stable across republishes, so a republish right after the original publish is a
+// cache hit (V1's inputHash cache), not a second render (spec V3 §5).
+//
+// `renderStore` — voir le commentaire de buildPublishPayload : injecté par les tests uniquement.
+export async function republishArticle(
+  articleId: string,
+  actorId?: string | null,
+  renderStore?: RenderStore,
+): Promise<ActionResult> {
   const cfg = getWpConfig();
   if (!cfg) return { ok: false, message: "WordPress non configuré." };
 
@@ -355,12 +430,15 @@ export async function republishArticle(articleId: string, actorId?: string | nul
 
   const wp = new WordPressClient(cfg);
   try {
-    const payload = await buildPublishPayload(wp, article);
+    const payload = await buildPublishPayload(wp, article, renderStore);
     const result = await wp.updatePost(Number(existingDist.externalId), payload);
     await upsertDistribution(articleId, existingDist, { status: "sent", externalId: String(result.id) });
     await db.insert(articleRevisions).values({ articleId, actorId: actorId ?? null, action: "republié sur WordPress" });
     return { ok: true, message: "Article republié sur WordPress." };
   } catch (err) {
-    return { ok: false, message: wpErrorMessage("La republication WordPress a échoué", err) };
+    const message = err instanceof RenderFailedError
+      ? err.message
+      : wpErrorMessage("La republication WordPress a échoué", err);
+    return { ok: false, message };
   }
 }
