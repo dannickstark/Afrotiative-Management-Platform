@@ -4,7 +4,11 @@ import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
 // code de bibliothèque.
 export type SatoriNode = { type: string; props: Record<string, unknown> };
 
-function gradientCss(g: Gradient): string {
+// Exportée pour components/studio/layer-view.tsx (Tâche 5, éditeur) : un dégradé de forme est une
+// chaîne CSS `linear-gradient(...)` valable telle quelle en style React inline — même raisonnement
+// que textStyleFor, sur un périmètre plus étroit (pas de piège historique connu ici, juste éviter
+// une deuxième implémentation qui pourrait un jour diverger en silence).
+export function gradientCss(g: Gradient): string {
   const stops = g.stops.map((s) => `${s.color} ${Math.round(s.at * 100)}%`).join(", ");
   return `linear-gradient(${g.angle}deg, ${stops})`;
 }
