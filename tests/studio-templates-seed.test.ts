@@ -25,13 +25,29 @@ afterAll(async () => {
   // Restaure l'état d'origine : supprime D'ABORD le remplaçant créé pendant le test, PUIS
   // dé-archive le gabarit d'origine — dans cet ordre précis, sinon la dé-archivation retomberait
   // sur la même portée (article_image, null, null) que le remplaçant encore actif et violerait
-  // l'index unique (constaté à l'exécution). Le dev DB retrouve exactement ses trois gabarits de
-  // départ d'origine, sans doublon.
+  // l'index unique (constaté à l'exécution, cf. l'incident décrit dans le rapport de tâche).
+  //
+  // Les deux restaurations sont dans des try/catch SÉPARÉS, à l'image de afterAll dans
+  // tests/studio-e2e.test.ts : sans ça, une erreur transitoire (connexion coupée, timeout de pool…)
+  // sur la suppression ferait sauter la dé-archivation qui suit, et le gabarit de départ
+  // article_image resterait DÉFINITIVEMENT archivé dans le dev DB partagé — plus grave qu'une simple
+  // fuite de ligne de test, puisque resolveTemplate exclut les lignes archivées : plus aucun
+  // gabarit par défaut pour ce contexte tant que quelqu'un ne relance pas `db:studio-templates` à la
+  // main. Chaque étape tente donc de restaurer ce qu'elle peut, inconditionnellement, et avale ce
+  // qu'elle ne peut pas (en le signalant) plutôt que de laisser une erreur bloquer la suite.
   if (createdByThisTest.length) {
-    await db.delete(renderTemplates).where(inArray(renderTemplates.id, createdByThisTest));
+    try {
+      await db.delete(renderTemplates).where(inArray(renderTemplates.id, createdByThisTest));
+    } catch (e) {
+      console.error("Nettoyage seedStudioTemplates — échec de suppression du remplaçant :", e);
+    }
   }
   if (archivedOriginalId) {
-    await db.update(renderTemplates).set({ archived: false }).where(eq(renderTemplates.id, archivedOriginalId));
+    try {
+      await db.update(renderTemplates).set({ archived: false }).where(eq(renderTemplates.id, archivedOriginalId));
+    } catch (e) {
+      console.error("Nettoyage seedStudioTemplates — échec de dé-archivage de l'original :", e);
+    }
   }
 });
 
