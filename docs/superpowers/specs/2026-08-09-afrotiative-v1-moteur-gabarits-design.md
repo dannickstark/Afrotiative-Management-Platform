@@ -66,9 +66,11 @@ même choix que celui qui rend `lib/wp/publish.ts` testable aujourd'hui.
 | `aws4fetch` | signature S3v4 pour R2 | ~2 ko, recommandé par Cloudflare, contre plusieurs Mo pour `@aws-sdk/client-s3` |
 | `sharp` | **déjà installé** | recadrage, flou, teinte, encodage final |
 
-Trois polices **Inter** (Regular 400 / SemiBold 600 / Bold 700) au format **TTF** sont commitées
-sous `lib/studio/fonts/` comme repli intégré. Licence OFL. Elles ne remplacent pas le kit de marque
-téléversable (V2) — elles garantissent qu'un rendu aboutit toujours, même sans aucun asset.
+Trois polices **Noto Sans** (Regular 400 / SemiBold 600 / Bold 700) au format **TTF** sont commitées
+sous `lib/studio/fonts/` comme repli intégré. Licence OFL. Choix délibéré, pas Inter comme prévu
+initialement : les URLs visées pour des TTF statiques Inter ne résolvaient pas au moment de la
+livraison. Ces polices ne remplacent pas le kit de marque téléversable (V2) — elles garantissent
+qu'un rendu aboutit toujours, même sans aucun asset.
 
 ---
 
@@ -263,9 +265,12 @@ scène. Aucune liste parallèle à maintenir, donc aucune dérive possible.
    C'est cette étape qui rend l'exemple agribusiness possible — Satori n'a pas de `backdrop-filter`.
 3. **`sceneToElement(scene, resolved)`** — fonction **pure** : calques → `div` en
    `position: absolute`, dans l'ordre du tableau.
-4. **Polices** : chargées depuis `render_assets` via R2, mises en cache en mémoire par `assetId`.
-   `embedFont: true` convertit les glyphes en tracés, donc resvg n'a jamais besoin des polices.
-   Une police introuvable retombe sur Inter et marque le rendu `degraded`.
+4. **Polices** : V1 n'a pas de chargeur d'assets — `NullAssetLoader` (`lib/studio/fonts.ts`) répond
+   toujours `null`, donc tout gabarit V1 s'appuie sur le repli embarqué. L'interface `AssetLoader`
+   (méthode `font(assetId)`) existe déjà pour que V2 y branche un vrai chargeur lisant
+   `render_assets` via R2 ; aucune ligne de code ne le fait encore. `embedFont: true` convertit les
+   glyphes en tracés, donc resvg n'a jamais besoin des polices. Une police introuvable ou dont le
+   chargement échoue retombe sur Noto Sans et marque le rendu `degraded`.
 5. **satori → SVG → resvg → PNG → sharp** (JPEG q86 ou WebP, métadonnées supprimées).
 6. **Stockage** sous `renders/{aaaa}/{mm}/{hash}.jpg`, insertion de la ligne `renders`, retour de
    l'URL publique.
@@ -326,7 +331,7 @@ fonctionnalité proprement**, elle ne lève pas.
 | Aucun gabarit résolu | `{ ok:true, url:null }` — l'appelant garde l'image brute |
 | Image source injoignable / URL refusée par le garde SSRF | **échec dur**, message français, réessayable |
 | Jeton requis manquant | **échec dur**, message listant les jetons |
-| Police introuvable | repli Inter, `degraded: true` |
+| Police introuvable | repli Noto Sans, `degraded: true` |
 | Scène invalide en base | **échec dur** — refuser vaut mieux que rendre n'importe quoi |
 
 L'écart assumé avec `uploadFeaturedImage`, qui est *fail-soft* : chaque rendu est déclenché par une

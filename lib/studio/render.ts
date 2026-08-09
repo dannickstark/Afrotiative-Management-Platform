@@ -77,9 +77,11 @@ export async function fitFontSize(layer: TextLayer, fonts: LoadedFont[]): Promis
     let svg: string;
     try {
       svg = await satori(probe as never, { width: layer.frame.w, fonts: satoriFonts, embedFont: false });
-    } catch {
+    } catch (e) {
+      console.error(`[studio] sonde autoFit du calque « ${layer.name || layer.id} » échouée :`, e);
       throw new RenderError(
         `Mesure du texte du calque « ${layer.name || layer.id} » impossible : une valeur (couleur, police) est invalide.`,
+        { cause: e },
       );
     }
     const height = Number(/height="(\d+(?:\.\d+)?)"/.exec(svg)?.[1] ?? layer.frame.h);
@@ -121,11 +123,13 @@ async function qrDataUri(text: string, fg: string, bg: string, margin: number): 
   let svg: string;
   try {
     svg = await QRCode.toString(text, { type: "svg", margin, color: { dark: fg, light: bg } });
-  } catch {
+  } catch (e) {
     // Cas reproduit : un contenu trop long ("The amount of data is too big to be stored in a QR
     // Code") — message anglais et non actionable pour un rédacteur, on ne le propage pas tel quel.
+    console.error("[studio] génération du QR code échouée :", e);
     throw new RenderError(
       "Génération du QR code impossible : le contenu du jeton est invalide ou trop volumineux pour être encodé.",
+      { cause: e },
     );
   }
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
@@ -145,7 +149,18 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
   //    franchement. Un magasin d'assets qui LÈVE au lieu de renvoyer null doit dégrader exactement
   //    comme un magasin qui renvoie null poliment — le jour où R2 a une panne ne doit pas être le
   //    jour où le rendu casse au lieu de simplement perdre la police personnalisée.
-  const fonts: LoadedFont[] = [...(await loadFallbackFonts())];
+  let fallbackFonts: LoadedFont[];
+  try {
+    fallbackFonts = await loadFallbackFonts();
+  } catch (e) {
+    // Ne JAMAIS laisser passer le message natif ici : il contient un chemin absolu du serveur
+    // (ex. « ENOENT: no such file or directory, open '/app/lib/studio/fonts/NotoSans-Regular.ttf' »)
+    // — une fuite d'infrastructure autant qu'une fuite d'anglais dans un message par ailleurs
+    // documenté comme affichable tel quel à un rédacteur.
+    console.error("[studio] chargement de la police de repli échoué :", e);
+    throw new RenderError("Génération de l'image impossible : la police de repli est introuvable sur le serveur.", { cause: e });
+  }
+  const fonts: LoadedFont[] = [...fallbackFonts];
   const seen = new Set<string>();
   for (const layer of resolved.layers) {
     if (layer.type !== "text" || !layer.font.assetId || seen.has(layer.font.assetId)) continue;
@@ -153,7 +168,12 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
     let font: LoadedFont | null;
     try {
       font = await assets.font(layer.font.assetId);
-    } catch {
+    } catch (e) {
+      // SEULE dégradation tolérée du pipeline (voir le commentaire au-dessus de ce bloc) : on avale
+      // volontairement l'erreur et on retombe sur le repli, mais on la journalise quand même — en
+      // production le message français ci-dessous est la seule trace qui existe QUELQUE PART, la
+      // journaliser est ce qui rend l'incident (ex. panne R2) visible sans casser le rendu.
+      console.error(`[studio] chargement de la police d'asset « ${layer.font.assetId} » échoué, repli sur la police embarquée :`, e);
       font = null;
     }
     if (font) fonts.push(font); else degraded = true;
@@ -182,8 +202,14 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
         blur: layer.blur, overlay: layer.overlay, fetchImpl: opts.fetchImpl,
       }));
     } else if (layer.type === "qr") {
-      const value = opts.values[layer.slot as TokenId];
-      if (!value) { degraded = true; return; }
+      // Pas de garde `if (!value)` ici : resolveTokens (values.ts) a déjà levé MissingTokensError
+      // plus haut pour TOUT jeton utilisé par la scène — y compris qrLayer.slot, qu'extractTokens
+      // (tokens.ts) recense explicitement — donc `value` est toujours défini à ce stade. Un ancien
+      // garde `if (!value) { degraded = true; return; }` était mort (prouvé par le test « exige la
+      // valeur du jeton du slot QR… », studio-render.test.ts) et laissait croire à tort que
+      // `degraded` pouvait couvrir un jeton QR manquant, alors que c'est un échec franc comme tout
+      // autre jeton requis.
+      const value = opts.values[layer.slot as TokenId]!;
       prepared.set(layer.id, await qrDataUri(value, layer.fg, layer.bg, layer.margin));
     }
   }));
@@ -212,17 +238,20 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
       fonts: asSatoriFonts(fonts),
       embedFont: true, // glyphes convertis en tracés : resvg n'a jamais besoin des polices
     });
-  } catch {
+  } catch (e) {
+    console.error("[studio] rendu satori de la scène échoué :", e);
     throw new RenderError(
       "Rendu de la scène impossible : une valeur du gabarit (couleur, police ou disposition) est invalide.",
+      { cause: e },
     );
   }
 
   let png: Buffer;
   try {
     png = new Resvg(svg, { fitTo: { mode: "width", value: scene.canvas.width } }).render().asPng();
-  } catch {
-    throw new RenderError("Rasterisation de la scène impossible.");
+  } catch (e) {
+    console.error("[studio] rasterisation resvg de la scène échouée :", e);
+    throw new RenderError("Rasterisation de la scène impossible.", { cause: e });
   }
 
   // removeAlpha() n'est appliqué qu'en JPEG : le format n'a structurellement pas de canal alpha
@@ -246,11 +275,13 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
         ? await sharp(png).webp({ quality: 88 }).toBuffer()
         : await sharp(png).removeAlpha().jpeg({ quality: 86, mozjpeg: true }).toBuffer(),
     );
-  } catch {
+  } catch (e) {
     // Cas reproduit : un canevas surdimensionné (ex. 20000x20000) passe satori et resvg mais fait
     // échouer sharp au décodage du PNG intermédiaire ("Input image exceeds pixel limit").
+    console.error("[studio] encodage sharp de l'image finale échoué :", e);
     throw new RenderError(
       "Encodage de l'image finale impossible : les dimensions du canevas sont probablement excessives.",
+      { cause: e },
     );
   }
 

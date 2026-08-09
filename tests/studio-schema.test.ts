@@ -1,6 +1,7 @@
-import { describe, it, expect, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { db, renderTemplates, renderTemplateVersions } from "@/db";
 import { inArray } from "drizzle-orm";
+import { deleteTemplateScope } from "./studio-fixtures";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // render_templates_scope (db/schema.ts) — a partial unique index on
@@ -12,23 +13,38 @@ import { inArray } from "drizzle-orm";
 // render_template_versions_unique — a plain unique index on (template_id, version), guarding the
 // immutable-snapshot invariant documented on renderTemplateVersions in db/schema.ts.
 // Network-free: real Neon (dev branch) DB only, no external HTTP.
+//
+// Portées statiques possédées par ce fichier — voir tests/studio-fixtures.ts pour la règle
+// partagée et le registre complet des trois fichiers concernés.
+const DEFAULT_SCOPE_CHANNEL = "test-schema-scope-defaut";
+const ARCHIVE_TEST_CHANNEL = "test-schema-archive-scope";
+
 describe("render_templates — unicité de la portée", () => {
   const created: string[] = [];
   const scene = { schemaVersion: 1, canvas: { width: 1, height: 1, background: "#000000" }, layers: [] };
 
-  // channel par défaut "whatsapp", PAS "facebook" : `bun run db:studio-templates`
+  // Canal synthétique, PAS "whatsapp" ni "facebook" : `bun run db:studio-templates`
   // (db/studio-templates.ts) sème désormais en base un gabarit par défaut réel et permanent à la
   // portée EXACTE (social_post, facebook, null) — le premier insertTemplate() ci-dessous entrerait
-  // en collision avec lui avant même d'atteindre le second insert que ce test veut exercer.
-  // "whatsapp" n'a aucun gabarit de départ semé.
+  // en collision avec lui avant même d'atteindre le second insert que ce test veut exercer. Un vrai
+  // membre de CHANNELS (comme "whatsapp") n'est pas plus sûr sur la durée : rien n'empêche un futur
+  // gabarit de départ d'y être semé (voir tests/studio-fixtures.ts, règle 3).
   async function insertTemplate(over: Partial<typeof renderTemplates.$inferInsert> = {}) {
     const [row] = await db.insert(renderTemplates).values({
-      name: "test", context: "social_post", channel: "whatsapp", categoryId: null,
+      name: "test", context: "social_post", channel: DEFAULT_SCOPE_CHANNEL, categoryId: null,
       format: "fb_link", width: 1200, height: 630, scene, ...over,
     }).returning();
     created.push(row.id);
     return row;
   }
+
+  // Delete-then-insert : voir tests/studio-fixtures.ts. Répare une exécution interrompue au lieu
+  // de laisser une ligne poison casser toutes les suivantes avec SQLSTATE 23505.
+  beforeAll(async () => {
+    await deleteTemplateScope("social_post", DEFAULT_SCOPE_CHANNEL, null);
+    await deleteTemplateScope("quote_card", ARCHIVE_TEST_CHANNEL, null);
+    await deleteTemplateScope("newsletter_header", null, null);
+  });
 
   afterAll(async () => {
     if (created.length) await db.delete(renderTemplates).where(inArray(renderTemplates.id, created));
@@ -53,9 +69,13 @@ describe("render_templates — unicité de la portée", () => {
   });
 
   it("autorise la même portée si l'un est archivé", async () => {
-    const a = await insertTemplate({ context: "quote_card", channel: null });
+    // Portée (quote_card, ARCHIVE_TEST_CHANNEL, null) — PAS (quote_card, null, null) :
+    // tests/studio-resolve.test.ts est l'unique propriétaire de cette dernière (voir
+    // tests/studio-fixtures.ts). Ce test-ci n'a besoin d'aucune sémantique liée à "quote_card" —
+    // seul un canal synthétique DISTINCT de celui des autres fichiers compte ici.
+    const a = await insertTemplate({ context: "quote_card", channel: ARCHIVE_TEST_CHANNEL });
     await db.update(renderTemplates).set({ archived: true }).where(inArray(renderTemplates.id, [a.id]));
-    await expect(insertTemplate({ context: "quote_card", channel: null })).resolves.toBeDefined();
+    await expect(insertTemplate({ context: "quote_card", channel: ARCHIVE_TEST_CHANNEL })).resolves.toBeDefined();
   });
 
   it("refuse deux versions de même numéro pour un gabarit (SQLSTATE 23505)", async () => {

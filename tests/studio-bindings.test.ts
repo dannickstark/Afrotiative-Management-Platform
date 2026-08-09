@@ -5,7 +5,8 @@ import {
 } from "@/db";
 import { eq, inArray } from "drizzle-orm";
 import { articleTokenValues, DEFAULT_CATEGORY_COLOR } from "@/lib/studio/bindings";
-import { renderForArticle, MemoryRenderStore } from "@/lib/studio";
+import { renderForArticle, MemoryRenderStore, type AssetLoader } from "@/lib/studio";
+import { loadFallbackFonts } from "@/lib/studio/fonts";
 
 // ---- fixtures partagées : articleTokenValues ----
 let articleId: string;
@@ -113,7 +114,7 @@ describe("renderForArticle", () => {
   const articleIds2: string[] = [];
   const catIds2: string[] = [];
 
-  function textScene(content: string) {
+  function textScene(content: string, fontAssetId?: string) {
     return {
       schemaVersion: 1 as const,
       canvas: { width: 200, height: 100, background: "#000000" },
@@ -121,19 +122,22 @@ describe("renderForArticle", () => {
         id: "t", name: "t", visible: true, locked: false,
         frame: { x: 0, y: 0, w: 180, h: 80 },
         type: "text" as const, content,
-        font: { family: "Noto Sans", size: 14, weight: 400 as const },
+        font: { assetId: fontAssetId, family: "Noto Sans", size: 14, weight: 400 as const },
         color: "#FFFFFF", align: "left" as const, vAlign: "top" as const, lineHeight: 1.2,
       }],
     };
   }
 
-  async function publishedTemplate(o: { context: string; categoryId: string | null; content: string }) {
+  async function publishedTemplate(o: {
+    context: string; channel?: string | null; categoryId: string | null; content: string; fontAssetId?: string;
+  }) {
+    const scene = textScene(o.content, o.fontAssetId);
     const [t] = await db.insert(renderTemplates).values({
-      name: "gabarit test", context: o.context, channel: null, categoryId: o.categoryId,
-      format: "website_featured", width: 200, height: 100, scene: textScene(o.content),
+      name: "gabarit test", context: o.context, channel: o.channel ?? null, categoryId: o.categoryId,
+      format: "website_featured", width: 200, height: 100, scene,
     }).returning();
     templateIds.push(t.id);
-    await db.insert(renderTemplateVersions).values({ templateId: t.id, version: 1, scene: textScene(o.content) });
+    await db.insert(renderTemplateVersions).values({ templateId: t.id, version: 1, scene });
     await db.update(renderTemplates).set({ publishedVersion: 1 }).where(eq(renderTemplates.id, t.id));
     return t.id;
   }
@@ -193,12 +197,56 @@ describe("renderForArticle", () => {
     expect(rows.length).toBe(1);
   });
 
+  // Important 6 (revue de branche) : renderForArticle n'exposait aucun moyen d'injecter un vrai
+  // AssetLoader — V2 (qui peuplera render_assets) n'aurait eu aucune façon de le brancher sans
+  // modifier cette fonction. Ce test prouve que l'option `assets` n'est pas seulement acceptée par
+  // le TYPE mais réellement TRANSMISE à renderScene : même gabarit (police liée à un assetId), sans
+  // loader la police d'asset est introuvable (NullAssetLoader par défaut, dégradation tolérée) ;
+  // avec un loader qui la fournit, le rendu n'est plus dégradé.
+  it("l'option assets est transmise à renderScene : un AssetLoader personnalisé évite la dégradation", async () => {
+    const [c] = await db.insert(wpCategories).values({
+      name: "Assets test", slug: `assets-test-${Date.now()}`,
+    }).returning();
+    catIds2.push(c.id);
+    await publishedTemplate({
+      context: "article_image", categoryId: c.id, content: "{{article.title}}", fontAssetId: "asset-titre",
+    });
+
+    const withoutLoader = await mkArticle({ title: "Sans loader", categoryId: c.id });
+    const resNoLoader = await renderForArticle(withoutLoader, { context: "article_image", store: new MemoryRenderStore() });
+    if (!resNoLoader.ok) throw new Error(`rendu attendu réussi : ${JSON.stringify(resNoLoader)}`);
+    expect(resNoLoader.degraded).toBe(true); // aucun loader fourni -> NullAssetLoader -> police introuvable
+
+    const [font] = await loadFallbackFonts();
+    const customLoader: AssetLoader = {
+      async font(assetId) { return assetId === "asset-titre" ? font : null; },
+      async imageUrl() { return null; },
+    };
+    const withLoader = await mkArticle({ title: "Avec loader", categoryId: c.id });
+    const resWithLoader = await renderForArticle(withLoader, {
+      context: "article_image", store: new MemoryRenderStore(), assets: customLoader,
+    });
+    if (!resWithLoader.ok) throw new Error(`rendu attendu réussi : ${JSON.stringify(resWithLoader)}`);
+    expect(resWithLoader.degraded).toBe(false);
+  });
+
   it("un jeton manquant dans le gabarit publié échoue franchement, en français, sans planter", async () => {
     // "quote.text" est un jeton légal du contexte quote_card (tokens.ts) mais articleTokenValues
     // ne le calcule JAMAIS pour un article (ce n'est pas un jeton d'article) : ce gabarit échoue
     // donc TOUJOURS à la résolution des jetons, de façon déterministe.
-    await publishedTemplate({ context: "quote_card", categoryId: null, content: "{{quote.text}}" });
-    const id = await mkArticle({ title: "Article sans citation", categoryId: null });
+    //
+    // Portée (quote_card, null, <categoryId FRAIS>) — PAS (quote_card, null, null) :
+    // tests/studio-resolve.test.ts est l'unique propriétaire de cette dernière (voir
+    // tests/studio-fixtures.ts). Un categoryId généré à chaque exécution (comme les autres tests de
+    // ce describe) suffit à s'en distinguer structurellement, sans avoir besoin d'un canal — et
+    // évite de forcer un canal synthétique à travers `channel?: Channel | null` (Important 6), qui
+    // n'accepte que les cinq membres réels de CHANNELS.
+    const [c] = await db.insert(wpCategories).values({
+      name: "Quote test", slug: `quote-test-${Date.now()}`,
+    }).returning();
+    catIds2.push(c.id);
+    await publishedTemplate({ context: "quote_card", categoryId: c.id, content: "{{quote.text}}" });
+    const id = await mkArticle({ title: "Article sans citation", categoryId: c.id });
 
     const res = await renderForArticle(id, { context: "quote_card", store: new MemoryRenderStore() });
     expect(res.ok).toBe(false);

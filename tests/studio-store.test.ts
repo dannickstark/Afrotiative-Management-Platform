@@ -81,12 +81,20 @@ describe("R2RenderStore", () => {
 describe("Cache round-trip (DB-backed)", () => {
   let testHash: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     testHash = computeInputHash({
       templateId: "22222222-2222-2222-2222-222222222222",
       templateVersion: 1,
       values: { "article.title": "Test Article" },
     });
+    // Delete-then-insert : testHash est un littéral FIXE (mêmes templateId/values à chaque
+    // exécution), donc une exécution interrompue après l'insertion mais avant l'afterAll ci-dessous
+    // laisserait une ligne à ce hash — poison pour la prochaine exécution. On la supprime
+    // défensivement avant de commencer plutôt que de compter uniquement sur le nettoyage en fin de
+    // suite. (saveRender est désormais idempotent sur un conflit d'inputHash — voir
+    // lib/studio/store.ts — donc ce cas précis ne ferait plus planter le test, mais rien ne garantit
+    // que la ligne poison porte encore les mêmes champs que ceux affirmés plus bas.)
+    await db.delete(renders).where(eq(renders.inputHash, testHash));
   });
 
   afterAll(async () => {
@@ -116,5 +124,73 @@ describe("Cache round-trip (DB-backed)", () => {
     expect(cached).toBeDefined();
     expect(cached?.inputHash).toBe(testHash);
     expect(cached?.url).toBe("https://example.com/renders/2026/08/test.jpg");
+  });
+
+  // Important 1 (revue de branche) : deux rendus concurrents et identiques (double clic, deux
+  // onglets) peuvent tous les deux dépasser le court-circuit findCachedRender avant que l'un des
+  // deux insère sa ligne — le second insert violerait alors renders_input_hash_unique. Ce test
+  // simule le SECOND appel du gagnant (même inputHash, mais des champs différents — comme le
+  // ferait un second rendu produisant des octets légèrement différents) : il doit renvoyer la ligne
+  // EXISTANTE plutôt que de lever, et surtout ne PAS écraser les champs déjà en base.
+  //
+  // Hash DÉDIÉ à ce test (PAS `testHash`, partagé avec le test précédent de ce describe) : la
+  // première version de ce test réutilisait `testHash` et échouait par ordre d'exécution — le test
+  // précédent ("sauvegarde et retrouve…") avait déjà inséré une ligne à ce hash avant que celui-ci
+  // ne s'exécute, donc le "premier" appel ci-dessous heurtait DÉJÀ un conflit (onConflictDoNothing)
+  // et renvoyait CETTE ligne-là plutôt que d'insérer réellement — le test ne prouvait alors plus rien
+  // sur la course qu'il prétendait couvrir. Un hash isolé rend ce test correct indépendamment de
+  // l'ordre d'exécution des tests voisins.
+  it("un second saveRender avec le même inputHash renvoie la ligne existante au lieu de lever (course de cache)", async () => {
+    const raceHash = computeInputHash({
+      templateId: "55555555-5555-5555-5555-555555555555",
+      templateVersion: 1,
+      values: { "article.title": "Course de cache" },
+    });
+    await db.delete(renders).where(eq(renders.inputHash, raceHash)); // delete-then-insert défensif
+
+    try {
+      const first = await saveRender({
+        templateId: "55555555-5555-5555-5555-555555555555",
+        templateVersion: 1,
+        context: "article",
+        subjectType: "article",
+        subjectId: "33333333-3333-3333-3333-333333333333",
+        inputHash: raceHash,
+        storageKey: "renders/2026/08/premier.jpg",
+        url: "https://example.com/renders/2026/08/premier.jpg",
+        width: 1200,
+        height: 630,
+        bytes: 111,
+        degraded: false,
+      });
+
+      const second = await saveRender({
+        templateId: "55555555-5555-5555-5555-555555555555",
+        templateVersion: 1,
+        context: "article",
+        subjectType: "article",
+        subjectId: "44444444-4444-4444-4444-444444444444", // volontairement différent du premier
+        inputHash: raceHash, // même hash : c'est CE qui déclenche le conflit
+        storageKey: "renders/2026/08/second.jpg",
+        url: "https://example.com/renders/2026/08/second.jpg",
+        width: 999,
+        height: 999,
+        bytes: 222,
+        degraded: true,
+      });
+
+      // Pas d'exception (le test lui-même échouerait autrement), et la ligne renvoyée par le
+      // "second" appel est bien la PREMIÈRE — pas une seconde ligne, pas les champs du second appel.
+      expect(second.id).toBe(first.id);
+      expect(second.url).toBe("https://example.com/renders/2026/08/premier.jpg");
+      expect(second.subjectId).toBe("33333333-3333-3333-3333-333333333333");
+      expect(second.degraded).toBe(false);
+
+      // Une seule ligne existe réellement en base pour ce hash — le conflit n'a pas produit de doublon.
+      const rows = await db.select().from(renders).where(eq(renders.inputHash, raceHash));
+      expect(rows).toHaveLength(1);
+    } finally {
+      await db.delete(renders).where(eq(renders.inputHash, raceHash));
+    }
   });
 });

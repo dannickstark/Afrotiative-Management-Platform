@@ -124,6 +124,10 @@ describe("prepareImage", () => {
       // Message autonome en français : ne doit pas contenir le texte brut de l'erreur sharp sous-
       // jacente (typiquement en anglais, ex. "unsupported image format").
       expect((e as Error).message.toLowerCase()).not.toContain("unsupported");
+      // Important 3 (revue de branche) : le message affiché reste français et sans détail natif,
+      // mais l'erreur sharp d'origine doit rester accessible via `.cause` — c'est la SEULE trace qui
+      // survit en production, un `console.error` ne pouvant pas être vérifié depuis un test.
+      expect((e as Error).cause).toBeDefined();
     }
   });
 

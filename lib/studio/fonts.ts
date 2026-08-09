@@ -22,6 +22,12 @@ let fallbackPromise: Promise<LoadedFont[]> | null = null;
 
 // Mémoïsé sur la promesse et non sur le résultat : deux appels concurrents au démarrage ne doivent
 // pas lire les fichiers deux fois.
+//
+// Une promesse REJETÉE n'est pas `null` : `??=` ne la remplace donc jamais, et un seul échec
+// transitoire (EMFILE sous charge, un déploiement où process.cwd() n'est pas la racine du dépôt…)
+// empoisonnerait TOUS les rendus suivants du process pour toujours avec la même rejection. On
+// réarme donc explicitement `fallbackPromise` à `null` quand la promesse échoue, pour que le
+// prochain appel retente une lecture fraîche au lieu de rejouer indéfiniment le même échec.
 export function loadFallbackFonts(): Promise<LoadedFont[]> {
   fallbackPromise ??= Promise.all(
     FALLBACK_FILES.map(async ({ file, weight }) => {
@@ -33,7 +39,10 @@ export function loadFallbackFonts(): Promise<LoadedFont[]> {
         style: "normal" as const,
       };
     }),
-  );
+  ).catch((e) => {
+    fallbackPromise = null;
+    throw e;
+  });
   return fallbackPromise;
 }
 

@@ -398,10 +398,11 @@ export const renderTemplates = pgTable("render_templates", {
   // Unicité de la portée de résolution. ATTENTION : drizzle 0.45 n'expose PAS .nullsNotDistinct()
   // sur uniqueIndex(), et sans ce modificateur l'index est INEFFICACE ici — PostgreSQL traite les
   // NULL comme distincts, donc deux gabarits (social_post, facebook, NULL) coexisteraient. Le
-  // modificateur est ajouté à la main dans la migration (DROP INDEX + CREATE UNIQUE INDEX ...
-  // NULLS NOT DISTINCT ...), sur le modèle de db/migrations/0007_run_control_index.sql. Une
-  // régénération naïve de la migration (bun run db:generate) PERDRAIT ce modificateur : si le
-  // schéma bouge à nouveau, il faudra le rajouter à la main dans la nouvelle migration générée.
+  // modificateur est ajouté à la main dans la migration (CREATE UNIQUE INDEX ... NULLS NOT
+  // DISTINCT ..., db/migrations/0015_slow_selene.sql — la table est neuve dans cette migration,
+  // donc un simple CREATE suffit ; pas de DROP INDEX préalable ici). Une régénération naïve de la
+  // migration (bun run db:generate) PERDRAIT ce modificateur : si le schéma bouge à nouveau, il
+  // faudra le rajouter à la main dans la nouvelle migration générée.
   uniqueIndex("render_templates_scope")
     .on(t.context, t.channel, t.categoryId)
     .where(sql`${t.archived} = false`),

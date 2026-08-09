@@ -215,6 +215,10 @@ describe("renderScene — erreurs natives (pas de fuite anglaise, échec franc)"
     expect(err).toBeInstanceOf(RenderError);
     expect((err as Error).message).not.toContain("Failed to parse");
     expect((err as Error).message.toLowerCase()).toContain("invalide");
+    // Important 3 (revue de branche) : le message affiché reste français et sans détail natif, mais
+    // l'erreur satori d'origine doit rester accessible via `.cause` — seule trace qui survit en
+    // production au-delà du `console.error` (non vérifiable depuis un test).
+    expect((err as Error).cause).toBeDefined();
   });
 
   // Finding 1 (revue round 1) : QRCode.toString lève une erreur anglaise ("The amount of data is
@@ -231,6 +235,7 @@ describe("renderScene — erreurs natives (pas de fuite anglaise, échec franc)"
     const err = await renderScene({ scene, values: { "article.url": "x".repeat(5000) } }).catch((e) => e);
     expect(err).toBeInstanceOf(RenderError);
     expect((err as Error).message).not.toContain("too big");
+    expect((err as Error).cause).toBeDefined();
   });
 });
 

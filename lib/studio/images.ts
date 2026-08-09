@@ -82,9 +82,10 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<string> {
     }
 
     out = await pipeline.png().toBuffer();
-  } catch {
+  } catch (e) {
     // Message autonome, volontairement SANS le texte de l'erreur sharp sous-jacente (en anglais).
-    throw new ImageFetchError(`Le fichier téléchargé depuis « ${url} » n'est pas une image exploitable.`);
+    console.error(`[studio] traitement sharp de l'image téléchargée (${url}) échoué :`, e);
+    throw new ImageFetchError(`Le fichier téléchargé depuis « ${url} » n'est pas une image exploitable.`, { cause: e });
   }
 
   return `data:image/png;base64,${out.toString("base64")}`;

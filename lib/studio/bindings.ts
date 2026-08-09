@@ -8,7 +8,16 @@ import { CONTEXT_TOKENS, type TemplateContext, type TokenId } from "./tokens";
 // Couleur de marque utilisée quand une catégorie n'a pas de couleur propre. Une catégorie sans
 // couleur ne doit jamais faire échouer un rendu.
 export const DEFAULT_CATEGORY_COLOR = "#1B7F4A";
-export const BRAND_LOGO_URL = process.env.STUDIO_BRAND_LOGO_URL ?? "";
+
+// Lue À L'INTÉRIEUR de la fonction, PAS capturée au chargement du module : une capture au niveau
+// module fige la valeur au premier import (donc avant que les tests n'aient eu l'occasion de poser
+// process.env.STUDIO_BRAND_LOGO_URL) et rend la variable intestable sans redémarrer le process.
+// Documentée dans .env.example et docs/DEPLOYMENT.md, aux côtés des cinq R2_* — sans elle,
+// {{brand.logo}} est simplement absent des valeurs (comme tout jeton non calculé) et tout gabarit
+// qui l'utilise échoue avec « Valeurs manquantes pour : brand.logo. ».
+export function brandLogoUrl(): string {
+  return process.env.STUDIO_BRAND_LOGO_URL ?? "";
+}
 
 // Construit les valeurs de jetons pour un article, PUIS les filtre par contexte. Le filtrage final
 // est ce qui garantit qu'un jeton indisponible (article.url en article_image) ne peut pas se
@@ -51,7 +60,7 @@ export async function articleTokenValues(
     "category.name": row.categoryName ?? undefined,
     "category.color": row.categoryColor ?? DEFAULT_CATEGORY_COLOR,
     "source.names": sources.length ? sources.map((s) => s.mediaName).join(", ") : undefined,
-    "brand.logo": BRAND_LOGO_URL || undefined,
+    "brand.logo": brandLogoUrl() || undefined,
   };
 
   const allowed = new Set<string>(CONTEXT_TOKENS[context]);

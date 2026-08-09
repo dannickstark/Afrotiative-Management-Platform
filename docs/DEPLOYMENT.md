@@ -62,6 +62,12 @@ même raisonnement que WordPress ci-dessus) :
 | `R2_BUCKET` | Nom du bucket (ex. `afrotiative-media`). |
 | `R2_PUBLIC_BASE_URL` | Base des URLs publiques (ex. `https://media.afrotiative.com`). |
 
+**Optionnel — jeton `{{brand.logo}}` :**
+
+| Variable | Rôle |
+|---|---|
+| `STUDIO_BRAND_LOGO_URL` | URL du logo de marque injecté dans le jeton `{{brand.logo}}`. Laissée vide, le jeton est simplement absent des valeurs — tout gabarit qui référence `{{brand.logo}}` échoue alors avec « Valeurs manquantes pour : brand.logo. » plutôt que de planter silencieusement. |
+
 ---
 
 ## 3. Mise en place de la base de données
@@ -264,6 +270,7 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 - **Mode dégradé** : sans clés IA, les brouillons sont produits mais marqués dégradés (`confidenceFlags.aiDegraded`) — visibles en revue, jamais publiés automatiquement.
 - **WordPress non configuré** : toute tentative de publication renvoie « WordPress non configuré » et laisse l'article `approved` (jamais de faux succès).
 - **Image fail-soft** : si l'image à la une échoue, le post part **sans** image (jamais de post à moitié cassé) ; l'éditeur peut l'ajouter puis **Republier**.
+- **Studio — couleur de catégorie** : `wp_categories.color` (jeton `{{category.color}}`) n'a **aucun chemin d'écriture** aujourd'hui — pas d'UI, pas de seed, pas posée par la synchronisation de taxonomie WordPress. Toute catégorie rend donc avec `DEFAULT_CATEGORY_COLOR` (`lib/studio/bindings.ts`) tant qu'elle n'est pas posée directement en base Postgres, ou jusqu'à ce que V2 livre un éditeur.
 - **Idempotence** : republier met à jour le post WP existant (via `distributions.externalId`), jamais de doublon.
 - **Dépublier / Republier** : depuis l'éditeur d'un article publié (rôles Éditeur/Admin).
 - **Sécurité** : secrets uniquement en `.env`/gestionnaire de secrets ; endpoints cron bearer-gardés ; RBAC appliqué **côté serveur** sur chaque action (pas seulement l'UI) ; un admin ne peut pas se verrouiller lui-même (anti-lockout).
