@@ -257,7 +257,7 @@ async function warnIfTokenExpiring(channel: Channel, settings: SocialChannelSett
     type: "token_expiring",
     title: `Jeton ${CHANNEL_LABELS[channel]} bientôt expiré`,
     detail: `Le jeton d'accès ${CHANNEL_LABELS[channel]} expire le ${formatDate(settings.tokenExpiresAt)}. Générez-en un nouveau et enregistrez-le sur /settings/social/${channel}.`,
-    entityId: channel,
+    entityId: null,   // NOT the channel key — alerts.entity_id is a uuid column; see the spec's §4 correction
   });
 }
 ```

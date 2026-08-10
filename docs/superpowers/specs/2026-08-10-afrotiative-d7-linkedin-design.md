@@ -183,8 +183,16 @@ nothing useful on a node read). So the expiry is **tracked, not discovered**:
   row + opt-in email path unchanged. `createAlert` already never throws, so alerting cannot break a
   tick.
 - **At most one alert per channel per day**, so a week of ticks does not produce 672 alerts. The
-  cheapest honest gate: look for an existing `token_expiring` alert for that channel newer than 24 h
-  before inserting (`entityId` carries the channel key).
+  gate is a lookup for an existing `token_expiring` alert for that channel newer than 24 h.
+
+  **Corrected during Task 2 (2026-08-10).** This spec originally said the lookup would key off
+  `entityId` carrying the channel key. That is impossible: `alerts.entityId` is a **`uuid`** column
+  (`db/schema.ts:345`), so a channel string fails the insert — and because `createAlert` wraps its
+  whole body in one try/catch and never throws, the failure would have been **silent**: no alert row,
+  no error, nothing in the logs but a swallowed insert. The alert would simply never have existed.
+  `entityId` is therefore left `null` for this alert type, and the dedup lookup keys off the
+  deterministic per-channel `title` (`Jeton <Canal> bientôt expiré`), which carries no date and so is
+  stable across ticks.
 
 An expired token is not treated as an error state by the scheduler — the send itself already reports
 401 clearly. This is a heads-up before the fact, nothing more.
