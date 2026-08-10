@@ -426,6 +426,24 @@ export const socialChannelSettings = pgTable("social_channel_settings", {
   autoWindowStartHour: integer("auto_window_start_hour").notNull().default(8),
   autoWindowEndHour: integer("auto_window_end_hour").notNull().default(20),
   lastAutoSendAt: timestamp("last_auto_send_at"),
+  // ---- Task 1 (D2+D3): encrypted credential storage ----
+  // Generic key→ciphertext map, NOT per-platform columns — Facebook needs a page id + token,
+  // Instagram an IG user id + the SAME token, a future LinkedIn an organization URN, WhatsApp
+  // none at all. Every value is the output of lib/diffusion/crypto.ts's encryptSecret (a
+  // self-describing "iv:authTag:ciphertext" string), even for fields that aren't secrets by
+  // themselves (e.g. a Facebook Page id) — one uniform "everything in here is encrypted"
+  // invariant is much harder to violate by accident than a per-field "is this one sensitive?"
+  // judgment call made separately for every new channel. Field NAMES are the adapter's business
+  // (Task 2+ — e.g. lib/diffusion/meta/facebook.ts), never this schema's: adding LinkedIn's URN
+  // later is a new key in this same jsonb blob, in application code, never a migration — the
+  // criterion the brief sets for this design.
+  credentials: jsonb("credentials").$type<Record<string, string>>(),
+  // Plaintext, UI-only: when `credentials` was last written, so /settings/social/[channel] can
+  // render "Défini le …" / "Non défini" without ever touching the encrypted blob itself (the
+  // Server Component page never even reads `credentials` off this row for that reason — see
+  // lib/diffusion/settings-core.ts's SocialChannelSettings type, which omits it). Cleared back to
+  // null by "Supprimer" alongside `credentials`.
+  credentialsSetAt: timestamp("credentials_set_at"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

@@ -8,9 +8,10 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { socialChannelSettingsSchema } from "@/lib/validation";
+import { socialChannelSettingsSchema, channelCredentialsSchema } from "@/lib/validation";
 import {
   updateChannelSettingsCore, type UpdateChannelSettingsPatch, type UpdateChannelSettingsResult,
+  setChannelCredentialsCore, deleteChannelCredentialsCore, type SetCredentialsResult,
 } from "@/lib/diffusion/settings-core";
 import type { Channel } from "@/lib/studio";
 
@@ -34,6 +35,47 @@ export async function updateChannelSettings(
   }
 
   const res = await updateChannelSettingsCore(channel, parsed.data);
+  if (res.ok) {
+    revalidatePath("/settings/social");
+    revalidatePath(`/settings/social/${channel}`);
+  }
+  return res;
+}
+
+// Task 1 (D2+D3) — the write-only credential save. `values` is a channel-specific map (Facebook's
+// page id + token, Instagram's IG user id, a future LinkedIn's org URN — see
+// lib/diffusion/settings-core.ts's own comment on why field names live in each adapter, not here)
+// that this action never returns: SetCredentialsResult's `settings` is the sanitized
+// SocialChannelSettings type (lib/diffusion/settings-core.ts), which physically cannot carry the
+// encrypted blob, let alone plaintext — see that module's comment on why the TYPE itself has no
+// ciphertext-shaped hole to leak through, not just caller discipline. Admin-only, same guard as
+// updateChannelSettings above (D1 spec §6: only "manage" writes channel settings).
+export async function updateChannelCredentials(
+  channel: Channel,
+  values: Record<string, string>,
+): Promise<SetCredentialsResult> {
+  const user = await requireUser();
+  requirePermission(user.role, "social", "manage");
+
+  const parsed = channelCredentialsSchema.safeParse(values);
+  if (!parsed.success) {
+    return { ok: false, message: parsed.error.issues[0]?.message ?? "Identifiants invalides." };
+  }
+
+  const res = await setChannelCredentialsCore(channel, parsed.data);
+  if (res.ok) {
+    revalidatePath("/settings/social");
+    revalidatePath(`/settings/social/${channel}`);
+  }
+  return res;
+}
+
+// The brief's "Supprimer" action — clears every credential field stored for `channel`.
+export async function deleteChannelCredentials(channel: Channel): Promise<SetCredentialsResult> {
+  const user = await requireUser();
+  requirePermission(user.role, "social", "manage");
+
+  const res = await deleteChannelCredentialsCore(channel);
   if (res.ok) {
     revalidatePath("/settings/social");
     revalidatePath(`/settings/social/${channel}`);

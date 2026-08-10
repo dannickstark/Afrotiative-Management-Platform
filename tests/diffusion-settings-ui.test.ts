@@ -136,3 +136,105 @@ describe("SocialChannelsList — enabled/disabled state and auto summary", () =>
     expect(differentInterval).not.toBe(on); // a different config must produce a different summary
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 1 (D2+D3) — the credentials card. `credentialFields` is an OPTIONAL prop (default []) so
+// every pre-existing test above keeps compiling/passing unmodified; these tests pass it explicitly
+// to exercise the new card. Same renderToStaticMarkup convention as the rest of this file — no
+// interactivity here (this codebase has no React Testing Library / jsdom setup), so this checks
+// the MARKUP the brief's three acceptance points actually produce: « Défini le … » / « Non défini
+// », a write-only (never pre-filled) masked input per field, and a Supprimer trigger. The action-
+// level round trip (save → never-plaintext → delete) is covered in tests/diffusion-crypto.test.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("SocialChannelForm — credentials card (Task 1: masked, write-only, Défini le/Non défini, Supprimer)", () => {
+  const credBaseSettings = {
+    channel: "facebook", enabled: true, captionMaxChars: 400, captionPrompt: null,
+    autoEnabled: false, autoIntervalHours: 6, autoMaxBacklogDays: 3,
+    autoWindowStartHour: 8, autoWindowEndHour: 20, lastAutoSendAt: null,
+    updatedAt: new Date(),
+  };
+
+  it("renders NO credentials card when the channel has no credentialFields (e.g. WhatsApp)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SocialChannelForm, {
+        channel: "whatsapp", label: "WhatsApp", captionLimits: SOCIAL_CHANNELS.whatsapp.captionLimits,
+        settings: { ...credBaseSettings, channel: "whatsapp", credentialsSetAt: null } as never,
+        credentialFields: SOCIAL_CHANNELS.whatsapp.credentialFields,
+      }),
+    );
+    expect(SOCIAL_CHANNELS.whatsapp.credentialFields.length).toBe(0); // sanity: this channel really has none configured
+    expect(html).not.toContain("Identifiants");
+    expect(html).not.toContain("Non défini");
+    expect(html).not.toContain("Supprimer");
+  });
+
+  it("shows « Non défini » (never « Défini le … ») when credentialsSetAt is null", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SocialChannelForm, {
+        channel: "facebook", label: "Facebook", captionLimits: SOCIAL_CHANNELS.facebook.captionLimits,
+        settings: { ...credBaseSettings, credentialsSetAt: null } as never,
+        credentialFields: SOCIAL_CHANNELS.facebook.credentialFields,
+      }),
+    );
+    expect(html).toContain("Non défini");
+    expect(html).not.toContain("Défini le");
+  });
+
+  it("shows « Défini le … » (never « Non défini ») when credentialsSetAt is a Date", () => {
+    const setAt = new Date("2026-03-14T10:30:00.000Z");
+    const html = renderToStaticMarkup(
+      React.createElement(SocialChannelForm, {
+        channel: "facebook", label: "Facebook", captionLimits: SOCIAL_CHANNELS.facebook.captionLimits,
+        settings: { ...credBaseSettings, credentialsSetAt: setAt } as never,
+        credentialFields: SOCIAL_CHANNELS.facebook.credentialFields,
+      }),
+    );
+    expect(html).toContain("Défini le");
+    expect(html).not.toContain("Non défini");
+  });
+
+  it("renders one masked, EMPTY (write-only — never pre-filled) input per credentialField, with that channel's own labels", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SocialChannelForm, {
+        channel: "facebook", label: "Facebook", captionLimits: SOCIAL_CHANNELS.facebook.captionLimits,
+        settings: { ...credBaseSettings, credentialsSetAt: new Date() } as never,
+        credentialFields: SOCIAL_CHANNELS.facebook.credentialFields,
+      }),
+    );
+    for (const field of SOCIAL_CHANNELS.facebook.credentialFields) expect(html).toContain(field.label);
+
+    // Every credential input is type="password" (masked) AND empty — proving the form has NOTHING
+    // to leak even before any network call: there is no decrypted value in this component's props
+    // for it to accidentally render (self-review: would still catch a bug that started passing a
+    // stored/decrypted value into `value=`).
+    const matches = [...html.matchAll(/<input[^>]*id="cred-[^"]*"[^>]*>/g)];
+    expect(matches.length).toBe(SOCIAL_CHANNELS.facebook.credentialFields.length);
+    for (const [tag] of matches) {
+      expect(tag).toContain('type="password"');
+      expect(tag).toMatch(/value=""/);
+    }
+  });
+
+  it("a DIFFERENT channel's credentialFields render DIFFERENT labels — proves the fields track the prop, not a hard-coded pair", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SocialChannelForm, {
+        channel: "instagram", label: "Instagram", captionLimits: SOCIAL_CHANNELS.instagram.captionLimits,
+        settings: { ...credBaseSettings, channel: "instagram", credentialsSetAt: null } as never,
+        credentialFields: SOCIAL_CHANNELS.instagram.credentialFields,
+      }),
+    );
+    for (const field of SOCIAL_CHANNELS.instagram.credentialFields) expect(html).toContain(field.label);
+    expect(html).not.toContain(SOCIAL_CHANNELS.facebook.credentialFields[0].label);
+  });
+
+  it("renders a Supprimer trigger for the credentials card", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(SocialChannelForm, {
+        channel: "facebook", label: "Facebook", captionLimits: SOCIAL_CHANNELS.facebook.captionLimits,
+        settings: { ...credBaseSettings, credentialsSetAt: new Date() } as never,
+        credentialFields: SOCIAL_CHANNELS.facebook.credentialFields,
+      }),
+    );
+    expect(html).toContain("Supprimer");
+  });
+});

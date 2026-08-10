@@ -33,6 +33,17 @@ export interface SocialChannel {
   // a channel's settings row on first read (lazy creation, Task 3) and as generateCaption's target
   // length before a channel has been configured.
   readonly captionLimits: { min: number; max: number; default: number };
+  // Task 1 (D2+D3) — which fields /settings/social/[channel]'s credentials card asks the operator
+  // for, and under what jsonb key (social_channel_settings.credentials — lib/diffusion/settings-
+  // core.ts) each ends up ENCRYPTED. `[]` (WhatsApp, X, TikTok, and LinkedIn for now) means the
+  // channel needs no stored credential yet — the card simply doesn't render. Purely additive
+  // metadata, unlike key/label/context/format/captionLimits above: adding a field here (e.g.
+  // LinkedIn's future "organizationUrn"/"accessToken") is a one-line code change, never a
+  // migration — db/schema.ts's `credentials` column is a generic key→ciphertext map that already
+  // accepts any key. Field keys are also the contract a channel's own `send()` reads back via
+  // getDecryptedCredentials(channel) (e.g. Task 2's lib/diffusion/meta/facebook.ts expects
+  // `credentials.pageId` / `credentials.pageAccessToken`).
+  readonly credentialFields: readonly { key: string; label: string }[];
   send(input: SendInput): Promise<SendResult>;
 }
 
@@ -75,21 +86,37 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
   facebook: {
     key: "facebook", label: CHANNEL_LABELS.facebook, context: "social_post", format: "fb_link",
     captionLimits: { min: 1, max: 63206, default: 400 },
+    // D2's Graph client posts to POST /{page-id}/photos with `access_token` — page id + a Page
+    // Access Token are the two things that call needs (plan §Task 2).
+    credentialFields: [
+      { key: "pageId", label: "Identifiant de la Page Facebook (Page ID)" },
+      { key: "pageAccessToken", label: "Jeton d’accès de la Page (Page Access Token)" },
+    ],
     send: (input) => new StubChannel("facebook").send(input),
   },
   instagram: {
     key: "instagram", label: CHANNEL_LABELS.instagram, context: "social_post", format: "ig_square",
     captionLimits: { min: 1, max: 2200, default: 300 },
+    // D3's two-step Graph flow (POST /{ig-user-id}/media then /media_publish) needs the IG user id
+    // and "the SAME token" as Facebook (plan §Task 1/§Task 3) — reused here under the identical
+    // "pageAccessToken" key so an operator who already saved Facebook's token knows to enter the
+    // exact same value here (no automatic cross-channel copy in Task 1's scope).
+    credentialFields: [
+      { key: "igUserId", label: "Identifiant utilisateur Instagram (IG User ID)" },
+      { key: "pageAccessToken", label: "Jeton d’accès (le même que celui de la Page Facebook liée)" },
+    ],
     send: (input) => new StubChannel("instagram").send(input),
   },
   whatsapp: {
     key: "whatsapp", label: CHANNEL_LABELS.whatsapp, context: "social_post", format: "wa_square",
     captionLimits: { min: 1, max: 1024, default: 300 },
+    credentialFields: [], // no credential needed — see this file's header comment
     send: (input) => new StubChannel("whatsapp").send(input),
   },
   x: {
     key: "x", label: CHANNEL_LABELS.x, context: "social_post", format: "x_landscape",
     captionLimits: { min: 1, max: 280, default: 260 },
+    credentialFields: [], // X is deferred (roadmap "Décisions D2 → D7") — no adapter/credentials yet
     send: (input) => new StubChannel("x").send(input),
   },
   tiktok: {
@@ -99,11 +126,18 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
     // PRESET is just dimensions, and 9:16 vertical is exactly TikTok's native content shape.
     format: "story",
     captionLimits: { min: 1, max: 2200, default: 300 },
+    credentialFields: [], // TikTok is deferred (roadmap "Décisions D2 → D7") — no adapter/credentials yet
     send: (input) => new StubChannel("tiktok").send(input),
   },
   linkedin: {
     key: "linkedin", label: CHANNEL_LABELS.linkedin, context: "social_post", format: "li_link",
     captionLimits: { min: 1, max: 3000, default: 400 },
+    // Deliberately EMPTY for now — LinkedIn ships after Facebook+Instagram (roadmap build order).
+    // The moment it's built, its fields (an organization URN + an access token) are added HERE,
+    // in application code — never a migration, since db/schema.ts's `credentials` column is
+    // already a generic key→ciphertext map. This is the concrete demonstration of Task 1's
+    // brief-set criterion.
+    credentialFields: [],
     send: (input) => new StubChannel("linkedin").send(input),
   },
 };

@@ -23,7 +23,12 @@ export default async function Page({ params }: { params: Promise<{ channel: stri
   const channel = raw;
 
   const settings = await getChannelSettings(channel);
-  const { label, captionLimits } = SOCIAL_CHANNELS[channel];
+  const { label, captionLimits, credentialFields } = SOCIAL_CHANNELS[channel];
 
-  return <SocialChannelForm channel={channel} label={label} captionLimits={captionLimits} settings={settings} />;
+  return (
+    <SocialChannelForm
+      channel={channel} label={label} captionLimits={captionLimits} settings={settings}
+      credentialFields={credentialFields}
+    />
+  );
 }

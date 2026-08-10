@@ -50,6 +50,26 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 
 > Les deux `*_TRIGGER_SECRET` doivent être **distincts** l'un de l'autre et de tout autre secret.
 
+**Diffusion sociale — identifiants chiffrés (D2+D3, Task 1) — laisser vide désactive proprement l'enregistrement d'identifiants** (`getCryptoConfig()` renvoie `null`) :
+
+| Variable | Rôle |
+|---|---|
+| `CREDENTIALS_ENCRYPTION_KEY` | Clé AES-256-GCM (32 octets, encodés en base64) qui chiffre les identifiants réseaux sociaux (jeton de Page Facebook/Instagram, futur URN LinkedIn…) stockés dans `social_channel_settings.credentials`. Générer : `openssl rand -base64 32`. |
+
+Sans cette variable, `/settings/social/[canal]` refuse l'enregistrement d'un identifiant avec un
+message français explicite plutôt que de planter — exactement l'idiome de `getWpConfig()`/
+`getStudioConfig()` ci-dessus, appliqué au chiffrement (`lib/diffusion/crypto.ts`).
+
+> **⚠️ Ne jamais perdre `CREDENTIALS_ENCRYPTION_KEY` une fois des identifiants enregistrés sous
+> elle.** Le chiffrement n'a **aucune porte dérobée** : si la clé est perdue ou changée sans
+> re-saisir les identifiants, tout ce qui a été enregistré sous l'ancienne clé devient
+> **définitivement illisible** (un déchiffrement avec la mauvaise clé échoue bruyamment —
+> `DecryptionFailedError` — plutôt que de renvoyer une valeur corrompue, mais ça ne le rend pas
+> récupérable pour autant). Traiter cette variable comme un secret de production au même titre que
+> `BETTER_AUTH_SECRET` : générée une fois, sauvegardée dans le gestionnaire de secrets de l'hôte,
+> **jamais régénérée** sans planifier au préalable la re-saisie de chaque identifiant déjà stocké
+> (Facebook, Instagram, et tout canal ajouté ensuite).
+
 **Studio de gabarits (V1 + V2 + V3) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
 renvoie `null`) :
 
