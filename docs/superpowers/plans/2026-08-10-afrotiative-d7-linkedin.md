@@ -450,6 +450,15 @@ test("a non-image content type is refused", async () => { /* … */ });
 
 - [ ] **Step 3: Implement** `linkedin.ts` and wire the registry. Note the registry's own guard: `tests/diffusion-channels.test.ts` keeps a `REAL_ADAPTER_CHANNELS` list (added in D2+D3) — LinkedIn joins it, so the "every channel returns ok:true" stub assumption no longer applies to it.
 
+**Added 2026-08-10, after Task 3 — a coupling this plan originally missed.** Populating `SOCIAL_CHANNELS.linkedin.credentialFields` breaks **three** assertions in `tests/diffusion-setup-guide.test.ts`, because that file pins today's state deliberately:
+
+- `:72` asserts the no-credential channels are exactly `["linkedin", "tiktok", "whatsapp", "x"]` — a hardcoded list;
+- `:69-76` asserts channels with no credential fields have **no** `fieldHint` anywhere in their guide;
+- the placeholder test asserts LinkedIn's guide says plainly that **the adapter is not built yet** — which stops being true in this task;
+- and the reverse-coverage test at `:83` covers only `facebook` and `instagram`, so LinkedIn must join it.
+
+So Task 4 owns keeping the suite green at its own commit: add LinkedIn's two `credentialFields`, give its guide the **minimal** `fieldHint`-bearing steps those fields require, drop the "not built yet" placeholder wording, and update those four expectations. **Task 6 still owns the full guide** — the Community Management tier path, the screencast, the token generator, the URN lookup, the rate limit. Task 4 writes only enough for an honest, green intermediate state; do not write Task 6's content here.
+
 - [ ] **Step 4: Run and confirm passing.** Run: `bun test tests/diffusion-linkedin.test.ts tests/diffusion-channels.test.ts tests/diffusion-send.test.ts`
 
 - [ ] **Step 5: Commit**
