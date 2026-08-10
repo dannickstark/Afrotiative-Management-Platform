@@ -43,7 +43,7 @@ intégrations.
 > tout doublon sur le même (article, canal). **D1 ne fournit encore aucun adaptateur réel** :
 > `StubChannel` consigne l'envoi (log + identifiant factice, voir la ligne « Diffusion » ci-dessous)
 > sans jamais toucher un vrai réseau, quel que soit le canal (Facebook, Instagram, WhatsApp, X,
-> TikTok).
+> TikTok, LinkedIn).
 
 ## Chaîne de valeur
 
@@ -63,7 +63,7 @@ Flux RSS  →  Extraction  →  Réécriture IA (FR)  →  File de revue  →  �
 | **Observabilité (SP4)** | `/runs` — exécutions, étapes, retraitement d'un item, relance d'un run. |
 | **Publication (SP5)** | publier / dépublier / republier WordPress + publication planifiée. Image à la une **générée au moment de publier** si un gabarit `article_image` est configuré (V3 — voir l'encadré ci-dessus) ; sinon image brute inchangée. |
 | **Studio (V1 + V2 + V3)** | moteur de gabarits + éditeur visuel. `/studio` (liste, groupée par contexte), `/studio/[id]` (éditeur : canevas, calques, jetons, aperçu réel, publication, historique), `/studio/assets` (bibliothèque images/polices), `/studio/generer` (génération ponctuelle citation / bandeau newsletter / récap). Lecture seule avec bannière explicite si le stockage R2 n'est pas configuré (voir `docs/DEPLOYMENT.md`). V3 : `/article/[id]` prévisualise le rendu `article_image` à la demande (onglet « Aperçu final ») et la publication l'utilise réellement (voir « Publication »). |
-| **Diffusion (D1)** | Panneau « Diffusion » sur `/article/[id]` (légende générée par IA, envoi manuel, réessai après échec) pour Facebook / Instagram / WhatsApp / X / TikTok. `/settings/social` (liste) et `/settings/social/[canal]` (activation, limite de légende, prompt, publication automatique) — admin uniquement. Zéro adaptateur réel : chaque canal délègue à `StubChannel`, qui journalise sans jamais appeler un vrai réseau. |
+| **Diffusion (D1)** | Panneau « Diffusion » sur `/article/[id]` (légende générée par IA, envoi manuel, réessai après échec) pour Facebook / Instagram / WhatsApp / X / TikTok / LinkedIn. `/settings/social` (liste) et `/settings/social/[canal]` (activation, limite de légende, prompt, publication automatique) — admin uniquement. Zéro adaptateur réel : chaque canal délègue à `StubChannel`, qui journalise sans jamais appeler un vrai réseau. |
 | **Réglages (SP2 + D1)** | `/settings/{feeds, taxonomy, team, integrations, pipeline, social}` — sources, taxonomie miroir, équipe, statut des intégrations, réglages pipeline, réseaux sociaux. |
 | **Crons** | `POST /api/pipeline/run` (ingestion) · `POST /api/publish/due` (publication planifiée), tous deux bearer-gardés · planificateur in-app (`lib/pipeline/scheduler.ts`, démarré par `instrumentation.ts`) pour l'exécution planifiée du pipeline ET le tic de diffusion automatique D1 (toutes les 15 min, désactivé canal par canal par défaut). |
 

@@ -296,8 +296,8 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
   déterministe sans clé configurée), envoie, consigne le résultat (`article_revisions`).
   `lastAutoSendAt` est posé **avant** l'envoi et persisté en base — un redémarrage/redéploiement ne
   provoque jamais de rafale de rattrapage.
-- **Aucun adaptateur réel en D1** : chaque canal (Facebook, Instagram, WhatsApp, X, TikTok)
-  délègue à `StubChannel`, qui journalise l'envoi (log `[diffusion:stub]`) et renvoie un
+- **Aucun adaptateur réel en D1** : chaque canal (Facebook, Instagram, WhatsApp, X, TikTok,
+  LinkedIn) délègue à `StubChannel`, qui journalise l'envoi (log `[diffusion:stub]`) et renvoie un
   identifiant factice **sans jamais appeler un vrai réseau social**. Activer la publication
   automatique en D1 ne pousse donc rien de visible en dehors de cette plateforme — c'est un socle
   vérifiable de bout en bout, en attendant qu'un vrai adaptateur remplace `StubChannel` canal par

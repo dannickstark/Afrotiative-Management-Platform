@@ -3,8 +3,8 @@
 **Date :** 2026-08-09
 **Statut :** Décisions validées — exécution autonome sous-projet par sous-projet
 **Portée :** Deux besoins liés — (a) un module type « Canva » pour définir des gabarits d'images
-avec emplacements dynamiques, (b) la diffusion des articles vers WhatsApp, Facebook, Instagram, X
-et TikTok. Décomposés en huit sous-projets, chacun avec son propre spec → plan → exécution.
+avec emplacements dynamiques, (b) la diffusion des articles vers WhatsApp, Facebook, Instagram, X,
+TikTok et LinkedIn. Décomposés en sous-projets, chacun avec son propre spec → plan → exécution.
 
 Ce document est le registre durable des décisions. Il fait suite au programme « Pipeline &
 Observabilité v2 » (`2026-08-05-afrotiative-pipeline-program-roadmap.md`), désormais livré.
@@ -132,21 +132,29 @@ API v2. **Bloqué** tant qu'un compte développeur sur palier payant n'existe pa
 ### D6 — Adaptateur TikTok
 Content Posting API, publication photo. **Bloqué** par l'audit d'application TikTok. Optionnel.
 
+### D7 — Adaptateur LinkedIn
+Community Management API (Posts), publication sur une Page entreprise. Nécessite la revue
+d'application LinkedIn pour le scope `w_organization_social` — **à lancer immédiatement, en
+parallèle du développement**, même délai de revue que Meta/X/TikTok.
+
 ---
 
 ## Travaux hors code à lancer maintenant
 
-Ces démarches ont des délais longs et bloqueront D2/D3/D5/D6 quelle que soit la vitesse de
+Ces démarches ont des délais longs et bloqueront D2/D3/D5/D6/D7 quelle que soit la vitesse de
 développement :
 
 1. **Revue d'application Meta** pour `pages_manage_posts` et `instagram_content_publish`.
 2. **Compte développeur X** sur un palier payant (le palier gratuit est plafonné très bas en
    écriture).
 3. **Audit d'application TikTok** pour la Content Posting API, si TikTok est confirmé.
-4. **Numéro de téléphone dédié** pour le worker WhatsApp — à considérer comme sacrifiable.
-5. **Compte Cloudflare R2** + bucket + clés (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+4. **Revue d'application LinkedIn** pour le scope `w_organization_social` (Community Management
+   API), requise pour publier sur une Page entreprise LinkedIn — même nature de délai que la revue
+   Meta.
+5. **Numéro de téléphone dédié** pour le worker WhatsApp — à considérer comme sacrifiable.
+6. **Compte Cloudflare R2** + bucket + clés (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
    `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`).
-6. **Polices de marque en TTF ou OTF** (pas WOFF2) et logos, pour le kit de marque.
+7. **Polices de marque en TTF ou OTF** (pas WOFF2) et logos, pour le kit de marque.
 
 ---
 

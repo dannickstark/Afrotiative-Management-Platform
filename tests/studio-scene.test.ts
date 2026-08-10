@@ -49,9 +49,9 @@ describe("parseScene", () => {
 });
 
 describe("FORMAT_PRESETS", () => {
-  it("expose les sept préréglages avec des dimensions positives", () => {
+  it("expose les huit préréglages avec des dimensions positives", () => {
     const keys = Object.keys(FORMAT_PRESETS);
-    expect(keys).toHaveLength(7);
+    expect(keys).toHaveLength(8);
     for (const k of keys) {
       const p = FORMAT_PRESETS[k as keyof typeof FORMAT_PRESETS];
       expect(p.width).toBeGreaterThan(0);

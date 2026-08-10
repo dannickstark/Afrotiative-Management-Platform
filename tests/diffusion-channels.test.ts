@@ -16,7 +16,7 @@ describe("SOCIAL_CHANNELS registry (D1 §2)", () => {
     }
   });
 
-  it("has exactly the five CHANNELS keys — no extras, nothing missing", () => {
+  it("has exactly the CHANNELS keys — no extras, nothing missing", () => {
     expect(Object.keys(SOCIAL_CHANNELS).sort()).toEqual([...CHANNELS].sort());
   });
 
@@ -40,7 +40,7 @@ describe("SOCIAL_CHANNELS registry (D1 §2)", () => {
     // documented source would fail here even though "default within [min,max]" above would not
     // catch it (that check passes for ANY internally-consistent triple).
     const expected: Record<Channel, number> = {
-      facebook: 63206, instagram: 2200, whatsapp: 1024, x: 280, tiktok: 2200,
+      facebook: 63206, instagram: 2200, whatsapp: 1024, x: 280, tiktok: 2200, linkedin: 3000,
     };
     for (const key of CHANNELS) expect(SOCIAL_CHANNELS[key].captionLimits.max).toBe(expected[key]);
   });

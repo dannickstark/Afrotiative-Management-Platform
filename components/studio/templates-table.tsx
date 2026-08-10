@@ -27,7 +27,7 @@ import { RoleGate } from "@/components/role-gate";
 // FORMAT_KEYS, CHANNELS et les actions ci-dessous : tout vient de modules feuilles, jamais du
 // barrel.
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
-import { TEMPLATE_CONTEXTS, CHANNELS, type TemplateContext, type Channel } from "@/lib/studio/tokens";
+import { TEMPLATE_CONTEXTS, CHANNELS, CHANNEL_LABELS, type TemplateContext, type Channel } from "@/lib/studio/tokens";
 import type { TemplateRow, CategoryOption } from "@/lib/queries/studio";
 import { createTemplate, duplicateTemplate, archiveTemplate, renameTemplate } from "@/lib/actions/studio-actions";
 
@@ -39,20 +39,13 @@ const CONTEXT_LABEL: Record<TemplateContext, string> = {
   recap_card: "Carte récap",
 };
 
-const CHANNEL_LABEL: Record<string, string> = {
-  facebook: "Facebook",
-  instagram: "Instagram",
-  whatsapp: "WhatsApp",
-  x: "X",
-  tiktok: "TikTok",
-};
-
 // Portée affichée : canal, catégorie, les deux, ou « Défaut » si ni l'un ni l'autre — c'est
 // littéralement le gabarit appliqué à tout le contexte, sans restriction. Un canal inconnu de
-// CHANNEL_LABEL (ex. une valeur "test-*" injectée par une suite de tests) s'affiche tel quel :
-// render_templates.channel est du texte libre en base (db/schema.ts), pas un enum.
+// CHANNEL_LABELS (ex. une valeur "test-*" injectée par une suite de tests) s'affiche tel quel :
+// render_templates.channel est du texte libre en base (db/schema.ts), pas un enum — d'où le cast
+// (pas une garantie) sur l'indexation ci-dessous.
 function scopeLabel(row: TemplateRow): string {
-  const channel = row.channel ? (CHANNEL_LABEL[row.channel] ?? row.channel) : null;
+  const channel = row.channel ? (CHANNEL_LABELS[row.channel as Channel] ?? row.channel) : null;
   const parts = [channel, row.categoryName].filter((v): v is string => Boolean(v));
   return parts.length > 0 ? parts.join(" · ") : "Défaut";
 }
@@ -212,12 +205,12 @@ function CreateTemplateDialog({ categories }: { categories: CategoryOption[] }) 
               >
                 <SelectTrigger className="w-full" data-action="create-channel-select">
                   <SelectValue placeholder="Aucun">
-                    {(v: string | null) => (v && v !== NO_CHANNEL ? CHANNEL_LABEL[v] : "Aucun")}
+                    {(v: string | null) => (v && v !== NO_CHANNEL ? (CHANNEL_LABELS[v as Channel] ?? v) : "Aucun")}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value={NO_CHANNEL}>Aucun</SelectItem>
-                  {CHANNELS.map((c) => <SelectItem key={c} value={c}>{CHANNEL_LABEL[c]}</SelectItem>)}
+                  {CHANNELS.map((c) => <SelectItem key={c} value={c}>{CHANNEL_LABELS[c]}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
