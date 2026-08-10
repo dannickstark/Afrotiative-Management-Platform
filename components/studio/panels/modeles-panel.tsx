@@ -1,5 +1,6 @@
 "use client";
 
+import { RoleGate } from "@/components/role-gate";
 import { CreateTemplateDialog, TemplatesTable } from "@/components/studio/templates-table";
 import type { CategoryOption, TemplateRow } from "@/lib/queries/studio";
 
@@ -12,14 +13,16 @@ import type { CategoryOption, TemplateRow } from "@/lib/queries/studio";
 // CreateTemplateDialog juste au-dessus, dans le rôle d'action primaire du skeleton commun de
 // panel-host.tsx) — les sections groupées par contexte restent, elles, identiques dans les deux cas.
 //
-// PAS de <RoleGate> autour de ce déclencheur, contrairement à celui que TemplatesTable garde pour
-// /studio (app/(app)/studio/page.tsx) : RoleGate lit useSession() (lib/auth-client.ts), qui n'a pas
-// de session à lire sous `renderToStaticMarkup` (pas de Provider, pas de réseau) et masquerait donc
-// le bouton même en test — voir tests/studio-templates-table.test.ts pour la vérification empirique.
-// Ce n'est pas un relâchement de la sécurité réelle : createTemplate (lib/actions/studio-actions.ts)
-// appelle requirePermission() côté serveur quoi qu'il arrive, et app/(app)/studio/[id]/page.tsx exige
-// déjà template:read pour atteindre CETTE page — dans la matrice RBAC (lib/rbac.ts), aucun rôle n'a
-// jamais template:read SANS template:manage, donc quiconque voit ce panneau a déjà le droit de créer.
+// <RoleGate allow={["admin", "editor"]}> — SYMÉTRIQUE avec le même déclencheur dans
+// templates-table.tsx (celui de /studio). Revue Tâche 2, Important 2 : la version précédente
+// omettait ce garde en argumentant que le RBAC serveur (createTemplate → requirePermission(),
+// lib/actions/studio-actions.ts) et le garde de page (template:read, app/(app)/studio/[id]/page.tsx)
+// rendaient déjà toute tentative sans droit inopérante — vrai AUJOURD'HUI (lib/rbac.ts +
+// tests/studio-rbac.test.ts prouvent qu'aucun rôle n'a jamais template:read sans template:manage),
+// mais cette preuve ne vit dans AUCUN fichier que ce composant référence : si la matrice RBAC
+// changeait un jour, ce panneau divergerait silencieusement de son frère sans le moindre signal de
+// compilation ou de lint. Le wrap coûte peu et rétablit la symétrie plutôt que de reposer sur un
+// invariant externe non tracé ici.
 export interface ModelesPanelProps {
   templates: TemplateRow[];
   categories: CategoryOption[];
@@ -28,7 +31,9 @@ export interface ModelesPanelProps {
 export function ModelesPanel({ templates, categories }: ModelesPanelProps) {
   return (
     <div className="flex flex-col gap-3" data-testid="modeles-panel">
-      <CreateTemplateDialog categories={categories} />
+      <RoleGate allow={["admin", "editor"]}>
+        <CreateTemplateDialog categories={categories} />
+      </RoleGate>
       <TemplatesTable templates={templates} categories={categories} showHeader={false} />
     </div>
   );

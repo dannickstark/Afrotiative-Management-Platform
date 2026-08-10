@@ -23,6 +23,7 @@ import type { TemplateRow, CategoryOption } from "@/lib/queries/studio";
 const { requireUser: realRequireUser, getSession: realGetSession } = await import("@/lib/session");
 const { revalidatePath: realRevalidatePath, revalidateTag: realRevalidateTag } = await import("next/cache");
 const realNavigation = await import("next/navigation");
+const realAuthClient = await import("@/lib/auth-client");
 
 const [seededEditor] = await db.select({ id: user.id, role: user.role })
   .from(user).where(eq(user.email, "editor@afrotiative.com"));
@@ -46,6 +47,16 @@ mock.module("next/navigation", () => ({
   useRouter: () => ({
     push: () => {}, refresh: () => {}, replace: () => {}, back: () => {}, forward: () => {}, prefetch: () => {},
   }),
+}));
+// Revue Tâche 2, Important 2 : ModelesPanel enveloppe désormais CreateTemplateDialog dans
+// <RoleGate allow={["admin","editor"]}> (symétrie avec templates-table.tsx) — RoleGate lit
+// useSession() (@/lib/auth-client.ts), qui n'a pas de session à lire sous `renderToStaticMarkup`
+// (pas de Provider, pas de réseau) et masquerait donc le déclencheur même en test. Mocké AVANT le
+// premier import de modeles-panel.tsx, même recette que next/navigation ci-dessus — la session
+// simulée porte le rôle "editor", cohérent avec FAKE_EDITOR utilisé plus bas pour les tests DB.
+mock.module("@/lib/auth-client", () => ({
+  ...realAuthClient,
+  useSession: () => ({ data: { user: { role: "editor" } } }),
 }));
 
 const { createTemplate, archiveTemplate } = await import("@/lib/actions/studio-actions");
@@ -103,6 +114,7 @@ afterAll(async () => {
   mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: realRequireUser }));
   mock.module("next/cache", () => ({ revalidatePath: realRevalidatePath, revalidateTag: realRevalidateTag }));
   mock.module("next/navigation", () => realNavigation);
+  mock.module("@/lib/auth-client", () => realAuthClient);
   const { inArray } = await import("drizzle-orm");
   if (templateIds.length) await db.delete(renderTemplates).where(inArray(renderTemplates.id, templateIds));
 });
