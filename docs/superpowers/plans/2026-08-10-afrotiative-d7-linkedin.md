@@ -39,7 +39,7 @@
 | `lib/diffusion/linkedin/linkedin.ts` (create) | The four-step send + French error mapping |
 | `lib/diffusion/channels.ts` (modify) | LinkedIn `credentialFields` + real `send` |
 | `lib/diffusion/caption.ts` (modify) | Append the permalink for LinkedIn, reserving its length before truncation |
-| `lib/diffusion/meta/connection-test.ts` (modify) | Add a LinkedIn branch to the existing connection test |
+| `lib/diffusion/connection-test.ts` (**moved** from `meta/` in Task 6) | Add a LinkedIn branch to the existing connection test |
 | `lib/diffusion/setup-guide.ts` (modify) | Replace the LinkedIn placeholder with the real guide |
 | `docs/DEPLOYMENT.md`, `README.md`, `.env.example` (modify) | `LINKEDIN_API_VERSION`, the LinkedIn prerequisites, adapter status |
 
@@ -560,13 +560,13 @@ test("LinkedIn connection test names the organization reached", async () => {
 });
 
 test("every channel still has a guide, and LinkedIn's is no longer a placeholder", () => {
-  const g = SETUP_GUIDES.linkedin;
-  expect(g.steps.length).toBeGreaterThan(3);
+  const g = SETUP_GUIDES.linkedin;   // NB: SETUP_GUIDES[channel] IS the step array — there is no `.steps`
+  expect(g.length).toBeGreaterThan(3);
   expect(JSON.stringify(g)).toMatch(/Community Management/);
   expect(JSON.stringify(g)).toMatch(/nouvelle application/i);   // Dev Tier needs a NEW app
   expect(JSON.stringify(g)).toMatch(/60 jours/);
   const fieldKeys = SOCIAL_CHANNELS.linkedin.credentialFields.map((f) => f.key);
-  for (const s of g.steps) if (s.fieldHint) expect(fieldKeys).toContain(s.fieldHint);
+  for (const s of g) if (s.fieldHint) expect(fieldKeys).toContain(s.fieldHint);
 });
 ```
 

@@ -115,7 +115,7 @@ Every request carries `Linkedin-Version` and `X-Restli-Protocol-Version: 2.0.0`.
      "commentary": "<caption, URL already appended at generation>",
      "visibility": "PUBLIC",
      "distribution": { "feedDistribution": "MAIN_FEED", "targetEntities": [], "thirdPartyDistributionChannels": [] },
-     "content": { "media": { "altText": "<article title, truncated>", "id": "<image urn>" } },
+     "content": { "media": { "altText": "<see the correction below>", "id": "<image urn>" } },
      "lifecycleState": "PUBLISHED",
      "isReshareDisabledByAuthor": false
    }
@@ -123,6 +123,17 @@ Every request carries `Linkedin-Version` and `X-Restli-Protocol-Version: 2.0.0`.
    A `201` carries the post URN in the **`x-restli-id`** header — that is `externalId`. A `201`
    without that header is a hard failure with its own message, not a silent success: we would
    otherwise record an empty `externalId` for a live public post.
+
+   **Corrected during Task 4 (2026-08-10) — `altText` cannot come from the article title.** This spec
+   asked for the article title, but `SendInput` is `{ articleId, imageUrl, caption }` and D1's rule is
+   explicit that an adapter must not re-fetch article data (`lib/diffusion/channels.ts:15-24`). Getting
+   a title here would have meant widening a D1 interface all six adapters share, which was not in this
+   sub-project's scope. The adapter therefore derives alt text from the **caption**, stripping every
+   URL and falling back to a static French string when nothing useful remains. Two consequences worth
+   recording: that derivation cost two review rounds of truncation bugs, and reusing the caption is a
+   mild accessibility compromise — a screen reader announces text adjacent to the image twice. If a
+   future sub-project widens `SendResult`/`SendInput` for other reasons, carrying a title is the
+   better answer.
 
 ### 3.3 Error mapping (all French)
 
