@@ -61,26 +61,28 @@ describe("SETUP_GUIDES (Task 4, D2+D3) — every Channel has a connection guide"
     }
   });
 
-  // Channels with no credential fields yet (whatsapp, x, tiktok, linkedin — channels.ts's own
-  // header comment) have nothing a fieldHint could legitimately point at; the previous test alone
-  // would also catch a stray one, but this pins the expectation explicitly per channel rather than
-  // leaving it as an incidental consequence.
+  // Channels with no credential fields yet (tiktok, whatsapp, x — channels.ts's own header comment;
+  // linkedin joined facebook/instagram in Task 4, D7) have nothing a fieldHint could legitimately
+  // point at; the previous test alone would also catch a stray one, but this pins the expectation
+  // explicitly per channel rather than leaving it as an incidental consequence.
   it("channels with no credential fields have no fieldHint in their guide", () => {
     const noCredentialChannels: Channel[] = CHANNELS.filter(
       (key) => SOCIAL_CHANNELS[key].credentialFields.length === 0,
     );
-    expect(noCredentialChannels.sort()).toEqual(["linkedin", "tiktok", "whatsapp", "x"]);
+    expect(noCredentialChannels.sort()).toEqual(["tiktok", "whatsapp", "x"]);
     for (const key of noCredentialChannels) {
       for (const step of SETUP_GUIDES[key]) expect(step.fieldHint).toBeUndefined();
     }
   });
 
-  // The reverse direction, for the two channels with a real adapter and real fields: every
+  // The reverse direction, for the three channels with a real adapter and real fields: every
   // registered credential field actually gets a guiding step, not just some of them — a future
   // credential field added to channels.ts without a matching guide step would leave an admin with a
-  // field to fill and no instructions for it, and this is the check that would catch that.
-  it("facebook and instagram guides cover every credential field they declare", () => {
-    for (const key of ["facebook", "instagram"] as const) {
+  // field to fill and no instructions for it, and this is the check that would catch that. LinkedIn
+  // joined this list in Task 4 (D7) — its guide is deliberately MINIMAL (spec §6/Task 6 owns the
+  // full content) but still covers organizationUrn/accessToken, so it belongs here too.
+  it("facebook, instagram and linkedin guides cover every credential field they declare", () => {
+    for (const key of ["facebook", "instagram", "linkedin"] as const) {
       const declaredKeys = SOCIAL_CHANNELS[key].credentialFields.map((f) => f.key);
       const hintedKeys = new Set(
         SETUP_GUIDES[key].map((s) => s.fieldHint).filter((h): h is string => h !== undefined),
@@ -89,14 +91,14 @@ describe("SETUP_GUIDES (Task 4, D2+D3) — every Channel has a connection guide"
     }
   });
 
-  // The placeholders must be honest about NOT being built, not silent about it — a step that just
+  // The placeholder must be honest about NOT being built, not silent about it — a step that just
   // said "coming soon" with no reason would fail the brief's "at least one step" test technically
-  // but still leave an admin (or the next task, D7/D4) with nothing actionable.
-  it("linkedin and whatsapp placeholders say plainly the adapter is not built yet", () => {
-    for (const key of ["linkedin", "whatsapp"] as const) {
-      const allText = SETUP_GUIDES[key].map((s) => `${s.title} ${s.body}`).join(" ");
-      expect(allText).toMatch(/pas encore/i);
-    }
+  // but still leave an admin (or the next task, D4) with nothing actionable. LinkedIn dropped out of
+  // this list in Task 4 (D7): the adapter is real now, so the guide would be LYING if it still said
+  // "pas encore construit" — see tests/diffusion-linkedin.test.ts for the adapter's own coverage.
+  it("whatsapp's placeholder says plainly the adapter is not built yet", () => {
+    const allText = SETUP_GUIDES.whatsapp.map((s) => `${s.title} ${s.body}`).join(" ");
+    expect(allText).toMatch(/pas encore/i);
   });
 
   // Same honesty requirement for the two deferred channels, but the reason is different (blocked on

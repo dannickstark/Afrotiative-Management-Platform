@@ -1,5 +1,10 @@
-import { describe, test, expect, afterEach } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, afterEach } from "bun:test";
+import { randomBytes } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { db, socialChannelSettings } from "@/db";
 import { LinkedInClient, LinkedInApiError } from "@/lib/diffusion/linkedin/rest-client";
+import { LinkedInChannel, mapLinkedInApiError } from "@/lib/diffusion/linkedin/linkedin";
+import { setChannelCredentialsCore, deleteChannelCredentialsCore } from "@/lib/diffusion/settings-core";
 
 // Task 3 (D7) — LinkedIn REST client. Client-only: no adapter, no credential reading, no DB
 // (SocialChannel wiring is Task 4). Every test runs against a Bun.serve fake, never the real
@@ -109,5 +114,336 @@ describe("LinkedInClient (D7 Task 3) — fake REST API, no real network", () => 
     const bytes = new Uint8Array([1]).buffer;
     await expect(c.putBytes(`http://localhost:${uploads.port}/dms-uploads/x`, bytes, "image/png"))
       .rejects.toMatchObject({ status: 429 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 4 (D7) — LinkedInChannel.send(): the four-step adapter (download → initializeUpload → PUT →
+// poll → post) behind lib/diffusion/channels.ts's SocialChannel interface. Same "fake LinkedIn API,
+// no real network" discipline as the client tests above, reusing `fakeLinkedIn`/`json`/`servers`
+// (this file's own Task 3 helpers). The one thing those tests never needed and this suite does: the
+// fake server ALSO serves `/render.png` (LinkedIn's own paths AND our own render's public URL live
+// on the SAME fake host here — see linkedInChannelFor's fetchImpl below for why that is safe to do
+// under the SSRF guard only in tests, never in production).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real network", () => {
+  const CHANNEL = "linkedin" as const;
+  const SAVED_KEY = process.env.CREDENTIALS_ENCRYPTION_KEY;
+  const VALID_KEY = randomBytes(32).toString("base64");
+  const noSleep = async () => {};
+
+  const ORG_URN = "urn:li:organization:42";
+  const ACCESS_TOKEN = "tok-li-abc";
+  const IMAGE_URN = "urn:li:image:9";
+  const POST_URN = "urn:li:share:77";
+  const RENDER_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]); // PNG magic bytes — the adapter only inspects content-type, never decodes the bytes, so this is enough
+
+  async function clearLinkedInCredentials() {
+    await deleteChannelCredentialsCore(CHANNEL);
+    await db.delete(socialChannelSettings).where(eq(socialChannelSettings.channel, CHANNEL));
+  }
+
+  beforeAll(() => {
+    process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY;
+  });
+  afterAll(async () => {
+    await clearLinkedInCredentials();
+    if (SAVED_KEY === undefined) delete process.env.CREDENTIALS_ENCRYPTION_KEY;
+    else process.env.CREDENTIALS_ENCRYPTION_KEY = SAVED_KEY;
+  });
+  afterEach(async () => {
+    await clearLinkedInCredentials();
+  });
+
+  // Wraps this file's own `fakeLinkedIn` (Task 3, above) to also log every request as
+  // "METHOD /path?search", in arrival order — what the happy-path/order tests below assert against.
+  // Task 3's `fakeLinkedIn` itself is untouched (its own tests never read `.calls`).
+  function fakeLinkedInTracked(
+    impl: (req: Request, u: URL) => Response | Promise<Response>,
+  ): { url: string; calls: string[] } {
+    const calls: string[] = [];
+    const srv = fakeLinkedIn(async (req) => {
+      const u = new URL(req.url);
+      calls.push(`${req.method} ${u.pathname}${u.search}`);
+      return impl(req, u);
+    });
+    return { url: srv.url, calls };
+  }
+
+  function pathsCalled(srv: { calls: string[] }): string[] {
+    return srv.calls;
+  }
+
+  // `/render.png` lives on the SAME fake host as every LinkedIn endpoint — spec §7: "the fake must
+  // serve two hosts' worth of paths (the API host and the dms-uploads upload URL it hands back)";
+  // the render's own URL is a THIRD thing served here for convenience, since nothing requires it to
+  // be on a different host and doing so keeps every test to a single Bun.serve instance.
+  function renderUrl(srv: { url: string }): string {
+    return `${srv.url}/render.png`;
+  }
+
+  // fetchImpl: fetch (real global fetch, pointed at the fake server) is what lets these tests reach
+  // a local Bun.serve instance for the byte download AND lifts the SSRF guard (only in combination
+  // with NODE_ENV === "test" — see linkedin.ts's send(), mirroring lib/studio/images.ts's
+  // prepareImage exactly). The one test that must exercise the REAL guard (the "unsafe image URL"
+  // test below) deliberately does NOT go through this helper.
+  function linkedInChannelFor(srv: { url: string }, overrides: Partial<{
+    pollMaxAttempts: number; pollIntervalMs: number; sleepImpl: (ms: number) => Promise<void>;
+  }> = {}): LinkedInChannel {
+    return new LinkedInChannel({ baseUrl: srv.url, fetchImpl: fetch, sleepImpl: noSleep, ...overrides });
+  }
+
+  test("happy path: four calls in order, externalId from x-restli-id", async () => {
+    const calls: string[] = [];
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url); calls.push(`${req.method} ${u.pathname}${u.search}`);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
+      if (u.pathname === "/rest/posts") return new Response("", { status: 201, headers: { "x-restli-id": POST_URN } });
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res).toEqual({ ok: true, externalId: POST_URN });
+    expect(calls).toEqual([
+      "GET /render.png",
+      "POST /rest/images?action=initializeUpload",
+      "PUT /dms-uploads/1",
+      `GET /rest/images/${IMAGE_URN}`,
+      "POST /rest/posts",
+    ]);
+  });
+
+  test("the post body carries the image urn, the caption, PUBLIC and MAIN_FEED", async () => {
+    let postBody: unknown = null;
+    let initBody: unknown = null;
+    const srv = fakeLinkedIn(async (req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) {
+        initBody = await req.json();
+        return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      }
+      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
+      if (u.pathname === "/rest/posts") {
+        postBody = await req.json();
+        return new Response("", { status: 201, headers: { "x-restli-id": POST_URN } });
+      }
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({
+      articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour, ceci est un test.",
+    });
+    expect(res.ok).toBe(true);
+    // Spec §3.2 step 2's exact payload shape.
+    expect(initBody).toEqual({ initializeUploadRequest: { owner: ORG_URN } });
+    // Spec §3.2 step 5's exact payload shape.
+    expect(postBody).toEqual({
+      author: ORG_URN,
+      commentary: "Bonjour, ceci est un test.",
+      visibility: "PUBLIC",
+      distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
+      content: { media: { altText: "Bonjour, ceci est un test.", id: IMAGE_URN } },
+      lifecycleState: "PUBLISHED",
+      isReshareDisabledByAuthor: false,
+    });
+  });
+
+  test("a timeout NEVER posts — an invisible post is worse than a failed send", async () => {
+    const srv = fakeLinkedInTracked((req, u) => {
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "PROCESSING" }); // never AVAILABLE
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv, { pollMaxAttempts: 3, sleepImpl: async () => {} }).send({
+      articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message).toMatch(/n'a pas fini d'être traitée|délai/i);
+    expect(pathsCalled(srv)).not.toContain("POST /rest/posts");
+    // Bounded — exactly pollMaxAttempts polls, never more, never fewer.
+    expect(pathsCalled(srv).filter((p) => p.includes("/rest/images/"))).toHaveLength(3);
+  });
+
+  test("PROCESSING_FAILED fails immediately without posting", async () => {
+    const srv = fakeLinkedInTracked((req, u) => {
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "PROCESSING_FAILED" });
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv, { pollMaxAttempts: 5 }).send({
+      articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message).toContain("PROCESSING_FAILED");
+      expect(res.message).toContain(IMAGE_URN);
+      // The image is the problem here, not the token — must not send the operator to the settings
+      // page the way the 401 mapping does (see the "401" test below).
+      expect(res.message).not.toContain("/settings/social/linkedin");
+    }
+    expect(pathsCalled(srv)).not.toContain("POST /rest/posts");
+    // Fails on the FIRST poll — not after exhausting every attempt.
+    expect(pathsCalled(srv).filter((p) => p.includes("/rest/images/"))).toHaveLength(1);
+  });
+
+  test("201 without x-restli-id is a failure, not a success with an empty id", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
+      if (u.pathname === "/rest/posts") return new Response("", { status: 201 }); // no x-restli-id header
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message).toContain("x-restli-id");
+      expect(res.message).toContain(IMAGE_URN);
+    }
+    expect((res as { ok: boolean; externalId?: string }).externalId).toBeUndefined();
+  });
+
+  test("401 says the token expired and points at the settings page", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      return json({ message: "invalid access token", status: 401 }, 401);
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: "expired-tok" });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message).toMatch(/jeton/i);
+      expect(res.message).toContain("/settings/social/linkedin");
+      expect(res.message).not.toContain("expired-tok"); // never a credential in the message
+    }
+  });
+
+  test("403 blames the scope or Page admin rights, not the token — distinct from 401", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      return json({ message: "ACCESS_DENIED", status: 403 }, 403);
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message.toLowerCase()).toMatch(/w_organization_social|administrateur/);
+      // Distinct fix from 401 — must not tell the operator to regenerate a token, and must not
+      // point at the settings page the way the 401 mapping does (see the "401" test above).
+      expect(res.message).not.toContain("Générez un nouveau jeton");
+      expect(res.message).not.toContain("/settings/social/linkedin");
+    }
+    expect(mapLinkedInApiError(new LinkedInApiError(401, {}, ""))).not.toBe(mapLinkedInApiError(new LinkedInApiError(403, {}, "")));
+  });
+
+  test("429 mentions the daily quota", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      return json({ message: "QPS_LIMIT_EXCEEDED", status: 429 }, 429);
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message.toLowerCase()).toMatch(/quota/);
+  });
+
+  test("a generic LinkedIn API error becomes a French message and never leaks the access token", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      return json({ message: "Invalid owner URN", status: 400 }, 400);
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: "SECRET-TOKEN-SHOULD-NEVER-APPEAR" });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message).toContain("La publication LinkedIn a échoué");
+      expect(res.message).not.toContain("SECRET-TOKEN-SHOULD-NEVER-APPEAR");
+    }
+  });
+
+  test("missing credentials refuse before any HTTP call", async () => {
+    const srv = fakeLinkedInTracked(() => json({ ok: 1 }));
+    // Credentials deliberately left unset — afterEach above clears them after every test too, so
+    // this holds regardless of test order within this file.
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message.toLowerCase()).toContain("identifiants");
+    expect(pathsCalled(srv)).toHaveLength(0);
+  });
+
+  test("an organization URN with no access token also refuses before any HTTP call", async () => {
+    const srv = fakeLinkedInTracked(() => json({ ok: 1 }));
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN }); // token deliberately omitted
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    expect(pathsCalled(srv)).toHaveLength(0);
+  });
+
+  // Mirrors tests/diffusion-connection-test.test.ts:118-129 and tests/diffusion-facebook.test.ts's/
+  // tests/diffusion-instagram.test.ts's own copies of the same regression test: write credentials
+  // under VALID_KEY, then swap in a DIFFERENT, validly-shaped 32-byte key before sending, exactly
+  // reproducing a CREDENTIALS_ENCRYPTION_KEY rotation without re-entering credentials.
+  test("a rotated encryption key returns a French failure instead of throwing (D2+D3 review, Important 1)", async () => {
+    const srv = fakeLinkedInTracked(() => json({ ok: 1 }));
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    process.env.CREDENTIALS_ENCRYPTION_KEY = randomBytes(32).toString("base64"); // simulates rotation
+    try {
+      const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.message).toMatch(/déchiffr/i);
+      expect(pathsCalled(srv)).toHaveLength(0); // fails before ANY HTTP call, including the image download
+    } finally {
+      process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY; // restore — afterEach doesn't touch this var
+    }
+  });
+
+  test("an unsafe image URL is refused before any LinkedIn call", async () => {
+    const srv = fakeLinkedInTracked(() => json({ ok: 1 }));
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    // Deliberately NOT going through linkedInChannelFor: no fetchImpl override here means the REAL
+    // SSRF guard runs (isSafePublicHttpUrl) — see linkedin.ts's send()/this describe's header comment.
+    const channel = new LinkedInChannel({ baseUrl: srv.url, sleepImpl: noSleep });
+    const res = await channel.send({
+      articleId: "a1", imageUrl: "http://169.254.169.254/latest/meta-data/", caption: "Bonjour",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message.toLowerCase()).toContain("adresse publique");
+    expect(pathsCalled(srv)).toHaveLength(0);
+  });
+
+  test("a non-image content type is refused", async () => {
+    const srv = fakeLinkedInTracked((req, u) => {
+      if (u.pathname === "/render.png") return new Response("<html>pas une image</html>", { headers: { "content-type": "text/html" } });
+      return json({ ok: 1 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message.toLowerCase()).toContain("image exploitable");
+    // Never reaches LinkedIn's own API — only the render download was attempted.
+    expect(pathsCalled(srv)).toEqual(["GET /render.png"]);
+  });
+
+  test("mapLinkedInApiError handles a non-LinkedInApiError Error and an unknown thrown value too", () => {
+    expect(mapLinkedInApiError(new Error("panne réseau"))).toContain("panne réseau");
+    expect(mapLinkedInApiError("chaîne quelconque")).toContain("inconnue");
   });
 });

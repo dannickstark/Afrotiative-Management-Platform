@@ -48,12 +48,12 @@ export type SetupGuideStep = {
   readonly fieldHint?: string;
 };
 
-// Per-channel, ordered. Facebook and Instagram are the two channels with a real adapter today
-// (D2/D3) and get a complete guide. The other four get an honest placeholder — LinkedIn and
-// WhatsApp name what D7/D4 will need so those tasks only fill the shape in; X and TikTok say plainly
-// that the channel is deferred and why (roadmap "Décisions D2 → D7"). Every channel still gets at
-// least one real step — even a placeholder must say something an admin (or the next task) can act
-// on, never just "coming soon".
+// Per-channel, ordered. Facebook, Instagram and (Task 4, D7 — minimally, see that entry's own
+// comment) LinkedIn are the three channels with a real adapter today and get a fieldHint-bearing
+// guide. The other three get an honest placeholder — WhatsApp names what D4 will need so that task
+// only fills the shape in; X and TikTok say plainly that the channel is deferred and why (roadmap
+// "Décisions D2 → D7"). Every channel still gets at least one real step — even a placeholder must
+// say something an admin (or the next task) can act on, never just "coming soon".
 export const SETUP_GUIDES: Readonly<Record<Channel, readonly SetupGuideStep[]>> = {
   facebook: [
     {
@@ -165,24 +165,40 @@ export const SETUP_GUIDES: Readonly<Record<Channel, readonly SetupGuideStep[]>> 
     },
   ],
   linkedin: [
+    // Task 4 (D7) — the adapter is now real (lib/diffusion/linkedin/linkedin.ts), so this guide can
+    // no longer say "not built yet"; it needs at least a minimal, HONEST fieldHint-bearing step for
+    // each of the two credential fields channels.ts now declares (organizationUrn/accessToken), the
+    // same reverse-coverage requirement tests/diffusion-setup-guide.test.ts already enforces for
+    // facebook/instagram. This is DELIBERATELY minimal — the Community Management tier path, the
+    // screencast requirement, the Token Generator walkthrough, the URN lookup, and the 500/day rate
+    // limit are Task 6's job (spec §6), not backfilled here. Writing that content now, ahead of Task
+    // 6, would risk duplicating/contradicting what Task 6 ships with more research behind it.
     {
-      title: "Adaptateur pas encore construit",
-      body:
-        "La publication vers LinkedIn n'est pas encore implémentée dans ce produit. C'est le prochain " +
-        "canal de la feuille de route, juste après Facebook et Instagram — cette page n'a donc aucun " +
-        "champ d'identifiant à remplir pour l'instant. Dès que l'adaptateur existera, les champs " +
-        "(un URN d'organisation LinkedIn et un jeton d'accès) apparaîtront automatiquement ici, sans " +
-        "migration de base de données.",
-    },
-    {
-      title: "Ce qu'il faudra préparer en amont",
+      title: "Programme d'accès Community Management API",
       body:
         "LinkedIn publie sur une Page entreprise via la Community Management API (ressource Posts, " +
         "champ commentary), avec le scope w_organization_social. L'accès à cette API passe par un " +
         "programme à deux paliers (palier de développement puis palier standard, chacun avec son " +
         "propre dossier et enregistrement vidéo) — un délai comparable à la revue d'application Meta. " +
-        "À lancer dès que ce canal est planifié, pas au moment de coder l'adaptateur.",
+        "Le compte utilisé pour générer le jeton doit aussi être administrateur de la Page LinkedIn " +
+        "ciblée.",
       href: "https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api",
+    },
+    {
+      title: "Renseigner l'URN de l'organisation",
+      body:
+        "L'URN identifie la Page entreprise LinkedIn cible (forme urn:li:organization:<id>) — c'est " +
+        "la valeur envoyée comme propriétaire de chaque image téléversée et comme auteur de chaque " +
+        "publication.",
+      fieldHint: "organizationUrn",
+    },
+    {
+      title: "Renseigner le jeton d'accès",
+      body:
+        "Le jeton généré via le Développeur Portal de LinkedIn (portant le scope " +
+        "w_organization_social) — il dure environ 60 jours et son renouvellement automatique n'est " +
+        "pas disponible pour ce type d'application.",
+      fieldHint: "accessToken",
     },
   ],
   whatsapp: [

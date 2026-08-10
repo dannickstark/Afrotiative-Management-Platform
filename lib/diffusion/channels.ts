@@ -6,6 +6,7 @@ import { CHANNELS, CHANNEL_LABELS, type Channel, type TemplateContext, type Form
 import { StubChannel } from "./stub-channel";
 import { FacebookChannel } from "./meta/facebook";
 import { InstagramChannel } from "./meta/instagram";
+import { LinkedInChannel } from "./linkedin/linkedin";
 
 // What a channel's `send` needs to actually publish: the rendered image (studio's public URL —
 // the render itself is generated and its renderId frozen onto the distributions row BEFORE `send`
@@ -37,7 +38,7 @@ export interface SocialChannel {
   readonly captionLimits: { min: number; max: number; default: number };
   // Task 1 (D2+D3) — which fields /settings/social/[channel]'s credentials card asks the operator
   // for, and under what jsonb key (social_channel_settings.credentials — lib/diffusion/settings-
-  // core.ts) each ends up ENCRYPTED. `[]` (WhatsApp, X, TikTok, and LinkedIn for now) means the
+  // core.ts) each ends up ENCRYPTED. `[]` (WhatsApp, X, TikTok for now) means the
   // channel needs no stored credential yet — the card simply doesn't render. Purely additive
   // metadata, unlike key/label/context/format/captionLimits above: adding a field here (e.g.
   // LinkedIn's future "organizationUrn"/"accessToken") is a one-line code change, never a
@@ -140,13 +141,20 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
   linkedin: {
     key: "linkedin", label: CHANNEL_LABELS.linkedin, context: "social_post", format: "li_link",
     captionLimits: { min: 1, max: 3000, default: 400 },
-    // Deliberately EMPTY for now — LinkedIn ships after Facebook+Instagram (roadmap build order).
-    // The moment it's built, its fields (an organization URN + an access token) are added HERE,
-    // in application code — never a migration, since db/schema.ts's `credentials` column is
-    // already a generic key→ciphertext map. This is the concrete demonstration of Task 1's
-    // brief-set criterion.
-    credentialFields: [],
-    send: (input) => new StubChannel("linkedin").send(input),
+    // Task 4 (D7) — the real adapter's four-step flow (lib/diffusion/linkedin/linkedin.ts) needs the
+    // company Page's organization URN (POST /rest/images's `owner` and /rest/posts's `author`) and
+    // an access token (Authorization: Bearer on every LinkedIn call). This is the concrete
+    // demonstration of Task 1's brief-set criterion: adding a channel's real fields here is a
+    // one-line application-code change, never a migration — db/schema.ts's `credentials` column is
+    // already a generic key→ciphertext map.
+    credentialFields: [
+      { key: "organizationUrn", label: "URN de l'organisation (Page entreprise)" },
+      { key: "accessToken", label: "Jeton d'accès" },
+    ],
+    // D7 — real adapter (lib/diffusion/linkedin/linkedin.ts): download the render → initialize the
+    // image upload → PUT the bytes → poll until AVAILABLE → POST the post. Same "new X().method
+    // (input)" swap as Facebook/Instagram above — nothing else here changed.
+    send: (input) => new LinkedInChannel().send(input),
   },
 };
 
