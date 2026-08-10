@@ -3,8 +3,10 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { getChannelSettings } from "@/lib/diffusion/settings-core";
 import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
+import { getSetupGuide } from "@/lib/diffusion/setup-guide";
 import { CHANNELS, type Channel } from "@/lib/studio";
 import { SocialChannelForm } from "@/components/settings/social-channel-form";
+import { ChannelSetupGuide } from "@/components/settings/channel-setup-guide";
 
 function isChannel(value: string): value is Channel {
   return (CHANNELS as readonly string[]).includes(value);
@@ -24,11 +26,17 @@ export default async function Page({ params }: { params: Promise<{ channel: stri
 
   const settings = await getChannelSettings(channel);
   const { label, captionLimits, credentialFields } = SOCIAL_CHANNELS[channel];
+  const guide = getSetupGuide(channel);
 
   return (
-    <SocialChannelForm
-      channel={channel} label={label} captionLimits={captionLimits} settings={settings}
-      credentialFields={credentialFields}
-    />
+    <div className="max-w-2xl space-y-4">
+      {/* Collapsed once credentials are set, expanded when they are not (Task 4 brief) — same
+          credentialsSetAt signal social-channel-form.tsx already reads for its own status copy. */}
+      <ChannelSetupGuide guide={guide} credentialFields={credentialFields} defaultOpen={!settings.credentialsSetAt} />
+      <SocialChannelForm
+        channel={channel} label={label} captionLimits={captionLimits} settings={settings}
+        credentialFields={credentialFields}
+      />
+    </div>
   );
 }
