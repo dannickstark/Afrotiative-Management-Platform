@@ -323,6 +323,8 @@ describe("the layer a click inserts", () => {
 });
 ```
 
+**Amended 2026-08-11 — Task 3's implementer found four defects in the test code above; it does not compile as written.** Recorded so the next reader does not trust it verbatim: the token id is `article.title`, not `title`; the `TextLayer` content field is `content`, not `text`; the scene key is `schemaVersion`, not `version`; `parseScene` takes an object, not a `JSON.stringify` result. Worst of the four: the "illegal token" case picked a token whose kind is not `text`, so it would have **passed vacuously** — the very failure mode this plan warns implementers about. The shipped tests in `tests/studio-dynamic-text.test.ts` are the corrected, authoritative version.
+
 - [ ] **Step 2: Run and confirm failure.** Run: `bun test tests/studio-dynamic-text.test.ts`
 
 - [ ] **Step 3: Implement.** `dynamicTextRowsFor` filters `CONTEXT_TOKENS`-eligible tokens to those whose `TOKEN_KINDS` entry is `"text"`, and marks the rest of the text-kind token universe unavailable with a reason naming the context. The panel renders `TEXT_PRESETS` at their real size, the primary action « Ajouter une zone de texte », then the rows — an unavailable row is disabled and inserts nothing on click.
