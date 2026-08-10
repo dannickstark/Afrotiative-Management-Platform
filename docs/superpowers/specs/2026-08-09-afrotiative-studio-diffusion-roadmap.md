@@ -3,8 +3,8 @@
 **Date :** 2026-08-09
 **Statut :** Décisions validées — exécution autonome sous-projet par sous-projet
 **Portée :** Deux besoins liés — (a) un module type « Canva » pour définir des gabarits d'images
-avec emplacements dynamiques, (b) la diffusion des articles vers WhatsApp, Facebook, Instagram, X
-et TikTok. Décomposés en huit sous-projets, chacun avec son propre spec → plan → exécution.
+avec emplacements dynamiques, (b) la diffusion des articles vers WhatsApp, Facebook, Instagram, X,
+TikTok et LinkedIn. Décomposés en sous-projets, chacun avec son propre spec → plan → exécution.
 
 Ce document est le registre durable des décisions. Il fait suite au programme « Pipeline &
 Observabilité v2 » (`2026-08-05-afrotiative-pipeline-program-roadmap.md`), désormais livré.
@@ -132,21 +132,67 @@ API v2. **Bloqué** tant qu'un compte développeur sur palier payant n'existe pa
 ### D6 — Adaptateur TikTok
 Content Posting API, publication photo. **Bloqué** par l'audit d'application TikTok. Optionnel.
 
+### D7 — Adaptateur LinkedIn
+Community Management API (Posts), publication sur une Page entreprise. Nécessite la revue
+d'application LinkedIn pour le scope `w_organization_social` — **à lancer immédiatement, en
+parallèle du développement**, même délai de revue que Meta/X/TikTok.
+
+---
+
+## Décisions D2 → D7 (validées par l'utilisateur, 2026-08-10)
+
+| Sujet | Décision |
+|---|---|
+| **Stockage des identifiants** | **En base**, dans `social_channel_settings`. Un admin colle et fait tourner un jeton depuis `/settings/social/[canal]` sans redéploiement — décisif puisque les jetons Meta longue durée expirent tous les ~60 jours. **Contrepartie assumée : des secrets au repos dans Postgres.** Ils doivent donc être **chiffrés** (AES-256-GCM, clé en variable d'environnement), jamais renvoyés en clair au client, et l'interface n'affiche qu'une valeur masquée en n'acceptant que l'écriture. |
+| **Cible WhatsApp** | **Un canal WhatsApp** (Channel), pas un groupe. |
+| **Adaptateurs à construire** | **Facebook + Instagram** (même application Meta, même revue), **LinkedIn**, puis **WhatsApp**. **X et TikTok reportés** — X exige un palier payant absent, TikTok reste « nice to have ». |
+
+### Faisabilité WhatsApp Channel — vérifiée (2026-08-10)
+
+La prudence exprimée en D1 (« le support des canaux par whatsapp-web.js est plus faible que celui
+des groupes ») est **levée**. La branche `main` de la bibliothèque expose bien `getChannels()`,
+`getChannelByInviteCode()`, `createChannel()`, et `sendMessage()` vers un canal accepte
+**texte, image, sticker, gif, vidéo, voix et sondage**. Image + légende — exactement ce dont la
+diffusion a besoin — est donc réalisable.
+
+**Réserve à lever en D4 :** ces méthodes sont sur `main` ; la version publiée sur npm peut être en
+retard. D4 devra vérifier et, le cas échéant, installer depuis GitHub plutôt que depuis npm.
+
+### Travail technique préalable aux adaptateurs
+
+Indépendant des identifiants, à faire avant ou avec le premier adaptateur :
+
+1. **Fondation « identifiants »** — colonnes chiffrées dans `social_channel_settings`, helpers de
+   chiffrement/déchiffrement, interface masquée. Prérequis de tous les adaptateurs.
+2. **Le problème du doublon au moins-une-fois** — le faucheur bascule `pending` → `failed` après
+   10 min ; avec un vrai adaptateur, un crash *après* que l'API a accepté la publication laisse une
+   ligne marquée en échec, et un réessai duplique alors un post public. `StubChannel` masque
+   entièrement ce cas en réussissant toujours instantanément. Chaque adaptateur doit écrire
+   `externalId` au plus tôt, et le seuil du faucheur doit être revu contre la latence réelle.
+3. **Gabarits manquants** — seuls `fb_link`, `ig_square` et `li_link` sont semés. WhatsApp
+   (`story`), X (`x_landscape`) et TikTok n'ont aucun gabarit `social_post` publié, et sans lui
+   l'envoi est refusé.
+4. **Expiration des jetons** — les jetons de Page Meta longue durée expirent vers 60 jours ; prévoir
+   le renouvellement et une alerte avant échéance.
+
 ---
 
 ## Travaux hors code à lancer maintenant
 
-Ces démarches ont des délais longs et bloqueront D2/D3/D5/D6 quelle que soit la vitesse de
+Ces démarches ont des délais longs et bloqueront D2/D3/D5/D6/D7 quelle que soit la vitesse de
 développement :
 
 1. **Revue d'application Meta** pour `pages_manage_posts` et `instagram_content_publish`.
 2. **Compte développeur X** sur un palier payant (le palier gratuit est plafonné très bas en
    écriture).
 3. **Audit d'application TikTok** pour la Content Posting API, si TikTok est confirmé.
-4. **Numéro de téléphone dédié** pour le worker WhatsApp — à considérer comme sacrifiable.
-5. **Compte Cloudflare R2** + bucket + clés (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
+4. **Revue d'application LinkedIn** pour le scope `w_organization_social` (Community Management
+   API), requise pour publier sur une Page entreprise LinkedIn — même nature de délai que la revue
+   Meta.
+5. **Numéro de téléphone dédié** pour le worker WhatsApp — à considérer comme sacrifiable.
+6. **Compte Cloudflare R2** + bucket + clés (`R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`,
    `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_BASE_URL`).
-6. **Polices de marque en TTF ou OTF** (pas WOFF2) et logos, pour le kit de marque.
+7. **Polices de marque en TTF ou OTF** (pas WOFF2) et logos, pour le kit de marque.
 
 ---
 

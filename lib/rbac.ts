@@ -8,12 +8,16 @@ const MATRIX: Matrix = {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
     feed: ["read", "manage"], taxonomy: ["read", "manage"], pipeline: ["read"],
     template: ["read", "manage", "publish"],
+    // D1 spec §6: the editor diffuses from the article page (read + send) but does not administer
+    // channel settings (/settings/social/[channel] — manage stays admin-only).
+    social: ["read", "send"],
   },
   admin: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
     feed: ["read", "manage"], taxonomy: ["read", "manage"],
     team: ["read", "manage"], pipeline: ["read", "configure"],
     template: ["read", "manage", "publish"],
+    social: ["read", "manage", "send"],
   },
 };
 

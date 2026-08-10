@@ -277,6 +277,43 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 */5  * * * *  curl -fsS -X POST https://VOTRE-APP/api/publish/due  -H "Authorization: Bearer $PUBLISH_TRIGGER_SECRET"
 ```
 
+### 6.5 Publication automatique sur les réseaux sociaux (D1) — planificateur **in-app**, pas un cron externe
+
+Contrairement aux deux tâches ci-dessus, la publication automatique D1 ne demande **aucune**
+configuration côté ordonnanceur externe : c'est un tic in-process (`lib/pipeline/scheduler.ts`,
+démarré une seule fois par `instrumentation.ts` au boot du serveur, toutes les 15 min via
+[croner](https://github.com/hexagon/croner)), cohérent avec le déploiement Railway **mono-instance**
+de cette plateforme — il tourne tant que le processus Next.js tourne, sans endpoint HTTP à appeler.
+
+- **Désactivée par défaut, canal par canal** — `social_channel_settings.autoEnabled` vaut `false`
+  jusqu'à ce qu'un admin l'active explicitement sur `/settings/social/[canal]`. Aucune action
+  requise ici pour un déploiement qui n'utilise pas cette fonctionnalité.
+- **Ce que fait un tic dû** (par canal, indépendamment) : choisit **un** article `published` sur
+  WordPress non encore envoyé sur ce canal, du plus ancien au plus récent (remonte aux jours
+  précédents si la journée est épuisée, borné par `autoMaxBacklogDays`), respecte une fenêtre
+  horaire (`autoWindowStartHour`/`autoWindowEndHour`) et un intervalle minimum
+  (`autoIntervalHours`) depuis le dernier envoi automatique. Génère une légende IA (repli
+  déterministe sans clé configurée), envoie, consigne le résultat (`article_revisions`).
+  `lastAutoSendAt` est posé **avant** l'envoi et persisté en base — un redémarrage/redéploiement ne
+  provoque jamais de rafale de rattrapage.
+- **Aucun adaptateur réel en D1** : chaque canal (Facebook, Instagram, WhatsApp, X, TikTok,
+  LinkedIn) délègue à `StubChannel`, qui journalise l'envoi (log `[diffusion:stub]`) et renvoie un
+  identifiant factice **sans jamais appeler un vrai réseau social**. Activer la publication
+  automatique en D1 ne pousse donc rien de visible en dehors de cette plateforme — c'est un socle
+  vérifiable de bout en bout, en attendant qu'un vrai adaptateur remplace `StubChannel` canal par
+  canal dans une itération future.
+- **Récupération des envois bloqués** : le même tic marque `failed` toute ligne `distributions`
+  restée `pending` plus de 10 min par défaut, configurable via `DIFFUSION_STALE_PENDING_MINUTES`
+  (processus interrompu entre l'écriture `pending` et le résultat final) — sans quoi cet article
+  resterait bloqué indéfiniment sur ce canal (index unique partiel, §1 de la conception D1).
+- **Diffusion bloquée avant tout envoi (alerte)** : si un tic dû se voit refuser AVANT même
+  d'écrire une ligne `distributions` (rendu en échec, stockage R2 non configuré, aucun gabarit
+  « post social » configuré pour ce canal), l'article resterait sinon sélectionné identiquement à
+  chaque tic suivant, bloquant silencieusement tout le canal. Le tic lève désormais une alerte
+  (« diffusion_blocked », visible dans la cloche de notifications et le tableau de bord) et essaie
+  jusqu'à deux autres candidats sur le même tic avant d'abandonner — de quoi contourner UN article
+  mal configuré sans laisser tout le canal à l'arrêt.
+
 ---
 
 ## 7. Checklist de première mise en route
@@ -316,6 +353,11 @@ curl -fsS -X POST https://VOTRE-APP/api/publish/due \
 - **Studio — `/studio/generer` sans gabarit publié** : les trois contextes à saisie manuelle (`quote_card`, `newsletter_header`, `recap_card`) n'ont **aucun gabarit de départ** (`bun run db:studio-templates` ne sème que `article_image`/`social_post`) — tant que personne n'en a créé un depuis **Studio → Gabarits** (`/studio`, bouton « Nouveau gabarit ») puis publié dans son éditeur (`/studio/[id]`), la génération répond « Aucun gabarit publié pour ce contexte. Créez-en un et publiez-le depuis Studio → Gabarits avant de générer. » plutôt qu'un état vide silencieux.
 - **Idempotence** : republier met à jour le post WP existant (via `distributions.externalId`), jamais de doublon.
 - **Dépublier / Republier** : depuis l'éditeur d'un article publié (rôles Éditeur/Admin).
+- **Diffusion réseaux sociaux (D1)** : `/settings/social/[canal]` (admin uniquement) — activation du
+  canal, limite de légende (bornée par le plafond officiel de chaque réseau), prompt personnalisé,
+  et publication automatique (désactivée par défaut, voir §6.5). D1 ne fournit aucun adaptateur
+  réel : tout envoi (manuel depuis `/article/[id]` ou automatique) passe par `StubChannel`, qui
+  journalise sans jamais contacter un vrai réseau.
 - **Sécurité** : secrets uniquement en `.env`/gestionnaire de secrets ; endpoints cron bearer-gardés ; RBAC appliqué **côté serveur** sur chaque action (pas seulement l'UI) ; un admin ne peut pas se verrouiller lui-même (anti-lockout).
 
 ---

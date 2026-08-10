@@ -125,7 +125,7 @@ export async function renderForArticle(
 export { resolveTemplate } from "./resolve";
 export {
   validateScene, extractTokens, CONTEXT_TOKENS, TOKEN_KINDS, TEMPLATE_CONTEXTS, CHANNELS,
-  TOKEN_IDS, type TokenId, type TemplateContext, type Channel,
+  TOKEN_IDS, CHANNEL_LABELS, type TokenId, type TemplateContext, type Channel,
 } from "./tokens";
 export {
   parseScene, sceneSchema, type Scene, type Layer, type ImageLayer, type TextLayer,

@@ -55,6 +55,18 @@ export const IG_TEMPLATE = {
   }),
 };
 
+// D7 (adaptateur LinkedIn) — même recette que FB_TEMPLATE : le canevas de base (1200×675) recadré
+// au format "li_link" (1200×627, lib/studio/formats.ts), le bloc titre remonté d'autant pour garder
+// la même marge basse proportionnelle.
+export const LI_TEMPLATE = {
+  ...ARTICLE_IMAGE_TEMPLATE,
+  canvas: { width: 1200, height: 627, background: "#0B0B0B" },
+  layers: ARTICLE_IMAGE_TEMPLATE.layers.map((l) =>
+    l.id === "title" ? { ...l, frame: { x: 72, y: 317, w: 1056, h: 233 } }
+      : l.id === "bg" || l.id === "frame" ? { ...l, frame: { x: 0, y: 0, w: 1200, h: 627 } }
+      : l),
+};
+
 type Starter = {
   name: string; context: TemplateContext; channel: string | null; format: FormatKey; scene: unknown;
 };
@@ -63,6 +75,7 @@ const STARTERS: Starter[] = [
   { name: "Image à la une — défaut", context: "article_image", channel: null, format: "website_featured", scene: ARTICLE_IMAGE_TEMPLATE },
   { name: "Facebook — défaut", context: "social_post", channel: "facebook", format: "fb_link", scene: FB_TEMPLATE },
   { name: "Instagram — défaut", context: "social_post", channel: "instagram", format: "ig_square", scene: IG_TEMPLATE },
+  { name: "LinkedIn — défaut", context: "social_post", channel: "linkedin", format: "li_link", scene: LI_TEMPLATE },
 ];
 
 // IDEMPOTENT et NON destructif — contrairement à db/seed.ts. Sûr à exécuter en production : un
@@ -71,7 +84,7 @@ const STARTERS: Starter[] = [
 // Le SELECT ci-dessous doit reproduire EXACTEMENT l'index unique de portée render_templates_scope :
 // (context, channel, category_id) NULLS NOT DISTINCT, **WHERE archived = false**
 // (db/migrations/0015_slow_selene.sql). Deux conditions, toutes les deux nécessaires :
-//   - `isNull(renderTemplates.categoryId)` plutôt qu'une égalité : ces trois gabarits n'ont jamais
+//   - `isNull(renderTemplates.categoryId)` plutôt qu'une égalité : ces quatre gabarits n'ont jamais
 //     de catégorie, et NULLS NOT DISTINCT traite plusieurs NULL de category_id sur la même
 //     (context, channel) comme UN SEUL groupe, pas comme des lignes distinctes.
 //   - `eq(renderTemplates.archived, false)` : SANS cette condition, une ligne ARCHIVÉE à cette

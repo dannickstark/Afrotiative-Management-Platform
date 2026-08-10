@@ -240,7 +240,7 @@ describe("renderForArticle", () => {
     // tests/studio-fixtures.ts). Un categoryId généré à chaque exécution (comme les autres tests de
     // ce describe) suffit à s'en distinguer structurellement, sans avoir besoin d'un canal — et
     // évite de forcer un canal synthétique à travers `channel?: Channel | null` (Important 6), qui
-    // n'accepte que les cinq membres réels de CHANNELS.
+    // n'accepte que les membres réels de CHANNELS.
     const [c] = await db.insert(wpCategories).values({
       name: "Quote test", slug: `quote-test-${Date.now()}`,
     }).returning();

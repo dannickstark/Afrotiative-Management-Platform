@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Rss, Tags, Users, Plug, SlidersHorizontal } from "lucide-react";
+import { Rss, Tags, Users, Plug, SlidersHorizontal, Share2 } from "lucide-react";
 import type { Role } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { SETTINGS_CHILDREN } from "@/components/shell/nav-items";
@@ -12,6 +12,7 @@ const SETTINGS_ICON: Record<string, typeof Rss> = {
   "/settings/team": Users,
   "/settings/integrations": Plug,
   "/settings/pipeline": SlidersHorizontal,
+  "/settings/social": Share2,
 };
 
 export function SettingsNav({ role }: { role: Role }) {
