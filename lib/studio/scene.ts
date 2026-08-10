@@ -75,10 +75,18 @@ const gradient = z.object({
   stops: z.array(z.object({ color: hexColor, at: z.number().min(0).max(1) })).min(2),
 });
 
+// Canonique : LA liste des formes que shapeLayer accepte aujourd'hui. lib/studio/shape-gallery.ts
+// (panneau Éléments, U1 Tâche 4) itère CE TABLEAU pour son garde-fou de complétude — jamais une
+// copie recopiée — pour qu'ajouter une forme ICI sans lui donner de tuile fasse échouer
+// tests/studio-shape-gallery.test.ts plutôt que de laisser un designer sans moyen de l'insérer
+// (revue Tâche 4, Important 1 : le garde-fou d'origine comparait deux copies manuscrites qui
+// pouvaient dériver ensemble sans qu'aucun test ne le remarque).
+export const SHAPE_KINDS = ["rect"] as const;
+
 const shapeLayer = z.object({
   ...layerBase,
   type: z.literal("shape"),
-  shape: z.literal("rect"),
+  shape: z.enum(SHAPE_KINDS),
   fill: z.union([hexColor, gradient]),
   radius: z.number().nonnegative().optional(),
   border: z.object({

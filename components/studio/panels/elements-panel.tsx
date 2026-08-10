@@ -3,7 +3,8 @@
 import type { Dispatch } from "react";
 import { Square, QrCode } from "lucide-react";
 import { addLayer, type EditorAction } from "@/lib/studio/editor-state";
-import { SHAPE_TILES, buildShapeLayer, recentTilesFor, type ShapeTile } from "@/lib/studio/shape-gallery";
+import { shapeTilesFor, buildShapeLayer, recentTilesFor, type ShapeTile, type ShapeTileRow } from "@/lib/studio/shape-gallery";
+import type { TemplateContext } from "@/lib/studio/tokens";
 
 // components/studio/panels/elements-panel.tsx — Tâche 4 (U1, spec §3) : le contenu de la catégorie
 // « Éléments » du rail. Deux sections (spec §3, tableau : « Utilisés récemment », then « Formes »),
@@ -16,12 +17,21 @@ import { SHAPE_TILES, buildShapeLayer, recentTilesFor, type ShapeTile } from "@/
 // ellipse/ligne/polygone : quand U3 étendra le schéma, il lui suffira d'ajouter des entrées à
 // SHAPE_TILES — ce composant énumère déjà ce tableau sans rien coder en dur par forme.
 //
-// Toute tuile — récente ou dans « Formes » — dispatch EXACTEMENT le même chemin qu'un clic sur une
-// ligne de Texte dynamique (Tâche 3, texte-panel.tsx) : `addLayer(tile.kind, buildShapeLayer(...))`,
-// où `tile.kind` ("shape" | "qr") est déjà un `Layer["type"]` valide — le calque construit remplace
-// le calque générique que createLayer() aurait produit (editor-state.ts), plutôt qu'un chemin
-// d'insertion parallèle. `addLayer` sélectionne lui-même le calque inséré (editor-state.ts:221-225).
+// Revue Tâche 4, Important 2 — corrigé : `context` (déjà porté par editor-shell.tsx, déjà threadé
+// dans <TextePanel>) permet à shape-gallery.ts#shapeTilesFor de griser la tuile QR quand son jeton
+// d'emplacement (article.url) est illégal ici — MÊME discipline que texte-panel.tsx pour les lignes
+// de Texte dynamique : un `<button disabled>` HTML natif (aucun clic ne peut en sortir un événement,
+// pas seulement un style visuel) portant sa raison française en `title`, une tuile grisée restant
+// VISIBLE plutôt que disparaissant purement et simplement.
+//
+// Toute tuile DISPONIBLE — récente ou dans « Formes » — dispatch EXACTEMENT le même chemin qu'un
+// clic sur une ligne de Texte dynamique (Tâche 3, texte-panel.tsx) :
+// `addLayer(tile.kind, buildShapeLayer(...))`, où `tile.kind` ("shape" | "qr") est déjà un
+// `Layer["type"]` valide — le calque construit remplace le calque générique que createLayer() aurait
+// produit (editor-state.ts), plutôt qu'un chemin d'insertion parallèle. `addLayer` sélectionne
+// lui-même le calque inséré (editor-state.ts:221-225).
 export interface ElementsPanelProps {
+  context: TemplateContext;
   canvas: { width: number; height: number };
   recentShapes: readonly string[];
   dispatch: Dispatch<EditorAction>;
@@ -33,29 +43,51 @@ export interface ElementsPanelProps {
   onShapeInserted: (tileId: string) => void;
 }
 
+// Revue Tâche 4, Important 3 — EXPORTÉE : ce que le clic sur une tuile fait, TOUT ENTIER (dispatch
+// l'insertion ET enregistre la tuile comme récemment utilisée) — même idiome que
+// components/studio/layer-panel.tsx#nextIndexForMove, la fonction pure derrière un bouton, composée
+// dans son test avec le VRAI réducteur (editorReducer). Ce dépôt n'a ni React Testing Library ni
+// jsdom pour `bun test` (voir tests/diffusion-settings-ui.test.ts) : aucun clic ne peut donc être
+// simulé sur le DOM. `onClick` ci-dessous n'est qu'un enrobage trivial de cet appel — la tester
+// directement teste donc exactement ce qu'un clic déclenche, dispatch et onShapeInserted ENSEMBLE,
+// pas seulement l'un des deux en isolation.
+export function insertShapeTile(
+  row: ShapeTileRow,
+  canvas: { width: number; height: number },
+  context: TemplateContext,
+  dispatch: Dispatch<EditorAction>,
+  onShapeInserted: (tileId: string) => void,
+): void {
+  dispatch(addLayer(row.kind, buildShapeLayer(row, canvas, context)));
+  onShapeInserted(row.id);
+}
+
 const TILE_ICON: Record<ShapeTile["kind"], typeof Square> = { shape: Square, qr: QrCode };
 
-function ShapeTileButton({ tile, onClick }: { tile: ShapeTile; onClick: () => void }) {
-  const Icon = TILE_ICON[tile.kind];
+function ShapeTileButton({ row, onClick }: { row: ShapeTileRow; onClick: () => void }) {
+  const Icon = TILE_ICON[row.kind];
   return (
     <button
       type="button"
-      data-tile={tile.id}
+      data-tile={row.id}
+      data-available={row.available}
+      disabled={!row.available}
+      title={row.reason}
       onClick={onClick}
-      className="flex flex-col items-center gap-1 rounded-md border px-2 py-3 text-xs hover:bg-accent"
+      className="flex flex-col items-center gap-1 rounded-md border px-2 py-3 text-xs hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
     >
       <Icon aria-hidden className="size-5" />
-      <span className="truncate">{tile.label}</span>
+      <span className="truncate">{row.label}</span>
     </button>
   );
 }
 
-export function ElementsPanel({ canvas, recentShapes, dispatch, onShapeInserted }: ElementsPanelProps) {
-  const recentTiles = recentTilesFor(recentShapes);
+export function ElementsPanel({ context, canvas, recentShapes, dispatch, onShapeInserted }: ElementsPanelProps) {
+  const rows = shapeTilesFor(context);
+  const recentTiles = recentTilesFor(rows, recentShapes);
 
-  function insert(tile: ShapeTile) {
-    dispatch(addLayer(tile.kind, buildShapeLayer(tile, canvas)));
-    onShapeInserted(tile.id);
+  function insert(row: ShapeTileRow) {
+    insertShapeTile(row, canvas, context, dispatch, onShapeInserted);
   }
 
   return (
@@ -64,8 +96,8 @@ export function ElementsPanel({ canvas, recentShapes, dispatch, onShapeInserted 
         <section className="space-y-1.5">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase">Utilisés récemment</h3>
           <div className="grid grid-cols-3 gap-1.5" data-testid="elements-recent">
-            {recentTiles.map((tile) => (
-              <ShapeTileButton key={`recent-${tile.id}`} tile={tile} onClick={() => insert(tile)} />
+            {recentTiles.map((row) => (
+              <ShapeTileButton key={`recent-${row.id}`} row={row} onClick={() => insert(row)} />
             ))}
           </div>
         </section>
@@ -74,8 +106,8 @@ export function ElementsPanel({ canvas, recentShapes, dispatch, onShapeInserted 
       <section className="space-y-1.5">
         <h3 className="text-xs font-semibold text-muted-foreground uppercase">Formes</h3>
         <div className="grid grid-cols-3 gap-1.5" data-testid="elements-shapes">
-          {SHAPE_TILES.map((tile) => (
-            <ShapeTileButton key={tile.id} tile={tile} onClick={() => insert(tile)} />
+          {rows.map((row) => (
+            <ShapeTileButton key={row.id} row={row} onClick={() => insert(row)} />
           ))}
         </div>
       </section>

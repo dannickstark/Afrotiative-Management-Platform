@@ -369,6 +369,7 @@ function EditorShellInner({
             )}
             {prefs.openPanel === "elements" && (
               <ElementsPanel
+                context={template.context}
                 canvas={{ width: template.width, height: template.height }}
                 recentShapes={prefs.recentShapes}
                 dispatch={dispatch}
