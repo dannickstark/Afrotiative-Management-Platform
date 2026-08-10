@@ -83,21 +83,34 @@ const DOWNLOAD_TIMEOUT_MS = 20_000; // same hang guard as lib/studio/images.ts's
 // guidance length. INFERRED: LinkedIn does not document an altText length ceiling; this cap is a
 // defensive choice, not a documented limit.
 //
-// Review fix, Important 2: the cap alone is not what makes truncation safe. generateCaption (spec
-// §2 — lib/diffusion/caption.ts, outside this task's file list, but its OUTPUT SHAPE is a hard fact
-// this file must respect) appends the article's permalink at the very END of the caption, as
-// "<body> <url>" — and SOCIAL_CHANNELS.linkedin.captionLimits.default is 400, already above this
-// 300-char cap, so a caption long enough to need truncating is the COMMON case, not an edge case. A
-// blind slice() (the original implementation) can land mid-URL, handing a screen-reader user a
-// dangling fragment like "https://example.com/blog/post-t". truncateAltText (below) fixes the ROOT
-// CAUSE rather than just the symptom: it drops a trailing URL BEFORE truncating at all (a URL is
-// never meaningful alt-text content anyway — it describes nothing about the IMAGE), then truncates
-// whatever remains on a WORD boundary, never mid-word. That means a URL fragment cannot survive
-// truncation regardless of where ALT_TEXT_MAX_CHARS sits — the cap's value was never actually the
-// bug, so it is kept rather than raised or removed (300 characters of "alt text" is already
-// generous for an accessibility label; LinkedIn's 3 000-char caption ceiling would be a poor upper
-// bound to reuse here).
+// Review fix, Important 2 (round 1 — INCOMPLETE, see round 2 below): a first fix only stripped a
+// TRAILING URL before truncating, reasoning that generateCaption (spec §2) appends the article
+// permalink at the very end as "<body> <url>". That is the shape generateCaption PRODUCES, but the
+// caption is human-editable before send() ever runs (spec §2's own "l'IA propose, l'humain
+// dispose" review-gate principle) — an editor can move a link to the front, drop one in mid-
+// sentence, paste several, or paste one with no spaces at all. The round-1 fix's own
+// truncateOnWordBoundary also still fell back to a BLIND slice whenever the word straddling the cut
+// point had no preceding space in the truncation window — exactly what a long LEADING url (or any
+// long unbroken token) produces. The review reproduced this concretely: a caption starting with a
+// 300+-char URL-shaped token still truncated mid-token.
+//
+// Round 2 fix (this version): the requirement is a BEHAVIOUR, not a caption shape — alt text must
+// never contain a partial URL for ANY caption an editor could plausibly produce (leading, trailing,
+// mid-caption, multiple URLs, or none at all). Two changes close the whole class, not a subset:
+//   1. stripUrls (below) removes EVERY http(s) URL ANYWHERE in the text (a global match, not
+//      anchored to the end), not just a trailing one.
+//   2. truncateOnWordBoundary (below) now returns null — never a blind slice — when no safe word
+//      boundary exists within the truncation window (the case a long leading/unbroken token
+//      produces, URL or not: after stripUrls runs, anything left that's still one giant unbroken
+//      token is not safely truncatable at all, so it must not be attempted).
+// truncateAltText composes both and falls back to a static, honest French string
+// (ALT_TEXT_FALLBACK) whenever what remains is empty, "uselessly short" (below
+// ALT_TEXT_MIN_USEFUL_CHARS — an inferred, undocumented threshold, not a LinkedIn requirement), or
+// has no safe truncation point — a generic but ACCURATE alt text is strictly better than any
+// fragment, URL or otherwise.
 const ALT_TEXT_MAX_CHARS = 300;
+const ALT_TEXT_MIN_USEFUL_CHARS = 3; // below this, what's left isn't a meaningful accessibility label — INFERRED threshold, not a LinkedIn requirement.
+const ALT_TEXT_FALLBACK = "Illustration de la publication.";
 
 export function mapLinkedInApiError(err: unknown): string {
   if (err instanceof DecryptionFailedError) {
@@ -370,31 +383,45 @@ export class LinkedInChannel {
   }
 }
 
-// Drops a trailing "<body> <url>" URL (the shape generateCaption produces — spec §2) before this
-// text is ever truncated. Matches the URL whether it is preceded by whitespace (the normal case) or
-// starts the string outright (a caption that is nothing BUT a URL) — review Important 2's whole
-// point is that a URL must never survive as a cut-off fragment, so it is removed first, not clipped.
-function stripTrailingUrl(text: string): string {
-  const trimmed = text.trimEnd();
-  const match = trimmed.match(/(?:^|\s)(https?:\/\/\S+)$/i);
-  if (!match) return trimmed;
-  return trimmed.slice(0, trimmed.length - match[1].length).trimEnd();
+// Drops EVERY http(s) URL anywhere in the text — leading, trailing, mid-caption, or repeated
+// (review Important 2, round 2: a caption is human-editable before send() runs, so its shape is not
+// this file's to assume — an anchored "trailing URL only" match, round 1's fix, missed a leading or
+// mid-caption one). `\S+` is greedy up to the next whitespace, so each match consumes exactly one
+// URL "word", never spilling into the text around it. Left-over double spaces (two URLs separated
+// only by a space, or a URL that WAS surrounded by spaces) are collapsed, and the result trimmed.
+function stripUrls(text: string): string {
+  return text.replace(/https?:\/\/\S+/gi, " ").replace(/\s+/g, " ").trim();
 }
 
-// Truncates on a WORD boundary, never mid-word — a blind slice() (the original implementation) is
-// what let a fragment of ANY word, URLs included, survive truncation (review Important 2).
-function truncateOnWordBoundary(text: string, maxChars: number): string {
+// Truncates on a WORD boundary, never mid-word. Returns null — never a blind slice — when no safe
+// boundary exists within the truncation window: the "word" straddling the cutoff has no preceding
+// space in that window, which happens for any long unbroken token there (a URL stripUrls somehow
+// missed, or simply a long word/hashtag/id with no spaces at all — review Important 2, round 2: the
+// requirement is "never a partial fragment," not "never a partial URL specifically," so this check
+// is deliberately URL-agnostic). Callers must treat null as "cannot truncate safely," not "truncate
+// anyway."
+function truncateOnWordBoundary(text: string, maxChars: number): string | null {
   if (text.length <= maxChars) return text;
   const clipped = text.slice(0, maxChars - 1);
   const lastSpace = clipped.lastIndexOf(" ");
-  const safe = lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped;
-  return `${safe}…`;
+  if (lastSpace <= 0) return null;
+  return `${clipped.slice(0, lastSpace)}…`;
 }
 
-function truncateAltText(caption: string): string {
-  const withoutUrl = stripTrailingUrl(caption);
-  // A caption that is NOTHING BUT a URL (withoutUrl empty after stripping) has no non-URL text left
-  // to describe the image with — an empty alt text is honest; a truncated URL fragment is not.
-  if (withoutUrl.length === 0) return "";
-  return truncateOnWordBoundary(withoutUrl, ALT_TEXT_MAX_CHARS);
+// Exported (not just used internally) so tests/diffusion-linkedin.test.ts can verify every caption
+// shape (leading/mid/multiple/no-space URLs) directly and fast, the same way the review itself
+// isolated and ran this function to reproduce round 1's bug — cheaper and more precise than routing
+// every case through a full fake-server send(). One full send()-level test still covers the trailing-
+// URL case end to end, proving the wiring from input.caption to the actual POST body.
+export function truncateAltText(caption: string): string {
+  const stripped = stripUrls(caption);
+  // Nothing useful left after stripping every URL (caption was one URL, or several with no other
+  // text), or so little that it wouldn't describe anything — a generic but ACCURATE fallback beats
+  // any fragment (review Important 2, round 2).
+  if (stripped.length < ALT_TEXT_MIN_USEFUL_CHARS) return ALT_TEXT_FALLBACK;
+  const truncated = truncateOnWordBoundary(stripped, ALT_TEXT_MAX_CHARS);
+  if (truncated === null) return ALT_TEXT_FALLBACK;
+  const withoutEllipsis = truncated.endsWith("…") ? truncated.slice(0, -1) : truncated;
+  if (withoutEllipsis.length < ALT_TEXT_MIN_USEFUL_CHARS) return ALT_TEXT_FALLBACK;
+  return truncated;
 }

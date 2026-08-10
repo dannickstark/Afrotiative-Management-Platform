@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, socialChannelSettings } from "@/db";
 import { LinkedInClient, LinkedInApiError } from "@/lib/diffusion/linkedin/rest-client";
-import { LinkedInChannel, mapLinkedInApiError } from "@/lib/diffusion/linkedin/linkedin";
+import { LinkedInChannel, mapLinkedInApiError, truncateAltText } from "@/lib/diffusion/linkedin/linkedin";
 import { setChannelCredentialsCore, deleteChannelCredentialsCore } from "@/lib/diffusion/settings-core";
 
 // Task 3 (D7) — LinkedIn REST client. Client-only: no adapter, no credential reading, no DB
@@ -283,11 +283,74 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
     expect(uploadSrv.calls).toEqual(["PUT /dms-uploads/1"]);
   });
 
-  // Review fix, Important 2: generateCaption (spec §2) appends the article permalink at the very
-  // END of the caption — "<body> <url>" — and linkedin.captionLimits.default (400) already exceeds
-  // ALT_TEXT_MAX_CHARS (300), so a caption long enough to trip alt-text truncation is the COMMON
-  // case. This caption is deliberately well over the cap so truncation genuinely runs, not just the
-  // URL-stripping step.
+  // Review fix, Important 2 (round 2) — direct unit tests of truncateAltText, the same way the
+  // review itself isolated and ran the function to reproduce round 1's bug (a leading, unbroken
+  // 300+-char token still truncated mid-token because round 1 only stripped a TRAILING url). The
+  // requirement is a BEHAVIOUR, not a caption shape: alt text must never contain a partial URL for
+  // ANY caption an editor could plausibly produce, since the caption is human-editable before
+  // send() runs (spec §2's own "l'IA propose, l'humain dispose"). Four shapes required by the
+  // review, each covered below: a leading long URL, a mid-caption URL, multiple URLs, and a long
+  // caption with no spaces at all.
+  describe("truncateAltText — every URL position/shape (review Important 2, round 2)", () => {
+    test("a leading long URL never survives, even truncated — the review's own reproduction", () => {
+      // The review's exact repro shape: a URL-like unbroken token starting the caption, long enough
+      // that round 1's word-boundary fallback (blind slice when no space precedes the cutoff) still
+      // sliced straight through it.
+      const caption = `https://x.test/${"a".repeat(320)} Texte après.`;
+      const altText = truncateAltText(caption);
+      expect(altText).not.toMatch(/https?:\/\//i);
+      expect(altText).not.toMatch(/a{5,}/); // no leftover run of the URL's own filler characters either
+      // The whole leading token (URL + filler) is gone; only the trailing sentence remains, untouched.
+      expect(altText).toBe("Texte après.");
+    });
+
+    test("a mid-caption URL never survives truncation", () => {
+      const before = "Avant le lien ".repeat(10).trim();
+      const after = "texte qui continue encore un peu afin de forcer une troncature sur une frontière de mot propre et sans jamais couper au milieu d'une url.";
+      const caption = `${before} https://exemple.test/chemin/vers/une/ressource ${after}`;
+      expect(caption.length).toBeGreaterThan(300);
+      const altText = truncateAltText(caption);
+      expect(altText).not.toMatch(/https?:\/\//i);
+      expect(altText.length).toBeGreaterThan(0);
+    });
+
+    test("multiple URLs anywhere in the caption never survive", () => {
+      const caption =
+        "Voici https://exemple.test/un un premier lien, puis https://exemple.test/deux un second, " +
+        "et enfin https://exemple.test/trois un troisième — tous doivent disparaître avant toute " +
+        "troncature du texte alternatif, quel que soit l'endroit où ils apparaissent dans la légende.";
+      const altText = truncateAltText(caption);
+      expect(altText).not.toMatch(/https?:\/\//i);
+      expect(altText.length).toBeGreaterThan(0);
+    });
+
+    test("a long caption with no spaces at all falls back to a static message rather than a blind slice", () => {
+      // Not a URL — the point (review Important 2, round 2) is that the requirement is "never a
+      // partial fragment," not "never a partial URL specifically": ANY long unbroken token with no
+      // safe word boundary must not be blindly sliced, URL or not.
+      const caption = "x".repeat(500);
+      const altText = truncateAltText(caption);
+      expect(altText).toBe("Illustration de la publication.");
+      expect(altText.length).toBeLessThan(caption.length);
+    });
+
+    test("a caption that is nothing but URLs falls back to the static message, not an empty string", () => {
+      const caption = "https://exemple.test/un https://exemple.test/deux";
+      expect(truncateAltText(caption)).toBe("Illustration de la publication.");
+    });
+
+    test("a short, normal caption with no URL is returned untouched", () => {
+      expect(truncateAltText("Bonjour, ceci est un test.")).toBe("Bonjour, ceci est un test.");
+    });
+  });
+
+  // Review fix, Important 2 (round 1): generateCaption (spec §2) appends the article permalink at
+  // the very END of the caption — "<body> <url>" — and linkedin.captionLimits.default (400) already
+  // exceeds ALT_TEXT_MAX_CHARS (300), so a caption long enough to trip alt-text truncation is the
+  // COMMON case. This full send()-level test proves the WIRING end to end (input.caption actually
+  // reaches the POST body's content.media.altText correctly) — the unit tests above (round 2) are
+  // what actually cover every URL shape/position; this one caption shape is enough to prove the
+  // plumbing, not to re-cover every case already covered above.
   test("alt text never contains a truncated URL fragment, even when the caption (with its appended permalink) exceeds the cap", async () => {
     const words = Array.from({ length: 80 }, (_, i) => `motdelegende${i}`);
     const body = words.join(" "); // well over 300 characters on its own — see comment above
