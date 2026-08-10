@@ -260,14 +260,18 @@ export const SETUP_GUIDES: Readonly<Record<Channel, readonly SetupGuideStep[]>> 
       fieldHint: "organizationUrn",
     },
     {
-      title: "Quota du palier de développement : 500 requêtes par jour, une publication en coûte quatre",
+      title: "Quota du palier de développement : 500 requêtes par jour, une publication en coûte AU MOINS quatre",
       body:
         "Tant que le palier standard n'est pas accordé, l'application est plafonnée à 500 appels API " +
         "par jour au total. Chaque publication LinkedIn faite par ce projet — initialisation du " +
         "téléversement, envoi des octets de l'image, sondage de son statut, puis création de la " +
-        "publication — en consomme quatre. Une fois plusieurs canaux automatiques actifs, ce plafond " +
-        "peut devenir la limite réelle avant même celle des identifiants ou des permissions ; un 429 " +
-        "renvoyé par LinkedIn l'indique explicitement dans le message d'erreur affiché ici.",
+        "publication — en consomme AU MOINS quatre : quatre seulement si LinkedIn répond « prête » " +
+        "dès le premier sondage, mais le sondage se répète (jusqu'à 10 fois) tant que l'image reste " +
+        "en traitement — WAITING_UPLOAD/PROCESSING sont le déroulement normal, pas un cas limite —, " +
+        "donc jusqu'à 13 requêtes pour une seule publication dans le pire cas. Une fois plusieurs " +
+        "canaux automatiques actifs, ce plafond peut devenir la limite réelle avant même celle des " +
+        "identifiants ou des permissions ; un 429 renvoyé par LinkedIn l'indique explicitement dans " +
+        "le message d'erreur affiché ici.",
       href: "https://learn.microsoft.com/en-us/linkedin/marketing/increasing-access",
     },
     {

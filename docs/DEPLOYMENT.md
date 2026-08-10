@@ -207,10 +207,15 @@ connexion », `lib/diffusion/setup-guide.ts`) ; ce qui suit en est le résumé o
    identifiants ») : c'est ce qui alimente l'alerte de jeton bientôt expiré (D7 Task 2 —
    `token_expiring`, envoyée 7 jours avant l'échéance, au plus une fois par jour et par canal).
 5. **Le palier de développement est plafonné à 500 requêtes API par application et par jour** (et
-   100 par membre et par jour). **Une publication LinkedIn de ce projet en consomme quatre**
-   (initialisation du téléversement, envoi des octets de l'image, sondage de son statut, création
-   de la publication) — un opérateur qui active la publication automatique sur LinkedIn en plus de
-   Facebook/Instagram doit garder ce plafond en tête ; un `429` LinkedIn l'indique explicitement
+   100 par membre et par jour). **Une publication LinkedIn de ce projet en consomme AU MOINS
+   quatre** (initialisation du téléversement, envoi des octets de l'image, un sondage de son statut,
+   création de la publication) — **mais ce n'est qu'un minimum** : le sondage
+   (`lib/diffusion/linkedin/linkedin.ts`) se répète tant que l'image reste `WAITING_UPLOAD`/
+   `PROCESSING` — le déroulement normal documenté par LinkedIn, pas un cas limite —, borné à 10
+   tentatives, donc **jusqu'à 13 requêtes pour une seule publication** dans le pire cas (4 appels
+   hors sondage à 20 s chacun + jusqu'à 10 sondages). Pour le calcul de capacité d'un opérateur qui
+   active la publication automatique sur LinkedIn en plus de Facebook/Instagram, retenir 4 comme
+   plancher et 13 comme pire cas, pas une valeur fixe ; un `429` LinkedIn l'indique explicitement
    dans le message d'erreur affiché par l'adaptateur.
 6. **Renseigner l'URN de l'organisation** (`urn:li:organization:<id numérique>`) — l'identifiant
    numérique se lit dans l'URL d'administration de la Page (`linkedin.com/company/<id>/admin/…`),
@@ -598,6 +603,6 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
 | « Le jeton d'accès LinkedIn a expiré ou n'est plus valide » (envoi ou « Tester la connexion ») | `401` LinkedIn — le jeton stocké n'authentifie plus (récurre environ tous les 60 jours, aucun renouvellement automatique). Régénérer un jeton via le Token Generator du portail développeur (§2, « Application LinkedIn », point 4) et l'enregistrer sur `/settings/social/linkedin`, puis « Tester la connexion » avant de réessayer un envoi. |
 | « LinkedIn a refusé la publication (accès refusé, 403) » | Différent d'un jeton expiré : soit l'application n'a pas (ou plus) la permission `w_organization_social`, soit le compte propriétaire du jeton n'est pas administrateur de la Page LinkedIn (§2, « Application LinkedIn », point 2). Régénérer le jeton ne corrige aucun des deux cas — vérifier la permission accordée et le rôle du compte sur la Page. |
 | « Impossible de déchiffrer les identifiants LinkedIn enregistrés… » (envoi ou « Tester la connexion ») | Même cause et même procédure que pour Facebook/Instagram ci-dessus — voir la procédure de récupération complète en §2. Sur `/settings/social/linkedin` : **« Supprimer »** puis ressaisir l'URN de l'organisation *et* le jeton d'accès, pas seulement celui qui semble en cause. |
-| « LinkedIn a refusé la requête : le quota quotidien de l'API semble épuisé (429) » | Le palier de développement de la Community Management API plafonne à 500 requêtes par application et par jour, et une publication en consomme quatre (§2, « Application LinkedIn », point 5). Réessayer le lendemain, ou demander le passage au palier standard (screencast requis, délai). |
+| « LinkedIn a refusé la requête : le quota quotidien de l'API semble épuisé (429) » | Le palier de développement de la Community Management API plafonne à 500 requêtes par application et par jour, et une publication en consomme au moins quatre — jusqu'à 13 si le sondage de l'image se répète (§2, « Application LinkedIn », point 5). Réessayer le lendemain, ou demander le passage au palier standard (screencast requis, délai). |
 | Envoi LinkedIn qui échoue à l'étape du traitement de l'image (« PROCESSING_FAILED »/« délai d'attente dépassé ») | `PROCESSING_FAILED` : LinkedIn a rejeté l'image elle-même (format/poids), pas le jeton — vérifier le rendu produit par le studio. Délai dépassé : LinkedIn met parfois plus de temps que le sondage borné (~5,1 min pire cas théorique, `lib/diffusion/linkedin/linkedin.ts` — intervalle et nombre de tentatives non confirmés contre un vrai compte, spec D7 §8 risque 1) ne l'anticipe — réessayer l'envoi. Voir §6.5 pour le raisonnement derrière `DIFFUSION_STALE_PENDING_MINUTES`. |
 | « Tester la connexion » LinkedIn échoue avec une erreur autre qu'un jeton expiré | Le plus souvent : accès Community Management pas encore accordé (palier de développement en cours d'examen, §2 point 3), URN d'organisation incorrecte ou mal formée, ou compte non administrateur de la Page. Le détail affiché reprend le message LinkedIn d'origine. Un test réussi ne garantit pas que la publication est autorisée — voir §8. |
