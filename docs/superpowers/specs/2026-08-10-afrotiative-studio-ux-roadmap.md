@@ -66,7 +66,10 @@ pivoté, et **toute la famille polygonale — triangle, étoile, hexagone, chevr
 
 | Sujet | Décision |
 |---|---|
-| **Coque** | Barre d'outils verticale + panneau de calques repliable + canevas portant des pastilles flottantes (format, zoom) + rail de propriétés à droite. La barre d'outils quitte l'en-tête. |
+| **Coque** | **Rail d'icônes libellées + un panneau large accosté par catégorie**, repliable par un chevron sur son bord et un raccourci — motif emprunté à Canva (captures fournies en atelier). Canevas portant des pastilles flottantes (format, zoom) + rail de propriétés à droite. Écarté : une barre d'outils **modale** (« armer l'outil rectangle »). On **clique une forme dans la galerie et elle atterrit** sur le plan de travail ; sélectionner-déplacer reste le comportement permanent du canevas, pas un outil. |
+| **Catégories du rail** | `Modèles` · `Éléments` · `Texte` · `Images` · `Marque` · `Calques`. Le panneau de calques cesse d'être un panneau flottant : il devient une entrée du rail. `Modèles` est ce sur quoi ouvre un gabarit vierge — c'est la réponse à « que voit-on à la création ». |
+| **Le panneau « Texte » porte les jetons** | Là où Canva propose du contenu générique, ce produit propose des **liaisons**. La section « Texte dynamique » liste les jetons de l'article — titre, chapô, rubrique, signature, date — et **un clic insère un calque déjà lié**, stylé depuis un préréglage. C'est le transfert le plus utile des captures : les liaisons deviennent explorables au lieu d'être cachées derrière un champ. Les jetons illégaux dans le contexte du gabarit s'affichent désactivés avec le motif. |
+| **Chaque panneau** | Une recherche en haut, **une** action principale (« Ajouter une zone de texte », « Importer des fichiers »), puis des sections : « Utilisés récemment », préréglages, catégories. Les préréglages de texte se dessinent **à leur taille réelle** (Titre / Sous-titre / Corps). |
 | **Aperçu** | **Ce n'est plus un panneau, c'est un mode.** Un commutateur flottant `Montage ⇄ Rendu réel`, centré au-dessus du plan de travail, plus le raccourci `R`. En mode rendu, toute la chrome d'édition disparaît. |
 | **Contenu du mode rendu** | Le format courant en grand, les sept autres en bande de vignettes cliquables en dessous. |
 | **Rail de propriétés** | Bande de géométrie **épinglée** en haut (X / Y / L / H / rotation / opacité), qui ne défile jamais ; sections par type repliables en dessous, état mémorisé. Écarté : des onglets dans le rail — ils cachent des propriétés liées les unes des autres (on perdrait l'ombre de vue en réglant la couleur dont elle tombe). |
@@ -86,13 +89,25 @@ décisions : la barre d'outils n'a rien à offrir sans les nouvelles formes, la 
 la vérité qu'une fois la re-mise en page acquise, et les repères sont inséparables de la
 multi-sélection. D'où ce re-découpage, dans cet ordre.
 
-### U1 — Coque et modes
-Barre d'outils verticale, panneau de calques repliable, pastilles flottantes, commutateur de mode,
-mode rendu avec sa bande de formats, restructuration du rail de propriétés (bande épinglée +
-sections repliables), indicateur d'enregistrement avec son état d'échec. **Aucune modification du
-moteur ni du schéma.** C'est le contenant dans lequel tout le reste vient se poser, donc il passe en
-premier : la barre d'outils doit exister avant que U3 y ajoute des formes, et le mode rendu avant
-qu'il porte une bande de formats.
+### U1 — Coque, rail et modes
+Rail d'icônes libellées avec ses six catégories, un panneau accosté par catégorie (recherche, action
+principale, sections), pastilles flottantes, commutateur de mode, mode rendu avec sa bande de
+formats, restructuration du rail de propriétés (bande épinglée + sections repliables), indicateur
+d'enregistrement avec son état d'échec. **Aucune modification du moteur ni du schéma.** C'est le
+contenant dans lequel tout le reste vient se poser, donc il passe en premier : la galerie
+« Éléments » doit exister avant que U3 y ajoute des tuiles, et le mode rendu avant qu'il porte une
+bande de formats.
+
+Les panneaux n'affichent que ce qui existe déjà — la galerie « Éléments » ne montre que le rectangle
+et le QR code tant que U3 n'a pas livré les autres formes, **sans boutons désactivés pour des choses
+qui ne fonctionnent pas**. Réutilise les surfaces déjà écrites plutôt que de les réécrire :
+`asset-library.tsx`, `asset-picker.tsx`, `token-picker.tsx` et `templates-table.tsx` existent et
+migrent depuis leurs modales et pages vers les panneaux.
+
+**Frontière avec U4, à ne pas confondre :** U1 utilise la connaissance de légalité que `tokens.ts`
+porte déjà, en lecture, pour griser un jeton indisponible dans le contexte du gabarit. U4 livre
+l'autre moitié — le sélecteur de jetons **à l'intérieur des champs** du rail de propriétés, et
+`parseScene` qui remonte toutes les erreurs au lieu de la première.
 
 ### U2 — Surface de précision
 Magnétisme et repères intelligents (bords et centres des calques voisins, centre et tiers du plan de
@@ -142,3 +157,10 @@ discrètement « le titre fait quatre lignes et il est coupé ». Des tests d'ab
   reconsidérer après U4.
 - **La grille de huit formats à poids égal** en mode rendu. Excellente pour une relecture finale,
   inutilisable pour juger un rendu de près. Éventuellement un troisième mode, plus tard.
+- **Une barre d'outils modale.** Voir la décision « Coque » : on clique une forme, elle atterrit.
+- **Ce que les captures de Canva contiennent et qui ne transfère pas** : la barre de génération par
+  IA (la génération de légendes existe déjà, et le studio n'est pas son endroit), l'écosystème
+  d'applications, l'audio, la vidéo, la 3D et les animations (aucun support du moteur, aucun cas
+  d'usage), les couronnes et fonctions payantes (outil mono-locataire), les banques d'illustrations
+  et de photos (les images viennent des articles et de R2, pas d'un catalogue), les grilles et
+  maquettes (Satori n'a pas CSS Grid, et les préréglages de format font déjà ce travail de cadrage).
