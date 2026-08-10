@@ -91,7 +91,7 @@ message français explicite plutôt que de planter — exactement l'idiome de `g
 
 | Variable | Rôle |
 |---|---|
-| `DIFFUSION_STALE_PENDING_MINUTES` | Minutes au-delà desquelles une ligne `distributions` restée `pending` est considérée abandonnée (processus arrêté avant la fin) et repassée `failed`, donc réessayable. Optionnel, défaut **10**. Voir §6.5 pour le détail et le raisonnement (pourquoi 10 minutes reste sûr avec les adaptateurs Facebook/Instagram/LinkedIn réels). |
+| `DIFFUSION_STALE_PENDING_MINUTES` | Minutes au-delà desquelles une ligne `distributions` restée `pending` est considérée abandonnée (processus arrêté avant la fin) et repassée `failed`, donc réessayable. Optionnel, défaut **10**. **Plancher dur de 6 minutes** : une valeur inférieure est relevée à 6 avec un avertissement dans les journaux du serveur (`lib/diffusion/scheduler.ts`), parce qu'un seuil sous le pire cas d'un adaptateur récupère un envoi *réellement en cours* — et le réessai republie alors un post public déjà en ligne. Voir §6.5 pour le détail et le raisonnement (pourquoi 10 minutes reste sûr avec les adaptateurs Facebook/Instagram/LinkedIn réels). |
 
 **Application Meta (Facebook + Instagram) — prérequis, permissions, jeton longue durée :**
 
