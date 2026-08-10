@@ -116,7 +116,12 @@ export function nextArchivedState(row: Pick<TemplateRow, "archived">): boolean {
 // création (lib/studio/template-core.ts) et l'éditeur n'expose aucun de ces quatre champs — sans ce
 // dialogue, la portée « un gabarit par canal, la couleur venant de la taxonomie » (spec §Objectif)
 // est structurellement inatteignable.
-function CreateTemplateDialog({ categories }: { categories: CategoryOption[] }) {
+//
+// EXPORTÉ (Tâche 2, U1 spec §3) : components/studio/panels/modeles-panel.tsx réutilise ce MÊME
+// composant comme action primaire du panneau « Modèles » (« Nouveau gabarit vierge »), plutôt que
+// de reconstruire un second formulaire de création — exactement le chemin d'écriture que la règle
+// de réutilisation (spec §3) interdit de dupliquer.
+export function CreateTemplateDialog({ categories }: { categories: CategoryOption[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -163,7 +168,7 @@ function CreateTemplateDialog({ categories }: { categories: CategoryOption[] }) 
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button data-action="create-template"><Plus aria-hidden />Nouveau gabarit</Button>} />
+      <DialogTrigger render={<Button data-action="create-template"><Plus aria-hidden />Nouveau gabarit vierge</Button>} />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Nouveau gabarit</DialogTitle>
@@ -369,7 +374,17 @@ function TemplateRowMenu({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function TemplatesTable({ templates, categories }: { templates: TemplateRow[]; categories: CategoryOption[] }) {
+// `showHeader` (Tâche 2, U1 spec §3) : par défaut `true`, comportement inchangé pour /studio
+// (app/(app)/studio/page.tsx, seul appelant historique). `components/studio/panels/modeles-panel.tsx`
+// passe `false` — il affiche déjà SA PROPRE instance de `CreateTemplateDialog` en action primaire du
+// panneau (skeleton commun de panel-host.tsx), donc masque ce titre + ce bouton internes plutôt que
+// d'en faire naître un second qui ferait doublon dès qu'un vrai rôle admin/éditeur serait présent
+// (RoleGate ne bloque rien en test — voir le fichier de test — mais bloquerait le second bouton en
+// production tout autant que le premier). Les groupes par contexte, eux, restent identiques dans les
+// deux cas : c'est la liste « gabarits existants à dupliquer » que le panneau vient héberger.
+export function TemplatesTable({
+  templates, categories, showHeader = true,
+}: { templates: TemplateRow[]; categories: CategoryOption[]; showHeader?: boolean }) {
   const router = useRouter();
   const [renameTarget, setRenameTarget] = useState<TemplateRow | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -407,13 +422,18 @@ export function TemplatesTable({ templates, categories }: { templates: TemplateR
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Gabarits</h1>
-        <RoleGate allow={["admin", "editor"]}>
-          <CreateTemplateDialog categories={categories} />
-        </RoleGate>
-      </div>
+    // testid EXPORTÉ (Tâche 2) : tests/studio-templates-table.test.ts l'utilise pour prouver que
+    // components/studio/panels/modeles-panel.tsx HÉBERGE cette table plutôt que d'en reconstruire
+    // une seconde — seul CE fichier pose cet attribut.
+    <div className="space-y-4" data-testid="templates-table">
+      {showHeader && (
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl font-semibold">Gabarits</h1>
+          <RoleGate allow={["admin", "editor"]}>
+            <CreateTemplateDialog categories={categories} />
+          </RoleGate>
+        </div>
+      )}
 
       {groups.length === 0 ? (
         <Card>

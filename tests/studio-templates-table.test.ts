@@ -1,7 +1,10 @@
 import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { db, renderTemplates, user } from "@/db";
 import { and, eq } from "drizzle-orm";
 import { deleteTemplateScope } from "./studio-fixtures";
+import type { TemplateRow, CategoryOption } from "@/lib/queries/studio";
 
 // tests/studio-templates-table.test.ts — Correctif Critique 1 de la revue finale V2 : /studio
 // n'avait AUCUNE UI de création/duplication/renommage/archivage (components/studio/templates-table.tsx
@@ -19,6 +22,7 @@ import { deleteTemplateScope } from "./studio-fixtures";
 // désarchiver → round-trip réel en base.
 const { requireUser: realRequireUser, getSession: realGetSession } = await import("@/lib/session");
 const { revalidatePath: realRevalidatePath, revalidateTag: realRevalidateTag } = await import("next/cache");
+const realNavigation = await import("next/navigation");
 
 const [seededEditor] = await db.select({ id: user.id, role: user.role })
   .from(user).where(eq(user.email, "editor@afrotiative.com"));
@@ -30,9 +34,23 @@ const FAKE_EDITOR = {
 
 mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_EDITOR }));
 mock.module("next/cache", () => ({ revalidatePath: () => {}, revalidateTag: realRevalidateTag }));
+// Tâche 2 (U1, spec §3) : ModelesPanel héberge CreateTemplateDialog ET TemplatesTable, tous deux
+// useRouter() (next/navigation) — sans ce mock, renderToStaticMarkup planterait avec "invariant
+// expected app router to be mounted" (vérifié empiriquement ; même diagnostic déjà documenté par
+// tests/studio-no-r2.test.ts pour asset-library.tsx/editor-shell.tsx). Posé AVANT le premier import
+// de templates-table.tsx juste en dessous — les imports dynamiques (`await import`, pas des imports
+// statiques hissés) s'exécutent dans l'ordre du fichier, donc l'ordre ICI est ce qui garantit que le
+// module se charge avec le mock déjà actif plutôt qu'avec le vrai next/navigation figé dedans.
+mock.module("next/navigation", () => ({
+  ...realNavigation,
+  useRouter: () => ({
+    push: () => {}, refresh: () => {}, replace: () => {}, back: () => {}, forward: () => {}, prefetch: () => {},
+  }),
+}));
 
 const { createTemplate, archiveTemplate } = await import("@/lib/actions/studio-actions");
 const { buildCreateTemplateInput, nextArchivedState } = await import("@/components/studio/templates-table");
+const { ModelesPanel } = await import("@/components/studio/panels/modeles-panel");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Portées STATIQUES possédées par ce fichier (registre tests/studio-fixtures.ts, à tenir à jour) :
@@ -84,6 +102,7 @@ beforeAll(async () => {
 afterAll(async () => {
   mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: realRequireUser }));
   mock.module("next/cache", () => ({ revalidatePath: realRevalidatePath, revalidateTag: realRevalidateTag }));
+  mock.module("next/navigation", () => realNavigation);
   const { inArray } = await import("drizzle-orm");
   if (templateIds.length) await db.delete(renderTemplates).where(inArray(renderTemplates.id, templateIds));
 });
@@ -155,5 +174,54 @@ describe("portées dédiées à ce fichier", () => {
     const rows = await db.select({ id: renderTemplates.id }).from(renderTemplates)
       .where(and(eq(renderTemplates.context, "recap_card"), eq(renderTemplates.channel, CH_CREATE_CONFLICT)));
     expect(rows.length).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 2 (U1, spec §3) : le panneau « Modèles » du rail HÉBERGE cette même table plutôt que d'en
+// réimplémenter une version réduite pour le panneau étroit — pas de requête DB nécessaire ici, la
+// preuve est purement structurelle (react-dom/server, même convention que
+// tests/studio-layer-panel.test.ts). Le testid affirmé n'existe QUE dans templates-table.tsx
+// (data-testid="templates-table", posé Tâche 2) : une réimplémentation qui reconstruirait sa propre
+// grille échouerait ce test même si elle affichait visuellement la même chose — c'est exactement le
+// sabotage-check demandé par le brief.
+function fixtureTemplate(overrides: Partial<TemplateRow> = {}): TemplateRow {
+  return {
+    id: "fixture-modeles-panel",
+    name: "Gabarit fixture",
+    context: "recap_card",
+    channel: null,
+    categoryId: null,
+    categoryName: null,
+    format: "ig_square",
+    width: 1080,
+    height: 1080,
+    archived: false,
+    publishedVersion: null,
+    hasUnpublishedChanges: true,
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+    ...overrides,
+  };
+}
+
+// Synchrone à dessein (PAS de `await import(...)` à l'intérieur) : ModelesPanel est déjà résolu par
+// le top-level await de ce fichier (voir plus haut), donc cette aide reste un simple appel direct à
+// renderToStaticMarkup — un helper `async` renverrait une Promise, et `expect(promise).toContain(...)`
+// échouerait toujours puisqu'une Promise n'a pas cette méthode.
+function renderModelesPanel({ templates, categories = [] }: { templates: TemplateRow[]; categories?: CategoryOption[] }): string {
+  return renderToStaticMarkup(React.createElement(ModelesPanel, { templates, categories }));
+}
+
+describe("ModelesPanel — héberge templates-table.tsx, ne le réimplémente pas (Tâche 2)", () => {
+  it("the Modèles panel renders the existing templates table, not a copy", async () => {
+    // assert the panel's rendered output contains the table's own testid,
+    // which only components/studio/templates-table.tsx sets
+    const html = renderModelesPanel({ templates: [fixtureTemplate()] });
+    expect(html).toContain('data-testid="templates-table"');
+  });
+
+  it("the Modèles panel offers « Nouveau gabarit vierge » as its primary action", async () => {
+    const html = renderModelesPanel({ templates: [] });
+    expect(html).toContain("Nouveau gabarit vierge");
   });
 });

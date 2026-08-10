@@ -12,6 +12,9 @@ import { Canvas } from "./canvas";
 import { Rail } from "./rail";
 import { PanelHost } from "./panel-host";
 import { CalquesPanel } from "./panels/calques-panel";
+import { ModelesPanel } from "./panels/modeles-panel";
+import { ImagesPanel } from "./panels/images-panel";
+import { MarquePanel, type MarqueCategoryColor } from "./panels/marque-panel";
 import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { PreviewPane } from "./preview-pane";
@@ -25,7 +28,7 @@ import { useEditorPrefs } from "@/hooks/use-editor-prefs";
 import { nextOpenPanel, type RailCategory } from "@/lib/studio/editor-prefs";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
-import type { TemplateVersionRow, PreviewArticleOption } from "@/lib/queries/studio";
+import type { TemplateVersionRow, PreviewArticleOption, TemplateRow, CategoryOption } from "@/lib/queries/studio";
 import type { AssetRow } from "@/lib/queries/assets";
 
 // components/studio/editor-shell.tsx — Tâche 9 : compose canevas + panneau de calques + panneau de
@@ -85,6 +88,21 @@ export interface EditorShellProps {
   // configuré, plutôt que d'échouer au clic. Défaut `true` : les appelants historiques (aucun
   // aujourd'hui hors cette page) restent pleinement fonctionnels sans cette prop.
   storageConfigured?: boolean;
+  // Tâche 2 (U1, spec §3) : données du panneau « Modèles » (gabarits existants à dupliquer, groupés
+  // par contexte, et les catégories du dialogue de création) — mêmes requêtes (lib/queries/studio.ts)
+  // que app/(app)/studio/page.tsx, chargées UNE FOIS par le Server Component (app/(app)/studio/[id]/
+  // page.tsx) et redescendues ici, jamais refetchées côté client. Défaut [] : un appelant qui
+  // n'aurait pas encore ces props (aucun aujourd'hui hors cette page) affiche un panneau Modèles sans
+  // gabarit à dupliquer, plutôt que de planter.
+  templates?: TemplateRow[];
+  categories?: CategoryOption[];
+  // Tâche 2 (U1, spec §3) : données du panneau « Marque » (lecture seule) — brandLogoUrl() vient
+  // d'une variable d'environnement (lib/studio/bindings.ts), categoryColors de wpCategories.color
+  // (db/schema.ts) via getTaxonomy() (lib/queries/settings.ts) ; toutes deux lues UNIQUEMENT côté
+  // serveur et redescendues en props, jamais importées ici (voir la note du fichier de page sur le
+  // pool `pg`). Défauts "" / [] : mêmes garanties qu'assets/storageConfigured ci-dessus.
+  brandLogoUrl?: string;
+  categoryColors?: MarqueCategoryColor[];
 }
 
 // Composant EXTÉRIEUR : ne porte AUCUN état d'édition lui-même, seulement le mécanisme de
@@ -114,6 +132,10 @@ export function EditorShell(props: EditorShellProps) {
       previewArticles={props.previewArticles}
       assets={props.assets ?? []}
       storageConfigured={props.storageConfigured ?? true}
+      templates={props.templates ?? []}
+      categories={props.categories ?? []}
+      brandLogoUrl={props.brandLogoUrl ?? ""}
+      categoryColors={props.categoryColors ?? []}
       onRestore={handleRestore}
     />
   );
@@ -125,6 +147,7 @@ interface EditorShellInnerProps extends EditorShellProps {
 
 function EditorShellInner({
   template, initialScene, publishedScene, versions, previewArticles, assets = [],
+  templates = [], categories = [], brandLogoUrl = "", categoryColors = [],
   storageConfigured = true, onRestore,
 }: EditorShellInnerProps) {
   const router = useRouter();
@@ -332,9 +355,20 @@ function EditorShellInner({
             {prefs.openPanel === "calques" && (
               <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
             )}
-            {/* Modèles / Éléments / Texte / Images / Marque : panneau vide pour l'instant — Tâches
-                2 à 4 le remplissent. C'est un choix délibéré (spec de la Tâche 1) : un panneau vide
-                est honnête, un bouton de rail désactivé ne le serait pas. */}
+            {/* Modèles / Images / Marque (Tâche 2, U1 spec §3) : chaque panneau HÉBERGE une surface
+                existante (templates-table.tsx, asset-picker.tsx) plutôt que d'en reconstruire une
+                copie — voir le rapport de la Tâche 2. Éléments / Texte restent des panneaux vides :
+                Tâches 3 et 4 les remplissent, même choix délibéré qu'à la Tâche 1 (un panneau vide
+                est honnête, un bouton de rail désactivé ne le serait pas). */}
+            {prefs.openPanel === "modeles" && (
+              <ModelesPanel templates={templates} categories={categories} />
+            )}
+            {prefs.openPanel === "images" && (
+              <ImagesPanel context={template.context} assets={assets} />
+            )}
+            {prefs.openPanel === "marque" && (
+              <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
+            )}
           </PanelHost>
         )}
 

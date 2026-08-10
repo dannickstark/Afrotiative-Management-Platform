@@ -5,10 +5,12 @@ import {
   ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont, BUNDLED_FONT_PICK,
 } from "@/components/studio/asset-picker";
 import { PropertyPanel } from "@/components/studio/property-panel";
+import { ImagesPanel } from "@/components/studio/panels/images-panel";
 import { FALLBACK_FONT_FAMILY } from "@/lib/studio/fonts";
 import { editorReducer, initEditorState, setLayerProp, type EditorAction } from "@/lib/studio/editor-state";
 import type { AssetRow } from "@/lib/queries/assets";
 import type { Scene, Layer, TextLayer, ImageLayer } from "@/lib/studio/scene";
+import type { TemplateContext } from "@/lib/studio/tokens";
 
 // tests/studio-asset-picker.test.ts — Tâche 13. Même convention que tests/studio-token-picker.test.ts
 // et tests/studio-property-panel.test.ts : pas de DOM sous `bun test`, donc la STRUCTURE se vérifie
@@ -219,5 +221,36 @@ describe("PropertyPanel — les sélecteurs d'assets sont bien montés pour le c
     );
     expect(html).toContain('data-action="asset-picker-font"');
     expect(html).toContain(FALLBACK_FONT_FAMILY);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ImagesPanel — Tâche 2 (U1, spec §3) : le panneau « Images » du rail HÉBERGE `ImageAssetPicker`
+// (ci-dessus) plutôt que de reconstruire une seconde grille de vignettes. Le testid affirmé
+// (data-testid="asset-picker", posé Tâche 2 sur le déclencheur de ImageAssetPicker) n'existe QUE
+// dans components/studio/asset-picker.tsx : une réimplémentation qui redessinerait sa propre grille
+// échouerait ce test même si elle affichait visuellement la même chose — le sabotage-check demandé
+// par le brief. La seconde assertion (le jeton "article.image") prouve que la liste des emplacements
+// d'image vient bien de CONTEXT_TOKENS/TOKEN_KINDS (lib/studio/tokens.ts) pour le contexte demandé,
+// pas d'une liste écrite en dur qui ignorerait le contexte.
+function fixtureAsset(overrides: Partial<AssetRow> = {}): AssetRow {
+  return {
+    id: "fixture-image-asset", kind: "image", name: "Image fixture", url: "https://cdn.test/fixture.png",
+    mime: "image/png", bytes: 1024, width: 400, height: 300,
+    fontFamily: null, fontWeight: null, fontStyle: null, uploadedByName: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    ...overrides,
+  };
+}
+
+function renderImagesPanel({ context, assets }: { context: TemplateContext; assets: AssetRow[] }): string {
+  return renderToStaticMarkup(React.createElement(ImagesPanel, { context, assets }));
+}
+
+describe("ImagesPanel — héberge asset-picker.tsx, ne réimplémente pas une grille d'assets (Tâche 2)", () => {
+  it("the Images panel hosts the asset picker and lists the context's image slots", async () => {
+    const html = renderImagesPanel({ context: "article_image", assets: [fixtureAsset()] });
+    expect(html).toContain('data-testid="asset-picker"');
+    expect(html).toContain("article.image");
   });
 });

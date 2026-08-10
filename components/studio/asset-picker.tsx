@@ -66,6 +66,10 @@ export function ImageAssetPicker({ assets, value, onPick }: ImageAssetPickerProp
             type="button" variant="outline" size="sm"
             className="w-full justify-start gap-2 font-normal"
             data-action="asset-picker-image"
+            // testid EXPORTÉ (Tâche 2, U1 spec §3) : components/studio/panels/images-panel.tsx
+            // héberge ce MÊME déclencheur plutôt que de reconstruire une grille d'assets — seul CE
+            // composant pose cet attribut, c'est ce que tests/studio-asset-picker.test.ts vérifie.
+            data-testid="asset-picker"
           >
             {current ? (
               // eslint-disable-next-line @next/next/no-img-element
