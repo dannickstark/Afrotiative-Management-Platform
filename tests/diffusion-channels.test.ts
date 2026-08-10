@@ -83,12 +83,21 @@ describe("StubChannel.send — no network call (D1 §2)", () => {
     expect(calls).toBe(0);
   });
 
-  it("every registered channel's send() also makes no network call — fetch call count stays zero (exercises the real registry wiring, not just the class directly)", async () => {
+  // D2+ migrates channels off StubChannel one at a time (channels.ts's own header comment: "D2 → D6
+  // each replace ONE channel's `send`... and NOTHING else"). A migrated channel's send() may now
+  // legitimately return ok:false here — this test environment configures no credentials for it — but
+  // it must STILL make zero RAW network calls, exactly like every remaining stub: the missing-
+  // credentials refusal happens before any HTTP call (see that channel's own dedicated test file,
+  // e.g. tests/diffusion-facebook.test.ts, for the full behavior). This still exercises the real
+  // registry wiring for every channel, not just StubChannel directly.
+  const REAL_ADAPTER_CHANNELS: readonly Channel[] = ["facebook"]; // grows as D3+ lands (instagram, ...)
+
+  it("every registered channel's send() makes no raw network call — fetch call count stays zero (exercises the real registry wiring, not just the class directly)", async () => {
     realFetch = globalThis.fetch;
     let calls = 0;
     globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
       calls++;
-      throw new Error("Un canal du registre a appelé le réseau — D1 ne doit avoir aucun adaptateur réel.");
+      throw new Error("Un canal du registre a appelé le réseau alors qu'aucun identifiant n'était configuré.");
     }) as unknown as typeof fetch;
 
     for (const key of CHANNELS) {
@@ -97,7 +106,11 @@ describe("StubChannel.send — no network call (D1 §2)", () => {
         imageUrl: "https://example.test/render.png",
         caption: "Légende de test.",
       });
-      expect(result.ok).toBe(true);
+      if (REAL_ADAPTER_CHANNELS.includes(key)) {
+        expect(result.ok).toBe(false); // real adapter, no credentials configured here — refuses, doesn't crash
+      } else {
+        expect(result.ok).toBe(true); // still StubChannel — always succeeds, D1 §2
+      }
     }
     expect(calls).toBe(0);
   });

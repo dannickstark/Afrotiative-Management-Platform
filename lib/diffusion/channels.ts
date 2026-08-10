@@ -4,6 +4,7 @@
 // captionLimits stay exactly as defined here.
 import { CHANNELS, CHANNEL_LABELS, type Channel, type TemplateContext, type FormatKey } from "@/lib/studio";
 import { StubChannel } from "./stub-channel";
+import { FacebookChannel } from "./meta/facebook";
 
 // What a channel's `send` needs to actually publish: the rendered image (studio's public URL —
 // the render itself is generated and its renderId frozen onto the distributions row BEFORE `send`
@@ -92,7 +93,11 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
       { key: "pageId", label: "Identifiant de la Page Facebook (Page ID)" },
       { key: "pageAccessToken", label: "Jeton d’accès de la Page (Page Access Token)" },
     ],
-    send: (input) => new StubChannel("facebook").send(input),
+    // D2 — real adapter (lib/diffusion/meta/facebook.ts). A fresh FacebookChannel per call (no
+    // shared GraphClient state to worry about) — same "new X().method(input)" shape StubChannel
+    // used, so this swap is the ONLY thing that changed for this channel (this file's own header
+    // comment's promise).
+    send: (input) => new FacebookChannel().send(input),
   },
   instagram: {
     key: "instagram", label: CHANNEL_LABELS.instagram, context: "social_post", format: "ig_square",
