@@ -392,6 +392,35 @@ que le fichier n'a pas été relancé seul, et un décompte global ne vaut pas c
 La dette de fond — isoler l'état par fichier, sur le modèle de `tests/studio-fixtures.ts` — reste
 ouverte et s'aggrave à chaque sous-projet qui ajoute des tests touchant la base.
 
+#### Un second mode de défaillance, distinct et pire : la fixture fuitée qui devient échue
+
+Diagnostiqué à la clôture de D7 (2026-08-10), et il explique les échecs les plus alarmants de la
+journée. `tests/publish-due.test.ts` — le garde-fou de revue humaine, protégé — a échoué **3 tests sur
+6 en isolation**, ce qui ne ressemblait pas du tout à une collision d'ordre. Le fichier était pourtant
+identique octet pour octet à son état d'origine.
+
+La cause : une exécution interrompue avait laissé dans la branche Neon *dev* la ligne
+`"Article futur (approuvé, échéance à venir)"`, une fixture créée avec `scheduled_at = création + 1 h`
+précisément pour vérifier qu'un article **pas encore échu** n'est pas publié. L'horloge a ensuite
+dépassé cette heure. La fixture est donc devenue **réellement échue**, et à partir de là
+`publishDueArticles()` la sélectionnait à chaque exécution, échouait à la publier (pas de WordPress
+configuré en test) et renvoyait `failed: 1` — faisant tomber trois tests dont deux dans le fichier
+protégé. Supprimer la ligne a immédiatement rendu le fichier vert (6/6).
+
+Ce qui rend ce mode plus dangereux que la collision d'ordre :
+
+- **il ne disparaît pas en relançant le fichier seul**, donc la parade habituelle donne un faux
+  positif de régression ;
+- **il est différé** : la fixture est inoffensive pendant une heure, puis nuisible pour toujours ;
+- **il se déclenche sur le fichier le plus sensible du dépôt**, celui qui protège la barrière de revue
+  humaine — exactement là où un faux échec risque d'être pris pour une vraie régression, ou pire, où
+  une vraie régression risque d'être prise pour ce bruit-là.
+
+**Toute fixture avec une échéance future doit être nettoyée dans un `afterAll` qui s'exécute même en
+cas d'échec**, ou porter une échéance si lointaine qu'elle ne peut pas être atteinte. C'est l'argument
+le plus fort en faveur de l'isolation par fichier, et il devrait passer devant D4 plutôt qu'après :
+D4 ajoutera encore des tests touchant la base.
+
 ---
 
 ## Suivi
