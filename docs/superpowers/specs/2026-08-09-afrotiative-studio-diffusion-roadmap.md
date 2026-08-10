@@ -337,6 +337,19 @@ n'existe : `tests/pipeline-web-search.test.ts` cas (a) et cas (d), et
 `tests/pipeline-pause-resume.test.ts` point de contrôle (b). Les deux sont sensibles à l'état
 accumulé de la base de développement partagée.
 
+**Le décompte d'une suite complète n'est pas reproductible** (constaté à la clôture de D2+D3,
+2026-08-10). Trois exécutions du **même** commit ont donné 3, 12 puis 5 échecs. Les fichiers qui
+apparaissent et disparaissent — `tests/publish-due.test.ts`, `tests/diffusion-schedule.test.ts`,
+`tests/diffusion-scheduler.test.ts`, `tests/wp-publish-render.test.ts` — repassent **tous au vert
+relancés seuls** (par exemple `wp-publish-render` : 7/7). Ils partagent la branche Neon dev et se
+gênent mutuellement selon l'ordre et l'état laissé par le fichier précédent ; deux exécutions
+concurrentes suffisent à en faire tomber neuf d'un coup.
+
+Conséquence pratique : **un échec dans une suite complète n'est pas une preuve de régression** tant
+que le fichier n'a pas été relancé seul, et un décompte global ne vaut pas comme critère de sortie.
+La dette de fond — isoler l'état par fichier, sur le modèle de `tests/studio-fixtures.ts` — reste
+ouverte et s'aggrave à chaque sous-projet qui ajoute des tests touchant la base.
+
 ---
 
 ## Suivi
