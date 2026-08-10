@@ -23,11 +23,26 @@ import {
   updateChannelSettings, updateChannelCredentials, deleteChannelCredentials, testChannelConnection,
 } from "@/lib/actions/diffusion-settings-actions";
 import type { Channel } from "@/lib/studio";
+// TYPE-only import (D7 review, Important 1) — never a value from settings-core.ts here. This file
+// is "use client", and settings-core.ts imports @/db, whose module-scope `pg` Pool has no browser
+// build; a VALUE import (e.g. hasAllCredentials) would pull that whole graph into the client bundle
+// for this page. A `type` import is erased at compile time, so it carries none of that risk.
+// app/(app)/settings/social/[channel]/page.tsx (a Server Component) computes `isConfigured`
+// server-side instead and passes it down as a plain boolean prop.
 import type { SocialChannelSettings } from "@/lib/diffusion/settings-core";
 
 export type CredentialField = { key: string; label: string };
 
 export type CaptionLimits = { min: number; max: number; default: number };
+
+// Local mirror of settings-core.ts's hasAllCredentials — deliberately NOT imported (see the
+// type-only import note above). Same one-line rule ("every declared field's key must be present;
+// an empty field list is never configured"), just re-derived here from data this component already
+// holds (`credentialFields`, a stable prop; `credentialKeys`, local state) so the UI reacts the
+// instant a save/delete changes what's stored, without waiting on a full page reload.
+function computeIsConfigured(fields: readonly CredentialField[], keys: readonly string[]): boolean {
+  return fields.length > 0 && fields.every((f) => keys.includes(f.key));
+}
 
 type FormState = {
   enabled: boolean;
@@ -38,7 +53,16 @@ type FormState = {
   autoMaxBacklogDays: string;
   autoWindowStartHour: string;
   autoWindowEndHour: string;
+  // Task 2 (D7 spec §4) — "YYYY-MM-DD", the native <input type="date"> value shape (same convention
+  // as components/published/published-filter-bar.tsx's `ymd`). "" means "unknown" (null), never
+  // "never expires" — see handleSave's own parsing of this field below.
+  tokenExpiresAt: string;
 };
+
+// d.toISOString().slice(0, 10) — same helper shape as published-filter-bar.tsx's `ymd`.
+function tokenExpiresAtToInputValue(d: Date | null): string {
+  return d ? d.toISOString().slice(0, 10) : "";
+}
 
 function toFormState(settings: SocialChannelSettings): FormState {
   return {
@@ -50,11 +74,12 @@ function toFormState(settings: SocialChannelSettings): FormState {
     autoMaxBacklogDays: String(settings.autoMaxBacklogDays),
     autoWindowStartHour: String(settings.autoWindowStartHour),
     autoWindowEndHour: String(settings.autoWindowEndHour),
+    tokenExpiresAt: tokenExpiresAtToInputValue(settings.tokenExpiresAt),
   };
 }
 
 export function SocialChannelForm({
-  channel, label, captionLimits, settings, credentialFields = [],
+  channel, label, captionLimits, settings, credentialFields = [], isConfigured: initialIsConfigured = false,
 }: {
   channel: Channel;
   label: string;
@@ -65,6 +90,15 @@ export function SocialChannelForm({
   // array (WhatsApp today) renders no credentials card at all. Optional/defaulted to `[]` so a
   // caller that hasn't wired credentials for a given channel yet doesn't have to pass anything.
   credentialFields?: readonly CredentialField[];
+  // D7 review, Important 1 — computed server-side by page.tsx (hasAllCredentials(channel,
+  // settings)) and handed down as a plain boolean: the ONLY way this "every declared field present"
+  // fact reaches this client component, since the function that computes it must never be imported
+  // here. Seeds local state below, kept fresh after each save/delete via computeIsConfigured
+  // (plain array logic, no import) rather than by re-deriving from this prop again. Optional,
+  // defaulting to `false` (the conservative, "not configured" reading) — same convention as
+  // `credentialFields` above — so a caller that predates this prop (a test fixture, say) still
+  // compiles and renders the safe state rather than a crash or a false "configured".
+  isConfigured?: boolean;
 }) {
   const [form, setForm] = useState<FormState>(toFormState(settings));
   const [error, setError] = useState<string | null>(null);
@@ -79,8 +113,25 @@ export function SocialChannelForm({
   // status reflects the latest save without a full page reload.
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [credentialsSetAt, setCredentialsSetAt] = useState<Date | null>(settings.credentialsSetAt);
+  // `credentialKeys` (D7 credential debt, spec §5 item 1) — which fields are CURRENTLY stored,
+  // updated locally from each guarded action's own return value exactly like `credentialsSetAt`
+  // above, so `isConfigured` below reflects the latest save without a full page reload. `?? []`
+  // guards a `settings` object that predates this field (still possible from a caller that hasn't
+  // been touched to pass it) rather than crashing on `.includes` of `undefined`.
+  const [credentialKeys, setCredentialKeys] = useState<string[]>(settings.credentialKeys ?? []);
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [isSavingCredentials, startSavingCredentials] = useTransition();
+
+  // "Configured" means EVERY declared field is present, not merely that credentialsSetAt is non-null
+  // (D2+D3 final review, M6 — a single saved field used to be enough to claim the channel ready).
+  // Drives the setup guide's collapse (page.tsx, using its OWN server-side computation) and, below,
+  // whether *Tester la connexion* is reachable — `credentialsSetAt` itself keeps meaning only "last
+  // write date" (the « Défini le … » text and *Supprimer*'s availability, since deleting a
+  // partial/broken credential set must stay possible precisely when it is NOT fully configured).
+  // Seeded from the server-computed prop, then kept in sync via computeIsConfigured (plain array
+  // logic on `credentialFields` + the freshest `credentialKeys`) after every save/delete — same
+  // prop-seeded-then-locally-updated pattern as `credentialsSetAt`/`credentialKeys` above.
+  const [isConfigured, setIsConfigured] = useState<boolean>(initialIsConfigured);
 
   // Task 5 (D2+D3) — "Tester la connexion" result. Always reflects the credentials currently STORED
   // server-side (testChannelConnection re-reads them itself), never whatever is mid-edit in
@@ -109,6 +160,19 @@ export function SocialChannelForm({
       return;
     }
 
+    // Task 2 (D7 spec §4) — "" (cleared by the admin) means "expiry unknown" (null), never "never
+    // expires". A non-empty value that still fails to parse (should not happen from a native date
+    // input, but never trust client input) is refused rather than silently sent as an Invalid Date.
+    let tokenExpiresAt: Date | null = null;
+    if (form.tokenExpiresAt.trim() !== "") {
+      const parsed = new Date(form.tokenExpiresAt);
+      if (Number.isNaN(parsed.getTime())) {
+        setError("Date d'expiration du jeton invalide.");
+        return;
+      }
+      tokenExpiresAt = parsed;
+    }
+
     setError(null);
     startSaving(async () => {
       try {
@@ -121,6 +185,7 @@ export function SocialChannelForm({
           autoMaxBacklogDays,
           autoWindowStartHour,
           autoWindowEndHour,
+          tokenExpiresAt,
         });
         if (!res.ok) {
           setError(res.message);
@@ -161,6 +226,8 @@ export function SocialChannelForm({
           return;
         }
         setCredentialsSetAt(res.settings.credentialsSetAt);
+        setCredentialKeys(res.settings.credentialKeys);
+        setIsConfigured(computeIsConfigured(credentialFields, res.settings.credentialKeys));
         setCredentialValues({}); // write-only: never keep what was just typed, saved or not
         toast.success(`Identifiants ${label} enregistrés.`);
       } catch (err) {
@@ -179,6 +246,8 @@ export function SocialChannelForm({
         return;
       }
       setCredentialsSetAt(res.settings.credentialsSetAt);
+      setCredentialKeys(res.settings.credentialKeys);
+      setIsConfigured(computeIsConfigured(credentialFields, res.settings.credentialKeys));
       setCredentialValues({});
       setConnectionTest(null); // nothing left to have verified
       toast.success(`Identifiants ${label} supprimés.`);
@@ -249,11 +318,40 @@ export function SocialChannelForm({
                 <Input
                   id={`cred-${f.key}`} type="password" autoComplete="off" disabled={isSavingCredentials}
                   value={credentialValues[f.key] ?? ""}
-                  placeholder={credentialsSetAt ? "•••••••• (laisser vide pour ne pas modifier)" : "Non défini"}
+                  // PER-FIELD, on whether THIS key is in credentialKeys — never on the channel-wide
+                  // credentialsSetAt (D7 review, Important 2). credentialsSetAt goes non-null the
+                  // moment ANY one field is saved, so with two fields (Facebook: pageId +
+                  // pageAccessToken) it used to make BOTH placeholders claim "already set, leave
+                  // blank to keep" the instant only one was — walking an admin who then leaves the
+                  // still-unset field blank straight into exactly the partial-credential bug Task 1
+                  // otherwise fixes (see tests/diffusion-credentials-presence.test.ts's "saving only
+                  // pageId" case).
+                  placeholder={credentialKeys.includes(f.key) ? "•••••••• (laisser vide pour ne pas modifier)" : "Non défini"}
                   onChange={(e) => setCredentialValues((v) => ({ ...v, [f.key]: e.target.value }))}
                 />
               </div>
             ))}
+            {/* Task 2 (D7 spec §4) — tokenExpiresAt is PLAINTEXT, never inside credentialValues: it
+                is not a secret and must be visible/editable, unlike the write-only fields above. It
+                also rides the OTHER action (updateChannelSettings, the page-level "Enregistrer"
+                button below) — not handleSaveCredentials — so the help text says so explicitly to
+                avoid an admin typing a date here and clicking "Enregistrer les identifiants",
+                expecting it to be included. */}
+            <div className="space-y-1.5 border-t border-border pt-4">
+              <Label htmlFor="token-expires-at">Date d&apos;expiration du jeton</Label>
+              <Input
+                id="token-expires-at" type="date" disabled={isSaving}
+                value={form.tokenExpiresAt}
+                onChange={(e) => setForm((f) => ({ ...f, tokenExpiresAt: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Ni Meta ni LinkedIn n&apos;expose cette date de façon fiable — elle est estimée à 60
+                jours à chaque enregistrement d&apos;identifiant ; corrigez-la ici depuis le générateur
+                de jeton de LinkedIn ou le débogueur de jeton d&apos;accès de Meta. Une alerte est
+                envoyée avant l&apos;échéance. Enregistrée avec le bouton « Enregistrer » ci-dessous,
+                pas avec « Enregistrer les identifiants ».
+              </p>
+            </div>
           </CardContent>
           <CardFooter className="flex-col items-stretch gap-3">
             {credentialError && <p className="text-sm text-destructive" role="alert">{credentialError}</p>}
@@ -290,7 +388,7 @@ export function SocialChannelForm({
                 <Button
                   type="button" variant="outline" size="sm"
                   onClick={handleTestConnection}
-                  disabled={isTestingConnection || isSavingCredentials || !credentialsSetAt}
+                  disabled={isTestingConnection || isSavingCredentials || !isConfigured}
                 >
                   {isTestingConnection && <Loader2 className="animate-spin" aria-hidden />}
                   {isTestingConnection ? "Test en cours…" : "Tester la connexion"}
@@ -301,9 +399,9 @@ export function SocialChannelForm({
                 </Button>
               </div>
             </div>
-            {!credentialsSetAt && (
+            {!isConfigured && (
               <p className="text-xs text-muted-foreground">
-                Enregistrez des identifiants avant de tester la connexion.
+                Enregistrez TOUS les identifiants ci-dessus avant de tester la connexion.
               </p>
             )}
           </CardFooter>

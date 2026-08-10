@@ -141,10 +141,52 @@ API v2. **Bloqué** tant qu'un compte développeur sur palier payant n'existe pa
 ### D6 — Adaptateur TikTok
 Content Posting API, publication photo. **Bloqué** par l'audit d'application TikTok. Optionnel.
 
-### D7 — Adaptateur LinkedIn
-Community Management API (Posts), publication sur une Page entreprise. Nécessite la revue
-d'application LinkedIn pour le scope `w_organization_social` — **à lancer immédiatement, en
-parallèle du développement**, même délai de revue que Meta/X/TikTok.
+### D7 — Adaptateur LinkedIn — ✅ Livré (2026-08-10)
+Community Management API. Envoi en quatre temps, imposé par LinkedIn : récupération des octets du
+rendu (LinkedIn ne va pas chercher notre URL) → `initializeUpload` → `PUT` des octets → **sondage
+borné jusqu'à `AVAILABLE`** → `POST /rest/posts`, l'identifiant du post venant de l'en-tête
+`x-restli-id`. Le sondage n'est pas optionnel : l'API Images ne supporte pas `SYNCHRONOUS_UPLOAD` et
+publier avant la fin du traitement produit, selon la documentation de LinkedIn elle-même, un post
+**invisible aux membres** — un `201` qui ressemble à un succès. Le permalien de l'article est ajouté à
+la légende **à la génération**, donc visible et modifiable avant envoi.
+
+Livré avec l'adaptateur : la présence d'identifiants ne vaut que si **tous** les champs déclarés sont
+posés (LinkedIn est le premier canal à deux champs), le refus d'un blob à clés mixtes, la validation
+des clés et du canal, et une **alerte avant l'expiration d'un jeton** (les deux plateformes ont des
+jetons de ~60 jours ; le rafraîchissement programmatique de LinkedIn est réservé aux partenaires).
+
+Nécessite toujours la revue d'application LinkedIn (`w_organization_social`, programme Community
+Management à deux paliers, le palier Standard exigeant une **vidéo de démonstration**). **Rien n'a été
+vérifié contre la vraie API** : tout est testé contre un faux serveur `Bun.serve`. Spec :
+`2026-08-10-afrotiative-d7-linkedin-design.md` ; plan : `../plans/2026-08-10-afrotiative-d7-linkedin.md`.
+
+#### Dette reportée à l'issue de D7
+
+Triage de la revue finale (2026-08-10), conservé ici parce que les répertoires de travail SDD sont
+gitignorés. La revue a conclu « fusionnable avec correctifs » ; les trois points Important et trois
+points mineurs ont été livrés dans `f489dbe`. Ce qui reste :
+
+| Point | Où | Pour qui |
+|---|---|---|
+| `caption.ts` refuse le permalien quand il occuperait *exactement* tout le budget (`> 0` au lieu de `>= 0`) — erreur dans le sens sûr, non couverte par un test | `lib/diffusion/caption.ts` | cosmétique |
+| `stripUrls` laisse une parenthèse orpheline ; une URL sans schéma (`www.x.com/…`) sous le plafond survit entière comme texte alternatif | `lib/diffusion/linkedin/linkedin.ts` | qualité du texte alternatif |
+| `isConfigured` est stocké en état à côté de `credentialKeys` et resynchronisé à trois endroits, au lieu d'être dérivé | `components/settings/social-channel-form.tsx` | D4 |
+| `getChannelSettings` est lu deux fois par canal et par tic (12 lectures au lieu de 6) | `lib/diffusion/scheduler.ts` | D4 |
+| `tokenExpiresAt` fait l'aller-retour par le formulaire en date UTC seule : tout enregistrement du formulaire tronque l'horodatage à minuit UTC | `components/settings/social-channel-form.tsx` | D4 |
+| `/:(\d+)$/` accepte `foo:123` et `urn:li:person:99` là où le guide et le message d'erreur parlent d'une URN d'organisation | `lib/diffusion/connection-test.ts` | cosmétique |
+| Le rejet réseau de `fetch` remonte non typé au lieu d'un `LinkedInApiError` — même lacune que `GraphClient` | `lib/diffusion/linkedin/rest-client.ts` | les deux clients ensemble |
+| Bords non testés : téléchargement d'image injoignable, `initializeUpload` sans `uploadUrl`/`image`, statut de sondage inconnu, image de zéro octet, repli `localizedName`, limite exacte des 7 jours, `LINKEDIN_API_VERSION=""`, identifiants partiels pour le test de connexion | tests | opportuniste |
+| Le bloc de tests D7 de `diffusion-caption` n'exerce que le repli déterministe, jamais la branche fournisseur avec un permalien non nul | `tests/diffusion-caption.test.ts` | opportuniste |
+
+**Défauts de mes propres documents relevés à l'exécution** (tous corrigés, consignés ici comme
+avertissement pour la prochaine spec) : §4 imposait `entityId: channel` alors que `alerts.entity_id`
+est un `uuid` et que `createAlert` avale toutes les erreurs — l'alerte n'aurait jamais existé,
+silencieusement ; §3.2 réclamait un texte alternatif issu du titre de l'article, que `SendInput` ne
+porte pas et qu'un adaptateur n'a pas le droit d'aller chercher ; la tâche 1 du plan demandait à un
+composant `"use client"` d'appeler une fonction de `settings-core`, ce qui aurait tiré le pool `pg`
+dans le paquet navigateur — **la troisième occurrence de cette erreur dans ce dépôt**. Le triptyque
+`credentialKeys` + `hasAllCredentials` + `isConfigured` calculé côté serveur est désormais le motif
+maison et devrait figurer dans le gabarit de plan.
 
 ---
 

@@ -78,8 +78,8 @@ export class GraphClient {
     return this.parse<T>(res);
   }
 
-  // GET with query-string params — used for the Instagram container status poll and both
-  // connection tests (lib/diffusion/meta/connection-test.ts).
+  // GET with query-string params — used for the Instagram container status poll and both Meta
+  // connection tests (lib/diffusion/connection-test.ts — moved out of meta/ in Task 6, D7).
   //
   // Review finding (Important 3): `access_token` is pulled OUT of `params` and sent as an
   // `Authorization: Bearer <token>` header instead of a query-string parameter — a token in a GET

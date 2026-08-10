@@ -48,12 +48,13 @@ export type SetupGuideStep = {
   readonly fieldHint?: string;
 };
 
-// Per-channel, ordered. Facebook and Instagram are the two channels with a real adapter today
-// (D2/D3) and get a complete guide. The other four get an honest placeholder — LinkedIn and
-// WhatsApp name what D7/D4 will need so those tasks only fill the shape in; X and TikTok say plainly
-// that the channel is deferred and why (roadmap "Décisions D2 → D7"). Every channel still gets at
-// least one real step — even a placeholder must say something an admin (or the next task) can act
-// on, never just "coming soon".
+// Per-channel, ordered. Facebook, Instagram and LinkedIn (full guide since Task 6, D7 — spec §6;
+// Task 4 shipped a deliberately minimal placeholder, see that entry's own comment) are the three
+// channels with a real adapter today and get a fieldHint-bearing guide. The other three get an
+// honest placeholder — WhatsApp names what D4 will need so that task only fills the shape in; X and
+// TikTok say plainly that the channel is deferred and why (roadmap "Décisions D2 → D7"). Every
+// channel still gets at least one real step — even a placeholder must say something an admin (or
+// the next task) can act on, never just "coming soon".
 export const SETUP_GUIDES: Readonly<Record<Channel, readonly SetupGuideStep[]>> = {
   facebook: [
     {
@@ -165,24 +166,123 @@ export const SETUP_GUIDES: Readonly<Record<Channel, readonly SetupGuideStep[]>> 
     },
   ],
   linkedin: [
+    // Task 4 (D7) shipped a deliberately minimal, honest 3-step placeholder here (fieldHint-bearing,
+    // but silent on the tier path, the screencast, the Token Generator walkthrough, the URN lookup,
+    // and the rate limit) — see git history for that version. Task 6 (D7, spec §6) replaces it with
+    // the full guide below.
+    //
+    // ── Verification method (fetched 2026-08-10, in addition to the facts the task brief already
+    //    supplied as pre-verified — see the task report for the full list of what came from which
+    //    source) ──
+    // learn.microsoft.com/en-us/linkedin/marketing/community-management-app-review (the access
+    // request/screencast process — confirms "create a new app, you can't reuse a rejected one" and
+    // "a super admin of the Page must verify the app" in LinkedIn's own words); .../marketing/
+    // increasing-access (the Development/Standard tier table — confirms the exact figures the brief
+    // gave: 500 API calls/app/24h, 100/member/24h for Development tier, and that Development tier
+    // integration/testing must complete within twelve months of provisioning); .../marketing/
+    // community-management/organizations/organization-lookup-api (GET /rest/organizations/{id}, the
+    // same endpoint this task's connection test — ./connection-test.ts — reads); .../shared/
+    // authentication/developer-portal-tools (the Token Generator); .../marketing/versioning (monthly
+    // version cadence, minimum one year supported before sunset, and that using any version requires
+    // an explicit Linkedin-Version header — no version applies by default).
     {
-      title: "Adaptateur pas encore construit",
+      title: "Créer une NOUVELLE application développeur LinkedIn",
       body:
-        "La publication vers LinkedIn n'est pas encore implémentée dans ce produit. C'est le prochain " +
-        "canal de la feuille de route, juste après Facebook et Instagram — cette page n'a donc aucun " +
-        "champ d'identifiant à remplir pour l'instant. Dès que l'adaptateur existera, les champs " +
-        "(un URN d'organisation LinkedIn et un jeton d'accès) apparaîtront automatiquement ici, sans " +
-        "migration de base de données.",
+        "Le palier de développement (« Development Tier ») de la Community Management API ne peut " +
+        "être demandé que par une application qui ne porte AUCUN autre produit API — sur une " +
+        "application déjà utilisée pour autre chose, l'option est grisée dans le portail développeur " +
+        "et la demande est refusée. Créez donc une application dédiée à cette intégration, dans le " +
+        "portefeuille Business de l'organisation, plutôt que de réutiliser une application existante.",
+      href: "https://www.linkedin.com/developers/apps",
     },
     {
-      title: "Ce qu'il faudra préparer en amont",
+      title: "Associer et faire vérifier la Page entreprise LinkedIn",
       body:
-        "LinkedIn publie sur une Page entreprise via la Community Management API (ressource Posts, " +
-        "champ commentary), avec le scope w_organization_social. L'accès à cette API passe par un " +
-        "programme à deux paliers (palier de développement puis palier standard, chacun avec son " +
-        "propre dossier et enregistrement vidéo) — un délai comparable à la revue d'application Meta. " +
-        "À lancer dès que ce canal est planifié, pas au moment de coder l'adaptateur.",
-      href: "https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api",
+        "Un super administrateur de la Page entreprise LinkedIn doit associer l'application à cette " +
+        "Page et la faire vérifier (« Associer une application à une Page LinkedIn », ci-contre) — " +
+        "LinkedIn contrôle cette association pendant l'examen de la demande d'accès. Le compte qui " +
+        "génère ensuite le jeton (étape « Générer le jeton d'accès » ci-dessous) doit lui-même être " +
+        "administrateur de cette même Page : sans ce rôle, chaque appel à /rest/images et /rest/posts " +
+        "renvoie un refus 403, différent d'un jeton expiré.",
+      href: "https://www.linkedin.com/help/linkedin/answer/a548360/associate-an-app-with-a-linkedin-page?lang=en",
+    },
+    {
+      title: "Demander l'accès Community Management — palier de développement",
+      body:
+        "Depuis le portail développeur, sur l'application créée à l'étape 1, demandez l'accès à la " +
+        "Community Management API, palier de développement (« Development Tier »). LinkedIn examine " +
+        "le cas d'usage déclaré, l'adresse professionnelle et l'organisation vérifiée avant " +
+        "d'accorder l'accès — comptez un délai d'examen, comme pour la revue d'application Meta. Ce " +
+        "palier autorise 500 appels API par application et par jour, et 100 par membre et par jour " +
+        "(voir la dernière étape ci-dessous pour ce que cela représente en publications), et impose " +
+        "de finaliser l'intégration dans les douze mois suivant l'octroi de l'accès.",
+      href: "https://learn.microsoft.com/en-us/linkedin/marketing/community-management-app-review",
+    },
+    {
+      title: "Passer au palier standard — dossier ET enregistrement vidéo (screencast)",
+      body:
+        "Le palier de développement suffit pour tester, mais lève les restrictions de volume et de " +
+        "production seulement au palier standard (« Standard Tier »). La demande de passage exige un " +
+        "screencast — un enregistrement d'écran, en haute résolution, montrant chaque cas d'usage " +
+        "déclaré dans le formulaire (le flux de connexion, puis la publication réelle) — en plus du " +
+        "dossier écrit. Prévoyez ce délai en plus de celui du palier de développement : lancez cette " +
+        "démarche dès que le palier de développement est validé, pas au moment de vouloir publier en " +
+        "production sans restriction.",
+      href: "https://learn.microsoft.com/en-us/linkedin/marketing/community-management-app-review",
+    },
+    {
+      title: "Générer le jeton d'accès avec le Token Generator du portail développeur",
+      body:
+        "Une fois l'accès Community Management accordé, ouvrez l'onglet « OAuth 2.0 tools » de " +
+        "l'application dans le portail développeur et utilisez le Token Generator (« Create token ») " +
+        "avec le scope w_organization_social — aucune implémentation OAuth côté serveur n'est " +
+        "nécessaire, le portail génère le jeton directement. Il dure environ 60 jours " +
+        "(expires_in: 5184000) ; le renouvellement programmatique (refresh token) n'est ouvert " +
+        "qu'aux partenaires LinkedIn, donc pas à ce projet — il n'existe aucun moyen d'automatiser " +
+        "son renouvellement. Notez la date d'expiration affichée par le générateur et reportez-la " +
+        "dans le champ « Date d'expiration du jeton » plus bas sur cette page (bouton « Enregistrer », " +
+        "pas « Enregistrer les identifiants ») : c'est ce qui déclenche l'alerte envoyée 7 jours avant " +
+        "l'échéance.",
+      href: "https://learn.microsoft.com/en-us/linkedin/shared/authentication/developer-portal-tools",
+      fieldHint: "accessToken",
+    },
+    {
+      title: "Renseigner l'URN de l'organisation",
+      body:
+        "L'URN identifie la Page entreprise LinkedIn cible, sous la forme urn:li:organization:<id " +
+        "numérique> — c'est la valeur envoyée comme propriétaire de chaque image téléversée et comme " +
+        "auteur de chaque publication. Trouvez l'identifiant numérique dans l'URL d'administration de " +
+        "la Page (linkedin.com/company/<id>/admin/…), ou interrogez l'Organization Lookup API " +
+        "(GET /rest/organizations?q=vanityName&vanityName=<nom>) si seul le nom public est connu. " +
+        "C'est ce même identifiant numérique — pas l'URN complète — que « Tester la connexion » " +
+        "utilise pour lire l'organisation via GET /rest/organizations/{id}.",
+      href: "https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/organization-lookup-api",
+      fieldHint: "organizationUrn",
+    },
+    {
+      title: "Quota du palier de développement : 500 requêtes par jour, une publication en coûte AU MOINS quatre",
+      body:
+        "Tant que le palier standard n'est pas accordé, l'application est plafonnée à 500 appels API " +
+        "par jour au total. Chaque publication LinkedIn faite par ce projet — initialisation du " +
+        "téléversement, envoi des octets de l'image, sondage de son statut, puis création de la " +
+        "publication — en consomme AU MOINS quatre : quatre seulement si LinkedIn répond « prête » " +
+        "dès le premier sondage, mais le sondage se répète (jusqu'à 10 fois) tant que l'image reste " +
+        "en traitement — WAITING_UPLOAD/PROCESSING sont le déroulement normal, pas un cas limite —, " +
+        "donc jusqu'à 13 requêtes pour une seule publication dans le pire cas. Une fois plusieurs " +
+        "canaux automatiques actifs, ce plafond peut devenir la limite réelle avant même celle des " +
+        "identifiants ou des permissions ; un 429 renvoyé par LinkedIn l'indique explicitement dans " +
+        "le message d'erreur affiché ici.",
+      href: "https://learn.microsoft.com/en-us/linkedin/marketing/increasing-access",
+    },
+    {
+      title: "Ce que « Tester la connexion » prouve — et ce qu'elle ne prouve pas",
+      body:
+        "Une fois les deux champs ci-dessous enregistrés, « Tester la connexion » lit l'organisation " +
+        "identifiée par l'URN (une seule requête, jamais une publication) et confirme que le jeton et " +
+        "l'identifiant d'organisation sont valides. Elle ne prouve PAS que la publication elle-même " +
+        "est autorisée : cela dépend en plus de la permission w_organization_social effectivement " +
+        "accordée et du rôle administrateur du compte sur la Page — seul un envoi réel (bouton « Test » " +
+        "sur l'onglet Diffusion d'un article, ou un envoi automatique) le vérifie.",
     },
   ],
   whatsapp: [

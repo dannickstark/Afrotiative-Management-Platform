@@ -27,9 +27,12 @@ export function ChannelSetupGuide({
   // already takes, so the guide's "→ Renseignez : …" pointer always names the exact same label the
   // credentials card shows for that field, never a hand-typed duplicate that could drift.
   credentialFields: readonly CredentialField[];
-  // Collapsed once credentials are set, expanded when they are not (brief's contract) — the caller
-  // (page.tsx) computes this from settings.credentialsSetAt, the same signal social-channel-form.tsx
-  // already uses for its own "Défini le …" / "Non défini" copy.
+  // Collapsed once EVERY declared credential field is set, expanded otherwise (brief's contract,
+  // corrected by the D7 credential debt fix, spec §5 item 1) — the caller (page.tsx) computes this
+  // with hasAllCredentials(channel, settings) (lib/diffusion/settings-core.ts), NOT from
+  // settings.credentialsSetAt alone: that field goes non-null the moment ANY one field is saved,
+  // which used to make this guide collapse — and offer *Tester la connexion* — while a two-field
+  // channel (e.g. a future LinkedIn) still had only one of its two credentials on file.
   defaultOpen: boolean;
 }) {
   function fieldLabel(key: string): string {

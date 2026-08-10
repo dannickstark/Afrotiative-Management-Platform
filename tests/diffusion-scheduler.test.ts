@@ -427,12 +427,15 @@ describe("reclaimStalePendingDistributions — cutoff configurable via DIFFUSION
     else process.env.DIFFUSION_STALE_PENDING_MINUTES = originalEnv;
   });
 
+  // "7" (above the STALE_PENDING_FLOOR_MINUTES=6 safety floor added below) — a cutoff still SHORTER
+  // than the default 10, so this keeps testing exactly what its name says, just no longer with a
+  // value the floor (Issue 7, D7 final review) would now itself override.
   it("honors a SHORTER cutoff from the env var — a row the default 10-minute cutoff would leave untouched gets reclaimed", async () => {
     const articleId = await createArticle(1, "Article — pending, cutoff réduit");
-    const at = new Date(Date.now() - 3 * 60_000); // 3 minutes ago — inside the default 10-min window, outside a 1-min one
+    const at = new Date(Date.now() - 8 * 60_000); // 8 minutes ago — inside the default 10-min window, outside a 7-min one
     await db.insert(distributions).values({ articleId, channel: CH_A, status: "pending", at, attempts: 0 });
 
-    process.env.DIFFUSION_STALE_PENDING_MINUTES = "1";
+    process.env.DIFFUSION_STALE_PENDING_MINUTES = "7";
     await reclaimStalePendingDistributions();
 
     const [row] = await distributionsFor(articleId, CH_A);
@@ -449,6 +452,40 @@ describe("reclaimStalePendingDistributions — cutoff configurable via DIFFUSION
 
     const [row] = await distributionsFor(articleId, CH_A);
     expect(row.status).toBe("failed"); // still reaped — an invalid value falls back to the default, not to "never reap"
+  });
+
+  // Issue 7 (D7 final review) — the reviewer's own concrete example: an operator sets
+  // DIFFUSION_STALE_PENDING_MINUTES=5 (or lower) "to make retries snappier", which would put the
+  // reaper INSIDE LinkedIn's own ≈5.1-minute (307s) worst-case send latency (see scheduler.ts's own
+  // stalePendingMinutes() header comment) — reclaiming a send that is still genuinely in flight risks
+  // a DUPLICATED LIVE PUBLIC POST once the original request eventually completes, not just a wasted
+  // retry. Uses "1" (an even more extreme version of the reviewer's own "5") and a row aged 4
+  // minutes: a raw (unfloored) 1-minute cutoff would reclaim it (4 > 1); the floor
+  // (STALE_PENDING_FLOOR_MINUTES=6) must not. This is the test that would fail if the floor in
+  // stalePendingMinutes() were removed — without it, this row WOULD flip to 'failed'.
+  it("floors an env value below the safety minimum — never reclaims inside LinkedIn's worst-case send window", async () => {
+    const articleId = await createArticle(1, "Article — pending, cutoff sous le plancher");
+    const at = new Date(Date.now() - 4 * 60_000); // 4 minutes ago — older than the raw "1" requested, younger than the 6-minute floor
+    await db.insert(distributions).values({ articleId, channel: CH_A, status: "pending", at, attempts: 0 });
+
+    process.env.DIFFUSION_STALE_PENDING_MINUTES = "1";
+    await reclaimStalePendingDistributions();
+
+    const [row] = await distributionsFor(articleId, CH_A);
+    expect(row.status).toBe("pending"); // NOT reclaimed — the floor, not the raw "1", governed the cutoff
+    expect(row.attempts).toBe(0);
+  });
+
+  it("still reclaims once a row is older than the floor itself, even with a below-floor env value requested", async () => {
+    const articleId = await createArticle(1, "Article — pending, au-delà du plancher");
+    const at = new Date(Date.now() - 7 * 60_000); // 7 minutes ago — older than the 6-minute floor
+    await db.insert(distributions).values({ articleId, channel: CH_A, status: "pending", at, attempts: 0 });
+
+    process.env.DIFFUSION_STALE_PENDING_MINUTES = "1";
+    await reclaimStalePendingDistributions();
+
+    const [row] = await distributionsFor(articleId, CH_A);
+    expect(row.status).toBe("failed"); // the floor (6 min) still lets a GENUINELY stale row be reclaimed
   });
 });
 

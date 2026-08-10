@@ -238,14 +238,23 @@ describe("settings-core credential storage (Task 1)", () => {
     expect(after.credentialsSetAt!.getTime()).toBeGreaterThanOrEqual(t0);
   });
 
-  it("deleteChannelCredentialsCore clears every field AND credentialsSetAt", async () => {
+  // D7 final review, Important 2 ("while you are there") — tokenExpiresAt used to survive a delete,
+  // so the settings form kept showing an expiry date for a channel that no longer had any
+  // credentials at all. This is the test that would FAIL if that field were dropped from the
+  // `.set(...)` again: settings.tokenExpiresAt would still read the ~60-day value the earlier
+  // setChannelCredentialsCore call seeded, not null.
+  it("deleteChannelCredentialsCore clears every field AND credentialsSetAt AND tokenExpiresAt", async () => {
     await setChannelCredentialsCore(CRED_CHANNEL, { accessToken: "to-delete", organizationUrn: "urn:to-delete" });
+    const beforeDelete = await getChannelSettings(CRED_CHANNEL);
+    expect(beforeDelete.tokenExpiresAt).not.toBeNull(); // sanity: there IS a date to clear
+
     const res = await deleteChannelCredentialsCore(CRED_CHANNEL);
     expect(res.ok).toBe(true);
 
     expect(await getDecryptedCredentials(CRED_CHANNEL)).toBeNull();
     const settings = await getChannelSettings(CRED_CHANNEL);
     expect(settings.credentialsSetAt).toBeNull();
+    expect(settings.tokenExpiresAt).toBeNull();
   });
 
   it("refuses to save when CREDENTIALS_ENCRYPTION_KEY is not configured, in French, and writes NOTHING", async () => {

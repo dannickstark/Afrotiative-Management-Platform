@@ -16,6 +16,7 @@ Ce document est le guide pour mettre la plateforme en production et l'exploiter 
 | **Base de données** | PostgreSQL avec l'extension **pgvector** (Neon recommandé — pgvector préinstallé). Deux URLs : pooled (app) + direct (migrations). |
 | **WordPress** *(pour publier)* | WP 5.6+ (Application Passwords), **permaliens jolis** activés, `/wp-json` accessible publiquement, un utilisateur bot de rôle **Editor** minimum. |
 | **Meta (Facebook + Instagram)** *(pour diffuser)* | Application Meta for Developers + Page Facebook (+ compte Instagram professionnel lié, pour Instagram) + permissions passées en revue (App Review, plusieurs semaines) + jeton de Page longue durée. Détails complets : §2, « Application Meta ». |
+| **LinkedIn** *(pour diffuser)* | Application développeur LinkedIn **dédiée** (le palier de développement de la Community Management API refuse une application qui porte déjà un autre produit) + Page entreprise associée et vérifiée + accès Community Management (palier de développement, puis standard avec screencast, délai) + jeton généré via le Token Generator (60 jours, pas de renouvellement automatique). Détails complets : §2, « Application LinkedIn ». |
 | **Hébergement** | N'importe quel hôte Node/Next (Vercel, Railway, Fly, VPS). `maxDuration` des routes cron = 300 s : sur Vercel, plan qui autorise 300 s de fonction. |
 | **Ordonnanceur** | Un cron externe capable de faire deux `POST` HTTP authentifiés (Vercel Cron, GitHub Actions, cron-job.org, crontab système…). |
 
@@ -55,7 +56,7 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 
 | Variable | Rôle |
 |---|---|
-| `CREDENTIALS_ENCRYPTION_KEY` | Clé AES-256-GCM (32 octets, encodés en base64) qui chiffre les identifiants réseaux sociaux (jeton de Page Facebook/Instagram, futur URN LinkedIn…) stockés dans `social_channel_settings.credentials`. Générer : `openssl rand -base64 32`. |
+| `CREDENTIALS_ENCRYPTION_KEY` | Clé AES-256-GCM (32 octets, encodés en base64) qui chiffre les identifiants réseaux sociaux (jeton de Page Facebook/Instagram, URN d'organisation et jeton LinkedIn…) stockés dans `social_channel_settings.credentials`. Générer : `openssl rand -base64 32`. |
 
 Sans cette variable, `/settings/social/[canal]` refuse l'enregistrement d'un identifiant avec un
 message français explicite plutôt que de planter — exactement l'idiome de `getWpConfig()`/
@@ -69,28 +70,28 @@ message français explicite plutôt que de planter — exactement l'idiome de `g
 > récupérable pour autant). Traiter cette variable comme un secret de production au même titre que
 > `BETTER_AUTH_SECRET` : générée une fois, sauvegardée dans le gestionnaire de secrets de l'hôte,
 > **jamais régénérée** sans planifier au préalable la re-saisie de chaque identifiant déjà stocké
-> (Facebook, Instagram, et tout canal ajouté ensuite).
+> (Facebook, Instagram, LinkedIn, et tout canal ajouté ensuite).
 >
 > **Si c'est arrivé quand même — procédure de récupération :** un envoi ou un « Tester la
-> connexion » échoue alors avec « Impossible de déchiffrer les identifiants Facebook/Instagram
-> enregistrés… » (voir §10). Il n'y a pas de réparation possible du blob existant — sur
-> `/settings/social/facebook` et/ou `/settings/social/instagram`, cliquez sur **« Supprimer »** puis
+> connexion » échoue alors avec « Impossible de déchiffrer les identifiants Facebook/Instagram/
+> LinkedIn enregistrés… » (voir §10). Il n'y a pas de réparation possible du blob existant — sur
+> `/settings/social/facebook`, `/instagram` et/ou `/linkedin`, cliquez sur **« Supprimer »** puis
 > **ressaisissez la TOTALITÉ des champs d'identifiants du canal** (Facebook : Page ID *et* jeton
-> d'accès ; Instagram : IG User ID *et* jeton d'accès), même si un seul champ semble en cause.
-> `setChannelCredentialsCore` (`lib/diffusion/settings-core.ts`) **fusionne** les valeurs
-> nouvellement soumises dans le blob `credentials` existant plutôt que de le remplacer en entier —
-> ne ressaisir qu'un seul champ laisserait les autres chiffrés sous l'ancienne clé, dans un blob
-> **mixte** qui échoue au déchiffrement en permanence, jeton neuf ou pas (`getDecryptedCredentials`
-> déchiffre TOUS les champs stockés en une fois ; un seul champ encore sous l'ancienne clé fait
-> échouer la lecture de tout le reste). Une fois les identifiants effacés puis intégralement
-> ressaisis, validez avec **« Tester la connexion »** avant de réactiver l'envoi automatique sur ce
-> canal.
+> d'accès ; Instagram : IG User ID *et* jeton d'accès ; LinkedIn : URN de l'organisation *et* jeton
+> d'accès), même si un seul champ semble en cause. `setChannelCredentialsCore`
+> (`lib/diffusion/settings-core.ts`) **fusionne** les valeurs nouvellement soumises dans le blob
+> `credentials` existant plutôt que de le remplacer en entier — ne ressaisir qu'un seul champ
+> laisserait les autres chiffrés sous l'ancienne clé, dans un blob **mixte** qui échoue au
+> déchiffrement en permanence, jeton neuf ou pas (`getDecryptedCredentials` déchiffre TOUS les
+> champs stockés en une fois ; un seul champ encore sous l'ancienne clé fait échouer la lecture de
+> tout le reste). Une fois les identifiants effacés puis intégralement ressaisis, validez avec
+> **« Tester la connexion »** avant de réactiver l'envoi automatique sur ce canal.
 
 **Diffusion sociale — seuil du nettoyeur d'envois bloqués (D1, paramétré en Task 5)** :
 
 | Variable | Rôle |
 |---|---|
-| `DIFFUSION_STALE_PENDING_MINUTES` | Minutes au-delà desquelles une ligne `distributions` restée `pending` est considérée abandonnée (processus arrêté avant la fin) et repassée `failed`, donc réessayable. Optionnel, défaut **10**. Voir §6.5 pour le détail et le raisonnement (pourquoi 10 minutes reste sûr avec les adaptateurs Facebook/Instagram réels). |
+| `DIFFUSION_STALE_PENDING_MINUTES` | Minutes au-delà desquelles une ligne `distributions` restée `pending` est considérée abandonnée (processus arrêté avant la fin) et repassée `failed`, donc réessayable. Optionnel, défaut **10**. **Plancher dur de 6 minutes** : une valeur inférieure est relevée à 6 avec un avertissement dans les journaux du serveur (`lib/diffusion/scheduler.ts`), parce qu'un seuil sous le pire cas d'un adaptateur récupère un envoi *réellement en cours* — et le réessai republie alors un post public déjà en ligne. Voir §6.5 pour le détail et le raisonnement (pourquoi 10 minutes reste sûr avec les adaptateurs Facebook/Instagram/LinkedIn réels). |
 
 **Application Meta (Facebook + Instagram) — prérequis, permissions, jeton longue durée :**
 
@@ -150,6 +151,87 @@ avant le premier déploiement plutôt que de le découvrir au moment d'activer u
 5. **`CREDENTIALS_ENCRYPTION_KEY`** chiffre le Page ID / IG User ID / jeton de Page une fois
    enregistrés — voir juste au-dessus dans cette même section (§2) pour sa génération et
    l'avertissement sur sa perte ; rien de spécifique à Meta ne s'y ajoute.
+
+**LinkedIn — version d'API (D7, Task 3+6)** :
+
+| Variable | Rôle |
+|---|---|
+| `LINKEDIN_API_VERSION` | Version de l'API LinkedIn (format `AAAAMM`, ex. `202607`) envoyée sur **chaque** appel via l'en-tête `Linkedin-Version` (`lib/diffusion/linkedin/rest-client.ts`). Optionnel — vide retombe sur une constante codée en dur dans le client. |
+
+**LinkedIn sunset ses versions sur son propre calendrier, pas sur celui de ce projet** —
+la version `202507` est déjà retirée d'après la documentation LinkedIn elle-même (vérifié
+2026-08-10). LinkedIn publie une nouvelle version chaque mois et garantit un support d'**au moins
+un an** avant retrait ; une constante codée en dur serait donc une bombe à retardement (elle casse
+la publication jusqu'au prochain déploiement dès que sa version sunset), alors que
+`LINKEDIN_API_VERSION` permet de rétablir le service **immédiatement**, sans code ni déploiement, en
+posant la variable sur une version encore supportée. **Liste des versions actuellement
+supportées/retirées** : la documentation « versioning » de LinkedIn
+(learn.microsoft.com/en-us/linkedin/marketing/versioning) et son propre lien vers le statut de
+migration par version (« migrations » → « api-migration-status ») — à revérifier périodiquement,
+pas seulement au moment d'un incident.
+
+**Application LinkedIn — prérequis, paliers d'accès, jeton (D7, Task 6) :**
+
+La diffusion réelle vers LinkedIn (`lib/diffusion/linkedin/linkedin.ts`) passe par la Community
+Management API de LinkedIn et exige, en amont, une démarche côté LinkedIn plus longue et moins
+intuitive que celle de Meta — ce n'est pas une variable d'environnement à poser (à l'exception de
+`LINKEDIN_API_VERSION`, ci-dessus), mais un compte/une application à configurer une fois. Le guide
+pas-à-pas complet est déjà **dans le produit** (`/settings/social/linkedin`, carte « Guide de
+connexion », `lib/diffusion/setup-guide.ts`) ; ce qui suit en est le résumé opérationnel :
+
+1. **Créer une application développeur LinkedIn *dédiée*, NEUVE** (linkedin.com/developers/apps).
+   Le palier de développement de la Community Management API **ne peut pas** être demandé par une
+   application qui porte déjà un autre produit API — l'option est **grisée** dans le portail pour
+   une application existante. C'est le piège le moins évident de tout ce parcours : réutiliser
+   l'application Meta, ou toute application déjà configurée pour autre chose, bloque la demande
+   avant même de commencer.
+2. **Associer et faire vérifier la Page entreprise LinkedIn** par un super administrateur de cette
+   Page, et s'assurer que le compte qui générera le jeton (étape 4) est lui-même **administrateur**
+   de cette Page — LinkedIn vérifie les deux pendant l'examen de la demande d'accès, et un compte
+   sans ce rôle reçoit un refus 403 sur chaque appel `/rest/images`/`/rest/posts`, distinct d'un
+   jeton expiré.
+3. **Demander l'accès Community Management, palier de développement**, puis, séparément et **plus
+   tard**, le **palier standard** — qui exige un **screencast** (enregistrement d'écran, narré,
+   démontrant chaque cas d'usage déclaré dans le formulaire) en plus du dossier écrit. **Comptez un
+   délai pour chaque palier** — comparable à l'App Review de Meta, mais en deux étapes distinctes.
+   Le palier de développement suffit pour tester et publier en usage restreint (voir le point 5) ;
+   le palier standard lève les restrictions de volume/production.
+4. **Générer le jeton d'accès avec le Token Generator du portail développeur** (aucune
+   implémentation OAuth côté serveur n'est nécessaire) — scope `w_organization_social`. Il dure
+   environ **60 jours** (`expires_in: 5184000`, documentation LinkedIn) ; **le renouvellement
+   programmatique (refresh token) est réservé aux partenaires LinkedIn**, donc indisponible pour ce
+   projet — il n'existe aucun moyen d'automatiser ce renouvellement, contrairement au jeton de Page
+   Facebook/Instagram (§2, point 4 ci-dessus) qui n'expire pas sur un minuteur fixe. **Notez la date
+   d'expiration affichée par le générateur** et enregistrez-la dans le champ « Date d'expiration du
+   jeton » de `/settings/social/linkedin` (bouton « Enregistrer », pas « Enregistrer les
+   identifiants ») : c'est ce qui alimente l'alerte de jeton bientôt expiré (D7 Task 2 —
+   `token_expiring`, envoyée 7 jours avant l'échéance, au plus une fois par jour et par canal).
+5. **Le palier de développement est plafonné à 500 requêtes API par application et par jour** (et
+   100 par membre et par jour). **Une publication LinkedIn de ce projet en consomme AU MOINS
+   quatre** (initialisation du téléversement, envoi des octets de l'image, un sondage de son statut,
+   création de la publication) — **mais ce n'est qu'un minimum** : le sondage
+   (`lib/diffusion/linkedin/linkedin.ts`) se répète tant que l'image reste `WAITING_UPLOAD`/
+   `PROCESSING` — le déroulement normal documenté par LinkedIn, pas un cas limite —, borné à 10
+   tentatives, donc **jusqu'à 13 requêtes pour une seule publication** dans le pire cas (3 appels
+   hors sondage — `initializeUpload`, `PUT`, `POST /rest/posts` — + jusqu'à 10 sondages ; le
+   téléchargement du rendu depuis R2/CDN, quatrième étape bornée à 20 s dans le calcul de latence du
+   §6.5, n'est pas un appel à l'API LinkedIn et ne compte donc pas dans ce quota-ci). Pour le calcul
+   de capacité d'un opérateur qui
+   active la publication automatique sur LinkedIn en plus de Facebook/Instagram, retenir 4 comme
+   plancher et 13 comme pire cas, pas une valeur fixe ; un `429` LinkedIn l'indique explicitement
+   dans le message d'erreur affiché par l'adaptateur.
+6. **Renseigner l'URN de l'organisation** (`urn:li:organization:<id numérique>`) — l'identifiant
+   numérique se lit dans l'URL d'administration de la Page (`linkedin.com/company/<id>/admin/…`),
+   ou via l'Organization Lookup API (`GET /rest/organizations?q=vanityName&vanityName=<nom>`) si
+   seul le nom public est connu.
+7. **`CREDENTIALS_ENCRYPTION_KEY`** chiffre l'URN de l'organisation et le jeton d'accès une fois
+   enregistrés (§2, en tête de cette section) ; rien de spécifique à LinkedIn ne s'y ajoute. Utilisez
+   le bouton **« Tester la connexion »** sur `/settings/social/linkedin` (Task 6) pour vérifier
+   qu'un jeton et un URN enregistrés résolvent bien, sans attendre un échec de publication réelle —
+   **un test réussi ne prouve PAS que la publication elle-même est autorisée** (il faut en plus la
+   permission `w_organization_social` effectivement accordée et le rôle administrateur sur la Page,
+   que seul un envoi réel vérifie), mais un jeton expiré ou un URN invalide y affiche le même message
+   qu'un envoi qui aurait échoué pour la même raison.
 
 **Studio de gabarits (V1 + V2 + V3) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
 renvoie `null`) :
@@ -397,30 +479,39 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
   déterministe sans clé configurée), envoie, consigne le résultat (`article_revisions`).
   `lastAutoSendAt` est posé **avant** l'envoi et persisté en base — un redémarrage/redéploiement ne
   provoque jamais de rafale de rattrapage.
-- **Facebook et Instagram ont un adaptateur réel (D2+D3)** — `lib/diffusion/meta/facebook.ts` et
-  `instagram.ts`, tous deux via l'API Graph de Meta (voir plus haut, §2, « Application Meta »,
-  pour les prérequis application/permissions/jeton). **WhatsApp, X, TikTok et LinkedIn restent sur
-  `StubChannel`** : il journalise l'envoi (log `[diffusion:stub]`) et renvoie un identifiant
-  factice **sans jamais appeler un vrai réseau social**, en attendant qu'un adaptateur réel
-  remplace `StubChannel` sur chacun de ces canaux dans une itération future. Activer la
+- **Facebook, Instagram et LinkedIn ont un adaptateur réel (D2+D3, D7)** — `lib/diffusion/meta/
+  facebook.ts` et `instagram.ts` via l'API Graph de Meta (voir plus haut, §2, « Application Meta »,
+  pour les prérequis application/permissions/jeton) ; `lib/diffusion/linkedin/linkedin.ts` via la
+  Community Management API de LinkedIn (§2, « Application LinkedIn », pour ses propres prérequis —
+  plus longs : deux paliers d'accès, un screencast, une application dédiée). **WhatsApp, X et
+  TikTok restent sur `StubChannel`** : il journalise l'envoi (log `[diffusion:stub]`) et renvoie un
+  identifiant factice **sans jamais appeler un vrai réseau social**, en attendant qu'un adaptateur
+  réel remplace `StubChannel` sur chacun de ces canaux dans une itération future. Activer la
   publication automatique sur un canal encore en stub ne pousse donc rien de visible en dehors de
-  cette plateforme ; l'activer sur Facebook ou Instagram publie réellement, une fois les
-  identifiants renseignés (§2) et l'App Review Meta passée (sinon Graph refuse la publication —
-  voir §2, point 2).
+  cette plateforme ; l'activer sur Facebook, Instagram ou LinkedIn publie réellement, une fois les
+  identifiants renseignés (§2) et la revue correspondante passée (sinon Graph/LinkedIn refuse la
+  publication — voir §2, points respectifs).
 - **Récupération des envois bloqués** : le même tic marque `failed` toute ligne `distributions`
   restée `pending` plus de 10 min par défaut, configurable via `DIFFUSION_STALE_PENDING_MINUTES`
   (§2) — sans quoi un envoi interrompu (processus arrêté entre l'écriture `pending` et le résultat
   final) resterait bloqué indéfiniment sur ce canal (index unique partiel, §1 de la conception
   D1). Ce seuil de 10 minutes a été revérifié (Task 5) contre la latence réelle du plus lent des
-  deux adaptateurs : l'envoi Instagram (`lib/diffusion/meta/instagram.ts`) crée un conteneur média
+  adaptateurs Meta : l'envoi Instagram (`lib/diffusion/meta/instagram.ts`) crée un conteneur média
   puis sonde son statut par intervalles de 3 s jusqu'à 10 tentatives avant de publier — pire cas
   théorique ≈4,5 minutes (12 appels Graph, chacun borné à 20 s, plus les pauses entre sondages),
   contre un seuil par défaut de 10 minutes : une marge d'environ 2,2× a été jugée suffisante et le
   défaut n'a pas été resserré (voir `lib/diffusion/scheduler.ts`, `stalePendingMinutes()`, pour le
-  calcul détaillé). Ne baissez cette variable qu'en connaissance de cause : un seuil trop court
-  peut réclamer comme « bloqué » un envoi Instagram encore légitimement en cours, ce qui expose au
-  risque de double-publication documenté dans les deux adaptateurs (aucun des deux n'a de clé
-  d'idempotence côté Graph pour s'en protéger).
+  calcul détaillé). **LinkedIn (D7, Task 6) est comparable, pas revérifié aussi précisément** : son
+  propre sondage borné (`lib/diffusion/linkedin/linkedin.ts`, même intervalle 3 s × 10 tentatives)
+  s'ajoute à trois appels API bornés à 20 s chacun (téléchargement du rendu, initialisation du
+  téléversement, envoi des octets) puis à la publication elle-même (20 s) — pire cas théorique
+  ≈5,1 minutes, une marge d'environ 1,95× sous le seuil par défaut de 10 minutes : plus serrée que
+  celle d'Instagram mais toujours positive ; le temps de traitement réel d'une image côté LinkedIn
+  n'est pas documenté (spec D7 §8, risque 1 — inféré, à confirmer une fois l'accès Community
+  Management effectivement obtenu). Ne baissez cette variable qu'en connaissance de cause : un
+  seuil trop court peut réclamer comme « bloqué » un envoi Instagram ou LinkedIn encore
+  légitimement en cours, ce qui expose au risque de double-publication documenté dans les trois
+  adaptateurs (aucun n'a de clé d'idempotence côté Graph/LinkedIn pour s'en protéger).
 - **Diffusion bloquée avant tout envoi (alerte)** : si un tic dû se voit refuser AVANT même
   d'écrire une ligne `distributions` (rendu en échec, stockage R2 non configuré, aucun gabarit
   « post social » configuré pour ce canal), l'article resterait sinon sélectionné identiquement à
@@ -468,12 +559,18 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
 - **Studio — `/studio/generer` sans gabarit publié** : les trois contextes à saisie manuelle (`quote_card`, `newsletter_header`, `recap_card`) n'ont **aucun gabarit de départ** (`bun run db:studio-templates` ne sème que `article_image`/`social_post`) — tant que personne n'en a créé un depuis **Studio → Gabarits** (`/studio`, bouton « Nouveau gabarit ») puis publié dans son éditeur (`/studio/[id]`), la génération répond « Aucun gabarit publié pour ce contexte. Créez-en un et publiez-le depuis Studio → Gabarits avant de générer. » plutôt qu'un état vide silencieux.
 - **Idempotence** : republier met à jour le post WP existant (via `distributions.externalId`), jamais de doublon.
 - **Dépublier / Republier** : depuis l'éditeur d'un article publié (rôles Éditeur/Admin).
-- **Diffusion réseaux sociaux (D1 + D2/D3)** : `/settings/social/[canal]` (admin uniquement) —
-  identifiants chiffrés + bouton « Tester la connexion » pour Facebook/Instagram (§2), activation
-  du canal, limite de légende (bornée par le plafond officiel de chaque réseau), prompt
-  personnalisé, et publication automatique (désactivée par défaut, voir §6.5). Facebook et
-  Instagram publient réellement via l'API Graph de Meta ; WhatsApp, X, TikTok et LinkedIn passent
-  encore par `StubChannel`, qui journalise sans jamais contacter un vrai réseau (voir §6.5).
+- **Diffusion réseaux sociaux (D1 + D2/D3 + D7)** : `/settings/social/[canal]` (admin uniquement) —
+  identifiants chiffrés + bouton « Tester la connexion » pour Facebook/Instagram/LinkedIn (§2),
+  activation du canal, limite de légende (bornée par le plafond officiel de chaque réseau), prompt
+  personnalisé, et publication automatique (désactivée par défaut, voir §6.5). Facebook, Instagram
+  et LinkedIn publient réellement (API Graph de Meta pour les deux premiers, Community Management
+  API pour le troisième) ; WhatsApp, X et TikTok passent encore par `StubChannel`, qui journalise
+  sans jamais contacter un vrai réseau (voir §6.5). « Tester la connexion » lit un nœud/une
+  organisation existante en un seul appel gratuit — jamais une publication — et prouve que le jeton
+  et l'identifiant enregistrés authentifient bien ; pour LinkedIn spécifiquement, cela ne prouve
+  **pas** que la publication elle-même est autorisée (il faut en plus la permission
+  `w_organization_social` effectivement accordée et le rôle administrateur sur la Page — seul un
+  envoi réel le vérifie).
 - **Sécurité** : secrets uniquement en `.env`/gestionnaire de secrets ; endpoints cron bearer-gardés ; RBAC appliqué **côté serveur** sur chaque action (pas seulement l'UI) ; un admin ne peut pas se verrouiller lui-même (anti-lockout).
 
 ---
@@ -506,3 +603,9 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
 | « Impossible de déchiffrer les identifiants Facebook/Instagram enregistrés… » (envoi ou « Tester la connexion ») | `CREDENTIALS_ENCRYPTION_KEY` a changé depuis l'enregistrement des identifiants de ce canal (rotation accidentelle, ou un seul champ ressaisi après une rotation — voir l'avertissement en §2). Sur `/settings/social/facebook`/`instagram` : **« Supprimer »** puis ressaisir **tous** les champs d'identifiants du canal, pas seulement celui qui semble en cause — voir la procédure de récupération complète en §2. Un envoi automatique en échec pour cette raison n'écrit ni jeton ni clé dans `lastError` ; le message reste identique à celui affiché ici. |
 | « Tester la connexion » échoue avec une erreur Graph autre qu'un jeton expiré | Le plus souvent : App Review Meta pas encore passée (permissions encore limitées aux rôles admin/testeur, §2 point 2) ou identifiant de Page/IG User ID incorrect. Le détail affiché reprend le message Graph d'origine. |
 | Envoi Instagram qui échoue à l'étape du conteneur (« statut : ERROR »/« délai d'attente dépassé ») | L'image source (`featuredImageUrl` ou le rendu du gabarit) doit être accessible publiquement en HTTPS ; Instagram met parfois plus de temps que le sondage borné (~4,5 min pire cas, `lib/diffusion/meta/instagram.ts`) ne l'anticipe — réessayer l'envoi. Voir §6.5 pour le raisonnement derrière `DIFFUSION_STALE_PENDING_MINUTES`. |
+| « Le jeton d'accès LinkedIn a expiré ou n'est plus valide » (envoi ou « Tester la connexion ») | `401` LinkedIn — le jeton stocké n'authentifie plus (récurre environ tous les 60 jours, aucun renouvellement automatique). Régénérer un jeton via le Token Generator du portail développeur (§2, « Application LinkedIn », point 4) et l'enregistrer sur `/settings/social/linkedin`, puis « Tester la connexion » avant de réessayer un envoi. |
+| « LinkedIn a refusé la publication (accès refusé, 403) » | Différent d'un jeton expiré : soit l'application n'a pas (ou plus) la permission `w_organization_social`, soit le compte propriétaire du jeton n'est pas administrateur de la Page LinkedIn (§2, « Application LinkedIn », point 2). Régénérer le jeton ne corrige aucun des deux cas — vérifier la permission accordée et le rôle du compte sur la Page. |
+| « Impossible de déchiffrer les identifiants LinkedIn enregistrés… » (envoi ou « Tester la connexion ») | Même cause et même procédure que pour Facebook/Instagram ci-dessus — voir la procédure de récupération complète en §2. Sur `/settings/social/linkedin` : **« Supprimer »** puis ressaisir l'URN de l'organisation *et* le jeton d'accès, pas seulement celui qui semble en cause. |
+| « LinkedIn a refusé la requête : le quota quotidien de l'API semble épuisé (429) » | Le palier de développement de la Community Management API plafonne à 500 requêtes par application et par jour, et une publication en consomme au moins quatre — jusqu'à 13 si le sondage de l'image se répète (§2, « Application LinkedIn », point 5). Réessayer le lendemain, ou demander le passage au palier standard (screencast requis, délai). |
+| Envoi LinkedIn qui échoue à l'étape du traitement de l'image (« PROCESSING_FAILED »/« délai d'attente dépassé ») | `PROCESSING_FAILED` : LinkedIn a rejeté l'image elle-même (format/poids), pas le jeton — vérifier le rendu produit par le studio. Délai dépassé : LinkedIn met parfois plus de temps que le sondage borné (~5,1 min pire cas théorique, `lib/diffusion/linkedin/linkedin.ts` — intervalle et nombre de tentatives non confirmés contre un vrai compte, spec D7 §8 risque 1) ne l'anticipe — réessayer l'envoi. Voir §6.5 pour le raisonnement derrière `DIFFUSION_STALE_PENDING_MINUTES`. |
+| « Tester la connexion » LinkedIn échoue avec une erreur autre qu'un jeton expiré | Le plus souvent : accès Community Management pas encore accordé (palier de développement en cours d'examen, §2 point 3), URN d'organisation incorrecte ou mal formée, ou compte non administrateur de la Page. Le détail affiché reprend le message LinkedIn d'origine. Un test réussi ne garantit pas que la publication est autorisée — voir §8. |

@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, WifiOff, Share2, X } from "lucide-react";
+import { AlertTriangle, WifiOff, Share2, Clock, X } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import type { Alert } from "@/lib/queries/alerts";
@@ -11,11 +11,18 @@ const ALERT_ICON: Record<AlertType, typeof AlertTriangle> = {
   run_failed: AlertTriangle,
   feed_dark: WifiOff,
   diffusion_blocked: Share2,
+  // Task 2 (D7 spec §4) — token_expiring: distinct from diffusion_blocked's Share2 (a send that
+  // already failed) since this is a heads-up before anything has actually broken.
+  token_expiring: Clock,
 };
 const ALERT_HREF: Record<AlertType, string> = {
   run_failed: "/runs",
   feed_dark: "/settings/feeds",
   diffusion_blocked: "/settings/social",
+  // Same target as diffusion_blocked: the detail text already names the specific channel/date, and
+  // entityId is null for this type (see lib/diffusion/scheduler.ts's own comment on why), so there
+  // is no per-alert deep link to build — the channel list is where an admin fixes it either way.
+  token_expiring: "/settings/social",
 };
 
 /**

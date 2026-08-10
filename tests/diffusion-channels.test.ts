@@ -90,7 +90,7 @@ describe("StubChannel.send — no network call (D1 §2)", () => {
   // credentials refusal happens before any HTTP call (see that channel's own dedicated test file,
   // e.g. tests/diffusion-facebook.test.ts, for the full behavior). This still exercises the real
   // registry wiring for every channel, not just StubChannel directly.
-  const REAL_ADAPTER_CHANNELS: readonly Channel[] = ["facebook", "instagram"]; // grows as further channels land
+  const REAL_ADAPTER_CHANNELS: readonly Channel[] = ["facebook", "instagram", "linkedin"]; // grows as further channels land
 
   it("every registered channel's send() makes no raw network call — fetch call count stays zero (exercises the real registry wiring, not just the class directly)", async () => {
     realFetch = globalThis.fetch;

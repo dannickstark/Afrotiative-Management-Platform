@@ -339,7 +339,7 @@ export const pipelineSettings = pgTable("pipeline_settings", {
 // single associated entity.
 export const alerts = pgTable("alerts", {
   id: uuid("id").primaryKey().defaultRandom(),
-  type: text("type").notNull(), // 'run_failed' | 'feed_dark' | 'diffusion_blocked' — see lib/alerts/notify.ts's AlertType
+  type: text("type").notNull(), // 'run_failed' | 'feed_dark' | 'diffusion_blocked' | 'token_expiring' — see lib/alerts/notify.ts's AlertType
   title: text("title").notNull(), // French, short — e.g. "Exécution du pipeline échouée"
   detail: text("detail").notNull(), // French, one-sentence specifics (counts / feed name)
   entityId: uuid("entity_id"), // the run or feed id this alert is about
@@ -444,6 +444,14 @@ export const socialChannelSettings = pgTable("social_channel_settings", {
   // lib/diffusion/settings-core.ts's SocialChannelSettings type, which omits it). Cleared back to
   // null by "Supprimer" alongside `credentials`.
   credentialsSetAt: timestamp("credentials_set_at"),
+  // ---- Task 2 (D7): token-expiry tracking (spec §4) ----
+  // Plaintext, deliberately OUTSIDE `credentials`: a date is not a secret, and the settings form
+  // must display/edit it directly (lib/diffusion/settings-core.ts's SocialChannelSettings type
+  // therefore keeps it, unlike the encrypted blob it omits). Neither Meta nor LinkedIn exposes an
+  // expiry on a cheap read, so this is TRACKED, not discovered: setChannelCredentialsCore defaults
+  // it to now + 60 days on every credential write, and an admin can correct it here from LinkedIn's
+  // token generator or Meta's Access Token Debugger. Null until credentials have ever been saved.
+  tokenExpiresAt: timestamp("token_expires_at"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

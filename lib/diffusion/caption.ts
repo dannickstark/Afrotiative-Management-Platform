@@ -7,17 +7,44 @@
 // through on throw/empty output) — the pipeline already runs credential-free via this chain, and
 // this module must too (Task 4 brief: "fall back deterministically... rather than erroring").
 import { generateText } from "ai";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { buildModel } from "@/lib/ai/providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
-import { db, articles, wpCategories } from "@/db";
+import { db, articles, wpCategories, distributions } from "@/db";
 import { getChannelSettings } from "./settings-core";
+import { getWpConfig } from "@/lib/wp/config";
+import { wpPostUrl } from "@/lib/wp/post-url";
 import type { Channel } from "@/lib/studio";
 
 export type GenerateCaptionInput = { articleId: string; channel: Channel };
 export type GenerateCaptionResult = { ok: true; caption: string } | { ok: false; message: string };
 
 const ELLIPSIS = "…";
+
+// D7 Task 5 (spec §2) — the blank line between the generated text and the appended permalink.
+// Kept deliberately plain: spec §2 shows a blank line, and Task 4's linkedin.ts already strips
+// EVERY URL anywhere in the caption to derive alt text — exotic separator formatting would only
+// interact with that stripping for no benefit.
+const URL_SEPARATOR = "\n\n";
+
+// LinkedIn only (spec §2, "Scope of the change") — Facebook and Instagram captions are untouched:
+// links are not clickable on Instagram, and Facebook's behaviour is deliberately left as D2 shipped
+// it. Returns null (not an error) whenever there is nothing to append: article not yet published to
+// WordPress, or WordPress itself not configured — the exact same graceful absence
+// lib/studio/bindings.ts's articleTokenValues already implements for the {{article.url}} token,
+// which this derivation deliberately mirrors rather than reinventing.
+async function articlePermalink(articleId: string, channel: Channel): Promise<string | null> {
+  if (channel !== "linkedin") return null;
+
+  const [dist] = await db
+    .select({ externalId: distributions.externalId })
+    .from(distributions)
+    .where(and(eq(distributions.articleId, articleId), eq(distributions.channel, "wordpress")))
+    .limit(1);
+
+  const baseUrl = getWpConfig()?.baseUrl ?? null;
+  return wpPostUrl(baseUrl, dist?.externalId ?? null);
+}
 
 // PURE — defensive backstop applied to EVERY caption this module returns (real provider output
 // AND the deterministic fallback alike): "a model does not reliably obey a character limit" (Task
@@ -102,11 +129,42 @@ export async function generateCaption({ articleId, channel }: GenerateCaptionInp
 
   const settings = await getChannelSettings(channel);
   const maxChars = settings.captionMaxChars;
-  const fallback = () => truncateCaption(row.title, maxChars);
+
+  // D7 Task 5 (spec §2, "the crux") — the permalink's length is reserved BEFORE truncation, never
+  // appended after it: appending after the clamp would produce either a caption over budget or a
+  // truncated link, depending on which side of the clamp the append landed on. `captionBudget` is
+  // what every truncateCaption call below actually clamps against; `finalize` then appends the
+  // (untouched, never-truncated) permalink afterward. When there is no permalink (not LinkedIn, or
+  // the article has no WordPress distribution yet), captionBudget === maxChars and finalize is a
+  // no-op passthrough to truncateCaption — this is what keeps Facebook/Instagram captions untouched.
+  const permalink = await articlePermalink(articleId, channel);
+  // Issue 6 (D7 final review) — when the permalink ALONE does not fit inside maxChars (a tiny
+  // captionMaxChars, or an unusually long permalink), the previous `Math.max(0, …)` floor let the
+  // reserved budget hit exactly 0. truncateCaption(text, 0) then returns "", and finalize still
+  // appended the untouched permalink anyway — producing "\n\n<permalink>", LONGER than maxChars, the
+  // exact invariant this budget dance exists to guarantee (spec §2). Reproduced concretely: maxChars
+  // = 20, a 30-char permalink → budget 0 → final caption 32 chars. LinkedIn's own captionLimits.min
+  // is 1, so an admin reaches this from the settings form alone, no LLM misbehavior required. Fixed
+  // the only way that keeps the invariant unconditionally: when the permalink cannot fit even on its
+  // own, it is not appended at all — the caption falls back to a plain, full-budget truncation,
+  // exactly like the "no permalink" case (not LinkedIn, or no WordPress distribution yet).
+  const permalinkFits = permalink !== null && maxChars - (permalink.length + URL_SEPARATOR.length) > 0;
+  const linkToAppend = permalinkFits ? permalink : null;
+  const captionBudget = linkToAppend ? maxChars - (linkToAppend.length + URL_SEPARATOR.length) : maxChars;
+  const finalize = (text: string): string => {
+    const truncated = truncateCaption(text, captionBudget);
+    return linkToAppend ? `${truncated}${URL_SEPARATOR}${linkToAppend}` : truncated;
+  };
+
+  const fallback = () => finalize(row.title);
 
   const cfg = getPipelineConfig();
   const prompt = buildCaptionPrompt({
-    title: row.title, excerpt: row.excerpt, category: categoryName, maxChars,
+    // captionBudget (not the raw maxChars) — when a permalink will be appended, the model should be
+    // told the SAME, already-reduced target its own output is actually clamped against; asking it
+    // for the full channel budget only to truncate the result further would routinely mangle prose
+    // that would otherwise have fit comfortably in the room actually available to it.
+    title: row.title, excerpt: row.excerpt, category: categoryName, maxChars: captionBudget,
     promptOverride: settings.captionPrompt,
   });
 
@@ -117,7 +175,7 @@ export async function generateCaption({ articleId, channel }: GenerateCaptionInp
       try {
         const { text } = await generateText({ model, prompt });
         const caption = text.trim();
-        if (caption.length > 0) return { ok: true, caption: truncateCaption(caption, maxChars) };
+        if (caption.length > 0) return { ok: true, caption: finalize(caption) };
         break; // empty output → next provider
       } catch (e) {
         console.warn(`[diffusion] fournisseur ${name} a échoué pour la légende de l'article ${articleId} : ${(e as Error).message}`);

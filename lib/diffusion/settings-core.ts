@@ -10,23 +10,43 @@ import { db, socialChannelSettings } from "@/db";
 import { eq } from "drizzle-orm";
 import { SOCIAL_CHANNELS } from "./channels";
 import { CHANNELS, type Channel } from "@/lib/studio";
-import { getCryptoConfig, encryptSecret, decryptSecret } from "./crypto";
+import { getCryptoConfig, encryptSecret, decryptSecret, DecryptionFailedError } from "./crypto";
+import { validateChannelCredentialFields } from "@/lib/validation";
 
-// Every column EXCEPT the encrypted `credentials` blob. That blob never needs to leave the server:
-// nothing that renders UI or crosses a "use server" Server Action boundary needs the ciphertext
-// itself — only whether one is set (`credentialsSetAt`, still on this type) and, server-side only,
-// its DECRYPTED value (getDecryptedCredentials, below — a completely separate function, deliberately
-// not reachable from anything that returns this type). Omitting the field here means every function
-// in this module that returns `SocialChannelSettings` physically strips `credentials` off the row
-// before returning it (see omitCredentials) — a caller can't forget to sanitize because there's
-// nothing to remember; the type itself has no ciphertext-shaped hole to leak through.
-export type SocialChannelSettings = Omit<typeof socialChannelSettings.$inferSelect, "credentials">;
+// Task 2 (D7 spec §4) — both Meta's and LinkedIn's tokens are documented as ~60-day-lived; used by
+// setChannelCredentialsCore below to seed tokenExpiresAt on every credential write.
+const TOKEN_EXPIRY_DEFAULT_DAYS = 60;
+
+// Every column EXCEPT the encrypted `credentials` blob, PLUS `credentialKeys` (D7 credential debt,
+// spec §5 item 1) — the field NAMES currently present in that blob, derived below in omitCredentials.
+// A key list is not sensitive (unlike a value): it is what lets a caller tell "one of two fields
+// saved" apart from "both saved" WITHOUT ever seeing what was typed. That blob itself never needs to
+// leave the server: nothing that renders UI or crosses a "use server" Server Action boundary needs
+// the ciphertext — only which keys are set (`credentialKeys`), WHEN they were last written
+// (`credentialsSetAt`, still on this type, unchanged meaning) and, server-side only, the DECRYPTED
+// values (getDecryptedCredentials, below — a completely separate function, deliberately not
+// reachable from anything that returns this type). Omitting `credentials` here means every function
+// in this module that returns `SocialChannelSettings` physically strips the blob off the row before
+// returning it (see omitCredentials) — a caller can't forget to sanitize because there's nothing to
+// remember; the type itself has no ciphertext-shaped hole to leak through.
+export type SocialChannelSettings = Omit<typeof socialChannelSettings.$inferSelect, "credentials"> & {
+  credentialKeys: string[];
+};
 
 type FullSettingsRow = typeof socialChannelSettings.$inferSelect;
 
 function omitCredentials(row: FullSettingsRow): SocialChannelSettings {
-  const { credentials: _credentials, ...rest } = row;
-  return rest;
+  const { credentials, ...rest } = row;
+  return { ...rest, credentialKeys: Object.keys(credentials ?? {}) };
+}
+
+// Presence = EVERY declared field, not any one of them (D2+D3 final review, M6). A channel with no
+// declared fields (whatsapp, x, tiktok today) is never "configured": an empty list must not report
+// as complete, which `every` on an empty array would.
+export function hasAllCredentials(channel: Channel, settings: SocialChannelSettings): boolean {
+  const declared = SOCIAL_CHANNELS[channel].credentialFields;
+  if (declared.length === 0) return false;
+  return declared.every((f) => settings.credentialKeys.includes(f.key));
 }
 
 // D1's placeholder baseline for a channel's settings row before an admin has ever visited
@@ -101,11 +121,18 @@ export async function getAllChannelSettings(): Promise<SocialChannelSettings[]> 
 // server-set (below). Credentials are a SEPARATE write path (setChannelCredentialsCore /
 // deleteChannelCredentialsCore) — deliberately excluded here so this patch can never accidentally
 // carry a plaintext secret through a code path that wasn't built to encrypt it.
+//
+// `tokenExpiresAt` (Task 2, D7 spec §4) rides this SAME patch, not the credentials one, precisely
+// BECAUSE it is not a secret: setChannelCredentialsCore already defaults it to now + 60 days on
+// every credential write (its own comment below), and this is the separate path that lets an admin
+// CORRECT that estimate afterward from LinkedIn's token generator or Meta's Access Token Debugger,
+// without re-submitting any credential value.
 export type UpdateChannelSettingsPatch = Partial<Pick<
   SocialChannelSettings,
   | "enabled" | "captionMaxChars" | "captionPrompt"
   | "autoEnabled" | "autoIntervalHours" | "autoMaxBacklogDays"
   | "autoWindowStartHour" | "autoWindowEndHour"
+  | "tokenExpiresAt"
 >>;
 
 export type UpdateChannelSettingsResult =
@@ -124,6 +151,17 @@ export async function updateChannelSettingsCore(
   channel: Channel,
   patch: UpdateChannelSettingsPatch,
 ): Promise<UpdateChannelSettingsResult> {
+  // D7 final review, Important 2 — spec §5 item 4's channel-validity guard landed on
+  // setChannelCredentialsCore alone; this writer and deleteChannelCredentialsCore (below) reach
+  // getOrCreateSettingsRow → defaultsFor → SOCIAL_CHANNELS[channel].captionLimits.default on an
+  // unknown key, a raw TypeError that crosses the "use server" boundary
+  // (lib/actions/diffusion-settings-actions.ts) and gets redacted to a generic non-French error by
+  // Next — exactly what this guard exists to prevent. Checked before anything else, same message
+  // shape as setChannelCredentialsCore's own guard.
+  if (!CHANNELS.includes(channel)) {
+    return { ok: false, message: `Canal social invalide : « ${channel} ».` };
+  }
+
   if (patch.captionMaxChars !== undefined) {
     const { min, max } = SOCIAL_CHANNELS[channel].captionLimits;
     const { label } = SOCIAL_CHANNELS[channel];
@@ -182,22 +220,87 @@ const NO_KEY_MESSAGE =
 
 // Encrypts every value in `values` and MERGES them into the channel's existing `credentials` blob —
 // a key not present in `values` keeps whatever it was already storing (e.g. rotating just the
-// access token without re-submitting the page id). Refuses UP FRONT, before any encryption or DB
-// write, when getCryptoConfig() is null: this is the brief's "a missing key must disable the
-// feature, not crash" applied to the actual write path, in French, exactly like
-// updateChannelSettingsCore's captionMaxChars refusal above.
+// access token without re-submitting the page id).
+//
+// Order of guards, each cheaper/more fundamental than the next, none skippable by the ones after it:
+//  1. `channel` itself must be a real entry in CHANNELS (D7 credential debt, spec §5 item 4) —
+//     refused in French BEFORE touching SOCIAL_CHANNELS[channel] (an unknown key there is
+//     `undefined`, and reading `.credentialFields` off it would throw a raw TypeError across the
+//     Server Action boundary instead of a clean message).
+//  2. The incoming field NAMES/lengths are validated against that channel's OWN credentialFields
+//     (spec §5 items 3/M8/M9) — lib/validation.ts's validateChannelCredentialFields, since it needs
+//     the channel to know which keys are legal.
+//  3. getCryptoConfig() must be configured — the brief's "a missing key must disable the feature,
+//     not crash" applied to the actual write path, in French, exactly like
+//     updateChannelSettingsCore's captionMaxChars refusal above.
+//  4. (below) every EXISTING entry must still decrypt before this write merges a new one in.
 export async function setChannelCredentialsCore(
   channel: Channel,
   values: Record<string, string>,
 ): Promise<SetCredentialsResult> {
+  if (!CHANNELS.includes(channel)) {
+    return { ok: false, message: `Canal social invalide : « ${channel} ».` };
+  }
+
+  const fieldsCheck = validateChannelCredentialFields(
+    SOCIAL_CHANNELS[channel].credentialFields.map((f) => f.key),
+    values,
+  );
+  if (!fieldsCheck.ok) return fieldsCheck;
+
   if (!getCryptoConfig()) return { ok: false, message: NO_KEY_MESSAGE };
 
   const current = await getOrCreateSettingsRow(channel);
+
+  // M7 (D2+D3 final review) — refuse to write if the EXISTING blob no longer decrypts under the
+  // active key (the key was rotated without re-entering credentials, or an earlier partial re-save
+  // already left a mixed-key blob). Merging a NEW value in under a DIFFERENT key than the rest of
+  // the blob was encrypted with would produce a blob where SOME fields decrypt and others throw
+  // forever — checked BEFORE any encryption or DB write, so a healthy blob (every entry decrypts)
+  // pays only the cost of the check, and a broken one is stopped from getting worse.
+  if (current.credentials) {
+    for (const ciphertext of Object.values(current.credentials)) {
+      try {
+        decryptSecret(ciphertext);
+      } catch (err) {
+        if (!(err instanceof DecryptionFailedError)) throw err;
+        return {
+          ok: false,
+          message:
+            "Les identifiants déjà enregistrés ne peuvent plus être déchiffrés (la clé de chiffrement a changé ?). " +
+            "Utilisez « Supprimer » puis ressaisissez TOUS les champs.",
+        };
+      }
+    }
+  }
+
   const merged: Record<string, string> = { ...(current.credentials ?? {}) };
   for (const [key, value] of Object.entries(values)) merged[key] = encryptSecret(value);
 
+  // Task 2 (D7 spec §4) — every credential write seeds tokenExpiresAt to now + 60 days WHEN NOTHING
+  // IS STORED YET (current.tokenExpiresAt === null): a channel that has never had a date recorded
+  // gets a baseline estimate, so the token-expiry alert (warnIfTokenExpiring, scheduler.ts) has
+  // something to compare against from the very first save, rather than staying silent forever.
+  //
+  // Correction (D7 final review, Important 1): an earlier version of this line reset
+  // tokenExpiresAt to now + 60 days on EVERY credential write, unconditionally. That is only ever
+  // safe to round LATER than reality — 60 days is documented as LinkedIn's/Meta's MAXIMUM realistic
+  // token life, never a minimum — and the alert this field drives is the ONLY heads-up before sends
+  // start failing with 401. Two concrete orderings hit the old unconditional reset: an admin
+  // recording the REAL expiry date (via updateChannelSettingsCore's own tokenExpiresAt field — both
+  // the setup guide's "Générer le jeton" step, lib/diffusion/setup-guide.ts, and
+  // docs/DEPLOYMENT.md §2 point 4 instruct exactly that) BEFORE ever saving credentials for the
+  // first time; and a LATER, single-field write that is not a token change at all (e.g. fixing a
+  // typo'd organizationUrn) silently discarding an already-correct date. Once ANY value is
+  // stored — this function's own default, or an admin's explicit correction — a further credential
+  // write no longer touches it; the admin corrects it explicitly via updateChannelSettingsCore, the
+  // same path the setup guide already points them at on every real token rotation. Worst case if an
+  // admin forgets to re-enter the date after a genuine rotation: a stale, too-EARLY date lingers and
+  // over-warns — a nuisance, not a missed 401, i.e. the safe direction to round in.
+  const tokenExpiresAt = current.tokenExpiresAt ?? new Date(Date.now() + TOKEN_EXPIRY_DEFAULT_DAYS * 24 * 60 * 60 * 1000);
+
   const [updated] = await db.update(socialChannelSettings)
-    .set({ credentials: merged, credentialsSetAt: new Date(), updatedAt: new Date() })
+    .set({ credentials: merged, credentialsSetAt: new Date(), tokenExpiresAt, updatedAt: new Date() })
     .where(eq(socialChannelSettings.channel, channel))
     .returning();
 
@@ -208,9 +311,22 @@ export async function setChannelCredentialsCore(
 // (not a single-field delete: write-only inputs never show which fields are currently set, so a
 // full-channel "start over" is the only UI action that's unambiguous to the admin).
 export async function deleteChannelCredentialsCore(channel: Channel): Promise<SetCredentialsResult> {
+  // D7 final review, Important 2 — same guard as updateChannelSettingsCore above, and for the exact
+  // same reason: an unknown channel would otherwise reach getOrCreateSettingsRow → defaultsFor →
+  // SOCIAL_CHANNELS[channel].captionLimits.default and throw a raw TypeError across the guarded
+  // "use server" action's boundary instead of this clean French message.
+  if (!CHANNELS.includes(channel)) {
+    return { ok: false, message: `Canal social invalide : « ${channel} ».` };
+  }
+
   await getOrCreateSettingsRow(channel);
   const [updated] = await db.update(socialChannelSettings)
-    .set({ credentials: null, credentialsSetAt: null, updatedAt: new Date() })
+    // tokenExpiresAt cleared alongside credentials/credentialsSetAt (D7 final review, Important 2,
+    // "while you are there") — left alone, a channel with every credential just cleared would keep
+    // showing a (now meaningless) expiry date on /settings/social/[channel], and the token-expiry
+    // alert (warnIfTokenExpiring, scheduler.ts) already short-circuits on hasAllCredentials first, so
+    // clearing it here loses no real signal.
+    .set({ credentials: null, credentialsSetAt: null, tokenExpiresAt: null, updatedAt: new Date() })
     .where(eq(socialChannelSettings.channel, channel))
     .returning();
   return { ok: true, settings: omitCredentials(updated) };
@@ -234,9 +350,10 @@ export async function deleteChannelCredentialsCore(channel: Channel): Promise<Se
 // docs/DEPLOYMENT.md §2's recovery procedure) is NOT caught here. It reaches decryptSecret
 // (lib/diffusion/crypto.ts), whose auth-tag check then fails and THROWS DecryptionFailedError —
 // this function does not catch it, so it propagates to the caller. Every current caller
-// (lib/diffusion/meta/facebook.ts's/instagram.ts's send(), lib/diffusion/meta/connection-test.ts)
-// wraps its own call to this function in a try/catch for exactly that reason; a new caller must do
-// the same, or call getCryptoConfig() itself first the way this comment used to (wrongly) imply
+// (lib/diffusion/meta/facebook.ts's/instagram.ts's send(), lib/diffusion/linkedin/linkedin.ts's
+// send(), lib/diffusion/connection-test.ts — moved out of meta/ in Task 6, D7) wraps its own call
+// to this function in a try/catch for exactly that reason; a new caller must do the same, or call
+// getCryptoConfig() itself first the way this comment used to (wrongly) imply
 // getDecryptedCredentials already did for it.
 export async function getDecryptedCredentials(channel: Channel): Promise<Record<string, string> | null> {
   const row = await getOrCreateSettingsRow(channel);

@@ -207,6 +207,10 @@ export const socialChannelSettingsSchema = z.object({
   autoWindowEndHour: z.number().int("Doit être un nombre entier.")
     .min(0, "L'heure de fin de fenêtre doit être comprise entre 0 et 23.")
     .max(23, "L'heure de fin de fenêtre doit être comprise entre 0 et 23.").optional(),
+  // Task 2 (D7 spec §4) — an admin correcting the estimate setChannelCredentialsCore defaulted to
+  // now + 60 days (LinkedIn's token generator / Meta's Access Token Debugger show the real date).
+  // Nullable: clearing the field means "expiry unknown", not "never expires".
+  tokenExpiresAt: z.date().nullable().optional(),
 });
 export type SocialChannelSettingsInput = z.infer<typeof socialChannelSettingsSchema>;
 
@@ -224,6 +228,56 @@ export const channelCredentialsSchema = z.record(
   z.string().min(1, "La valeur d'un identifiant ne peut pas être vide."),
 ).refine((v) => Object.keys(v).length > 0, { message: "Aucun identifiant à enregistrer." });
 export type ChannelCredentialsInput = z.infer<typeof channelCredentialsSchema>;
+
+// D7 credential debt (D2+D3 final review, M8/M9) — channelCredentialsSchema above validates SHAPE
+// only (a non-empty map of non-empty strings) because it has no channel argument, so it cannot know
+// which field NAMES are legal. setChannelCredentialsCore (lib/diffusion/settings-core.ts) DOES know
+// the channel, and calls this with that channel's own declared field keys
+// (SOCIAL_CHANNELS[channel].credentialFields, lib/diffusion/channels.ts) to catch two things
+// channelCredentialsSchema alone cannot: a key that isn't declared for this channel (M8 — a typo, or
+// a value copy-pasted from a different channel's form) and a value over 4096 characters (M9 —
+// generous for a page id / access token / URN, but not unbounded: an operator pasting an entire file
+// into a credential field must be refused, not silently stored as-is). Same `{ ok, message }` shape
+// as validateCategoryColor below — a plain function, not a zod schema, because the set of legal keys
+// is only known at CALL time (one channel's credentialFields), not something a static zod shape can
+// express without being rebuilt per channel anyway.
+const CHANNEL_CREDENTIAL_VALUE_MAX_LENGTH = 4096;
+
+export function validateChannelCredentialFields(
+  declaredKeys: readonly string[],
+  values: Record<string, string>,
+): { ok: true } | { ok: false; message: string } {
+  // A channel with NO declared fields yet (lib/diffusion/channels.ts's `credentialFields: []` —
+  // today whatsapp/x/tiktok) has no known shape to validate a key NAME against: that `[]` means
+  // "this channel's credential schema isn't defined in the registry yet", not "no field is ever
+  // legal". Rejecting every key for such a channel would also reject the field names its own future
+  // adapter task will introduce.
+  //
+  // Correction (D7 final review, Issue 12): this comment used to also list "linkedin" here and cite
+  // tests/diffusion-crypto.test.ts's "linkedin" fixture as this carve-out's justification — true when
+  // D2+D3 wrote it (linkedin.credentialFields really was `[]` back then), but D7 Tasks 4/6 gave
+  // linkedin its own real declared keys (organizationUrn/accessToken, lib/diffusion/channels.ts), and
+  // that same fixture now saves under THOSE real keys. It no longer exercises this carve-out at all —
+  // linkedin is simply a channel with a full, real credential schema now, exactly like
+  // facebook/instagram. The length bound below still applies regardless — that one is a universal
+  // sanity bound, not tied to a specific field name.
+  if (declaredKeys.length > 0) {
+    for (const key of Object.keys(values)) {
+      if (!declaredKeys.includes(key)) {
+        return { ok: false, message: `Champ d'identifiant inconnu pour ce canal : « ${key} ».` };
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (value.length > CHANNEL_CREDENTIAL_VALUE_MAX_LENGTH) {
+      return {
+        ok: false,
+        message: `La valeur du champ « ${key} » dépasse la longueur maximale autorisée (${CHANNEL_CREDENTIAL_VALUE_MAX_LENGTH} caractères).`,
+      };
+    }
+  }
+  return { ok: true };
+}
 
 // wp_categories.color — the {{category.color}} token setCategoryColor writes (V2 Task 3, closing
 // the V1-documented gap: the column and the render read existed, nothing could write it). Strict

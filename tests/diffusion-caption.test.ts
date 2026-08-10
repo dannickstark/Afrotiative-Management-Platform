@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, mock, spyOn } from "bun:test";
-import { db, articles, wpCategories, socialChannelSettings } from "@/db";
-import { eq } from "drizzle-orm";
+import { describe, it, test, expect, beforeAll, afterAll, afterEach, beforeEach, mock, spyOn } from "bun:test";
+import { db, articles, wpCategories, socialChannelSettings, distributions } from "@/db";
+import { eq, inArray } from "drizzle-orm";
 import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
-import { getChannelSettings } from "@/lib/diffusion/settings-core";
+import { getChannelSettings, updateChannelSettingsCore } from "@/lib/diffusion/settings-core";
 
 // This channel is this file's EXCLUSIVE static social_channel_settings scope — see the disjoint-
 // scope convention documented in tests/studio-fixtures.ts and followed informally by
@@ -235,5 +235,126 @@ describe("generateCaption (D1 §3, Task 4)", () => {
   it("returns ok:false for a non-existent article", async () => {
     const r = await generateCaption({ articleId: "00000000-0000-0000-0000-000000000000", channel: TEST_CHANNEL });
     expect(r.ok).toBe(false);
+  });
+});
+
+// D7 Task 5 (spec §2) — the article permalink appended to the LinkedIn caption. "linkedin" is this
+// describe block's own EXCLUSIVE static social_channel_settings scope (same disjoint-scope
+// convention as TEST_CHANNEL's header comment above): the third test below writes captionMaxChars
+// through updateChannelSettingsCore, so the row is reset to a known-absent state in beforeAll and
+// wiped again after every test (afterEach) and at the end (afterAll) — mirrors
+// tests/diffusion-linkedin.test.ts's own clearLinkedInCredentials, which does the exact same thing
+// for the exact same channel key for the exact same reason (another file's own use of "linkedin"
+// settings must never see this file's captionMaxChars: 300 leak in, and vice versa).
+//
+// wpPostUrl (lib/wp/post-url.ts) needs getWpConfig()'s three env vars, which test-setup.ts
+// deliberately does NOT load from .env.local (DB tests run credential-free by default) — posed here
+// exactly as tests/studio-bindings.test.ts already does for the same helper.
+describe("generateCaption — permalien LinkedIn dans la légende (D7 spec §2, Task 5)", () => {
+  const LINKEDIN = "linkedin" as const;
+  const WP_ENV = { WP_BASE_URL: "https://wp.example.com", WP_USER: "u", WP_APP_PASSWORD: "p" };
+  const wpEnvSnapshot: Record<string, string | undefined> = {};
+  const articleIds: string[] = [];
+
+  async function resetLinkedInSettings() {
+    await db.delete(socialChannelSettings).where(eq(socialChannelSettings.channel, LINKEDIN));
+  }
+
+  beforeAll(async () => {
+    for (const k of Object.keys(WP_ENV)) {
+      wpEnvSnapshot[k] = process.env[k];
+      process.env[k] = (WP_ENV as Record<string, string>)[k];
+    }
+    await resetLinkedInSettings();
+  });
+
+  afterEach(async () => {
+    await resetLinkedInSettings();
+    if (articleIds.length) {
+      await db.delete(articles).where(inArray(articles.id, articleIds)); // cascade: distributions
+      articleIds.length = 0;
+    }
+  });
+
+  afterAll(async () => {
+    await resetLinkedInSettings();
+    for (const k of Object.keys(WP_ENV)) {
+      if (wpEnvSnapshot[k] === undefined) delete process.env[k]; else process.env[k] = wpEnvSnapshot[k];
+    }
+  });
+
+  async function seedArticleWithWordpressDistribution(o: { externalId: string; title?: string }): Promise<string> {
+    const [a] = await db.insert(articles).values({
+      title: o.title ?? "Un article déjà publié sur WordPress",
+      bodyHtml: "<p>x</p>",
+      status: "approved",
+    }).returning();
+    articleIds.push(a.id);
+    await db.insert(distributions).values({
+      articleId: a.id, channel: "wordpress", status: "sent", externalId: o.externalId,
+    });
+    return a.id;
+  }
+
+  async function seedArticleWithoutWordpressDistribution(): Promise<string> {
+    const [a] = await db.insert(articles).values({
+      title: "Un article jamais publié sur WordPress",
+      bodyHtml: "<p>x</p>",
+      status: "approved",
+    }).returning();
+    articleIds.push(a.id);
+    return a.id;
+  }
+
+  test("LinkedIn: the permalink is appended when the article is published to WordPress", async () => {
+    const id = await seedArticleWithWordpressDistribution({ externalId: "1234" });
+    const res = await generateCaption({ articleId: id, channel: "linkedin" });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.caption).toContain("/?p=1234");
+  });
+
+  test("LinkedIn: no WordPress distribution means no URL, and the send still works", async () => {
+    const id = await seedArticleWithoutWordpressDistribution();
+    const res = await generateCaption({ articleId: id, channel: "linkedin" });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.caption).not.toMatch(/https?:\/\//);
+  });
+
+  test("the URL is reserved BEFORE truncation — result within budget, link intact", async () => {
+    const id = await seedArticleWithWordpressDistribution({ externalId: "1234", title: "x".repeat(5000) });
+    await updateChannelSettingsCore("linkedin", { captionMaxChars: 300 });
+    const res = await generateCaption({ articleId: id, channel: "linkedin" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.caption.length).toBeLessThanOrEqual(300);
+      expect(res.caption).toContain("/?p=1234");   // the link is never what gets cut
+    }
+  });
+
+  // Issue 6 (D7 final review) — the reviewer's own repro: maxChars=20, a permalink of 30 chars (this
+  // fixture's WP_BASE_URL + externalId "1234" produces exactly "https://wp.example.com/?p=1234", 30
+  // characters). Before the fix, captionBudget clamped to 0, truncateCaption("", …) returned "", and
+  // finalize appended the untouched 30-char permalink anyway — a 32-char final caption, over the
+  // 20-char limit. This is the test that would FAIL if the `permalinkFits` guard were removed: the
+  // caption would then be 32 chars (over 20) and would contain the permalink.
+  test("Issue 6 — the permalink is never appended when it alone would not fit inside captionMaxChars", async () => {
+    const id = await seedArticleWithWordpressDistribution({ externalId: "1234" });
+    const settingsRes = await updateChannelSettingsCore("linkedin", { captionMaxChars: 20 });
+    expect(settingsRes.ok).toBe(true);
+
+    const res = await generateCaption({ articleId: id, channel: "linkedin" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.caption.length).toBeLessThanOrEqual(20); // the hard invariant (spec §2) — never exceeded
+      expect(res.caption).not.toMatch(/https?:\/\//); // the permalink itself must not survive, partially or otherwise
+    }
+  });
+
+  test("Facebook and Instagram captions are untouched", async () => {
+    const id = await seedArticleWithWordpressDistribution({ externalId: "1234" });
+    for (const channel of ["facebook", "instagram"] as const) {
+      const res = await generateCaption({ articleId: id, channel });
+      if (res.ok) expect(res.caption).not.toContain("/?p=1234");
+    }
   });
 });
