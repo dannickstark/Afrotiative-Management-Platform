@@ -7,7 +7,9 @@ import { TagsInput, type ArticleTag } from "./tags-input";
 import { SourcesList } from "./sources-list";
 import { ExcerptField } from "./excerpt-field";
 import { HistoryPanel } from "./history-panel";
+import { DiffusionPanel } from "./diffusion-panel";
 import type { ArticleDetail } from "@/lib/queries/article";
+import type { ChannelDiffusionState } from "@/lib/queries/diffusion";
 
 const SECTION_LABEL = "mb-1.5 text-xs font-medium text-muted-foreground";
 
@@ -18,7 +20,7 @@ const SECTION_LABEL = "mb-1.5 text-xs font-medium text-muted-foreground";
 // only renders + delegates to setters.
 export function SidePanel({
   article, image, onImageChange, categoryId, onCategoryChange, tags, onTagsChange, wpTagNames,
-  excerpt, onExcerptChange, readOnly,
+  excerpt, onExcerptChange, readOnly, diffusionChannels, canSendDiffusion, r2Configured,
 }: {
   article: ArticleDetail;
   image: ImageFields;
@@ -31,6 +33,9 @@ export function SidePanel({
   excerpt: string;
   onExcerptChange: (v: string) => void;
   readOnly: boolean;
+  diffusionChannels: ChannelDiffusionState[];
+  canSendDiffusion: boolean;
+  r2Configured: boolean;
 }) {
   return (
     <Card className="flex w-full shrink-0 flex-col overflow-hidden lg:w-80">
@@ -48,6 +53,25 @@ export function SidePanel({
             readOnly={readOnly}
           />
         </section>
+
+        {/* D1 §4 — "une carte par canal activé... sous les onglets image" : rendered directly below
+            ImagePanel's own tabs (Image originale / Aperçu final), not folded into that section —
+            each channel's diffusion state is independent of the article_image preview above it. */}
+        {diffusionChannels.length > 0 && (
+          <>
+            <Separator />
+            <section>
+              <p className={SECTION_LABEL}>Diffusion</p>
+              <DiffusionPanel
+                articleId={article.id}
+                isPublished={article.status === "published"}
+                canSend={canSendDiffusion}
+                r2Configured={r2Configured}
+                channels={diffusionChannels}
+              />
+            </section>
+          </>
+        )}
 
         <Separator />
 

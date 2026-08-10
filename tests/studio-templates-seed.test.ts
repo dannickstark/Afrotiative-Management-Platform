@@ -3,10 +3,10 @@ import { db, renderTemplates } from "@/db";
 import { and, eq, isNull, inArray } from "drizzle-orm";
 import { seedStudioTemplates } from "@/db/studio-templates";
 
-// Ce test travaille directement sur les TROIS portées réelles de db/studio-templates.ts :
+// Ce test travaille directement sur les QUATRE portées réelles de db/studio-templates.ts :
 // `seedStudioTemplates()` n'accepte aucune liste alternative de gabarits (STARTERS est un module-
 // privé fixe), donc c'est la seule façon de couvrir sa convergence réelle dans le dev DB partagé où
-// ces trois gabarits sont censés rester en place en permanence (§9 de la spec — « point de départ
+// ces quatre gabarits sont censés rester en place en permanence (§9 de la spec — « point de départ
 // à l'éditeur V2 »). Toute mutation faite ici (archivage) est restaurée dans afterAll.
 async function findActiveAt(context: string, channel: string | null) {
   const [row] = await db.select().from(renderTemplates).where(and(
@@ -52,24 +52,25 @@ afterAll(async () => {
 });
 
 describe("seedStudioTemplates", () => {
-  it("sème (ou retrouve) les trois gabarits, puis un second passage ne crée rien", async () => {
+  it("sème (ou retrouve) les quatre gabarits, puis un second passage ne crée rien", async () => {
     const first = await seedStudioTemplates();
     // Ne présume PAS que ce premier appel du fichier est le tout premier appel jamais fait dans ce
     // dev DB (db:studio-templates a déjà pu tourner avant cette suite) : l'invariant vrai dans les
-    // deux cas est que les trois portées existent APRÈS l'appel, créées ou déjà là.
-    expect(first.created + first.skipped).toBe(3);
+    // deux cas est que les quatre portées existent APRÈS l'appel, créées ou déjà là.
+    expect(first.created + first.skipped).toBe(4);
 
     const rows = await Promise.all([
       findActiveAt("article_image", null),
       findActiveAt("social_post", "facebook"),
       findActiveAt("social_post", "instagram"),
+      findActiveAt("social_post", "linkedin"),
     ]);
     for (const row of rows) expect(row).not.toBeNull();
 
-    // Deuxième passage : maintenant que les trois existent forcément (ci-dessus), le résultat est
+    // Deuxième passage : maintenant que les quatre existent forcément (ci-dessus), le résultat est
     // déterministe.
     const second = await seedStudioTemplates();
-    expect(second).toEqual({ created: 0, skipped: 3 });
+    expect(second).toEqual({ created: 0, skipped: 4 });
   });
 
   it("un gabarit archivé est réinstallé au passage suivant — convergence, pas seulement idempotence", async () => {
@@ -81,19 +82,19 @@ describe("seedStudioTemplates", () => {
 
     // Le gabarit "article_image" par défaut n'a plus AUCUNE ligne active à sa portée : le SELECT
     // d'existence (avec eq(archived, false), corrigé en revue) doit donc le considérer absent et le
-    // réinstaller — created: 1 pour lui, skipped: 2 pour les deux autres, inchangés.
+    // réinstaller — created: 1 pour lui, skipped: 3 pour les trois autres, inchangés.
     const r = await seedStudioTemplates();
     expect(r.created).toBe(1);
-    expect(r.skipped).toBe(2);
+    expect(r.skipped).toBe(3);
 
     const after = await findActiveAt("article_image", null);
     expect(after).not.toBeNull();
     expect(after!.id).not.toBe(before.id); // une NOUVELLE ligne, pas l'ancienne réactivée
     if (after) createdByThisTest.push(after.id);
 
-    // Un troisième passage retrouve maintenant les trois (le remplaçant + les deux jamais touchés) :
-    // plus rien à créer.
+    // Un troisième passage retrouve maintenant les quatre (le remplaçant + les trois jamais
+    // touchés) : plus rien à créer.
     const third = await seedStudioTemplates();
-    expect(third).toEqual({ created: 0, skipped: 3 });
+    expect(third).toEqual({ created: 0, skipped: 4 });
   });
 });

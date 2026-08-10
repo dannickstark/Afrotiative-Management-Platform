@@ -3,12 +3,17 @@ import { getPipelineSettings } from "@/lib/queries/settings";
 import { sendEmail } from "@/lib/email/resend";
 
 // ---- SP9a: alert creation + optional email notification ----
-// Called from two sites, both deep inside the pipeline runner's own best-effort machinery —
-// lib/pipeline/run.ts's executeRun finalize (run_failed) and lib/pipeline/feed-health.ts's
-// updateFeedHealth (feed_dark) — so createAlert must NEVER throw: alerting is a side channel
-// reporting on a run/feed-read, never part of it.
+// Called from sites deep inside best-effort machinery — lib/pipeline/run.ts's executeRun finalize
+// (run_failed), lib/pipeline/feed-health.ts's updateFeedHealth (feed_dark), and (D1 final review,
+// Important 2) lib/diffusion/scheduler.ts's tickChannel (diffusion_blocked) — so createAlert must
+// NEVER throw: alerting is a side channel reporting on a run/feed-read/diffusion-tick, never part
+// of it.
 
-export type AlertType = "run_failed" | "feed_dark";
+// diffusion_blocked (D1 final review, Important 2): a scheduled send refused BEFORE
+// send-core.ts ever wrote a distributions row (render failure, R2 unconfigured, no `social_post`
+// template) — without this alert, that candidate would be reselected identically on every future
+// due tick with no trace anywhere but a console.error, silently wedging the whole channel.
+export type AlertType = "run_failed" | "feed_dark" | "diffusion_blocked";
 
 export type CreateAlertInput = {
   type: AlertType;

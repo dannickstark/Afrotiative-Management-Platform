@@ -33,8 +33,28 @@ export const TEMPLATE_CONTEXTS = [
 ] as const;
 export type TemplateContext = (typeof TEMPLATE_CONTEXTS)[number];
 
-export const CHANNELS = ["facebook", "instagram", "whatsapp", "x", "tiktok"] as const;
+export const CHANNELS = ["facebook", "instagram", "whatsapp", "x", "tiktok", "linkedin"] as const;
 export type Channel = (typeof CHANNELS)[number];
+
+// Libellé français canonique d'un canal — UNE seule source, réutilisée à la fois par le registre
+// de diffusion (lib/diffusion/channels.ts, SOCIAL_CHANNELS[...].label) et par les sélecteurs de
+// canal du studio (components/studio/templates-table.tsx, components/studio/manual-generate.tsx).
+// Ce module (lib/studio/tokens.ts) n'importe rien de lourd (pas de @/db) : il reste importable tel
+// quel depuis un composant CLIENT — contrairement à lib/diffusion/channels.ts, qui entraîne le
+// barrel @/lib/studio et, via lui, @/db (voir le commentaire de templates-table.tsx sur ses imports
+// directs). Avant cette constante, ces trois endroits recopiaient chacun leur propre
+// Record<Channel, string> : celle de templates-table.tsx était typée Record<string, string>, PAS
+// Record<Channel, string> — donc un canal ajouté à CHANNELS sans mise à jour de cette copie
+// n'aurait déclenché AUCUNE erreur de compilation, juste un sélecteur de canal affichant `undefined`
+// pour le nouveau canal (constaté en ajoutant LinkedIn — voir le rapport de tâche D7).
+export const CHANNEL_LABELS: Record<Channel, string> = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  whatsapp: "WhatsApp",
+  x: "X",
+  tiktok: "TikTok",
+  linkedin: "LinkedIn",
+};
 
 const ARTICLE_COMMON = [
   "article.title", "article.excerpt", "article.date", "article.byline", "article.image",

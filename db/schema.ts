@@ -339,7 +339,7 @@ export const pipelineSettings = pgTable("pipeline_settings", {
 // single associated entity.
 export const alerts = pgTable("alerts", {
   id: uuid("id").primaryKey().defaultRandom(),
-  type: text("type").notNull(), // 'run_failed' | 'feed_dark' — see lib/alerts/notify.ts's AlertType
+  type: text("type").notNull(), // 'run_failed' | 'feed_dark' | 'diffusion_blocked' — see lib/alerts/notify.ts's AlertType
   title: text("title").notNull(), // French, short — e.g. "Exécution du pipeline échouée"
   detail: text("detail").notNull(), // French, one-sentence specifics (counts / feed name)
   entityId: uuid("entity_id"), // the run or feed id this alert is about
@@ -355,13 +355,79 @@ export const distributions = pgTable("distributions", {
   status: distributionStatus("status").notNull().default("stubbed"),
   externalId: text("external_id"),
   at: timestamp("at").notNull().defaultNow(),
+  // ---- D1: social-channel diffusion (lib/diffusion/) — StubChannel today, D2→D6 replace only the
+  // `send` behind each registry entry. All columns below are nullable / defaulted so the existing
+  // WordPress insert (lib/wp/publish.ts's upsertDistribution, which never sets any of them) keeps
+  // working completely unchanged. ----
+  // The studio render (renders.id) that was actually distributed. NOT a foreign key, for the same
+  // reason renders.subjectId isn't one (see its comment below): this is diffusion HISTORY, not a
+  // live join, and must outlive a pruned render row. IMMUTABLE once a send has happened — it
+  // materializes spec §1's "never re-render after a send": a retry re-sends this SAME image.
+  renderId: uuid("render_id"),
+  // The caption actually sent, as edited by the operator (AI proposes, human disposes — spec §3).
+  caption: text("caption"),
+  attempts: integer("attempts").notNull().default(0),
+  // Last failure message, in French — surfaced next to the "Réessayer" button (spec §4/§7).
+  lastError: text("last_error"),
+  // Set only for a scheduler-created row awaiting its due time; null for a manual send (spec §1).
+  scheduledFor: timestamp("scheduled_for"),
+  sentAt: timestamp("sent_at"),
+  // 'manual' | 'scheduled' — audit trail (spec §1/§7). Free TEXT, not a Postgres enum: same
+  // reasoning as alerts.type above (no ALTER TYPE ADD VALUE landmine in drizzle's single-
+  // transaction migrate() on a fresh DB). Null for every row written before this column existed
+  // (all 'wordpress' rows — lib/wp/publish.ts never sets it, and is not touched by D1).
+  triggeredBy: text("triggered_by"),
+  // Who clicked "Publier sur {canal}" — null for a scheduled send (spec §1).
+  actorId: text("actor_id").references(() => user.id),
 }, (t) => [
   // At most one 'wordpress' distribution row per article (upsertDistribution's invariant,
   // lib/wp/publish.ts): guards against a theoretical race-created duplicate that would double a
   // row in the /published list. Partial (WHERE channel = 'wordpress') so other channels are
   // unconstrained — modeled on pipeline_runs_one_running above.
   uniqueIndex("distributions_one_wordpress_per_article").on(t.articleId).where(sql`${t.channel} = 'wordpress'`),
+  // D1 §1's hard guarantee: at most one row per (article, non-wordpress channel) that is currently
+  // 'pending' or already 'sent'. This is what stops the automatic scheduler (D1 Lot 4) from
+  // doubling an operator's manual send, and vice-versa — whichever insert wins a race, the loser
+  // hits SQLSTATE 23505 instead of silently creating a second live row. 'failed' rows do NOT hold
+  // this slot, so a retry (a fresh insert for the same article+channel) is never blocked by a prior
+  // failure. `status` is compared against enum literals ('pending'/'sent') that already existed in
+  // distribution_status before this migration (see db/migrations/0000_curious_wong.sql) — unlike
+  // the pipeline_runs_one_running predicate's ALTER-TYPE-in-the-same-transaction trap documented
+  // above, referencing an ALREADY-EXISTING enum value in a predicate is safe on a fresh DB. No
+  // NULLS NOT DISTINCT needed either (unlike render_templates_scope below): article_id and channel
+  // are both NOT NULL here, so Postgres's default null-distinctness never comes into play.
+  uniqueIndex("distributions_one_active_per_article_channel")
+    .on(t.articleId, t.channel)
+    .where(sql`${t.channel} <> 'wordpress' AND ${t.status} in ('pending', 'sent')`),
 ]);
+
+// ---- D1: per-channel diffusion settings — one row per social channel, created LAZILY on first
+// read (lib/diffusion/settings-core.ts's getChannelSettings) from that channel's registry defaults
+// (lib/diffusion/channels.ts) rather than seeded here. `channel` is free TEXT (matches
+// distributions.channel and render_templates.channel), not a foreign key to anything: there is no
+// channels table, CHANNELS (lib/studio/tokens.ts) is the single source of truth for valid keys.
+export const socialChannelSettings = pgTable("social_channel_settings", {
+  channel: text("channel").primaryKey(),
+  enabled: boolean("enabled").notNull().default(true),
+  // Bounded (never exceeded) by that channel's captionLimits.max — enforced in
+  // lib/diffusion/settings-core.ts's updateChannelSettingsCore, not at the DB layer, so the refusal
+  // carries a French message naming the bound instead of a raw constraint violation.
+  captionMaxChars: integer("caption_max_chars").notNull(),
+  // Optional operator override of the AI caption prompt for this channel; null = use the default
+  // prompt (spec §3).
+  captionPrompt: text("caption_prompt"),
+  // ---- automatic scheduler knobs (D1 Lot 4 — table ships now, scheduler wires into it later) ----
+  // Off by default, like pipelineSettings.autoPublishEnabled: no channel auto-sends until an admin
+  // opts in from /settings/social/[channel].
+  autoEnabled: boolean("auto_enabled").notNull().default(false),
+  autoIntervalHours: integer("auto_interval_hours").notNull().default(6),
+  autoMaxBacklogDays: integer("auto_max_backlog_days").notNull().default(3),
+  // Business-hours window default (08h–20h) — spec §5: "un média ne poste pas à 4 h du matin".
+  autoWindowStartHour: integer("auto_window_start_hour").notNull().default(8),
+  autoWindowEndHour: integer("auto_window_end_hour").notNull().default(20),
+  lastAutoSendAt: timestamp("last_auto_send_at"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
 
 // ---- V1 studio de gabarits ----
 // AUCUN nouvel enum PostgreSQL, volontairement : colonnes `text` + unions TypeScript. Même

@@ -25,10 +25,9 @@ const INTEGRATIONS: { name: IntegrationName; label: string; description: string 
   { name: "firecrawl", label: "Firecrawl", description: "Extraction de contenu (repli)." },
 ];
 
-const RESERVED = [
-  { label: "WhatsApp", description: "Diffusion des articles publiés." },
-  { label: "Réseaux sociaux", description: "Publication automatique (X, Facebook, LinkedIn…)." },
-];
+// D1 shipped the "Réseaux sociaux" / "WhatsApp" reserved placeholders that used to live here
+// ("Bientôt — SP6") as a real admin surface at /settings/social — see components/settings/
+// social-channels.tsx. Nothing left to reserve a slot for.
 
 // Page-level card grid for the integrations admin (SP2 Task 5). Never renders a key value —
 // only the "Configuré"/"Non configuré" badge — and "Tester" only ever runs FREE checks
@@ -45,9 +44,6 @@ export function IntegrationCards({ status }: { status: IntegrationStatus }) {
             lastSuccessAt={i.name === "wordpress" ? status.wordpress.lastSuccessAt : null}
             lastRun={status.lastRun}
           />
-        ))}
-        {RESERVED.map((r) => (
-          <ReservedCard key={r.label} label={r.label} description={r.description} />
         ))}
       </div>
     </div>
@@ -99,23 +95,6 @@ function IntegrationCard({
           {isPending && <Loader2 className="animate-spin" aria-hidden />}
           Tester
         </Button>
-      </CardFooter>
-    </Card>
-  );
-}
-
-function ReservedCard({ label, description }: { label: string; description: string }) {
-  return (
-    <Card className="opacity-70">
-      <CardHeader>
-        <CardTitle>{label}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-        <CardAction>
-          <Badge variant="outline" className={NOT_CONFIGURED_STYLE}>Bientôt — SP6</Badge>
-        </CardAction>
-      </CardHeader>
-      <CardFooter>
-        <Button variant="outline" size="sm" disabled title="Disponible en SP6.">Tester</Button>
       </CardFooter>
     </Card>
   );

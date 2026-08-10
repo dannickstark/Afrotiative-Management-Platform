@@ -9,6 +9,7 @@ export const FORMAT_PRESETS = {
   story:            { width: 1080, height: 1920, label: "Story (Instagram / WhatsApp)" },
   x_landscape:      { width: 1600, height: 900,  label: "X — paysage" },
   wa_square:        { width: 1080, height: 1080, label: "WhatsApp — carré" },
+  li_link:          { width: 1200, height: 627,  label: "LinkedIn — lien" },
 } as const;
 
 export type FormatKey = keyof typeof FORMAT_PRESETS;

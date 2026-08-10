@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { renderManual } from "@/lib/actions/studio-manual-actions";
 import { fieldsForContext, MANUAL_CONTEXTS, type ManualField } from "@/lib/studio/manual-form";
-import { CHANNELS, type TemplateContext, type Channel, type TokenId } from "@/lib/studio/tokens";
+import { CHANNELS, CHANNEL_LABELS, type TemplateContext, type Channel, type TokenId } from "@/lib/studio/tokens";
 import type { TokenValues } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { TOKEN_LABELS } from "./token-picker";
@@ -38,10 +38,6 @@ const CONTEXT_LABEL: Record<TemplateContext, string> = {
   quote_card: "Carte citation",
   newsletter_header: "Bandeau newsletter",
   recap_card: "Carte récap",
-};
-
-const CHANNEL_LABEL: Record<Channel, string> = {
-  facebook: "Facebook", instagram: "Instagram", whatsapp: "WhatsApp", x: "X", tiktok: "TikTok",
 };
 
 const NO_CHANNEL = "__aucun__";
@@ -209,12 +205,12 @@ export function ManualGenerate({ assets, categories, storageConfigured, initialC
             >
               <SelectTrigger className="w-full" data-action="manual-channel-select">
                 <SelectValue placeholder="Aucun">
-                  {(v: string | null) => (v && v !== NO_CHANNEL ? CHANNEL_LABEL[v as Channel] : "Aucun")}
+                  {(v: string | null) => (v && v !== NO_CHANNEL ? CHANNEL_LABELS[v as Channel] : "Aucun")}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_CHANNEL}>Aucun</SelectItem>
-                {CHANNELS.map((c) => <SelectItem key={c} value={c}>{CHANNEL_LABEL[c]}</SelectItem>)}
+                {CHANNELS.map((c) => <SelectItem key={c} value={c}>{CHANNEL_LABELS[c]}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>

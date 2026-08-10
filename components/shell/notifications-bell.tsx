@@ -2,7 +2,7 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Bell, AlertTriangle, WifiOff } from "lucide-react";
+import { Bell, AlertTriangle, WifiOff, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { markAlertRead, markAllAlertsRead } from "@/lib/actions/alert-actions";
@@ -17,12 +17,16 @@ import type { AlertType } from "@/lib/alerts/notify";
 const ALERT_ICON: Record<AlertType, typeof AlertTriangle> = {
   run_failed: AlertTriangle,
   feed_dark: WifiOff,
+  diffusion_blocked: Share2,
 };
 
-// run_failed -> the runs history (/runs); feed_dark -> the feed that went quiet (/settings/feeds).
+// run_failed -> the runs history (/runs); feed_dark -> the feed that went quiet (/settings/feeds);
+// diffusion_blocked -> the channel settings list (/settings/social) — an operator fixes this by
+// reconfiguring the channel (R2, a social_post template) or by disabling it, not per-article.
 const ALERT_HREF: Record<AlertType, string> = {
   run_failed: "/runs",
   feed_dark: "/settings/feeds",
+  diffusion_blocked: "/settings/social",
 };
 
 /**

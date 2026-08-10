@@ -174,6 +174,42 @@ export const fixFieldsSchema = z.object({
 });
 export type FixFieldsInput = z.infer<typeof fixFieldsSchema>;
 
+// lib/diffusion/settings-core.ts's UpdateChannelSettingsPatch, server-side (D1 final review,
+// Important 4). Lives here (not in lib/actions/diffusion-settings-actions.ts) for the same reason
+// as pipelineSettingsSchema/feedSchema above: that file needs a file-level "use server" directive,
+// and Next.js only allows async-function exports from such a module.
+//
+// Before this schema existed, updateChannelSettings (the Server Action — a PUBLIC network endpoint)
+// validated only captionMaxChars server-side; every other field was checked ONLY by
+// components/settings/social-channel-form.tsx's client-side guards, which a direct/future caller
+// bypasses entirely. Two concrete failures that opened: `autoIntervalHours: 0` made isDue
+// unconditionally true (lib/diffusion/schedule-core.ts: `now - lastAutoSendAt >= 0` always holds),
+// so a channel would send on EVERY 15-minute scheduler tick — 96/day once a real adapter exists,
+// not once per configured interval; and a non-integer value reached an `integer` Postgres column
+// and surfaced as a raw, untranslated driver error instead of a clean French message.
+//
+// Every field is `.optional()`, matching UpdateChannelSettingsPatch's own `Partial<...>` shape — a
+// caller may legitimately send only a subset (the current form always sends all eight, but the
+// patch type itself does not require that), and only the fields actually present get validated.
+// captionMaxChars's channel-specific [min, max] bound (Facebook 63,206 vs X 280) is NOT re-checked
+// here — that stays updateChannelSettingsCore's job (it needs the channel key, which this schema
+// alone doesn't carry) — this only guards the shape (integer, positive) common to every channel.
+export const socialChannelSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  captionMaxChars: z.number().int("Doit être un nombre entier.").positive("Doit être un entier positif.").optional(),
+  captionPrompt: z.string().nullable().optional(),
+  autoEnabled: z.boolean().optional(),
+  autoIntervalHours: z.number().int("Doit être un nombre entier.").positive("L'intervalle doit être un entier positif (en heures).").optional(),
+  autoMaxBacklogDays: z.number().int("Doit être un nombre entier.").positive("La profondeur de rattrapage doit être un entier positif (en jours).").optional(),
+  autoWindowStartHour: z.number().int("Doit être un nombre entier.")
+    .min(0, "L'heure de début de fenêtre doit être comprise entre 0 et 23.")
+    .max(23, "L'heure de début de fenêtre doit être comprise entre 0 et 23.").optional(),
+  autoWindowEndHour: z.number().int("Doit être un nombre entier.")
+    .min(0, "L'heure de fin de fenêtre doit être comprise entre 0 et 23.")
+    .max(23, "L'heure de fin de fenêtre doit être comprise entre 0 et 23.").optional(),
+});
+export type SocialChannelSettingsInput = z.infer<typeof socialChannelSettingsSchema>;
+
 // wp_categories.color — the {{category.color}} token setCategoryColor writes (V2 Task 3, closing
 // the V1-documented gap: the column and the render read existed, nothing could write it). Strict
 // #RRGGBB only: no 3-digit shorthand (#FFF), no alpha channel, no CSS colour names — the studio's
