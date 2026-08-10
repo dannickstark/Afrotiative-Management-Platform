@@ -5,6 +5,7 @@
 import { CHANNELS, CHANNEL_LABELS, type Channel, type TemplateContext, type FormatKey } from "@/lib/studio";
 import { StubChannel } from "./stub-channel";
 import { FacebookChannel } from "./meta/facebook";
+import { InstagramChannel } from "./meta/instagram";
 
 // What a channel's `send` needs to actually publish: the rendered image (studio's public URL —
 // the render itself is generated and its renderId frozen onto the distributions row BEFORE `send`
@@ -110,7 +111,9 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
       { key: "igUserId", label: "Identifiant utilisateur Instagram (IG User ID)" },
       { key: "pageAccessToken", label: "Jeton d’accès (le même que celui de la Page Facebook liée)" },
     ],
-    send: (input) => new StubChannel("instagram").send(input),
+    // D3 — real adapter (lib/diffusion/meta/instagram.ts): create container → poll status_code →
+    // media_publish. Same "new X().method(input)" swap as Facebook above — nothing else here changed.
+    send: (input) => new InstagramChannel().send(input),
   },
   whatsapp: {
     key: "whatsapp", label: CHANNEL_LABELS.whatsapp, context: "social_post", format: "wa_square",
