@@ -10,7 +10,7 @@
 // attributes and helper text are a UX nicety, not the source of truth.
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { formatDate } from "@/lib/format";
-import { updateChannelSettings, updateChannelCredentials, deleteChannelCredentials } from "@/lib/actions/diffusion-settings-actions";
+import {
+  updateChannelSettings, updateChannelCredentials, deleteChannelCredentials, testChannelConnection,
+} from "@/lib/actions/diffusion-settings-actions";
 import type { Channel } from "@/lib/studio";
 import type { SocialChannelSettings } from "@/lib/diffusion/settings-core";
 
@@ -79,6 +81,13 @@ export function SocialChannelForm({
   const [credentialsSetAt, setCredentialsSetAt] = useState<Date | null>(settings.credentialsSetAt);
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [isSavingCredentials, startSavingCredentials] = useTransition();
+
+  // Task 5 (D2+D3) — "Tester la connexion" result. Always reflects the credentials currently STORED
+  // server-side (testChannelConnection re-reads them itself), never whatever is mid-edit in
+  // `credentialValues` above — cleared on every save/delete below so a stale "vérifiée" never
+  // outlives the credentials it was actually run against.
+  const [connectionTest, setConnectionTest] = useState<{ ok: boolean; detail: string } | null>(null);
+  const [isTestingConnection, startTestingConnection] = useTransition();
 
   function handleSave() {
     const captionMaxChars = Number(form.captionMaxChars);
@@ -142,6 +151,7 @@ export function SocialChannelForm({
       return;
     }
     setCredentialError(null);
+    setConnectionTest(null); // a prior "vérifiée" no longer applies to whatever is being saved now
     startSavingCredentials(async () => {
       try {
         const res = await updateChannelCredentials(channel, values);
@@ -170,14 +180,40 @@ export function SocialChannelForm({
       }
       setCredentialsSetAt(res.settings.credentialsSetAt);
       setCredentialValues({});
+      setConnectionTest(null); // nothing left to have verified
       toast.success(`Identifiants ${label} supprimés.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Échec de la suppression.");
     }
   }
 
+  // Task 5 (D2+D3) — one free Graph read against the credentials currently SAVED for this channel
+  // (testChannelConnection re-reads them server-side; see that action's own comment on why it never
+  // reads `credentialValues`). setError-style local state, not a toast-only affordance: the brief
+  // asks the result to show WHICH channel/account it reached, which needs to persist on-screen, not
+  // just flash in a toast.
+  function handleTestConnection() {
+    setConnectionTest(null);
+    startTestingConnection(async () => {
+      try {
+        const res = await testChannelConnection(channel);
+        setConnectionTest(res);
+        if (res.ok) toast.success(res.detail);
+        else toast.error(res.detail);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Échec du test de connexion.";
+        setConnectionTest({ ok: false, detail });
+        toast.error(detail);
+      }
+    });
+  }
+
   return (
-    <div className="max-w-2xl space-y-4">
+    // Task 4 review, deferred Minor (a): width is constrained ONCE, by the page-level wrapper
+    // (app/(app)/settings/social/[channel]/page.tsx, which also wraps <ChannelSetupGuide> in the
+    // SAME max-w-2xl) — this root only needs its OWN vertical rhythm between its cards, not a
+    // second, redundant max-w-2xl.
+    <div className="space-y-4">
       <h1 className="text-xl font-semibold">{label}</h1>
 
       <Card>
@@ -221,6 +257,19 @@ export function SocialChannelForm({
           </CardContent>
           <CardFooter className="flex-col items-stretch gap-3">
             {credentialError && <p className="text-sm text-destructive" role="alert">{credentialError}</p>}
+            {connectionTest && (
+              <p
+                className={`flex items-start gap-1.5 text-sm ${connectionTest.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}
+                role={connectionTest.ok ? "status" : "alert"}
+              >
+                {connectionTest.ok ? (
+                  <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden />
+                ) : (
+                  <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                )}
+                {connectionTest.detail}
+              </p>
+            )}
             <div className="flex items-center justify-between gap-2">
               <ConfirmDialog
                 trigger={
@@ -237,11 +286,26 @@ export function SocialChannelForm({
                 destructive
                 onConfirm={handleDeleteCredentials}
               />
-              <Button onClick={handleSaveCredentials} disabled={isSavingCredentials} size="sm">
-                {isSavingCredentials && <Loader2 className="animate-spin" aria-hidden />}
-                {isSavingCredentials ? "Enregistrement…" : "Enregistrer les identifiants"}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button" variant="outline" size="sm"
+                  onClick={handleTestConnection}
+                  disabled={isTestingConnection || isSavingCredentials || !credentialsSetAt}
+                >
+                  {isTestingConnection && <Loader2 className="animate-spin" aria-hidden />}
+                  {isTestingConnection ? "Test en cours…" : "Tester la connexion"}
+                </Button>
+                <Button onClick={handleSaveCredentials} disabled={isSavingCredentials} size="sm">
+                  {isSavingCredentials && <Loader2 className="animate-spin" aria-hidden />}
+                  {isSavingCredentials ? "Enregistrement…" : "Enregistrer les identifiants"}
+                </Button>
+              </div>
             </div>
+            {!credentialsSetAt && (
+              <p className="text-xs text-muted-foreground">
+                Enregistrez des identifiants avant de tester la connexion.
+              </p>
+            )}
           </CardFooter>
         </Card>
       )}
