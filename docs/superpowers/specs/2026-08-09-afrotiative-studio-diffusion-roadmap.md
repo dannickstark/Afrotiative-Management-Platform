@@ -114,13 +114,22 @@ registre de canaux, sous-pages `/settings/social/{canal}`, génération IA des l
 par canal, panneau **Diffusion** sur la page article (bouton + légende éditable par canal), rendu à
 l'envoi, planificateur automatique (dont la règle WhatsApp ci-dessus), journal d'audit. Dépend de V1.
 
-### D2 — Adaptateur Facebook Page
-Graph API. Comptes déjà disponibles. Nécessite la revue d'application Meta pour
-`pages_manage_posts` — **à lancer immédiatement, en parallèle du développement**.
+### D2 — Adaptateur Facebook Page — ✅ Livré (2026-08-10)
+Graph API, client à URL de base injectable (`lib/diffusion/meta/graph-client.ts`), publication photo
+sur la Page. Nécessite toujours la revue d'application Meta pour `pages_manage_posts` — **rien n'a
+été vérifié contre la vraie API Graph** : tout est testé contre un faux serveur `Bun.serve`, par
+construction. Spec et plan combinés : `../plans/2026-08-10-afrotiative-d2-d3-meta.md`.
 
-### D3 — Adaptateur Instagram
-Content Publishing API, compte Business lié à la page Facebook. Exige une URL d'image publiquement
-accessible (d'où R2). Nécessite `instagram_content_publish` — même revue Meta que D2.
+### D3 — Adaptateur Instagram — ✅ Livré (2026-08-10)
+Content Publishing API en deux étapes (conteneur média → sondage borné du `status_code` →
+`media_publish`), compte Business lié à la page Facebook, URL d'image publique servie par R2.
+Nécessite toujours `instagram_content_publish` — même revue Meta que D2, même réserve : aucun envoi
+réel n'a eu lieu.
+
+Livrés avec eux, dans le même sous-projet : le **stockage chiffré des identifiants** (AES-256-GCM,
+`social_channel_settings.credentials`, clé en `CREDENTIALS_ENCRYPTION_KEY`), les **guides de
+connexion dans le produit** pour les six canaux (`lib/diffusion/setup-guide.ts`), et un bouton
+**Tester la connexion** qui fait un seul appel Graph gratuit.
 
 ### D4 — Adaptateur WhatsApp + service worker
 Second service Railway : whatsapp-web.js, Chromium, `RemoteAuth` avec session persistée en
@@ -281,6 +290,39 @@ corps dans `patch-fetch.js` de Next 16.3 n'est emprunté que sous certaines cond
 sans pouvoir le prouver. `putObject` n'a **aucune** couverture automatisée et ne peut pas en avoir
 sous `bun test` (le patch de Next n'y est pas actif) : la seule défense reste la vérification
 navigateur de l'étape 11 de `docs/DEPLOYMENT.md`.
+
+### Dette reportée à l'issue de D2 + D3
+
+Triage de la revue finale du sous-projet (2026-08-10). Rien de ce qui suit ne bloque la fusion — la
+revue finale a conclu « fusionnable avec correctifs », et les correctifs (trois points Important, deux
+Minor) ont été livrés dans `781e6d2`. Ce qui reste est conservé ici parce que les répertoires de
+travail SDD sont gitignorés.
+
+| Point | Où | Pour qui |
+|---|---|---|
+| `credentialsSetAt` bascule au **premier** champ enregistré : n'enregistrer que l'identifiant de Page affiche « Défini le … », replie le guide de connexion et **active « Tester la connexion »** alors que le jeton manque encore — c'est justement la séquence la plus probable. Le plus gênant des points reportés, puisqu'il abîme le libre-service | `settings-core.ts`, `social-channel-form.tsx`, `settings/social/[channel]/page.tsx` | D7 |
+| `setChannelCredentialsCore` fusionne un nouveau chiffré dans le blob existant **sans vérifier** que les entrées existantes se déchiffrent encore : après un changement de clé, ne ressaisir qu'un champ produit un blob mixte définitivement illisible (contourné par la doc, pas par le code) | `lib/diffusion/settings-core.ts` | D7 |
+| `channelCredentialsSchema` ne valide que la forme : ni les clés contre `credentialFields`, ni une longueur maximale | `lib/validation.ts` | D7 |
+| `channel` n'est pas validé dans les actions d'identifiants (motif D1 préexistant, désormais sur un chemin d'écriture de secret) | `lib/actions/diffusion-settings-actions.ts` | D7 |
+| Ni identifiant de clé (`v1:`) ni AAD liée à `${canal}:${champ}` dans le format stocké — bon marché maintenant, pénible une fois des lignes en production | `lib/diffusion/crypto.ts` | avant la première mise en production des identifiants |
+| Les codes Graph transitoires (4/17/32/613, 5xx) tombent dans le mappeur générique, sans « réessayez plus tard » ni temporisation | `lib/diffusion/meta/*.ts` | D7 |
+| Le mappeur générique dit « La publication … a échoué » même pour un test de connexion en lecture seule | `connection-test.ts`, `facebook.ts`, `instagram.ts` | cosmétique |
+| Contenu de type bloc à l'intérieur du bouton `CollapsibleTrigger` (le motif du projet enveloppe un `span`) ; et le titre `<h1>` de la page s'affiche **sous** la carte du guide | `channel-setup-guide.tsx`, `settings/social/[channel]/page.tsx` | cosmétique |
+| Filet de sécurité recommandé : un `try/catch` autour de `socialChannel.send()` pour qu'aucun adaptateur futur ne puisse enliser une ligne `pending` en levant. Écarté du sous-projet parce que c'est un fichier du socle D1 et que les gardes par adaptateur corrigent le vrai défaut | `lib/diffusion/send-core.ts:165` | D4 / D7 |
+
+**Risque résiduel accepté à la fusion.** `Authorization: Bearer` remplace le jeton en paramètre
+d'URL sur les GET Graph : vérifié dans la documentation de deux produits Meta voisins sur le même
+hôte, **inféré** pour les points d'accès Page/photo et conteneur Instagram. Si l'inférence est
+fausse, cela se voit comme un `401` propre traduit en français, pas comme une faille — et le bouton
+« Tester la connexion » est le premier appel réel. **À vérifier dès que la revue d'application Meta
+est accordée**, en même temps que les trois réglages inférés : le sondage Instagram (3 s × 10), le
+repli `post_id`/`id` de Facebook, et `PUBLISHED` traité comme état terminal.
+
+**Deux défauts du plan D2+D3 lui-même**, relevés par la revue finale : « paramétrer le seuil du
+faucheur » avait déjà été livré par la vague de correctifs D1 (`0906cb7`), et « enregistrer
+l'identifiant de conteneur au plus tôt » n'est pas réalisable dans `SocialChannel`, qui n'a
+volontairement aucun accès à la base — il aurait fallu inscrire l'élargissement de `SendResult` dans
+le périmètre.
 
 ### Hygiène des tests (transverse)
 
