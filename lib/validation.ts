@@ -210,6 +210,21 @@ export const socialChannelSettingsSchema = z.object({
 });
 export type SocialChannelSettingsInput = z.infer<typeof socialChannelSettingsSchema>;
 
+// Task 1 (D2+D3) — lib/diffusion/settings-core.ts's setChannelCredentialsCore. Field NAMES are
+// deliberately NOT enumerated here (no "pageId" | "pageAccessToken" union): which fields a channel
+// needs is that channel's adapter's business (Facebook: page id + token; Instagram: IG user id +
+// the SAME token; a future LinkedIn: an organization URN; WhatsApp: none) and is decided in Task
+// 2+'s application code, never in this shared schema — enumerating them here would be exactly the
+// per-platform coupling the storage design (db/schema.ts's `credentials` jsonb) was chosen to
+// avoid. This validates SHAPE only: a non-empty map of non-empty string values. An empty value
+// would silently encrypt "" as if it were a real secret — reject it up front, in French, rather
+// than let a blank write-only field through.
+export const channelCredentialsSchema = z.record(
+  z.string().min(1, "Nom de champ d'identifiant invalide."),
+  z.string().min(1, "La valeur d'un identifiant ne peut pas être vide."),
+).refine((v) => Object.keys(v).length > 0, { message: "Aucun identifiant à enregistrer." });
+export type ChannelCredentialsInput = z.infer<typeof channelCredentialsSchema>;
+
 // wp_categories.color — the {{category.color}} token setCategoryColor writes (V2 Task 3, closing
 // the V1-documented gap: the column and the render read existed, nothing could write it). Strict
 // #RRGGBB only: no 3-digit shorthand (#FFF), no alpha channel, no CSS colour names — the studio's

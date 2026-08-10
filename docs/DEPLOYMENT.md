@@ -15,6 +15,7 @@ Ce document est le guide pour mettre la plateforme en production et l'exploiter 
 | **Runtime** | Node 20+ (l'app tourne sur Node ; Bun sert de gestionnaire de paquets / test runner / lanceur de scripts). Bun 1.x installé. |
 | **Base de données** | PostgreSQL avec l'extension **pgvector** (Neon recommandé — pgvector préinstallé). Deux URLs : pooled (app) + direct (migrations). |
 | **WordPress** *(pour publier)* | WP 5.6+ (Application Passwords), **permaliens jolis** activés, `/wp-json` accessible publiquement, un utilisateur bot de rôle **Editor** minimum. |
+| **Meta (Facebook + Instagram)** *(pour diffuser)* | Application Meta for Developers + Page Facebook (+ compte Instagram professionnel lié, pour Instagram) + permissions passées en revue (App Review, plusieurs semaines) + jeton de Page longue durée. Détails complets : §2, « Application Meta ». |
 | **Hébergement** | N'importe quel hôte Node/Next (Vercel, Railway, Fly, VPS). `maxDuration` des routes cron = 300 s : sur Vercel, plan qui autorise 300 s de fonction. |
 | **Ordonnanceur** | Un cron externe capable de faire deux `POST` HTTP authentifiés (Vercel Cron, GitHub Actions, cron-job.org, crontab système…). |
 
@@ -49,6 +50,106 @@ Toutes les valeurs vivent dans `.env.local` (gitignoré — **jamais commité, j
 | `PUBLISH_TRIGGER_SECRET` | **requis** pour autoriser le cron `POST /api/publish/due` (401 sinon). Générer : `openssl rand -hex 32`. |
 
 > Les deux `*_TRIGGER_SECRET` doivent être **distincts** l'un de l'autre et de tout autre secret.
+
+**Diffusion sociale — identifiants chiffrés (D2+D3, Task 1) — laisser vide désactive proprement l'enregistrement d'identifiants** (`getCryptoConfig()` renvoie `null`) :
+
+| Variable | Rôle |
+|---|---|
+| `CREDENTIALS_ENCRYPTION_KEY` | Clé AES-256-GCM (32 octets, encodés en base64) qui chiffre les identifiants réseaux sociaux (jeton de Page Facebook/Instagram, futur URN LinkedIn…) stockés dans `social_channel_settings.credentials`. Générer : `openssl rand -base64 32`. |
+
+Sans cette variable, `/settings/social/[canal]` refuse l'enregistrement d'un identifiant avec un
+message français explicite plutôt que de planter — exactement l'idiome de `getWpConfig()`/
+`getStudioConfig()` ci-dessus, appliqué au chiffrement (`lib/diffusion/crypto.ts`).
+
+> **⚠️ Ne jamais perdre `CREDENTIALS_ENCRYPTION_KEY` une fois des identifiants enregistrés sous
+> elle.** Le chiffrement n'a **aucune porte dérobée** : si la clé est perdue ou changée sans
+> re-saisir les identifiants, tout ce qui a été enregistré sous l'ancienne clé devient
+> **définitivement illisible** (un déchiffrement avec la mauvaise clé échoue bruyamment —
+> `DecryptionFailedError` — plutôt que de renvoyer une valeur corrompue, mais ça ne le rend pas
+> récupérable pour autant). Traiter cette variable comme un secret de production au même titre que
+> `BETTER_AUTH_SECRET` : générée une fois, sauvegardée dans le gestionnaire de secrets de l'hôte,
+> **jamais régénérée** sans planifier au préalable la re-saisie de chaque identifiant déjà stocké
+> (Facebook, Instagram, et tout canal ajouté ensuite).
+>
+> **Si c'est arrivé quand même — procédure de récupération :** un envoi ou un « Tester la
+> connexion » échoue alors avec « Impossible de déchiffrer les identifiants Facebook/Instagram
+> enregistrés… » (voir §10). Il n'y a pas de réparation possible du blob existant — sur
+> `/settings/social/facebook` et/ou `/settings/social/instagram`, cliquez sur **« Supprimer »** puis
+> **ressaisissez la TOTALITÉ des champs d'identifiants du canal** (Facebook : Page ID *et* jeton
+> d'accès ; Instagram : IG User ID *et* jeton d'accès), même si un seul champ semble en cause.
+> `setChannelCredentialsCore` (`lib/diffusion/settings-core.ts`) **fusionne** les valeurs
+> nouvellement soumises dans le blob `credentials` existant plutôt que de le remplacer en entier —
+> ne ressaisir qu'un seul champ laisserait les autres chiffrés sous l'ancienne clé, dans un blob
+> **mixte** qui échoue au déchiffrement en permanence, jeton neuf ou pas (`getDecryptedCredentials`
+> déchiffre TOUS les champs stockés en une fois ; un seul champ encore sous l'ancienne clé fait
+> échouer la lecture de tout le reste). Une fois les identifiants effacés puis intégralement
+> ressaisis, validez avec **« Tester la connexion »** avant de réactiver l'envoi automatique sur ce
+> canal.
+
+**Diffusion sociale — seuil du nettoyeur d'envois bloqués (D1, paramétré en Task 5)** :
+
+| Variable | Rôle |
+|---|---|
+| `DIFFUSION_STALE_PENDING_MINUTES` | Minutes au-delà desquelles une ligne `distributions` restée `pending` est considérée abandonnée (processus arrêté avant la fin) et repassée `failed`, donc réessayable. Optionnel, défaut **10**. Voir §6.5 pour le détail et le raisonnement (pourquoi 10 minutes reste sûr avec les adaptateurs Facebook/Instagram réels). |
+
+**Application Meta (Facebook + Instagram) — prérequis, permissions, jeton longue durée :**
+
+La diffusion réelle vers Facebook et Instagram (`lib/diffusion/meta/facebook.ts`,
+`lib/diffusion/meta/instagram.ts`) passe par l'API Graph de Meta et exige, en amont, une démarche
+côté Meta — ce n'est pas une variable d'environnement à poser, mais un compte/une application à
+configurer une fois. Le guide pas-à-pas complet est déjà **dans le produit**
+(`/settings/social/facebook` et `/settings/social/instagram`, carte « Guide de connexion »,
+`lib/diffusion/setup-guide.ts`) ; ce qui suit en est le résumé opérationnel, pour préparer l'accès
+avant le premier déploiement plutôt que de le découvrir au moment d'activer un canal :
+
+1. **Créer une application Meta for Developers** (developers.facebook.com/apps), de type
+   « Entreprise », rattachée au portefeuille Business qui possède la Page Facebook (et le compte
+   Instagram professionnel lié, le cas échéant).
+2. **Permissions qui exigent une revue Meta (App Review)** — hors mode développement (rôles
+   admin/testeur de l'application), aucune des deux séries ci-dessous ne fonctionne sans cette
+   revue :
+   - Facebook : `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`.
+   - Instagram (parcours « Connexion Facebook » — celui que ces adaptateurs utilisent, pas le
+     parcours plus récent « Connexion Instagram » à permissions `instagram_business_*`) :
+     `instagram_basic`, `instagram_content_publish`, `pages_read_engagement`.
+   Un seul dossier de revue peut couvrir les deux canaux à la fois (un descriptif du cas d'usage +
+   un enregistrement vidéo du parcours de connexion puis de l'usage réel de chaque permission).
+   **Comptez plusieurs semaines.** Lancez cette démarche dès que le canal est planifié, pas au
+   moment de déployer l'adaptateur : elle ne bloque pas le développement/test (les rôles
+   admin/testeur suffisent), mais bloque la mise en production réelle (publier au nom de n'importe
+   quel administrateur de la Page).
+3. **Obtenir le jeton de Page longue durée** — le même `pageAccessToken` que Facebook ET Instagram
+   enregistrent, sur `/settings/social/facebook` et `/settings/social/instagram` respectivement :
+   a. Générer un jeton utilisateur courte durée pour un compte administrateur de la Page (ex.
+      l'explorateur Graph API), avec les permissions ci-dessus cochées.
+   b. L'échanger **côté serveur uniquement** (jamais depuis un navigateur — la clé secrète de
+      l'application y transiterait) contre un jeton utilisateur longue durée :
+      `GET /{version}/oauth/access_token?grant_type=fb_exchange_token&client_id=<id
+      app>&client_secret=<secret app>&fb_exchange_token=<jeton courte durée>`.
+   c. Avec ce jeton longue durée, appeler `GET /{version}/me/accounts` : la réponse liste chaque
+      Page administrée, avec son `id` (à saisir dans le champ « Page ID ») et son `access_token`
+      dérivé (à saisir dans « Jeton d'accès de la Page »).
+   d. Pour Instagram, récupérer en plus l'IG User ID : `GET /{version}/{page-id}
+      ?fields=instagram_business_account`.
+4. **Ce que « expire » veut dire ici — à retenir avant de déployer, pas après un premier
+   incident** : le jeton **utilisateur** longue durée de l'étape (b) expire au bout d'environ 60
+   jours (documentation Meta) — mais ce n'est **pas** ce jeton-là qui est stocké dans
+   l'application. Le jeton **de Page** dérivé à l'étape (c), lui, n'a **pas** de date d'expiration
+   fixe d'après la documentation Meta actuelle : il est invalidé sur événement (changement de mot
+   de passe de l'administrateur, révocation de permission, retrait du rôle sur la Page, longue
+   inactivité), pas par un minuteur. En pratique, les deux se traduisent par la même consigne
+   opérationnelle — **revérifiez et régénérez le jeton de Page tous les ~60 jours environ**, même
+   sans minuteur strict côté Meta : c'est l'hypothèse déjà posée par le message d'erreur affiché
+   par les deux adaptateurs en cas de jeton expiré/invalide (code Graph 190, « environ tous les 60
+   jours ») et par le guide de connexion dans le produit ; ce runbook ne dit pas autre chose, il ne
+   fait que le préciser. Utilisez le bouton **« Tester la connexion »** sur
+   `/settings/social/facebook` et `/settings/social/instagram` (Task 5) pour vérifier qu'un jeton
+   enregistré est toujours valide sans attendre un échec de publication réelle — un test réussi
+   nomme la Page/le compte Instagram réellement atteint, un jeton expiré affiche le même message
+   qu'un envoi qui aurait échoué pour la même raison.
+5. **`CREDENTIALS_ENCRYPTION_KEY`** chiffre le Page ID / IG User ID / jeton de Page une fois
+   enregistrés — voir juste au-dessus dans cette même section (§2) pour sa génération et
+   l'avertissement sur sa perte ; rien de spécifique à Meta ne s'y ajoute.
 
 **Studio de gabarits (V1 + V2 + V3) — laisser les 5 vides désactive proprement le studio** (`getStudioConfig()`
 renvoie `null`) :
@@ -296,16 +397,30 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
   déterministe sans clé configurée), envoie, consigne le résultat (`article_revisions`).
   `lastAutoSendAt` est posé **avant** l'envoi et persisté en base — un redémarrage/redéploiement ne
   provoque jamais de rafale de rattrapage.
-- **Aucun adaptateur réel en D1** : chaque canal (Facebook, Instagram, WhatsApp, X, TikTok,
-  LinkedIn) délègue à `StubChannel`, qui journalise l'envoi (log `[diffusion:stub]`) et renvoie un
-  identifiant factice **sans jamais appeler un vrai réseau social**. Activer la publication
-  automatique en D1 ne pousse donc rien de visible en dehors de cette plateforme — c'est un socle
-  vérifiable de bout en bout, en attendant qu'un vrai adaptateur remplace `StubChannel` canal par
-  canal dans une itération future.
+- **Facebook et Instagram ont un adaptateur réel (D2+D3)** — `lib/diffusion/meta/facebook.ts` et
+  `instagram.ts`, tous deux via l'API Graph de Meta (voir plus haut, §2, « Application Meta »,
+  pour les prérequis application/permissions/jeton). **WhatsApp, X, TikTok et LinkedIn restent sur
+  `StubChannel`** : il journalise l'envoi (log `[diffusion:stub]`) et renvoie un identifiant
+  factice **sans jamais appeler un vrai réseau social**, en attendant qu'un adaptateur réel
+  remplace `StubChannel` sur chacun de ces canaux dans une itération future. Activer la
+  publication automatique sur un canal encore en stub ne pousse donc rien de visible en dehors de
+  cette plateforme ; l'activer sur Facebook ou Instagram publie réellement, une fois les
+  identifiants renseignés (§2) et l'App Review Meta passée (sinon Graph refuse la publication —
+  voir §2, point 2).
 - **Récupération des envois bloqués** : le même tic marque `failed` toute ligne `distributions`
   restée `pending` plus de 10 min par défaut, configurable via `DIFFUSION_STALE_PENDING_MINUTES`
-  (processus interrompu entre l'écriture `pending` et le résultat final) — sans quoi cet article
-  resterait bloqué indéfiniment sur ce canal (index unique partiel, §1 de la conception D1).
+  (§2) — sans quoi un envoi interrompu (processus arrêté entre l'écriture `pending` et le résultat
+  final) resterait bloqué indéfiniment sur ce canal (index unique partiel, §1 de la conception
+  D1). Ce seuil de 10 minutes a été revérifié (Task 5) contre la latence réelle du plus lent des
+  deux adaptateurs : l'envoi Instagram (`lib/diffusion/meta/instagram.ts`) crée un conteneur média
+  puis sonde son statut par intervalles de 3 s jusqu'à 10 tentatives avant de publier — pire cas
+  théorique ≈4,5 minutes (12 appels Graph, chacun borné à 20 s, plus les pauses entre sondages),
+  contre un seuil par défaut de 10 minutes : une marge d'environ 2,2× a été jugée suffisante et le
+  défaut n'a pas été resserré (voir `lib/diffusion/scheduler.ts`, `stalePendingMinutes()`, pour le
+  calcul détaillé). Ne baissez cette variable qu'en connaissance de cause : un seuil trop court
+  peut réclamer comme « bloqué » un envoi Instagram encore légitimement en cours, ce qui expose au
+  risque de double-publication documenté dans les deux adaptateurs (aucun des deux n'a de clé
+  d'idempotence côté Graph pour s'en protéger).
 - **Diffusion bloquée avant tout envoi (alerte)** : si un tic dû se voit refuser AVANT même
   d'écrire une ligne `distributions` (rendu en échec, stockage R2 non configuré, aucun gabarit
   « post social » configuré pour ce canal), l'article resterait sinon sélectionné identiquement à
@@ -353,11 +468,12 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
 - **Studio — `/studio/generer` sans gabarit publié** : les trois contextes à saisie manuelle (`quote_card`, `newsletter_header`, `recap_card`) n'ont **aucun gabarit de départ** (`bun run db:studio-templates` ne sème que `article_image`/`social_post`) — tant que personne n'en a créé un depuis **Studio → Gabarits** (`/studio`, bouton « Nouveau gabarit ») puis publié dans son éditeur (`/studio/[id]`), la génération répond « Aucun gabarit publié pour ce contexte. Créez-en un et publiez-le depuis Studio → Gabarits avant de générer. » plutôt qu'un état vide silencieux.
 - **Idempotence** : republier met à jour le post WP existant (via `distributions.externalId`), jamais de doublon.
 - **Dépublier / Republier** : depuis l'éditeur d'un article publié (rôles Éditeur/Admin).
-- **Diffusion réseaux sociaux (D1)** : `/settings/social/[canal]` (admin uniquement) — activation du
-  canal, limite de légende (bornée par le plafond officiel de chaque réseau), prompt personnalisé,
-  et publication automatique (désactivée par défaut, voir §6.5). D1 ne fournit aucun adaptateur
-  réel : tout envoi (manuel depuis `/article/[id]` ou automatique) passe par `StubChannel`, qui
-  journalise sans jamais contacter un vrai réseau.
+- **Diffusion réseaux sociaux (D1 + D2/D3)** : `/settings/social/[canal]` (admin uniquement) —
+  identifiants chiffrés + bouton « Tester la connexion » pour Facebook/Instagram (§2), activation
+  du canal, limite de légende (bornée par le plafond officiel de chaque réseau), prompt
+  personnalisé, et publication automatique (désactivée par défaut, voir §6.5). Facebook et
+  Instagram publient réellement via l'API Graph de Meta ; WhatsApp, X, TikTok et LinkedIn passent
+  encore par `StubChannel`, qui journalise sans jamais contacter un vrai réseau (voir §6.5).
 - **Sécurité** : secrets uniquement en `.env`/gestionnaire de secrets ; endpoints cron bearer-gardés ; RBAC appliqué **côté serveur** sur chaque action (pas seulement l'UI) ; un admin ne peut pas se verrouiller lui-même (anti-lockout).
 
 ---
@@ -386,3 +502,7 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
 | « Aucun gabarit publié pour ce contexte » sur `/studio/generer` | Normal pour `quote_card`/`newsletter_header`/`recap_card` tant qu'aucun gabarit n'a été créé (**Studio → Gabarits**, `/studio`, bouton « Nouveau gabarit ») **et publié** dans son éditeur (`/studio/[id]`) pour ce contexte (aucun gabarit de départ ne les couvre). |
 | Gabarit qui échoue avec « Valeurs manquantes pour : brand.logo. » | `STUDIO_BRAND_LOGO_URL` n'est pas posée (§2) — optionnelle, mais tout gabarit qui référence `{{brand.logo}}` l'exige. |
 | Publication qui échoue avec « Génération de l'image échouée — … » (article laissé `approved`) | R2 **est** configuré et un gabarit `article_image` s'est résolu pour la catégorie de l'article, mais son rendu a échoué (V3, §2/§8) — le message nomme la cause (jetons manquants, échec moteur…). Corriger la cause (ex. compléter l'image/la catégorie de l'article, ou `STUDIO_BRAND_LOGO_URL` si le gabarit y fait référence) puis relancer la publication (« Approuver & publier » ou **Republier**) ; la barrière de revue n'est pas affectée, l'article reste réessayable. |
+| « Le jeton d'accès Facebook/Instagram a expiré ou n'est plus valide » (envoi ou « Tester la connexion ») | Code Graph 190 — le jeton de Page stocké n'authentifie plus (§2, point 4). Régénérer un jeton de Page (§2, point 3) et l'enregistrer sur `/settings/social/facebook`/`instagram`, puis « Tester la connexion » avant de réessayer un envoi. |
+| « Impossible de déchiffrer les identifiants Facebook/Instagram enregistrés… » (envoi ou « Tester la connexion ») | `CREDENTIALS_ENCRYPTION_KEY` a changé depuis l'enregistrement des identifiants de ce canal (rotation accidentelle, ou un seul champ ressaisi après une rotation — voir l'avertissement en §2). Sur `/settings/social/facebook`/`instagram` : **« Supprimer »** puis ressaisir **tous** les champs d'identifiants du canal, pas seulement celui qui semble en cause — voir la procédure de récupération complète en §2. Un envoi automatique en échec pour cette raison n'écrit ni jeton ni clé dans `lastError` ; le message reste identique à celui affiché ici. |
+| « Tester la connexion » échoue avec une erreur Graph autre qu'un jeton expiré | Le plus souvent : App Review Meta pas encore passée (permissions encore limitées aux rôles admin/testeur, §2 point 2) ou identifiant de Page/IG User ID incorrect. Le détail affiché reprend le message Graph d'origine. |
+| Envoi Instagram qui échoue à l'étape du conteneur (« statut : ERROR »/« délai d'attente dépassé ») | L'image source (`featuredImageUrl` ou le rendu du gabarit) doit être accessible publiquement en HTTPS ; Instagram met parfois plus de temps que le sondage borné (~4,5 min pire cas, `lib/diffusion/meta/instagram.ts`) ne l'anticipe — réessayer l'envoi. Voir §6.5 pour le raisonnement derrière `DIFFUSION_STALE_PENDING_MINUTES`. |

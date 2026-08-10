@@ -10,16 +10,22 @@
 // attributes and helper text are a UX nicety, not the source of truth.
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { updateChannelSettings } from "@/lib/actions/diffusion-settings-actions";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { formatDate } from "@/lib/format";
+import {
+  updateChannelSettings, updateChannelCredentials, deleteChannelCredentials, testChannelConnection,
+} from "@/lib/actions/diffusion-settings-actions";
 import type { Channel } from "@/lib/studio";
 import type { SocialChannelSettings } from "@/lib/diffusion/settings-core";
+
+export type CredentialField = { key: string; label: string };
 
 export type CaptionLimits = { min: number; max: number; default: number };
 
@@ -48,16 +54,40 @@ function toFormState(settings: SocialChannelSettings): FormState {
 }
 
 export function SocialChannelForm({
-  channel, label, captionLimits, settings,
+  channel, label, captionLimits, settings, credentialFields = [],
 }: {
   channel: Channel;
   label: string;
   captionLimits: CaptionLimits;
   settings: SocialChannelSettings;
+  // Task 1 (D2+D3) — which credential inputs to show, driven by SOCIAL_CHANNELS[channel]
+  // .credentialFields (lib/diffusion/channels.ts), NOT hard-coded here: a channel with an empty
+  // array (WhatsApp today) renders no credentials card at all. Optional/defaulted to `[]` so a
+  // caller that hasn't wired credentials for a given channel yet doesn't have to pass anything.
+  credentialFields?: readonly CredentialField[];
 }) {
   const [form, setForm] = useState<FormState>(toFormState(settings));
   const [error, setError] = useState<string | null>(null);
   const [isSaving, startSaving] = useTransition();
+
+  // `credentialValues` holds ONLY what the admin is currently typing — write-only by construction:
+  // it is NEVER initialized from `settings` (there is nothing to initialize it from; the decrypted
+  // value never reaches this component in the first place, see settings-core.ts's own comment on
+  // why), and is reset to `{}` after every successful save/delete so a value that was just typed
+  // is never redisplayed. `credentialsSetAt` starts from the settings row and is updated locally
+  // from each guarded action's own (sanitized) return value, so the "Défini le …" / "Non défini"
+  // status reflects the latest save without a full page reload.
+  const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
+  const [credentialsSetAt, setCredentialsSetAt] = useState<Date | null>(settings.credentialsSetAt);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+  const [isSavingCredentials, startSavingCredentials] = useTransition();
+
+  // Task 5 (D2+D3) — "Tester la connexion" result. Always reflects the credentials currently STORED
+  // server-side (testChannelConnection re-reads them itself), never whatever is mid-edit in
+  // `credentialValues` above — cleared on every save/delete below so a stale "vérifiée" never
+  // outlives the credentials it was actually run against.
+  const [connectionTest, setConnectionTest] = useState<{ ok: boolean; detail: string } | null>(null);
+  const [isTestingConnection, startTestingConnection] = useTransition();
 
   function handleSave() {
     const captionMaxChars = Number(form.captionMaxChars);
@@ -106,8 +136,84 @@ export function SocialChannelForm({
     });
   }
 
+  // Only the fields the admin actually TYPED SOMETHING into are sent — an untouched field keeps
+  // whatever was already stored server-side (setChannelCredentialsCore's merge semantics,
+  // lib/diffusion/settings-core.ts), matching what a write-only, never-pre-filled input can
+  // actually mean by "left blank" (there is no way to distinguish "unchanged" from "clear this one
+  // field" from an empty input alone — that ambiguity is exactly why "Supprimer" is a separate,
+  // explicit, whole-channel action rather than "save an empty field").
+  function handleSaveCredentials() {
+    const values = Object.fromEntries(
+      Object.entries(credentialValues).filter(([, v]) => v.trim() !== ""),
+    );
+    if (Object.keys(values).length === 0) {
+      setCredentialError("Aucun identifiant à enregistrer.");
+      return;
+    }
+    setCredentialError(null);
+    setConnectionTest(null); // a prior "vérifiée" no longer applies to whatever is being saved now
+    startSavingCredentials(async () => {
+      try {
+        const res = await updateChannelCredentials(channel, values);
+        if (!res.ok) {
+          setCredentialError(res.message);
+          toast.error(res.message);
+          return;
+        }
+        setCredentialsSetAt(res.settings.credentialsSetAt);
+        setCredentialValues({}); // write-only: never keep what was just typed, saved or not
+        toast.success(`Identifiants ${label} enregistrés.`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Échec de l'enregistrement.";
+        setCredentialError(message);
+        toast.error(message);
+      }
+    });
+  }
+
+  async function handleDeleteCredentials() {
+    try {
+      const res = await deleteChannelCredentials(channel);
+      if (!res.ok) {
+        toast.error(res.message);
+        return;
+      }
+      setCredentialsSetAt(res.settings.credentialsSetAt);
+      setCredentialValues({});
+      setConnectionTest(null); // nothing left to have verified
+      toast.success(`Identifiants ${label} supprimés.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Échec de la suppression.");
+    }
+  }
+
+  // Task 5 (D2+D3) — one free Graph read against the credentials currently SAVED for this channel
+  // (testChannelConnection re-reads them server-side; see that action's own comment on why it never
+  // reads `credentialValues`). setError-style local state, not a toast-only affordance: the brief
+  // asks the result to show WHICH channel/account it reached, which needs to persist on-screen, not
+  // just flash in a toast.
+  function handleTestConnection() {
+    setConnectionTest(null);
+    startTestingConnection(async () => {
+      try {
+        const res = await testChannelConnection(channel);
+        setConnectionTest(res);
+        if (res.ok) toast.success(res.detail);
+        else toast.error(res.detail);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Échec du test de connexion.";
+        setConnectionTest({ ok: false, detail });
+        toast.error(detail);
+      }
+    });
+  }
+
   return (
-    <div className="max-w-2xl space-y-4">
+    // Task 4 review, deferred Minor (a): width is constrained ONCE, by the page-level wrapper
+    // (app/(app)/settings/social/[channel]/page.tsx, which also wraps <ChannelSetupGuide> in the
+    // SAME max-w-2xl) — this root only needs its OWN vertical rhythm between its cards, not a
+    // second, redundant max-w-2xl.
+    <div className="space-y-4">
       <h1 className="text-xl font-semibold">{label}</h1>
 
       <Card>
@@ -125,6 +231,84 @@ export function SocialChannelForm({
           </div>
         </CardContent>
       </Card>
+
+      {credentialFields.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Identifiants</CardTitle>
+            <CardDescription>
+              {credentialsSetAt ? `Défini le ${formatDate(credentialsSetAt)}.` : "Non défini."}{" "}
+              Les champs ci-dessous n&apos;affichent jamais la valeur enregistrée — ils ne servent
+              qu&apos;à écrire une nouvelle valeur, qui remplace l&apos;ancienne dès l&apos;enregistrement.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {credentialFields.map((f) => (
+              <div key={f.key} className="space-y-1.5">
+                <Label htmlFor={`cred-${f.key}`}>{f.label}</Label>
+                <Input
+                  id={`cred-${f.key}`} type="password" autoComplete="off" disabled={isSavingCredentials}
+                  value={credentialValues[f.key] ?? ""}
+                  placeholder={credentialsSetAt ? "•••••••• (laisser vide pour ne pas modifier)" : "Non défini"}
+                  onChange={(e) => setCredentialValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </CardContent>
+          <CardFooter className="flex-col items-stretch gap-3">
+            {credentialError && <p className="text-sm text-destructive" role="alert">{credentialError}</p>}
+            {connectionTest && (
+              <p
+                className={`flex items-start gap-1.5 text-sm ${connectionTest.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}
+                role={connectionTest.ok ? "status" : "alert"}
+              >
+                {connectionTest.ok ? (
+                  <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden />
+                ) : (
+                  <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                )}
+                {connectionTest.detail}
+              </p>
+            )}
+            <div className="flex items-center justify-between gap-2">
+              <ConfirmDialog
+                trigger={
+                  <Button
+                    variant="ghost" size="sm" disabled={isSavingCredentials || !credentialsSetAt}
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    Supprimer
+                  </Button>
+                }
+                title={`Supprimer les identifiants ${label} ?`}
+                description={`${label} ne pourra plus envoyer tant que de nouveaux identifiants ne sont pas enregistrés.`}
+                confirmLabel="Supprimer"
+                destructive
+                onConfirm={handleDeleteCredentials}
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button" variant="outline" size="sm"
+                  onClick={handleTestConnection}
+                  disabled={isTestingConnection || isSavingCredentials || !credentialsSetAt}
+                >
+                  {isTestingConnection && <Loader2 className="animate-spin" aria-hidden />}
+                  {isTestingConnection ? "Test en cours…" : "Tester la connexion"}
+                </Button>
+                <Button onClick={handleSaveCredentials} disabled={isSavingCredentials} size="sm">
+                  {isSavingCredentials && <Loader2 className="animate-spin" aria-hidden />}
+                  {isSavingCredentials ? "Enregistrement…" : "Enregistrer les identifiants"}
+                </Button>
+              </div>
+            </div>
+            {!credentialsSetAt && (
+              <p className="text-xs text-muted-foreground">
+                Enregistrez des identifiants avant de tester la connexion.
+              </p>
+            )}
+          </CardFooter>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

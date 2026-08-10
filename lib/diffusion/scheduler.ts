@@ -45,14 +45,27 @@ import type { RenderStore } from "@/lib/studio/store";
 // it via process.env without re-importing this module, same reasoning as
 // parsePipelineConfig(process.env) being called fresh per read rather than once at startup.
 //
-// D1 ships zero real adapters, so 10 minutes is safe today by construction — StubChannel.send does
-// no I/O at all. The moment a real adapter (D2+) lands, this cutoff becomes a correctness
-// assumption about that adapter's own latency, and it cuts BOTH ways: too short reclaims a
-// genuinely in-flight send (a second attempt could double-post before the first's response even
-// lands); too long leaves a channel needlessly wedged after a real crash. Revisit this value against
-// real adapter latency once one exists — see the D1 spec's own "Post-revue" note for the matching
-// D2 obligation (write `externalId` as early as the API allows, so a resend can be short-circuited
-// instead of relying on this cutoff alone).
+// D1 shipped zero real adapters, so 10 minutes was safe by construction back then — StubChannel.send
+// does no I/O at all. This cutoff cuts BOTH ways for a real adapter: too short reclaims a genuinely
+// in-flight send (a second attempt could double-post before the first's response even lands — see
+// facebook.ts's/instagram.ts's own header comments on that exact window); too long leaves a channel
+// needlessly wedged after a real crash.
+//
+// Task 5 (D2+D3) — revisited against the two real adapters that now exist, kept at 10 (unchanged).
+// The slower of the two by far is Instagram's bounded container poll (lib/diffusion/meta/
+// instagram.ts): worst-case theoretical latency is 12 Graph HTTP round trips (1 create-container +
+// up to pollMaxAttempts=10 status polls + 1 media_publish), each individually bounded by
+// GraphClient's own DEFAULT_TIMEOUT_MS=20s (graph-client.ts) — a call that legitimately takes just
+// under that ceiling still SUCCEEDS, it just hasn't hit the abort yet — plus 9 inter-poll sleeps of
+// pollIntervalMs=3s between the up-to-10 poll attempts. 12 × 20s + 9 × 3s = 240s + 27s = 267s, ≈4.5
+// minutes. Facebook (facebook.ts) is a single Graph call, so its own worst case is a small fraction
+// of that (≈20s). Against that ≈4.5-minute theoretical ceiling, the existing 10-minute (600s)
+// default keeps a ≈2.2× margin — comfortably safe without narrowing it, and narrowing it buys little
+// (the two adapters' well-documented at-least-once/duplicate-post windows above are already the
+// sharper, unclosed risk here — see their own header comments — so erring toward NOT reclaiming a
+// send that might still be genuinely in flight is the safer direction to round in). Kept at 10,
+// unchanged; see tests/diffusion-scheduler.test.ts's "cutoff configurable via
+// DIFFUSION_STALE_PENDING_MINUTES" describe block for the env-var override's own coverage.
 function stalePendingMinutes(): number {
   const raw = process.env.DIFFUSION_STALE_PENDING_MINUTES;
   const n = raw !== undefined ? Number(raw) : NaN;
