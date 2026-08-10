@@ -152,6 +152,15 @@ describe("SocialChannelForm — credentials card (Task 1: masked, write-only, D�
     autoEnabled: false, autoIntervalHours: 6, autoMaxBacklogDays: 3,
     autoWindowStartHour: 8, autoWindowEndHour: 20, lastAutoSendAt: null,
     updatedAt: new Date(),
+    // D7 review, Important 2 fix: credentialKeys is now what actually drives the PER-FIELD masked
+    // placeholder (settings.credentialKeys.includes(f.key)), not the channel-wide credentialsSetAt
+    // — a real settings row NEVER has credentialsSetAt set with an empty credentialKeys
+    // (setChannelCredentialsCore writes both together), so a fixture claiming "Défini le …" below
+    // must also declare which keys that implies, exactly like production data would. Facebook's own
+    // two fields — tests below that need "nothing saved yet" override credentialsSetAt to null
+    // (the header text stays governed by that field alone; only the per-field placeholder reads
+    // credentialKeys), and none of the other assertions here are sensitive to this value.
+    credentialKeys: ["pageId", "pageAccessToken"],
   };
 
   it("renders NO credentials card when the channel has no credentialFields (e.g. WhatsApp)", () => {

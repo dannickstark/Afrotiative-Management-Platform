@@ -27,6 +27,14 @@ export default async function Page({ params }: { params: Promise<{ channel: stri
   const settings = await getChannelSettings(channel);
   const { label, captionLimits, credentialFields } = SOCIAL_CHANNELS[channel];
   const guide = getSetupGuide(channel);
+  // Computed HERE, server-side, and passed down as a plain boolean — never inside
+  // SocialChannelForm (D7 review, Important 1): that component is "use client", and importing
+  // hasAllCredentials as a VALUE there would pull the whole settings-core.ts graph — including
+  // @/db's module-scope `pg` Pool, which has no browser build — into the client bundle for this
+  // page. `bun test`/`tsc --noEmit` cannot see that break; only a real build/dev-server load can
+  // (next.config.ts records two prior instances of exactly this blind spot). Reused for BOTH the
+  // guide's collapse below and the form's initial "Tester la connexion" gate.
+  const isConfigured = hasAllCredentials(channel, settings);
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -35,10 +43,10 @@ export default async function Page({ params }: { params: Promise<{ channel: stri
           two fields saved must still show as unconfigured — credentialsSetAt alone (non-null the
           moment ANY field is saved) can't tell that apart from "fully configured", which is exactly
           the D2+D3 final review bug this closes. */}
-      <ChannelSetupGuide guide={guide} credentialFields={credentialFields} defaultOpen={!hasAllCredentials(channel, settings)} />
+      <ChannelSetupGuide guide={guide} credentialFields={credentialFields} defaultOpen={!isConfigured} />
       <SocialChannelForm
         channel={channel} label={label} captionLimits={captionLimits} settings={settings}
-        credentialFields={credentialFields}
+        credentialFields={credentialFields} isConfigured={isConfigured}
       />
     </div>
   );

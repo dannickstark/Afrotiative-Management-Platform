@@ -151,7 +151,13 @@ export function hasAllCredentials(channel: Channel, settings: SocialChannelSetti
 
 In `setChannelCredentialsCore`: validate `channel` against `CHANNELS` and the incoming keys against that channel's `credentialFields` with a 4096-character value bound (put the schema in `lib/validation.ts` beside `channelCredentialsSchema`), then — before merging — attempt to decrypt each existing entry; on `DecryptionFailedError` return `{ ok: false, message: "Les identifiants déjà enregistrés ne peuvent plus être déchiffrés (la clé de chiffrement a changé ?). Utilisez « Supprimer » puis ressaisissez TOUS les champs." }`.
 
-In the two UI files: replace every `credentialsSetAt ? … : …` decision about *configured-ness* with `hasAllCredentials(...)`. Keep `credentialsSetAt` for the «&nbsp;Défini le …&nbsp;» date itself. The guide's `defaultOpen` becomes `!hasAllCredentials(channel, settings)`, and *Tester la connexion* is disabled unless it is true.
+In the two UI files: replace every `credentialsSetAt ? … : …` decision about *configured-ness* with full-presence logic. Keep `credentialsSetAt` for the «&nbsp;Défini le …&nbsp;» date itself. The guide's `defaultOpen` becomes `!isConfigured`, and *Tester la connexion* is disabled unless it is true.
+
+**Amended 2026-08-10 after Task 1's review — the original wiring was a plan defect.** `hasAllCredentials` must **not** be called from `components/settings/social-channel-form.tsx`: that file is `"use client"`, and importing a *value* from `settings-core.ts` pulls its `@/db` import — and `db/index.ts`'s module-scope `pg` `Pool` — into the client bundle for this very page. `bun test` and `tsc --noEmit` both pass it; `next.config.ts` records two prior instances of exactly this blind spot, visible only in a real build. Instead:
+
+- **`page.tsx` (Server Component) computes `isConfigured = hasAllCredentials(channel, settings)`** and passes it to the form as a boolean prop.
+- The client form keeps **no** `settings-core` value import.
+- For **per-field** decisions (the masked placeholder that says «&nbsp;laisser vide pour ne pas modifier&nbsp;»), the form uses `settings.credentialKeys.includes(f.key)` — plain array logic on data it already receives, and a key list is not sensitive. A channel-wide flag must never drive a per-field placeholder: with two fields, saving one would otherwise tell the admin both are already set.
 
 - [ ] **Step 4: Run the tests and confirm they pass**
 

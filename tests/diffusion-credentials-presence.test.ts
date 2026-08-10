@@ -1,5 +1,7 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterEach, afterAll } from "bun:test";
 import { randomBytes } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { db, socialChannelSettings } from "@/db";
 import { hasAllCredentials, getChannelSettings, setChannelCredentialsCore } from "@/lib/diffusion/settings-core";
 
 // This suite exercises real encrypt/decrypt round trips end to end (setChannelCredentialsCore
@@ -18,6 +20,23 @@ afterAll(() => {
   if (SAVED_KEY === undefined) delete process.env.CREDENTIALS_ENCRYPTION_KEY;
   else process.env.CREDENTIALS_ENCRYPTION_KEY = SAVED_KEY;
 });
+
+// "facebook" is a real channel with DECLARED credentialFields (pageId/pageAccessToken) — needed
+// because several assertions below depend on that exact two-field shape (and on "organizationUrn"
+// being a key Facebook does NOT declare); no dedicated non-production fixture channel has any
+// credentialFields to test against. tests/diffusion-settings.test.ts, tests/diffusion-facebook.
+// test.ts and tests/diffusion-connection-test.test.ts already share "facebook" as a fixture the
+// same way, and each cleans up its own row (D7 review, Important 3 — this file must too, not rely
+// on a sibling's cleanup or on the shared Neon dev branch happening to be clean). Deleted before
+// the suite starts AND after every single test, so no test here ever depends on residue left by a
+// previous test in this file (the first test's `credentialKeys` assertion specifically requires a
+// row with pageId and NOTHING else) and nothing here outlives this file's own run.
+async function deleteFacebookRow() {
+  await db.delete(socialChannelSettings).where(eq(socialChannelSettings.channel, "facebook"));
+}
+beforeAll(deleteFacebookRow);
+afterEach(deleteFacebookRow);
+afterAll(deleteFacebookRow);
 
 describe("credential presence means ALL declared fields (D2+D3 final review, M6)", () => {
   test("saving only pageId leaves Facebook reported as NOT configured", async () => {
