@@ -3,14 +3,27 @@ import { parsePrefs, serializePrefs, DEFAULT_PREFS, RAIL_CATEGORIES, RAIL_LABELS
 
 describe("editor prefs — pure, never throws", () => {
   it("returns defaults for null, empty, corrupt JSON and wrong-shaped JSON", () => {
-    for (const raw of [null, "", "{", "[]", '{"openPanel":42}', '{"zoom":"enormous"}']) {
+    for (const raw of [null, "", "{", "[]", '{"openPanel":42}', '{"zoom":"enormous"}', '{"recentShapes":"rect"}', '{"recentShapes":42}']) {
       expect(parsePrefs(raw)).toEqual(DEFAULT_PREFS);
     }
   });
 
   it("round-trips a full prefs object", () => {
-    const p = { openPanel: "texte" as const, rulers: true, grid: true, safeAreas: false, zoom: 0.5, sectionsOpen: { "text.ombre": false } };
+    const p = {
+      openPanel: "texte" as const, rulers: true, grid: true, safeAreas: false, zoom: 0.5,
+      sectionsOpen: { "text.ombre": false }, recentShapes: ["qr", "rect"],
+    };
     expect(parsePrefs(serializePrefs(p))).toEqual(p);
+  });
+
+  it("a corrupt recentShapes falls back to [] rather than throwing, and filters non-string entries", () => {
+    // Tâche 4 (U1, spec §3) : même discipline « par champ » que sectionsOpen — une valeur qui n'est
+    // pas un tableau retombe sur le défaut du champ ([]) ; un tableau dont certaines entrées ne sont
+    // pas des chaînes garde les entrées valides plutôt que de faire tomber tout le champ.
+    expect(parsePrefs('{"recentShapes":"nope"}').recentShapes).toEqual([]);
+    expect(parsePrefs('{"recentShapes":null}').recentShapes).toEqual([]);
+    expect(parsePrefs('{"recentShapes":{"a":1}}').recentShapes).toEqual([]);
+    expect(parsePrefs('{"recentShapes":["rect",42,null,"qr"]}').recentShapes).toEqual(["rect", "qr"]);
   });
 
   it("defaults: no panel forced open, rulers and grid OFF, safe areas ON, zoom fit", () => {

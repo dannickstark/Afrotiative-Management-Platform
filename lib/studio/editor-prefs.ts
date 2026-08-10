@@ -24,6 +24,13 @@ export type EditorPrefs = {
   safeAreas: boolean; // default true
   zoom: number | "fit"; // default "fit"
   sectionsOpen: Record<string, boolean>; // key: `${layerType}.${sectionId}`
+  // Tâche 4 (U1, spec §3) : ids de lib/studio/shape-gallery.ts#ShapeTile récemment insérés depuis le
+  // panneau Éléments, LA PLUS RÉCENTE EN TÊTE. Ce module reste ignorant du catalogue de tuiles lui-
+  // même (aucun import de shape-gallery.ts ici, pour ne pas faire dépendre ce module PUR et générique
+  // d'un autre module métier) : il ne fait que transporter et valider la FORME (un tableau de
+  // chaînes), tandis que shape-gallery.ts#recentTilesFor résout ces ids en tuiles réelles et ignore
+  // ceux qui ne correspondent plus à rien.
+  recentShapes: string[];
 };
 
 export const DEFAULT_PREFS: EditorPrefs = {
@@ -33,6 +40,7 @@ export const DEFAULT_PREFS: EditorPrefs = {
   safeAreas: true,
   zoom: "fit",
   sectionsOpen: {},
+  recentShapes: [],
 };
 
 const RAIL_CATEGORY_SET = new Set<string>(RAIL_CATEGORIES);
@@ -68,6 +76,15 @@ function parseSectionsOpen(value: unknown): Record<string, boolean> {
   return out;
 }
 
+// Pas un `[]` du tout, ou un tableau dont certaines entrées ne sont pas des chaînes (corruption
+// partielle) -> les entrées non-chaînes sont filtrées plutôt que de faire tomber tout le champ,
+// même discipline « par champ, jamais en bloc » que le reste de ce module ; une valeur qui n'est
+// même pas un tableau retombe sur le défaut du champ ([]).
+function parseRecentShapes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string");
+}
+
 // Ne lève JAMAIS : une entrée `null`, vide, du JSON syntaxiquement invalide, un tableau ou un objet
 // dont chaque champ est du mauvais type retombent tous sur DEFAULT_PREFS (en bloc pour les deux
 // premiers cas, champ par champ pour le dernier — les deux convergent vers le même résultat quand
@@ -94,6 +111,7 @@ export function parsePrefs(raw: string | null): EditorPrefs {
     safeAreas: parseBooleanField(obj.safeAreas, DEFAULT_PREFS.safeAreas),
     zoom: parseZoom(obj.zoom),
     sectionsOpen: parseSectionsOpen(obj.sectionsOpen),
+    recentShapes: parseRecentShapes(obj.recentShapes),
   };
 }
 

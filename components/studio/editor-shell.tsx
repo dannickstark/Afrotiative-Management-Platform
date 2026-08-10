@@ -16,6 +16,7 @@ import { ModelesPanel } from "./panels/modeles-panel";
 import { ImagesPanel } from "./panels/images-panel";
 import { MarquePanel, type MarqueCategoryColor } from "./panels/marque-panel";
 import { TextePanel } from "./panels/texte-panel";
+import { ElementsPanel } from "./panels/elements-panel";
 import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { PreviewPane } from "./preview-pane";
@@ -27,6 +28,7 @@ import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
 import { nextOpenPanel, type RailCategory } from "@/lib/studio/editor-prefs";
+import { withRecentShape } from "@/lib/studio/shape-gallery";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
 import type { TemplateVersionRow, PreviewArticleOption, TemplateRow, CategoryOption } from "@/lib/queries/studio";
@@ -358,13 +360,20 @@ function EditorShellInner({
             )}
             {/* Modèles / Images / Marque (Tâche 2, U1 spec §3) : chaque panneau HÉBERGE une surface
                 existante (templates-table.tsx, asset-picker.tsx) plutôt que d'en reconstruire une
-                copie — voir le rapport de la Tâche 2. Texte (Tâche 3, spec §4) insère désormais un
-                calque via `dispatch` — voir components/studio/panels/texte-panel.tsx pour le
-                cheminement complet clic -> calque lié. Éléments reste un panneau vide : Tâche 4 le
-                remplit, même choix délibéré qu'à la Tâche 1 (un panneau vide est honnête, un bouton
-                de rail désactivé ne le serait pas). */}
+                copie — voir le rapport de la Tâche 2. Texte (Tâche 3, spec §4) et Éléments (Tâche 4,
+                spec §3) insèrent désormais un calque via `dispatch` — voir
+                components/studio/panels/texte-panel.tsx et panels/elements-panel.tsx pour le
+                cheminement complet clic -> calque lié. */}
             {prefs.openPanel === "modeles" && (
               <ModelesPanel templates={templates} categories={categories} />
+            )}
+            {prefs.openPanel === "elements" && (
+              <ElementsPanel
+                canvas={{ width: template.width, height: template.height }}
+                recentShapes={prefs.recentShapes}
+                dispatch={dispatch}
+                onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
+              />
             )}
             {prefs.openPanel === "texte" && (
               <TextePanel
