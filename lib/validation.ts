@@ -225,6 +225,50 @@ export const channelCredentialsSchema = z.record(
 ).refine((v) => Object.keys(v).length > 0, { message: "Aucun identifiant à enregistrer." });
 export type ChannelCredentialsInput = z.infer<typeof channelCredentialsSchema>;
 
+// D7 credential debt (D2+D3 final review, M8/M9) — channelCredentialsSchema above validates SHAPE
+// only (a non-empty map of non-empty strings) because it has no channel argument, so it cannot know
+// which field NAMES are legal. setChannelCredentialsCore (lib/diffusion/settings-core.ts) DOES know
+// the channel, and calls this with that channel's own declared field keys
+// (SOCIAL_CHANNELS[channel].credentialFields, lib/diffusion/channels.ts) to catch two things
+// channelCredentialsSchema alone cannot: a key that isn't declared for this channel (M8 — a typo, or
+// a value copy-pasted from a different channel's form) and a value over 4096 characters (M9 —
+// generous for a page id / access token / URN, but not unbounded: an operator pasting an entire file
+// into a credential field must be refused, not silently stored as-is). Same `{ ok, message }` shape
+// as validateCategoryColor below — a plain function, not a zod schema, because the set of legal keys
+// is only known at CALL time (one channel's credentialFields), not something a static zod shape can
+// express without being rebuilt per channel anyway.
+const CHANNEL_CREDENTIAL_VALUE_MAX_LENGTH = 4096;
+
+export function validateChannelCredentialFields(
+  declaredKeys: readonly string[],
+  values: Record<string, string>,
+): { ok: true } | { ok: false; message: string } {
+  // A channel with NO declared fields yet (lib/diffusion/channels.ts's `credentialFields: []` —
+  // today whatsapp/x/tiktok/linkedin) has no known shape to validate a key NAME against: that `[]`
+  // means "this channel's credential schema isn't defined in the registry yet", not "no field is
+  // ever legal". Rejecting every key for such a channel would also reject the field names its own
+  // future adapter task will introduce — and, concretely, would break the credential-storage tests
+  // already exercising a not-yet-adapted channel with its OWN placeholder field names (see
+  // tests/diffusion-crypto.test.ts's "linkedin" fixture). The length bound below still applies
+  // regardless — that one is a universal sanity bound, not tied to a specific field name.
+  if (declaredKeys.length > 0) {
+    for (const key of Object.keys(values)) {
+      if (!declaredKeys.includes(key)) {
+        return { ok: false, message: `Champ d'identifiant inconnu pour ce canal : « ${key} ».` };
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (value.length > CHANNEL_CREDENTIAL_VALUE_MAX_LENGTH) {
+      return {
+        ok: false,
+        message: `La valeur du champ « ${key} » dépasse la longueur maximale autorisée (${CHANNEL_CREDENTIAL_VALUE_MAX_LENGTH} caractères).`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 // wp_categories.color — the {{category.color}} token setCategoryColor writes (V2 Task 3, closing
 // the V1-documented gap: the column and the render read existed, nothing could write it). Strict
 // #RRGGBB only: no 3-digit shorthand (#FFF), no alpha channel, no CSS colour names — the studio's

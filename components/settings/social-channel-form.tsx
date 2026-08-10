@@ -23,7 +23,7 @@ import {
   updateChannelSettings, updateChannelCredentials, deleteChannelCredentials, testChannelConnection,
 } from "@/lib/actions/diffusion-settings-actions";
 import type { Channel } from "@/lib/studio";
-import type { SocialChannelSettings } from "@/lib/diffusion/settings-core";
+import { hasAllCredentials, type SocialChannelSettings } from "@/lib/diffusion/settings-core";
 
 export type CredentialField = { key: string; label: string };
 
@@ -79,8 +79,22 @@ export function SocialChannelForm({
   // status reflects the latest save without a full page reload.
   const [credentialValues, setCredentialValues] = useState<Record<string, string>>({});
   const [credentialsSetAt, setCredentialsSetAt] = useState<Date | null>(settings.credentialsSetAt);
+  // `credentialKeys` (D7 credential debt, spec §5 item 1) — which fields are CURRENTLY stored,
+  // updated locally from each guarded action's own return value exactly like `credentialsSetAt`
+  // above, so `isConfigured` below reflects the latest save without a full page reload. `?? []`
+  // guards a `settings` object that predates this field (still possible from a caller that hasn't
+  // been touched to pass it) rather than crashing on `.includes` of `undefined`.
+  const [credentialKeys, setCredentialKeys] = useState<string[]>(settings.credentialKeys ?? []);
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [isSavingCredentials, startSavingCredentials] = useTransition();
+
+  // "Configured" means EVERY declared field is present, not merely that credentialsSetAt is non-null
+  // (D2+D3 final review, M6 — a single saved field used to be enough to claim the channel ready).
+  // Drives the setup guide's collapse (page.tsx) and, below, whether *Tester la connexion* is
+  // reachable — `credentialsSetAt` itself keeps meaning only "last write date" (the « Défini le … »
+  // text and *Supprimer*'s availability, since deleting a partial/broken credential set must stay
+  // possible precisely when it is NOT fully configured).
+  const isConfigured = hasAllCredentials(channel, { ...settings, credentialKeys });
 
   // Task 5 (D2+D3) — "Tester la connexion" result. Always reflects the credentials currently STORED
   // server-side (testChannelConnection re-reads them itself), never whatever is mid-edit in
@@ -161,6 +175,7 @@ export function SocialChannelForm({
           return;
         }
         setCredentialsSetAt(res.settings.credentialsSetAt);
+        setCredentialKeys(res.settings.credentialKeys);
         setCredentialValues({}); // write-only: never keep what was just typed, saved or not
         toast.success(`Identifiants ${label} enregistrés.`);
       } catch (err) {
@@ -179,6 +194,7 @@ export function SocialChannelForm({
         return;
       }
       setCredentialsSetAt(res.settings.credentialsSetAt);
+      setCredentialKeys(res.settings.credentialKeys);
       setCredentialValues({});
       setConnectionTest(null); // nothing left to have verified
       toast.success(`Identifiants ${label} supprimés.`);
@@ -290,7 +306,7 @@ export function SocialChannelForm({
                 <Button
                   type="button" variant="outline" size="sm"
                   onClick={handleTestConnection}
-                  disabled={isTestingConnection || isSavingCredentials || !credentialsSetAt}
+                  disabled={isTestingConnection || isSavingCredentials || !isConfigured}
                 >
                   {isTestingConnection && <Loader2 className="animate-spin" aria-hidden />}
                   {isTestingConnection ? "Test en cours…" : "Tester la connexion"}
@@ -301,9 +317,9 @@ export function SocialChannelForm({
                 </Button>
               </div>
             </div>
-            {!credentialsSetAt && (
+            {!isConfigured && (
               <p className="text-xs text-muted-foreground">
-                Enregistrez des identifiants avant de tester la connexion.
+                Enregistrez TOUS les identifiants ci-dessus avant de tester la connexion.
               </p>
             )}
           </CardFooter>

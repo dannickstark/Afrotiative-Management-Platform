@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { getChannelSettings } from "@/lib/diffusion/settings-core";
+import { getChannelSettings, hasAllCredentials } from "@/lib/diffusion/settings-core";
 import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
 import { getSetupGuide } from "@/lib/diffusion/setup-guide";
 import { CHANNELS, type Channel } from "@/lib/studio";
@@ -30,9 +30,12 @@ export default async function Page({ params }: { params: Promise<{ channel: stri
 
   return (
     <div className="max-w-2xl space-y-4">
-      {/* Collapsed once credentials are set, expanded when they are not (Task 4 brief) — same
-          credentialsSetAt signal social-channel-form.tsx already reads for its own status copy. */}
-      <ChannelSetupGuide guide={guide} credentialFields={credentialFields} defaultOpen={!settings.credentialsSetAt} />
+      {/* Collapsed once EVERY declared credential field is set, expanded otherwise (Task 4 brief,
+          corrected by the D7 credential debt fix, spec §5 item 1): a channel with only ONE of its
+          two fields saved must still show as unconfigured — credentialsSetAt alone (non-null the
+          moment ANY field is saved) can't tell that apart from "fully configured", which is exactly
+          the D2+D3 final review bug this closes. */}
+      <ChannelSetupGuide guide={guide} credentialFields={credentialFields} defaultOpen={!hasAllCredentials(channel, settings)} />
       <SocialChannelForm
         channel={channel} label={label} captionLimits={captionLimits} settings={settings}
         credentialFields={credentialFields}

@@ -10,23 +10,39 @@ import { db, socialChannelSettings } from "@/db";
 import { eq } from "drizzle-orm";
 import { SOCIAL_CHANNELS } from "./channels";
 import { CHANNELS, type Channel } from "@/lib/studio";
-import { getCryptoConfig, encryptSecret, decryptSecret } from "./crypto";
+import { getCryptoConfig, encryptSecret, decryptSecret, DecryptionFailedError } from "./crypto";
+import { validateChannelCredentialFields } from "@/lib/validation";
 
-// Every column EXCEPT the encrypted `credentials` blob. That blob never needs to leave the server:
-// nothing that renders UI or crosses a "use server" Server Action boundary needs the ciphertext
-// itself — only whether one is set (`credentialsSetAt`, still on this type) and, server-side only,
-// its DECRYPTED value (getDecryptedCredentials, below — a completely separate function, deliberately
-// not reachable from anything that returns this type). Omitting the field here means every function
-// in this module that returns `SocialChannelSettings` physically strips `credentials` off the row
-// before returning it (see omitCredentials) — a caller can't forget to sanitize because there's
-// nothing to remember; the type itself has no ciphertext-shaped hole to leak through.
-export type SocialChannelSettings = Omit<typeof socialChannelSettings.$inferSelect, "credentials">;
+// Every column EXCEPT the encrypted `credentials` blob, PLUS `credentialKeys` (D7 credential debt,
+// spec §5 item 1) — the field NAMES currently present in that blob, derived below in omitCredentials.
+// A key list is not sensitive (unlike a value): it is what lets a caller tell "one of two fields
+// saved" apart from "both saved" WITHOUT ever seeing what was typed. That blob itself never needs to
+// leave the server: nothing that renders UI or crosses a "use server" Server Action boundary needs
+// the ciphertext — only which keys are set (`credentialKeys`), WHEN they were last written
+// (`credentialsSetAt`, still on this type, unchanged meaning) and, server-side only, the DECRYPTED
+// values (getDecryptedCredentials, below — a completely separate function, deliberately not
+// reachable from anything that returns this type). Omitting `credentials` here means every function
+// in this module that returns `SocialChannelSettings` physically strips the blob off the row before
+// returning it (see omitCredentials) — a caller can't forget to sanitize because there's nothing to
+// remember; the type itself has no ciphertext-shaped hole to leak through.
+export type SocialChannelSettings = Omit<typeof socialChannelSettings.$inferSelect, "credentials"> & {
+  credentialKeys: string[];
+};
 
 type FullSettingsRow = typeof socialChannelSettings.$inferSelect;
 
 function omitCredentials(row: FullSettingsRow): SocialChannelSettings {
-  const { credentials: _credentials, ...rest } = row;
-  return rest;
+  const { credentials, ...rest } = row;
+  return { ...rest, credentialKeys: Object.keys(credentials ?? {}) };
+}
+
+// Presence = EVERY declared field, not any one of them (D2+D3 final review, M6). A channel with no
+// declared fields (whatsapp, x, tiktok today) is never "configured": an empty list must not report
+// as complete, which `every` on an empty array would.
+export function hasAllCredentials(channel: Channel, settings: SocialChannelSettings): boolean {
+  const declared = SOCIAL_CHANNELS[channel].credentialFields;
+  if (declared.length === 0) return false;
+  return declared.every((f) => settings.credentialKeys.includes(f.key));
 }
 
 // D1's placeholder baseline for a channel's settings row before an admin has ever visited
@@ -182,17 +198,60 @@ const NO_KEY_MESSAGE =
 
 // Encrypts every value in `values` and MERGES them into the channel's existing `credentials` blob —
 // a key not present in `values` keeps whatever it was already storing (e.g. rotating just the
-// access token without re-submitting the page id). Refuses UP FRONT, before any encryption or DB
-// write, when getCryptoConfig() is null: this is the brief's "a missing key must disable the
-// feature, not crash" applied to the actual write path, in French, exactly like
-// updateChannelSettingsCore's captionMaxChars refusal above.
+// access token without re-submitting the page id).
+//
+// Order of guards, each cheaper/more fundamental than the next, none skippable by the ones after it:
+//  1. `channel` itself must be a real entry in CHANNELS (D7 credential debt, spec §5 item 4) —
+//     refused in French BEFORE touching SOCIAL_CHANNELS[channel] (an unknown key there is
+//     `undefined`, and reading `.credentialFields` off it would throw a raw TypeError across the
+//     Server Action boundary instead of a clean message).
+//  2. The incoming field NAMES/lengths are validated against that channel's OWN credentialFields
+//     (spec §5 items 3/M8/M9) — lib/validation.ts's validateChannelCredentialFields, since it needs
+//     the channel to know which keys are legal.
+//  3. getCryptoConfig() must be configured — the brief's "a missing key must disable the feature,
+//     not crash" applied to the actual write path, in French, exactly like
+//     updateChannelSettingsCore's captionMaxChars refusal above.
+//  4. (below) every EXISTING entry must still decrypt before this write merges a new one in.
 export async function setChannelCredentialsCore(
   channel: Channel,
   values: Record<string, string>,
 ): Promise<SetCredentialsResult> {
+  if (!CHANNELS.includes(channel)) {
+    return { ok: false, message: `Canal social invalide : « ${channel} ».` };
+  }
+
+  const fieldsCheck = validateChannelCredentialFields(
+    SOCIAL_CHANNELS[channel].credentialFields.map((f) => f.key),
+    values,
+  );
+  if (!fieldsCheck.ok) return fieldsCheck;
+
   if (!getCryptoConfig()) return { ok: false, message: NO_KEY_MESSAGE };
 
   const current = await getOrCreateSettingsRow(channel);
+
+  // M7 (D2+D3 final review) — refuse to write if the EXISTING blob no longer decrypts under the
+  // active key (the key was rotated without re-entering credentials, or an earlier partial re-save
+  // already left a mixed-key blob). Merging a NEW value in under a DIFFERENT key than the rest of
+  // the blob was encrypted with would produce a blob where SOME fields decrypt and others throw
+  // forever — checked BEFORE any encryption or DB write, so a healthy blob (every entry decrypts)
+  // pays only the cost of the check, and a broken one is stopped from getting worse.
+  if (current.credentials) {
+    for (const ciphertext of Object.values(current.credentials)) {
+      try {
+        decryptSecret(ciphertext);
+      } catch (err) {
+        if (!(err instanceof DecryptionFailedError)) throw err;
+        return {
+          ok: false,
+          message:
+            "Les identifiants déjà enregistrés ne peuvent plus être déchiffrés (la clé de chiffrement a changé ?). " +
+            "Utilisez « Supprimer » puis ressaisissez TOUS les champs.",
+        };
+      }
+    }
+  }
+
   const merged: Record<string, string> = { ...(current.credentials ?? {}) };
   for (const [key, value] of Object.entries(values)) merged[key] = encryptSecret(value);
 
