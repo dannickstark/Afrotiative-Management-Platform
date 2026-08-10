@@ -212,8 +212,11 @@ connexion », `lib/diffusion/setup-guide.ts`) ; ce qui suit en est le résumé o
    création de la publication) — **mais ce n'est qu'un minimum** : le sondage
    (`lib/diffusion/linkedin/linkedin.ts`) se répète tant que l'image reste `WAITING_UPLOAD`/
    `PROCESSING` — le déroulement normal documenté par LinkedIn, pas un cas limite —, borné à 10
-   tentatives, donc **jusqu'à 13 requêtes pour une seule publication** dans le pire cas (4 appels
-   hors sondage à 20 s chacun + jusqu'à 10 sondages). Pour le calcul de capacité d'un opérateur qui
+   tentatives, donc **jusqu'à 13 requêtes pour une seule publication** dans le pire cas (3 appels
+   hors sondage — `initializeUpload`, `PUT`, `POST /rest/posts` — + jusqu'à 10 sondages ; le
+   téléchargement du rendu depuis R2/CDN, quatrième étape bornée à 20 s dans le calcul de latence du
+   §6.5, n'est pas un appel à l'API LinkedIn et ne compte donc pas dans ce quota-ci). Pour le calcul
+   de capacité d'un opérateur qui
    active la publication automatique sur LinkedIn en plus de Facebook/Instagram, retenir 4 comme
    plancher et 13 comme pire cas, pas une valeur fixe ; un `429` LinkedIn l'indique explicitement
    dans le message d'erreur affiché par l'adaptateur.

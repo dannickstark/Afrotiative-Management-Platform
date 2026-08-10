@@ -145,13 +145,17 @@ export function mapLinkedInApiError(err: unknown): string {
       );
     }
     // 429 — the Development Tier's 500-requests-per-app-per-day ceiling (spec §3.3); one send costs
-    // four. A generic "publication failed" would send an operator hunting in the wrong place.
+    // at least four, more if the image-status poll repeats (review round 2, D7 Task 6 fix: the
+    // earlier flat "quatre" here matched what the docs said before that same review round required
+    // "at least four, up to 13" there too — this message is the live string an operator actually
+    // sees, so it must not keep contradicting the corrected docs). A generic "publication failed"
+    // would send an operator hunting in the wrong place either way.
     if (err.status === 429) {
       return (
         "LinkedIn a refusé la requête : le quota quotidien de l'API semble épuisé (429). Le palier " +
         "de développement de l'API Community Management autorise 500 requêtes par application et par " +
-        "jour, et une seule publication en consomme quatre. Réessayez demain, ou demandez le passage " +
-        "au palier standard."
+        "jour, et une seule publication en consomme au moins quatre, jusqu'à treize si le sondage de " +
+        "l'image se répète. Réessayez demain, ou demandez le passage au palier standard."
       );
     }
     // 413 — LinkedIn itself rejected the image as too large (spec §3.2 step 1). Distinct from every
