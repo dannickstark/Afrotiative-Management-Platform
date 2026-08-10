@@ -104,6 +104,29 @@ describe("testFacebookConnection — fake Graph API (Task 5), no real network", 
     expect(result.detail).toContain("Unsupported get request.");
     expect(result.detail).not.toContain("SECRET-TOKEN-SHOULD-NEVER-APPEAR");
   });
+
+  // Review finding (Important 1): getDecryptedCredentials (settings-core.ts) calls decryptSecret
+  // (lib/diffusion/crypto.ts), which THROWS DecryptionFailedError when CREDENTIALS_ENCRYPTION_KEY
+  // has been rotated without re-entering credentials — a scenario this same diff's own
+  // DEPLOYMENT.md/.env.example text explicitly warns operators never to do, but documents as a
+  // real production risk. Before the fix, that throw was NOT caught by testFacebookConnection
+  // (only the GraphClient.get call was inside try/catch) — this test reproduces it by writing
+  // credentials under VALID_KEY, then swapping in a DIFFERENT, validly-shaped 32-byte key before
+  // reading them back, so decryptSecret's GCM auth-tag check fails exactly like a real rotation
+  // would. If the fix regresses, `await testFacebookConnection(...)` below rejects and this test
+  // fails with an uncaught exception, not a normal assertion failure.
+  it("a rotated/wrong encryption key: ok:false with a French message, never a thrown error — zero HTTP calls", async () => {
+    await setChannelCredentialsCore("facebook", { pageId: "112233445566778", pageAccessToken: "tok-abc-123" });
+    process.env.CREDENTIALS_ENCRYPTION_KEY = randomBytes(32).toString("base64"); // simulates rotation
+    try {
+      const result = await testFacebookConnection({ baseUrl: base });
+      expect(result.ok).toBe(false);
+      expect(result.detail.toLowerCase()).toContain("déchiffr"); // French, names the real failure
+      expect(requestCount).toBe(0); // the failure happens before any Graph call is ever made
+    } finally {
+      process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY; // restore — afterEach doesn't touch this var
+    }
+  });
 });
 
 describe("testInstagramConnection — fake Graph API (Task 5), no real network", () => {
@@ -182,5 +205,20 @@ describe("testInstagramConnection — fake Graph API (Task 5), no real network",
     expect(result.detail.toLowerCase()).toMatch(/expir/);
     expect(result.detail).toContain("/settings/social/instagram");
     expect(result.detail).not.toContain("expired-tok");
+  });
+
+  // Same review finding (Important 1) and same fix, mirrored for testInstagramConnection — see the
+  // Facebook describe block above for the full explanation.
+  it("a rotated/wrong encryption key: ok:false with a French message, never a thrown error — zero HTTP calls", async () => {
+    await setChannelCredentialsCore("instagram", { igUserId: "17841400000000000", pageAccessToken: "tok-ig-456" });
+    process.env.CREDENTIALS_ENCRYPTION_KEY = randomBytes(32).toString("base64"); // simulates rotation
+    try {
+      const result = await testInstagramConnection({ baseUrl: base });
+      expect(result.ok).toBe(false);
+      expect(result.detail.toLowerCase()).toContain("déchiffr");
+      expect(requestCount).toBe(0);
+    } finally {
+      process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY;
+    }
   });
 });

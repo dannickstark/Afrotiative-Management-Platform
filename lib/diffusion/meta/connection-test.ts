@@ -41,14 +41,28 @@ const INSTAGRAM_MISSING =
 // Tests the credentials currently STORED for "facebook" (never whatever is unsaved in the form —
 // there is nothing else to test server-side; see social-channel-form.tsx's own comment on why
 // credential inputs are write-only). GET /{page-id}?fields=id,name.
+//
+// The WHOLE body is inside the try — not just the GraphClient.get call — same shape as
+// testIntegration (lib/actions/integration-actions.ts:11-14), the brief's own named model. Fix for
+// a review finding: getDecryptedCredentials (settings-core.ts) calls decryptSecret
+// (lib/diffusion/crypto.ts), which THROWS DecryptionFailedError if CREDENTIALS_ENCRYPTION_KEY was
+// rotated without re-entering credentials — documented in this same diff's own
+// DEPLOYMENT.md/.env.example text as a real, if discouraged, production scenario. Left uncaught,
+// that exception crosses the "use server" boundary (diffusion-settings-actions.ts's
+// testChannelConnection) and Next.js redacts it to a generic, non-French message in production
+// (node_modules/next/dist/docs/01-app/01-getting-started/10-error-handling.md: expected errors
+// should be modeled as return values, not thrown) — breaking both the French-strings requirement
+// and this feature's whole diagnostic purpose for exactly the "unconfigured/rotated encryption
+// key" edge case. Every other error path in this file already returns { ok: false, detail }; this
+// makes decryption failures no exception to that.
 export async function testFacebookConnection(clientConfig: GraphClientConfig = {}): Promise<ConnectionTestResult> {
-  const credentials = await getDecryptedCredentials("facebook");
-  const pageId = credentials?.pageId;
-  const pageAccessToken = credentials?.pageAccessToken;
-  if (!pageId || !pageAccessToken) return { ok: false, detail: FACEBOOK_MISSING };
-
-  const client = new GraphClient(clientConfig);
   try {
+    const credentials = await getDecryptedCredentials("facebook");
+    const pageId = credentials?.pageId;
+    const pageAccessToken = credentials?.pageAccessToken;
+    if (!pageId || !pageAccessToken) return { ok: false, detail: FACEBOOK_MISSING };
+
+    const client = new GraphClient(clientConfig);
     const page = await client.get<{ id?: string; name?: string }>(`/${pageId}`, {
       fields: "id,name",
       access_token: pageAccessToken,
@@ -65,14 +79,16 @@ export async function testFacebookConnection(clientConfig: GraphClientConfig = {
 }
 
 // Tests the credentials currently STORED for "instagram". GET /{ig-user-id}?fields=id,username.
+// Same whole-body try/catch as testFacebookConnection above, and for the identical reason
+// (getDecryptedCredentials can throw DecryptionFailedError on a rotated/wrong encryption key).
 export async function testInstagramConnection(clientConfig: GraphClientConfig = {}): Promise<ConnectionTestResult> {
-  const credentials = await getDecryptedCredentials("instagram");
-  const igUserId = credentials?.igUserId;
-  const pageAccessToken = credentials?.pageAccessToken;
-  if (!igUserId || !pageAccessToken) return { ok: false, detail: INSTAGRAM_MISSING };
-
-  const client = new GraphClient(clientConfig);
   try {
+    const credentials = await getDecryptedCredentials("instagram");
+    const igUserId = credentials?.igUserId;
+    const pageAccessToken = credentials?.pageAccessToken;
+    if (!igUserId || !pageAccessToken) return { ok: false, detail: INSTAGRAM_MISSING };
+
+    const client = new GraphClient(clientConfig);
     const account = await client.get<{ id?: string; username?: string }>(`/${igUserId}`, {
       fields: "id,username",
       access_token: pageAccessToken,
