@@ -15,22 +15,32 @@ import { CHANNEL_LABELS, type Channel } from "@/lib/studio";
 // guarded elsewhere in this codebase, not a reinterpretation of the feature:
 //
 // 1. The brief's example seeds "linkedin" as the CONFIGURED channel in every scenario that needs
-//    hasAllCredentials(channel, settings) to be true. But lib/diffusion/channels.ts's
-//    SOCIAL_CHANNELS.linkedin.credentialFields is STILL `[]` today — LinkedIn's two real fields
-//    (organizationUrn/accessToken) are Task 4's job (plan §"Produces"), not this one's — and
-//    hasAllCredentials (settings-core.ts) returns false unconditionally whenever declared.length
-//    === 0. tests/diffusion-setup-guide.test.ts already guards this exact fact (its "channels with
-//    no credential fields" test asserts that list is EXACTLY ["linkedin","tiktok","whatsapp","x"]),
-//    so populating linkedin's credentialFields here to make the brief's literal channel choice work
-//    would break that unrelated, already-green test outside this task's file list. Every scenario
-//    below that needs a GENUINELY configured channel (not vacuously "never configured, so of course
-//    nothing alerts") therefore uses "instagram" (real credentialFields: igUserId/pageAccessToken)
-//    in place of "linkedin", and keeps "facebook" for the brief's own facebook-based scenario
-//    unchanged. The one brief scenario that does NOT depend on hasAllCredentials — "saving
-//    credentials defaults tokenExpiresAt to ~60 days out" — keeps "linkedin" exactly as written:
-//    setChannelCredentialsCore accepts any key names for a channel with no declared fields yet
-//    (lib/validation.ts's validateChannelCredentialFields carve-out, already exercised the same way
-//    by tests/diffusion-crypto.test.ts's own "linkedin" fixture).
+//    hasAllCredentials(channel, settings) to be true. At the time THIS task (Task 2) shipped,
+//    lib/diffusion/channels.ts's SOCIAL_CHANNELS.linkedin.credentialFields was STILL `[]` —
+//    LinkedIn's two real fields (organizationUrn/accessToken) were Task 4's job (plan §"Produces"),
+//    not this one's — and hasAllCredentials (settings-core.ts) returns false unconditionally
+//    whenever declared.length === 0. tests/diffusion-setup-guide.test.ts already guarded this exact
+//    fact (its "channels with no credential fields" test asserted that list was EXACTLY
+//    ["linkedin","tiktok","whatsapp","x"]), so populating linkedin's credentialFields here to make
+//    the brief's literal channel choice work would have broken that unrelated, already-green test
+//    outside this task's file list. Every scenario below that needs a GENUINELY configured channel
+//    (not vacuously "never configured, so of course nothing alerts") therefore uses "instagram"
+//    (real credentialFields: igUserId/pageAccessToken) in place of "linkedin", and keeps "facebook"
+//    for the brief's own facebook-based scenario unchanged. The one brief scenario that does NOT
+//    depend on hasAllCredentials — "saving credentials defaults tokenExpiresAt to ~60 days out" —
+//    keeps "linkedin" exactly as written: at the time, setChannelCredentialsCore accepted any key
+//    names for linkedin under lib/validation.ts's validateChannelCredentialFields carve-out for a
+//    channel with no declared fields yet.
+//
+//    Correction (D7 final review, Issue 12): D7 Tasks 4/6 have SINCE given linkedin its own real
+//    declared keys (organizationUrn/accessToken) — the paragraph above is now a historical account of
+//    why this file's OTHER scenarios use instagram/facebook, not a live fact about linkedin today.
+//    The carve-out citation in the last sentence is also stale for the same reason:
+//    tests/diffusion-crypto.test.ts's "linkedin" fixture now saves under linkedin's real declared
+//    keys, so it no longer exercises that carve-out at all (see lib/validation.ts's own corrected
+//    comment). Restructuring this file's channel choices now that linkedin has real fields is out of
+//    this fix's scope — the behaviour below is unchanged, only this account of why it looks the way
+//    it does was wrong.
 //
 // 2. The brief's warnIfTokenExpiring sets `entityId: channel` on the alert. alerts.entity_id
 //    (db/schema.ts) is a `uuid` column, and a channel key ("linkedin", "facebook", …) is not a
@@ -181,5 +191,36 @@ describe("token expiry alerting (D7 spec §4)", () => {
     const days = (s.tokenExpiresAt!.getTime() - Date.now()) / 86_400_000;
     expect(days).toBeGreaterThan(59);
     expect(days).toBeLessThan(61);
+  });
+
+  // D7 final review, Important 1 — the reviewer's own second concrete ordering: an admin fixes a
+  // TYPO in organizationUrn (not a token rotation at all) after already having recorded the REAL
+  // expiry date. Before the fix, setChannelCredentialsCore reset tokenExpiresAt to "now + 60 days"
+  // on EVERY credential write, unconditionally — so this partial, non-token write would have
+  // silently discarded the admin-set date. This is the test that would FAIL if that reset were still
+  // unconditional: the admin-set date (45 days out) is neither ~60 days out (what the old,
+  // unconditional default would produce) nor anywhere close to it, so a regression back to the old
+  // behaviour changes the asserted value, it doesn't just weaken an assertion.
+  test("a second, partial credential write does not move an admin-set tokenExpiresAt date", async () => {
+    // First save — nothing stored yet, so tokenExpiresAt is seeded to the ~60-day default.
+    await setChannelCredentialsCore("linkedin", { organizationUrn: "urn:li:organization:typo", accessToken: "tok" });
+
+    // The admin then records the REAL date read off LinkedIn's Token Generator (setup-guide.ts's
+    // "Générer le jeton" step / docs/DEPLOYMENT.md §2 point 4) — deliberately NOT ~60 days out, so a
+    // silent reset back toward "now + 60 days" is unambiguous.
+    const adminSetDate = daysFromNow(45);
+    const correctionRes = await updateChannelSettingsCore("linkedin", { tokenExpiresAt: adminSetDate });
+    if (!correctionRes.ok) throw new Error(`updateChannelSettingsCore failed: ${correctionRes.message}`);
+
+    // A LATER write that only fixes a typo'd organizationUrn — accessToken is not re-submitted, so
+    // this is not a token rotation of any kind, just spec §5's ordinary "rotate one field" path.
+    const fixRes = await setChannelCredentialsCore("linkedin", { organizationUrn: "urn:li:organization:corrige" });
+    if (!fixRes.ok) throw new Error(`setChannelCredentialsCore failed: ${fixRes.message}`);
+
+    const s = await getChannelSettings("linkedin");
+    expect(s.tokenExpiresAt!.getTime()).toBe(adminSetDate.getTime()); // untouched by the typo fix
+    const days = (s.tokenExpiresAt!.getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(44);
+    expect(days).toBeLessThan(46); // nowhere near the ~60-day default the old, unconditional reset would have produced
   });
 });

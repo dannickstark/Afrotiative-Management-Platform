@@ -138,12 +138,22 @@ export async function generateCaption({ articleId, channel }: GenerateCaptionInp
   // the article has no WordPress distribution yet), captionBudget === maxChars and finalize is a
   // no-op passthrough to truncateCaption — this is what keeps Facebook/Instagram captions untouched.
   const permalink = await articlePermalink(articleId, channel);
-  const captionBudget = permalink
-    ? Math.max(0, maxChars - (permalink.length + URL_SEPARATOR.length))
-    : maxChars;
+  // Issue 6 (D7 final review) — when the permalink ALONE does not fit inside maxChars (a tiny
+  // captionMaxChars, or an unusually long permalink), the previous `Math.max(0, …)` floor let the
+  // reserved budget hit exactly 0. truncateCaption(text, 0) then returns "", and finalize still
+  // appended the untouched permalink anyway — producing "\n\n<permalink>", LONGER than maxChars, the
+  // exact invariant this budget dance exists to guarantee (spec §2). Reproduced concretely: maxChars
+  // = 20, a 30-char permalink → budget 0 → final caption 32 chars. LinkedIn's own captionLimits.min
+  // is 1, so an admin reaches this from the settings form alone, no LLM misbehavior required. Fixed
+  // the only way that keeps the invariant unconditionally: when the permalink cannot fit even on its
+  // own, it is not appended at all — the caption falls back to a plain, full-budget truncation,
+  // exactly like the "no permalink" case (not LinkedIn, or no WordPress distribution yet).
+  const permalinkFits = permalink !== null && maxChars - (permalink.length + URL_SEPARATOR.length) > 0;
+  const linkToAppend = permalinkFits ? permalink : null;
+  const captionBudget = linkToAppend ? maxChars - (linkToAppend.length + URL_SEPARATOR.length) : maxChars;
   const finalize = (text: string): string => {
     const truncated = truncateCaption(text, captionBudget);
-    return permalink ? `${truncated}${URL_SEPARATOR}${permalink}` : truncated;
+    return linkToAppend ? `${truncated}${URL_SEPARATOR}${linkToAppend}` : truncated;
   };
 
   const fallback = () => finalize(row.title);

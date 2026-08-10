@@ -2,7 +2,10 @@ import { describe, expect, test, beforeAll, afterEach, afterAll } from "bun:test
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, socialChannelSettings } from "@/db";
-import { hasAllCredentials, getChannelSettings, setChannelCredentialsCore } from "@/lib/diffusion/settings-core";
+import {
+  hasAllCredentials, getChannelSettings, setChannelCredentialsCore,
+  deleteChannelCredentialsCore, updateChannelSettingsCore,
+} from "@/lib/diffusion/settings-core";
 
 // This suite exercises real encrypt/decrypt round trips end to end (setChannelCredentialsCore
 // actually writes/merges an encrypted blob), so it needs a valid CREDENTIALS_ENCRYPTION_KEY of its
@@ -99,5 +102,27 @@ describe("credential input validation (M8, M9)", () => {
     // @ts-expect-error deliberately bypassing the type to reach the runtime guard
     const res = await setChannelCredentialsCore("not-a-channel", { pageId: "1" });
     expect(res.ok).toBe(false);
+  });
+
+  // D7 final review, Important 2 — spec §5 item 4's channel-validity guard landed on
+  // setChannelCredentialsCore alone; deleteChannelCredentialsCore and updateChannelSettingsCore
+  // reach the exact same getOrCreateSettingsRow → defaultsFor → SOCIAL_CHANNELS[channel].
+  // captionLimits.default path on an unknown channel, which throws a raw TypeError — reachable from
+  // an unauthenticated "use server" export (deleteChannelCredentials/updateChannelSettings,
+  // lib/actions/diffusion-settings-actions.ts) with no validation of its own. Without these two
+  // tests, the suite implied coverage of both writers that it did not actually have — only the `set`
+  // path was ever exercised here.
+  test("deleteChannelCredentialsCore refuses an unknown channel with a French message, not a TypeError", async () => {
+    // @ts-expect-error deliberately bypassing the type to reach the runtime guard
+    const res = await deleteChannelCredentialsCore("not-a-channel");
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message).toContain("Canal social invalide");
+  });
+
+  test("updateChannelSettingsCore refuses an unknown channel with a French message, not a TypeError", async () => {
+    // @ts-expect-error deliberately bypassing the type to reach the runtime guard
+    const res = await updateChannelSettingsCore("not-a-channel", { enabled: true });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message).toContain("Canal social invalide");
   });
 });

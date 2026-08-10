@@ -52,25 +52,53 @@ import type { RenderStore } from "@/lib/studio/store";
 // facebook.ts's/instagram.ts's own header comments on that exact window); too long leaves a channel
 // needlessly wedged after a real crash.
 //
-// Task 5 (D2+D3) — revisited against the two real adapters that now exist, kept at 10 (unchanged).
-// The slower of the two by far is Instagram's bounded container poll (lib/diffusion/meta/
-// instagram.ts): worst-case theoretical latency is 12 Graph HTTP round trips (1 create-container +
-// up to pollMaxAttempts=10 status polls + 1 media_publish), each individually bounded by
-// GraphClient's own DEFAULT_TIMEOUT_MS=20s (graph-client.ts) — a call that legitimately takes just
-// under that ceiling still SUCCEEDS, it just hasn't hit the abort yet — plus 9 inter-poll sleeps of
-// pollIntervalMs=3s between the up-to-10 poll attempts. 12 × 20s + 9 × 3s = 240s + 27s = 267s, ≈4.5
-// minutes. Facebook (facebook.ts) is a single Graph call, so its own worst case is a small fraction
-// of that (≈20s). Against that ≈4.5-minute theoretical ceiling, the existing 10-minute (600s)
-// default keeps a ≈2.2× margin — comfortably safe without narrowing it, and narrowing it buys little
-// (the two adapters' well-documented at-least-once/duplicate-post windows above are already the
-// sharper, unclosed risk here — see their own header comments — so erring toward NOT reclaiming a
-// send that might still be genuinely in flight is the safer direction to round in). Kept at 10,
-// unchanged; see tests/diffusion-scheduler.test.ts's "cutoff configurable via
-// DIFFUSION_STALE_PENDING_MINUTES" describe block for the env-var override's own coverage.
+// Task 5 (D2+D3), revisited again Task 6 (D7) against the THREE real adapters that now exist, kept
+// at 10 (unchanged). LinkedIn (lib/diffusion/linkedin/linkedin.ts) is now the slowest by far, not
+// Instagram — see docs/DEPLOYMENT.md §6.5 for the same figures spelled out for an operator: 4
+// timeout-bound steps (download the render, initializeUpload, PUT the bytes, POST /rest/posts), each
+// individually bounded by LinkedInClient's own DEFAULT_TIMEOUT_MS=20s (rest-client.ts) or, for the
+// download, linkedin.ts's own DOWNLOAD_TIMEOUT_MS=20s — a call that legitimately takes just under
+// that ceiling still SUCCEEDS, it just hasn't hit the abort yet — plus up to 10 status-poll GETs
+// (same 20s bound each) with 9 inter-poll sleeps of pollIntervalMs=3s between them. (4 + 10) × 20s +
+// 9 × 3s = 280s + 27s = 307s, ≈5.1 minutes. Instagram's own bounded container poll
+// (lib/diffusion/meta/instagram.ts) is next: 12 Graph HTTP round trips (1 create-container + up to
+// pollMaxAttempts=10 status polls + 1 media_publish), each bounded the same way, plus 9 inter-poll
+// sleeps of 3s — 12 × 20s + 9 × 3s = 240s + 27s = 267s, ≈4.5 minutes. Facebook (facebook.ts) is a
+// single Graph call, so its own worst case is a small fraction of either (≈20s). Against LinkedIn's
+// ≈5.1-minute theoretical ceiling — now the binding one — the existing 10-minute (600s) default
+// keeps a ≈1.95× margin: tighter than the ≈2.2× Instagram alone would give, but still comfortably
+// positive, and narrowing the default further buys little (the three adapters' well-documented
+// at-least-once/duplicate-post windows above are already the sharper, unclosed risk here — see their
+// own header comments — so erring toward NOT reclaiming a send that might still be genuinely in
+// flight is the safer direction to round in). Kept at 10, unchanged; see
+// tests/diffusion-scheduler.test.ts's "cutoff configurable via DIFFUSION_STALE_PENDING_MINUTES"
+// describe block for the env-var override's own coverage.
+//
+// Issue 7 (D7 final review) — the prose above is the only defence against narrowing this past
+// LinkedIn's own worst case; an operator lowering DIFFUSION_STALE_PENDING_MINUTES to "make retries
+// snappier" (the reviewer's own example: 5 minutes) would put the reaper INSIDE that ≈5.1-minute
+// window and reclaim a send that is still genuinely in flight — the consequence is not a wasted
+// retry, it is a DUPLICATED LIVE PUBLIC POST once the original request eventually completes. A floor
+// backs the prose with code: STALE_PENDING_FLOOR_MINUTES (6) is the smallest whole number of minutes
+// that still fully covers the ≈5.1-minute (307s) LinkedIn ceiling above (ceil(307s / 60) = 6),
+// leaving the operator free to shorten the default 10-minute cutoff somewhat without being able to
+// cross back into the danger zone the paragraph above spends several sentences explaining.
+const STALE_PENDING_FLOOR_MINUTES = 6;
+
 function stalePendingMinutes(): number {
   const raw = process.env.DIFFUSION_STALE_PENDING_MINUTES;
   const n = raw !== undefined ? Number(raw) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 10;
+  const requested = Number.isFinite(n) && n > 0 ? n : 10;
+  const floored = Math.max(requested, STALE_PENDING_FLOOR_MINUTES);
+  if (floored !== requested) {
+    console.warn(
+      `[scheduler] DIFFUSION_STALE_PENDING_MINUTES=${requested} est sous le plancher de sécurité ` +
+      `de ${STALE_PENDING_FLOOR_MINUTES} min (pire cas LinkedIn ≈5,1 min, voir docs/DEPLOYMENT.md ` +
+      `§6.5) — ${STALE_PENDING_FLOOR_MINUTES} min appliquées pour éviter de réclamer un envoi encore ` +
+      "légitimement en cours et publier un doublon public.",
+    );
+  }
+  return floored;
 }
 
 export async function reclaimStalePendingDistributions(): Promise<void> {

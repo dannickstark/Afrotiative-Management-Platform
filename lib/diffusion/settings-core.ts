@@ -151,6 +151,17 @@ export async function updateChannelSettingsCore(
   channel: Channel,
   patch: UpdateChannelSettingsPatch,
 ): Promise<UpdateChannelSettingsResult> {
+  // D7 final review, Important 2 — spec §5 item 4's channel-validity guard landed on
+  // setChannelCredentialsCore alone; this writer and deleteChannelCredentialsCore (below) reach
+  // getOrCreateSettingsRow → defaultsFor → SOCIAL_CHANNELS[channel].captionLimits.default on an
+  // unknown key, a raw TypeError that crosses the "use server" boundary
+  // (lib/actions/diffusion-settings-actions.ts) and gets redacted to a generic non-French error by
+  // Next — exactly what this guard exists to prevent. Checked before anything else, same message
+  // shape as setChannelCredentialsCore's own guard.
+  if (!CHANNELS.includes(channel)) {
+    return { ok: false, message: `Canal social invalide : « ${channel} ».` };
+  }
+
   if (patch.captionMaxChars !== undefined) {
     const { min, max } = SOCIAL_CHANNELS[channel].captionLimits;
     const { label } = SOCIAL_CHANNELS[channel];
@@ -266,15 +277,27 @@ export async function setChannelCredentialsCore(
   const merged: Record<string, string> = { ...(current.credentials ?? {}) };
   for (const [key, value] of Object.entries(values)) merged[key] = encryptSecret(value);
 
-  // Task 2 (D7 spec §4) — every credential write resets tokenExpiresAt to now + 60 days,
-  // unconditionally: a fresh save (first entry, rotation, or partial re-entry) means whatever token
-  // is now stored is, as far as this app can know, a NEW one, so restarting the estimate from today
-  // is the honest default. Neither Meta nor LinkedIn exposes the real expiry on a cheap read (spec
-  // §4's whole premise — tracked, not discovered), so this is deliberately an ESTIMATE the admin can
-  // still correct afterward via updateChannelSettingsCore's own `tokenExpiresAt` field (see that
-  // type's comment) — this function itself takes no separate "explicit date" parameter, since
-  // nothing today calls it wanting one; adding an unused one would be speculative.
-  const tokenExpiresAt = new Date(Date.now() + TOKEN_EXPIRY_DEFAULT_DAYS * 24 * 60 * 60 * 1000);
+  // Task 2 (D7 spec §4) — every credential write seeds tokenExpiresAt to now + 60 days WHEN NOTHING
+  // IS STORED YET (current.tokenExpiresAt === null): a channel that has never had a date recorded
+  // gets a baseline estimate, so the token-expiry alert (warnIfTokenExpiring, scheduler.ts) has
+  // something to compare against from the very first save, rather than staying silent forever.
+  //
+  // Correction (D7 final review, Important 1): an earlier version of this line reset
+  // tokenExpiresAt to now + 60 days on EVERY credential write, unconditionally. That is only ever
+  // safe to round LATER than reality — 60 days is documented as LinkedIn's/Meta's MAXIMUM realistic
+  // token life, never a minimum — and the alert this field drives is the ONLY heads-up before sends
+  // start failing with 401. Two concrete orderings hit the old unconditional reset: an admin
+  // recording the REAL expiry date (via updateChannelSettingsCore's own tokenExpiresAt field — both
+  // the setup guide's "Générer le jeton" step, lib/diffusion/setup-guide.ts, and
+  // docs/DEPLOYMENT.md §2 point 4 instruct exactly that) BEFORE ever saving credentials for the
+  // first time; and a LATER, single-field write that is not a token change at all (e.g. fixing a
+  // typo'd organizationUrn) silently discarding an already-correct date. Once ANY value is
+  // stored — this function's own default, or an admin's explicit correction — a further credential
+  // write no longer touches it; the admin corrects it explicitly via updateChannelSettingsCore, the
+  // same path the setup guide already points them at on every real token rotation. Worst case if an
+  // admin forgets to re-enter the date after a genuine rotation: a stale, too-EARLY date lingers and
+  // over-warns — a nuisance, not a missed 401, i.e. the safe direction to round in.
+  const tokenExpiresAt = current.tokenExpiresAt ?? new Date(Date.now() + TOKEN_EXPIRY_DEFAULT_DAYS * 24 * 60 * 60 * 1000);
 
   const [updated] = await db.update(socialChannelSettings)
     .set({ credentials: merged, credentialsSetAt: new Date(), tokenExpiresAt, updatedAt: new Date() })
@@ -288,9 +311,22 @@ export async function setChannelCredentialsCore(
 // (not a single-field delete: write-only inputs never show which fields are currently set, so a
 // full-channel "start over" is the only UI action that's unambiguous to the admin).
 export async function deleteChannelCredentialsCore(channel: Channel): Promise<SetCredentialsResult> {
+  // D7 final review, Important 2 — same guard as updateChannelSettingsCore above, and for the exact
+  // same reason: an unknown channel would otherwise reach getOrCreateSettingsRow → defaultsFor →
+  // SOCIAL_CHANNELS[channel].captionLimits.default and throw a raw TypeError across the guarded
+  // "use server" action's boundary instead of this clean French message.
+  if (!CHANNELS.includes(channel)) {
+    return { ok: false, message: `Canal social invalide : « ${channel} ».` };
+  }
+
   await getOrCreateSettingsRow(channel);
   const [updated] = await db.update(socialChannelSettings)
-    .set({ credentials: null, credentialsSetAt: null, updatedAt: new Date() })
+    // tokenExpiresAt cleared alongside credentials/credentialsSetAt (D7 final review, Important 2,
+    // "while you are there") — left alone, a channel with every credential just cleared would keep
+    // showing a (now meaningless) expiry date on /settings/social/[channel], and the token-expiry
+    // alert (warnIfTokenExpiring, scheduler.ts) already short-circuits on hasAllCredentials first, so
+    // clearing it here loses no real signal.
+    .set({ credentials: null, credentialsSetAt: null, tokenExpiresAt: null, updatedAt: new Date() })
     .where(eq(socialChannelSettings.channel, channel))
     .returning();
   return { ok: true, settings: omitCredentials(updated) };

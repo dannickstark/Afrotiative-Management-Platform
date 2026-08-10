@@ -390,6 +390,50 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
     expect(withoutEllipsis.endsWith(" ")).toBe(false);
   });
 
+  // D7 final review, Important 3 — spec §7's required poll test did not exist: every OTHER poll case
+  // in this file returns a CONSTANT status (AVAILABLE immediately, PROCESSING forever, or
+  // PROCESSING_FAILED immediately), so nothing exercised the actual WAITING_UPLOAD/PROCESSING →
+  // AVAILABLE transition — the NORMAL LinkedIn flow per this adapter's own header comment and the
+  // setup guide's own quota step ("WAITING_UPLOAD/PROCESSING sont le déroulement normal, pas un cas
+  // limite"). A counter-driven fake answers PROCESSING twice, then AVAILABLE on the third poll — this
+  // is the test that would FAIL if the poll loop were broken in any of the ways the constant-status
+  // tests around it cannot detect: posting too early (before AVAILABLE), never actually sleeping
+  // between attempts (a busy-loop), or sleeping with the wrong interval (pollIntervalMs, left at its
+  // PRODUCTION default here — not overridden — unlike every other test in this describe block).
+  test("normal flow: PROCESSING then AVAILABLE — the poll actually transitions and sleeps pollIntervalMs between attempts", async () => {
+    let pollAttempt = 0;
+    const uploadSrv = fakeUploadHost();
+    const srv = fakeLinkedInTracked((req, u) => {
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      if (u.pathname.includes("/rest/images/")) {
+        pollAttempt += 1;
+        return json({ id: IMAGE_URN, status: pollAttempt < 3 ? "PROCESSING" : "AVAILABLE" });
+      }
+      if (u.pathname === "/rest/posts") return new Response("", { status: 201, headers: { "x-restli-id": POST_URN } });
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+
+    const sleepCalls: number[] = [];
+    // Deliberately NOT using linkedInChannelFor (its default sleepImpl is a no-op, which would make
+    // "sleeps with pollIntervalMs" unfalsifiable) and NOT overriding pollIntervalMs — the assertion
+    // below is against the adapter's own DEFAULT_POLL_INTERVAL_MS (3000), the value production uses.
+    const channel = new LinkedInChannel({
+      baseUrl: srv.url, fetchImpl: fetch,
+      sleepImpl: async (ms) => { sleepCalls.push(ms); },
+    });
+    const res = await channel.send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+
+    expect(res).toEqual({ ok: true, externalId: POST_URN });
+    const pollCalls = pathsCalled(srv).filter((p) => p === `GET /rest/images/${IMAGE_URN}`);
+    expect(pollCalls).toHaveLength(3); // exactly three GET /rest/images/… — never more, never fewer
+    const postIndex = pathsCalled(srv).indexOf("POST /rest/posts");
+    const lastPollIndex = pathsCalled(srv).lastIndexOf(`GET /rest/images/${IMAGE_URN}`);
+    expect(postIndex).toBeGreaterThan(lastPollIndex); // POST /rest/posts happens AFTER every poll, never before
+    expect(sleepCalls).toEqual([3000, 3000]); // two sleeps (between attempts 1→2 and 2→3), each pollIntervalMs
+  });
+
   test("a timeout NEVER posts — an invisible post is worse than a failed send", async () => {
     const srv = fakeLinkedInTracked((req, u) => {
       if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });

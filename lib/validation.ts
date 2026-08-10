@@ -248,13 +248,19 @@ export function validateChannelCredentialFields(
   values: Record<string, string>,
 ): { ok: true } | { ok: false; message: string } {
   // A channel with NO declared fields yet (lib/diffusion/channels.ts's `credentialFields: []` —
-  // today whatsapp/x/tiktok/linkedin) has no known shape to validate a key NAME against: that `[]`
-  // means "this channel's credential schema isn't defined in the registry yet", not "no field is
-  // ever legal". Rejecting every key for such a channel would also reject the field names its own
-  // future adapter task will introduce — and, concretely, would break the credential-storage tests
-  // already exercising a not-yet-adapted channel with its OWN placeholder field names (see
-  // tests/diffusion-crypto.test.ts's "linkedin" fixture). The length bound below still applies
-  // regardless — that one is a universal sanity bound, not tied to a specific field name.
+  // today whatsapp/x/tiktok) has no known shape to validate a key NAME against: that `[]` means
+  // "this channel's credential schema isn't defined in the registry yet", not "no field is ever
+  // legal". Rejecting every key for such a channel would also reject the field names its own future
+  // adapter task will introduce.
+  //
+  // Correction (D7 final review, Issue 12): this comment used to also list "linkedin" here and cite
+  // tests/diffusion-crypto.test.ts's "linkedin" fixture as this carve-out's justification — true when
+  // D2+D3 wrote it (linkedin.credentialFields really was `[]` back then), but D7 Tasks 4/6 gave
+  // linkedin its own real declared keys (organizationUrn/accessToken, lib/diffusion/channels.ts), and
+  // that same fixture now saves under THOSE real keys. It no longer exercises this carve-out at all —
+  // linkedin is simply a channel with a full, real credential schema now, exactly like
+  // facebook/instagram. The length bound below still applies regardless — that one is a universal
+  // sanity bound, not tied to a specific field name.
   if (declaredKeys.length > 0) {
     for (const key of Object.keys(values)) {
       if (!declaredKeys.includes(key)) {

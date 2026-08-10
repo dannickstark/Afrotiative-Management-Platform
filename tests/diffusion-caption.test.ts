@@ -331,6 +331,25 @@ describe("generateCaption — permalien LinkedIn dans la légende (D7 spec §2, 
     }
   });
 
+  // Issue 6 (D7 final review) — the reviewer's own repro: maxChars=20, a permalink of 30 chars (this
+  // fixture's WP_BASE_URL + externalId "1234" produces exactly "https://wp.example.com/?p=1234", 30
+  // characters). Before the fix, captionBudget clamped to 0, truncateCaption("", …) returned "", and
+  // finalize appended the untouched 30-char permalink anyway — a 32-char final caption, over the
+  // 20-char limit. This is the test that would FAIL if the `permalinkFits` guard were removed: the
+  // caption would then be 32 chars (over 20) and would contain the permalink.
+  test("Issue 6 — the permalink is never appended when it alone would not fit inside captionMaxChars", async () => {
+    const id = await seedArticleWithWordpressDistribution({ externalId: "1234" });
+    const settingsRes = await updateChannelSettingsCore("linkedin", { captionMaxChars: 20 });
+    expect(settingsRes.ok).toBe(true);
+
+    const res = await generateCaption({ articleId: id, channel: "linkedin" });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.caption.length).toBeLessThanOrEqual(20); // the hard invariant (spec §2) — never exceeded
+      expect(res.caption).not.toMatch(/https?:\/\//); // the permalink itself must not survive, partially or otherwise
+    }
+  });
+
   test("Facebook and Instagram captions are untouched", async () => {
     const id = await seedArticleWithWordpressDistribution({ externalId: "1234" });
     for (const channel of ["facebook", "instagram"] as const) {
