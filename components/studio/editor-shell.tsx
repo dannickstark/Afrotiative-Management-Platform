@@ -9,7 +9,9 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Canvas } from "./canvas";
-import { LayerPanel } from "./layer-panel";
+import { Rail } from "./rail";
+import { PanelHost } from "./panel-host";
+import { CalquesPanel } from "./panels/calques-panel";
 import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { PreviewPane } from "./preview-pane";
@@ -19,6 +21,8 @@ import { shouldShowUnpublishedBadge } from "@/lib/studio/scene-diff";
 import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
 import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions";
 import { StorageBanner } from "./storage-banner";
+import { useEditorPrefs } from "@/hooks/use-editor-prefs";
+import { nextOpenPanel, type RailCategory } from "@/lib/studio/editor-prefs";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
 import type { TemplateVersionRow, PreviewArticleOption } from "@/lib/queries/studio";
@@ -26,7 +30,15 @@ import type { AssetRow } from "@/lib/queries/assets";
 
 // components/studio/editor-shell.tsx — Tâche 9 : compose canevas + panneau de calques + panneau de
 // propriétés + aperçu réel + historique, et porte l'autosauvegarde et la publication (spec §3).
+// Tâche 1 (U1, spec §3) : le rail d'icônes + le panneau accosté remplacent la colonne de calques
+// dédiée — voir le second bloc de commentaire, juste avant le rendu, pour le détail de la disposition.
 const AUTOSAVE_DELAY_MS = 1500;
+
+// Raccourci clavier repliant le panneau accosté (spec §9 / §3 : « ⌘/ »). Choix documenté dans le
+// rapport de la Tâche 1 : ni Chrome ni Safari ne réservent Cmd+/ par défaut sur macOS (Cmd+Shift+/,
+// qui produit « ? », ouvre la recherche du menu Aide — un raccourci DIFFÉRENT) donc pas de collision
+// technique constatée ; conservé tel quel plutôt que le repli « ⌘. » envisagé par la spec.
+const COLLAPSE_PANEL_KEY = "/";
 
 const CONTEXT_LABEL: Record<TemplateContext, string> = {
   article_image: "Image à la une",
@@ -117,6 +129,26 @@ function EditorShellInner({
 }: EditorShellInnerProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
+
+  // ── Rail + panneau accosté (Tâche 1, spec §3) ────────────────────────────
+  const [prefs, setPrefs] = useEditorPrefs();
+
+  function selectRailCategory(category: RailCategory) {
+    setPrefs((p) => ({ ...p, openPanel: nextOpenPanel(p.openPanel, category) }));
+  }
+
+  // Replie le panneau au clavier (⌘/) — voir COLLAPSE_PANEL_KEY ci-dessus pour le choix documenté.
+  // Ne fait rien quand aucun panneau n'est ouvert : le rail (clic) reste la SEULE façon d'en OUVRIR
+  // un ; ce raccourci ne fait que reproduire l'action du chevron de panel-host.tsx.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key !== COLLAPSE_PANEL_KEY || (!e.metaKey && !e.ctrlKey)) return;
+      e.preventDefault();
+      setPrefs((p) => (p.openPanel ? { ...p, openPanel: nextOpenPanel(p.openPanel, p.openPanel) } : p));
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [setPrefs]);
 
   // ── Autosauvegarde (spec §3) ─────────────────────────────────────────────
   const [autosaveState, setAutosaveState] = useState<AutosaveState>({ status: "idle", message: null, dirty: false });
@@ -284,16 +316,36 @@ function EditorShellInner({
         </div>
       )}
 
-      <div className="grid flex-1 grid-cols-[220px_1fr_300px] gap-3 overflow-hidden">
-        <div className="overflow-auto rounded-lg border p-2">
-          <LayerPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
-        </div>
+      {/* Rail + panneau accosté + canevas + colonne propriétés (Tâche 1, spec §2/§3). La colonne
+          propriétés (PropertyPanel + PreviewPane empilés) n'est PAS touchée par cette tâche — Tâche 5
+          transformera l'aperçu en mode ; il reste ici, à l'identique, pour que ce shell reste
+          livrable seul. Seule la colonne de calques dédiée disparaît : son contenu déménage dans
+          CalquesPanel, ouvert via le rail. */}
+      <div className="flex flex-1 gap-3 overflow-hidden">
+        <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
 
-        <div ref={canvasWrapRef} className="flex items-center justify-center overflow-auto rounded-lg border bg-muted/20 p-4">
+        {prefs.openPanel && (
+          <PanelHost
+            open={prefs.openPanel}
+            onOpenChange={(next) => setPrefs((p) => ({ ...p, openPanel: next }))}
+          >
+            {prefs.openPanel === "calques" && (
+              <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
+            )}
+            {/* Modèles / Éléments / Texte / Images / Marque : panneau vide pour l'instant — Tâches
+                2 à 4 le remplissent. C'est un choix délibéré (spec de la Tâche 1) : un panneau vide
+                est honnête, un bouton de rail désactivé ne le serait pas. */}
+          </PanelHost>
+        )}
+
+        <div
+          ref={canvasWrapRef}
+          className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/20 p-4"
+        >
           <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
         </div>
 
-        <div className="flex flex-col gap-3 overflow-auto">
+        <div className="flex w-[300px] shrink-0 flex-col gap-3 overflow-auto">
           <div className="rounded-lg border">
             <PropertyPanel
               scene={state.scene} selectedId={state.selectedId} context={template.context}
