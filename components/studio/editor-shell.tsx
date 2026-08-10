@@ -15,6 +15,7 @@ import { CalquesPanel } from "./panels/calques-panel";
 import { ModelesPanel } from "./panels/modeles-panel";
 import { ImagesPanel } from "./panels/images-panel";
 import { MarquePanel, type MarqueCategoryColor } from "./panels/marque-panel";
+import { TextePanel } from "./panels/texte-panel";
 import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { PreviewPane } from "./preview-pane";
@@ -357,11 +358,20 @@ function EditorShellInner({
             )}
             {/* Modèles / Images / Marque (Tâche 2, U1 spec §3) : chaque panneau HÉBERGE une surface
                 existante (templates-table.tsx, asset-picker.tsx) plutôt que d'en reconstruire une
-                copie — voir le rapport de la Tâche 2. Éléments / Texte restent des panneaux vides :
-                Tâches 3 et 4 les remplissent, même choix délibéré qu'à la Tâche 1 (un panneau vide
-                est honnête, un bouton de rail désactivé ne le serait pas). */}
+                copie — voir le rapport de la Tâche 2. Texte (Tâche 3, spec §4) insère désormais un
+                calque via `dispatch` — voir components/studio/panels/texte-panel.tsx pour le
+                cheminement complet clic -> calque lié. Éléments reste un panneau vide : Tâche 4 le
+                remplit, même choix délibéré qu'à la Tâche 1 (un panneau vide est honnête, un bouton
+                de rail désactivé ne le serait pas). */}
             {prefs.openPanel === "modeles" && (
               <ModelesPanel templates={templates} categories={categories} />
+            )}
+            {prefs.openPanel === "texte" && (
+              <TextePanel
+                context={template.context}
+                canvas={{ width: template.width, height: template.height }}
+                dispatch={dispatch}
+              />
             )}
             {prefs.openPanel === "images" && (
               <ImagesPanel context={template.context} assets={assets} />

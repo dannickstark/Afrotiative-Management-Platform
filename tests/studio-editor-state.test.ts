@@ -143,6 +143,32 @@ describe("addLayer", () => {
       expect(next.selectedId).toBe(added.id);
     });
   }
+
+  // Tâche 3 (U1, spec §4) : « Texte dynamique » construit un TextLayer déjà lié à un jeton
+  // (dynamic-text.ts:buildDynamicTextLayer) et le fait entrer par CETTE MÊME action — pas une
+  // action parallèle — en fournissant le second argument optionnel `layer`.
+  it("avec un `layer` fourni, insère CE calque tel quel plutôt que le calque générique par défaut", () => {
+    const state = makeState();
+    const prefilled: Layer = {
+      id: "dyn-1", name: "Titre de l'article", visible: true, locked: false,
+      frame: { x: 10, y: 10, w: 500, h: 100 },
+      type: "text", content: "{{article.title}}",
+      font: { family: "Noto Sans", size: 64, weight: 700 },
+      color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+    };
+    const next = editorReducer(state, addLayer("text", prefilled));
+    expect(next.scene.layers).toHaveLength(state.scene.layers.length + 1);
+    const added = next.scene.layers.at(-1)!;
+    expect(added).toEqual(prefilled);
+    expect(next.selectedId).toBe("dyn-1");
+  });
+
+  it("un `layer` fourni mais invalide laisse l'état inchangé, comme n'importe quel autre commit refusé", () => {
+    const state = makeState();
+    const invalid = { ...state.scene.layers[1], frame: { x: 0, y: 0, w: -1, h: 100 } } as Layer;
+    const next = editorReducer(state, addLayer("text", invalid));
+    expect(next).toBe(state);
+  });
 });
 
 describe("deleteLayer", () => {

@@ -46,7 +46,7 @@ export type EditorAction =
   | { type: "resizeLayer"; id: string; frame: Frame }
   | { type: "rotateLayer"; id: string; deg: number }
   | { type: "setLayerProp"; id: string; patch: LayerPatch }
-  | { type: "addLayer"; layerType: Layer["type"] }
+  | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
   | { type: "deleteLayer"; id: string }
   | { type: "reorderLayer"; id: string; toIndex: number }
   | { type: "toggleVisible"; id: string }
@@ -76,8 +76,14 @@ export function rotateLayer(id: string, deg: number): EditorAction {
 export function setLayerProp(id: string, patch: LayerPatch): EditorAction {
   return { type: "setLayerProp", id, patch };
 }
-export function addLayer(type: Layer["type"]): EditorAction {
-  return { type: "addLayer", layerType: type };
+// `layer` (Tâche 3, U1 spec §4) : quand fourni, ce calque DÉJÀ CONSTRUIT (ex.
+// dynamic-text.ts:buildDynamicTextLayer, un TextLayer déjà lié à un jeton et stylé depuis un
+// préréglage) remplace le calque générique que createLayer() aurait produit — plutôt que d'ajouter
+// une action parallèle « insertLayer » qui dupliquerait la logique de commit/sélection ci-dessous.
+// Omis (la totalité des appels existants, layer-panel.tsx), le comportement générique d'avant est
+// inchangé bit à bit.
+export function addLayer(type: Layer["type"], layer?: Layer): EditorAction {
+  return { type: "addLayer", layerType: type, layer };
 }
 export function deleteLayer(id: string): EditorAction {
   return { type: "deleteLayer", id };
@@ -213,7 +219,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     }
 
     case "addLayer": {
-      const layer = createLayer(action.layerType);
+      const layer = action.layer ?? createLayer(action.layerType);
       const next = commit(state, { ...state.scene, layers: [...state.scene.layers, layer] });
       return next === state ? state : { ...next, selectedId: layer.id };
     }
