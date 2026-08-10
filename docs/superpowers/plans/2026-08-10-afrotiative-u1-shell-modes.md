@@ -369,7 +369,12 @@ describe("shape gallery", () => {
   // This is the guard that makes U3 impossible to half-ship: adding a shape to the schema
   // without a tile leaves a designer with no way to insert it.
   it("offers a tile for every shape the schema accepts", () => {
-    const schemaShapes = ["rect"]; // update in lockstep with scene.ts's shapeLayer
+    // AMENDED 2026-08-11 — as originally written this line was a hand-copied mirror of the schema,
+    // so the guard caught tile/mirror drift but NOT the dangerous case: extending scene.ts's real
+    // schema while the gallery falls behind. Both sides stayed ["rect"] and the test passed.
+    // The shipped fix exports SHAPE_KINDS from scene.ts, builds the schema from it
+    // (shape: z.enum(SHAPE_KINDS)), and iterates that same constant here — one source, two consumers.
+    const schemaShapes = SHAPE_KINDS; // imported from @/lib/studio/scene
     const tileShapes = SHAPE_TILES.filter((t) => t.kind === "shape").map((t) => t.shape);
     expect([...tileShapes].sort()).toEqual([...schemaShapes].sort());
   });
