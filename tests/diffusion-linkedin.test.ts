@@ -121,10 +121,16 @@ describe("LinkedInClient (D7 Task 3) — fake REST API, no real network", () => 
 // Task 4 (D7) — LinkedInChannel.send(): the four-step adapter (download → initializeUpload → PUT →
 // poll → post) behind lib/diffusion/channels.ts's SocialChannel interface. Same "fake LinkedIn API,
 // no real network" discipline as the client tests above, reusing `fakeLinkedIn`/`json`/`servers`
-// (this file's own Task 3 helpers). The one thing those tests never needed and this suite does: the
-// fake server ALSO serves `/render.png` (LinkedIn's own paths AND our own render's public URL live
-// on the SAME fake host here — see linkedInChannelFor's fetchImpl below for why that is safe to do
-// under the SSRF guard only in tests, never in production).
+// (this file's own Task 3 helpers). The fake server ALSO serves `/render.png` (LinkedIn's own paths
+// AND our own render's public URL live on the SAME fake host here — see linkedInChannelFor's
+// fetchImpl below for why that is safe to do under the SSRF guard only in tests, never in
+// production). The upload URL, by contrast, is served from a genuinely SEPARATE Bun.serve instance
+// via fakeUploadHost (below) — review Important 3: spec §3.1/§7 require the fake to prove `uploadUrl`
+// is a different HOST from the API base (production: www.linkedin.com/dms-uploads/... vs
+// api.linkedin.com), and linkedin.ts:289 passes it through client.putBytes VERBATIM as an absolute
+// URL. Reusing the API server's own origin for uploadUrl (as an earlier draft of this file did)
+// would let a future regression that silently re-joined uploadUrl onto baseUrl pass every test here
+// unnoticed, since same-origin collapses exactly the distinction that matters.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real network", () => {
   const CHANNEL = "linkedin" as const;
@@ -174,12 +180,30 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
     return srv.calls;
   }
 
-  // `/render.png` lives on the SAME fake host as every LinkedIn endpoint — spec §7: "the fake must
-  // serve two hosts' worth of paths (the API host and the dms-uploads upload URL it hands back)";
-  // the render's own URL is a THIRD thing served here for convenience, since nothing requires it to
-  // be on a different host and doing so keeps every test to a single Bun.serve instance.
+  // `/render.png` lives on the SAME fake host as every LinkedIn endpoint — nothing requires it to be
+  // on a different host (it's OUR OWN render URL, not a LinkedIn one), so colocating it here keeps
+  // most tests to a single Bun.serve instance.
   function renderUrl(srv: { url: string }): string {
     return `${srv.url}/render.png`;
+  }
+
+  // A genuinely SEPARATE host for the upload URL (review Important 3 — see this describe block's
+  // header comment for why same-origin was a real gap). `calls` is the SAME array the API host's own
+  // tracker pushes into, when one is passed in, so ordering assertions across BOTH hosts still read
+  // as one merged, real-time-ordered list — requests are always awaited sequentially by send(), never
+  // concurrent, so there is no ordering race between two separate Bun.serve instances writing to the
+  // same array. Always answers 201 — no adapter test here needs the PUT response body/status to vary.
+  function fakeUploadHost(calls: string[] = []): { url: string; calls: string[] } {
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const u = new URL(req.url);
+        calls.push(`${req.method} ${u.pathname}${u.search}`);
+        return new Response("", { status: 201 });
+      },
+    });
+    servers.push(server);
+    return { url: `http://localhost:${server.port}`, calls };
   }
 
   // fetchImpl: fetch (real global fetch, pointed at the fake server) is what lets these tests reach
@@ -195,11 +219,15 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
 
   test("happy path: four calls in order, externalId from x-restli-id", async () => {
     const calls: string[] = [];
+    // Genuinely separate host for the PUT — review Important 3 (see describe header comment). If a
+    // future regression re-joined uploadUrl onto baseUrl, the PUT would hit `srv` instead (which has
+    // no /dms-uploads branch below and would answer "nope"/500), and this test would fail instead of
+    // passing unnoticed.
+    const uploadSrv = fakeUploadHost(calls);
     const srv = fakeLinkedIn((req) => {
       const u = new URL(req.url); calls.push(`${req.method} ${u.pathname}${u.search}`);
       if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
-      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
-      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
       if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
       if (u.pathname === "/rest/posts") return new Response("", { status: 201, headers: { "x-restli-id": POST_URN } });
       return new Response("nope", { status: 500 });
@@ -219,14 +247,14 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
   test("the post body carries the image urn, the caption, PUBLIC and MAIN_FEED", async () => {
     let postBody: unknown = null;
     let initBody: unknown = null;
+    const uploadSrv = fakeUploadHost(); // genuinely separate host — review Important 3
     const srv = fakeLinkedIn(async (req) => {
       const u = new URL(req.url);
       if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
       if (u.search.includes("initializeUpload")) {
         initBody = await req.json();
-        return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
+        return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
       }
-      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
       if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
       if (u.pathname === "/rest/posts") {
         postBody = await req.json();
@@ -251,16 +279,62 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
       lifecycleState: "PUBLISHED",
       isReshareDisabledByAuthor: false,
     });
+    // The PUT genuinely reached the separate upload host, not the API host — review Important 3.
+    expect(uploadSrv.calls).toEqual(["PUT /dms-uploads/1"]);
+  });
+
+  // Review fix, Important 2: generateCaption (spec §2) appends the article permalink at the very
+  // END of the caption — "<body> <url>" — and linkedin.captionLimits.default (400) already exceeds
+  // ALT_TEXT_MAX_CHARS (300), so a caption long enough to trip alt-text truncation is the COMMON
+  // case. This caption is deliberately well over the cap so truncation genuinely runs, not just the
+  // URL-stripping step.
+  test("alt text never contains a truncated URL fragment, even when the caption (with its appended permalink) exceeds the cap", async () => {
+    const words = Array.from({ length: 80 }, (_, i) => `motdelegende${i}`);
+    const body = words.join(" "); // well over 300 characters on its own — see comment above
+    const url = "https://exemple.test/articles/un-permalien-suffisamment-long-pour-etre-tronque-au-milieu-si-le-texte-alternatif-etait-tronque-naivement";
+    const caption = `${body} ${url}`; // spec §2's shape
+    expect(caption.length).toBeGreaterThan(300); // sanity: this test genuinely exercises truncation
+
+    // `unknown`, not a concrete shape — a `let` reassigned only inside the async fetch closure below
+    // narrows to `never` under strict TS control-flow analysis if given a concrete optional-chain-
+    // friendly type here (see this file's own putBytes test above for the same `!`-assertion trap).
+    let postBody: unknown = null;
+    const uploadSrv = fakeUploadHost();
+    const srv = fakeLinkedIn(async (req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
+      if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
+      if (u.pathname === "/rest/posts") {
+        postBody = await req.json();
+        return new Response("", { status: 201, headers: { "x-restli-id": POST_URN } });
+      }
+      return new Response("nope", { status: 500 });
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption });
+    expect(res.ok).toBe(true);
+
+    const parsedBody = postBody as { content?: { media?: { altText?: string } } } | null;
+    const altText = parsedBody?.content?.media?.altText ?? "";
+    expect(altText.length).toBeGreaterThan(0);
+    // The hard requirement: the URL must never survive truncation, partially or otherwise.
+    expect(altText).not.toMatch(/https?:\/\//i);
+    // Never cut mid-word either: strip the trailing ellipsis (if any) and confirm what remains is an
+    // exact, whole-word-boundary PREFIX of the caption's body — a mid-word slice would not be one.
+    const withoutEllipsis = altText.endsWith("…") ? altText.slice(0, -1) : altText;
+    expect(body.startsWith(withoutEllipsis)).toBe(true);
+    expect(withoutEllipsis.endsWith(" ")).toBe(false);
   });
 
   test("a timeout NEVER posts — an invisible post is worse than a failed send", async () => {
     const srv = fakeLinkedInTracked((req, u) => {
       if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
-      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
-      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
       if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "PROCESSING" }); // never AVAILABLE
       return new Response("nope", { status: 500 });
     });
+    const uploadSrv = fakeUploadHost(srv.calls); // genuinely separate host — review Important 3
     await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
     const res = await linkedInChannelFor(srv, { pollMaxAttempts: 3, sleepImpl: async () => {} }).send({
       articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour",
@@ -275,11 +349,11 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
   test("PROCESSING_FAILED fails immediately without posting", async () => {
     const srv = fakeLinkedInTracked((req, u) => {
       if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
-      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
-      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
       if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "PROCESSING_FAILED" });
       return new Response("nope", { status: 500 });
     });
+    const uploadSrv = fakeUploadHost(srv.calls); // genuinely separate host — review Important 3
     await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
     const res = await linkedInChannelFor(srv, { pollMaxAttempts: 5 }).send({
       articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour",
@@ -298,11 +372,11 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
   });
 
   test("201 without x-restli-id is a failure, not a success with an empty id", async () => {
+    const uploadSrv = fakeUploadHost(); // genuinely separate host — review Important 3
     const srv = fakeLinkedIn((req) => {
       const u = new URL(req.url);
       if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
-      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${srv.url}/dms-uploads/1`, image: IMAGE_URN } });
-      if (u.pathname.startsWith("/dms-uploads")) return new Response("", { status: 201 });
+      if (u.search.includes("initializeUpload")) return json({ value: { uploadUrl: `${uploadSrv.url}/dms-uploads/1`, image: IMAGE_URN } });
       if (u.pathname.includes("/rest/images/")) return json({ id: IMAGE_URN, status: "AVAILABLE" });
       if (u.pathname === "/rest/posts") return new Response("", { status: 201 }); // no x-restli-id header
       return new Response("nope", { status: 500 });
@@ -362,6 +436,46 @@ describe("LinkedInChannel.send — fake LinkedIn API (D7 Task 4), no real networ
     const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.message.toLowerCase()).toMatch(/quota/);
+  });
+
+  // Review fix, Important 1: spec §3.2 step 1 is explicit that a 413/415 FROM LINKEDIN gets a
+  // distinct French message rather than falling into the generic branch — the render/format is the
+  // problem, not the token or a permission (same distinguishing principle as PROCESSING_FAILED).
+  test("413 means the render is too large for LinkedIn — distinct from every other error", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      return json({ message: "PAYLOAD_TOO_LARGE", status: 413 }, 413);
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message.toLowerCase()).toMatch(/taille|volumineux|lourd/);
+      // Not a token/permission/quota message — the image itself is the problem.
+      expect(res.message).not.toContain("/settings/social/linkedin");
+      expect(res.message.toLowerCase()).not.toMatch(/quota|w_organization_social/);
+    }
+    // Distinct mapping from every other status this file exercises.
+    const messages = [401, 403, 429, 413].map((status) => mapLinkedInApiError(new LinkedInApiError(status, {}, "")));
+    expect(new Set(messages).size).toBe(messages.length);
+  });
+
+  test("415 means the format is not one LinkedIn accepts — distinct from every other error", async () => {
+    const srv = fakeLinkedIn((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/render.png") return new Response(RENDER_BYTES, { headers: { "content-type": "image/png" } });
+      return json({ message: "UNSUPPORTED_MEDIA_TYPE", status: 415 }, 415);
+    });
+    await setChannelCredentialsCore(CHANNEL, { organizationUrn: ORG_URN, accessToken: ACCESS_TOKEN });
+    const res = await linkedInChannelFor(srv).send({ articleId: "a1", imageUrl: renderUrl(srv), caption: "Bonjour" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.message.toLowerCase()).toMatch(/format/);
+      expect(res.message.toLowerCase()).toMatch(/jpg|png|gif/);
+      expect(res.message).not.toContain("/settings/social/linkedin");
+    }
+    expect(mapLinkedInApiError(new LinkedInApiError(413, {}, ""))).not.toBe(mapLinkedInApiError(new LinkedInApiError(415, {}, "")));
   });
 
   test("a generic LinkedIn API error becomes a French message and never leaks the access token", async () => {

@@ -54,14 +54,14 @@
 // this project — same position D2/D3 shipped in): the poll interval/attempt count (3s × 10, no
 // documented processing time exists to size this against); that a 403 on these two endpoints always
 // means scope-or-admin rather than something subtler LinkedIn hasn't documented; that 429 cleanly
-// means the daily tier quota and nothing else; the exact French wording, which only real failures
-// will validate. A known, deliberate SCOPE CUT vs. the full design doc: spec §3.2 step 1 also
-// mentions a 413/415 FROM LINKEDIN (not our own download) as deserving "a distinct French message
-// rather than a generic failure" — the task brief's own self-review checklist enumerates exactly
-// FOUR error classes to make distinguishable (401/403/429/PROCESSING_FAILED), and 413/415 is not
-// among them. Left unmapped here rather than speculatively implemented: both fall into the generic
-// `mapLinkedInApiError` branch (a truthful but less specific French message). Flagged for whoever
-// picks this up next, not silently dropped.
+// means the daily tier quota and nothing else; that a 413/415 from LinkedIn's own API always means
+// "the image itself, not the token or a permission" (spec §3.2 step 1's own framing, mirrored in
+// mapLinkedInApiError below); the exact French wording, which only real failures will validate.
+// (Review fix, Important 1: an earlier draft of this file left 413/415 unmapped, reasoning that the
+// task brief's own self-review checklist named only four error classes. The review correctly held
+// that a brief's checklist omission does not retract spec text the task was pointed at — spec §3.2
+// step 1 is explicit that a 413/415 "maps to a distinct French message rather than a generic
+// failure" — so both are now mapped below, alongside 401/403/429/PROCESSING_FAILED.)
 import { getDecryptedCredentials } from "../settings-core";
 import { DecryptionFailedError } from "../crypto";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
@@ -79,9 +79,24 @@ const DOWNLOAD_TIMEOUT_MS = 20_000; // same hang guard as lib/studio/images.ts's
 // spec §3.2 step 5 says "<article title, truncated>", but no adapter is handed the article's title,
 // only its id. Rather than invent an interface change every other adapter would also have to accept
 // (SendInput is shared across all six channels), the caption itself — already the human-reviewed,
-// final text for this exact post — is used as the alt text, truncated to a sane accessibility-guidance
-// length. INFERRED: LinkedIn does not document an altText length ceiling; this cap is a defensive
-// choice, not a documented limit.
+// final text for this exact post — is used as the alt text, truncated to a sane accessibility-
+// guidance length. INFERRED: LinkedIn does not document an altText length ceiling; this cap is a
+// defensive choice, not a documented limit.
+//
+// Review fix, Important 2: the cap alone is not what makes truncation safe. generateCaption (spec
+// §2 — lib/diffusion/caption.ts, outside this task's file list, but its OUTPUT SHAPE is a hard fact
+// this file must respect) appends the article's permalink at the very END of the caption, as
+// "<body> <url>" — and SOCIAL_CHANNELS.linkedin.captionLimits.default is 400, already above this
+// 300-char cap, so a caption long enough to need truncating is the COMMON case, not an edge case. A
+// blind slice() (the original implementation) can land mid-URL, handing a screen-reader user a
+// dangling fragment like "https://example.com/blog/post-t". truncateAltText (below) fixes the ROOT
+// CAUSE rather than just the symptom: it drops a trailing URL BEFORE truncating at all (a URL is
+// never meaningful alt-text content anyway — it describes nothing about the IMAGE), then truncates
+// whatever remains on a WORD boundary, never mid-word. That means a URL fragment cannot survive
+// truncation regardless of where ALT_TEXT_MAX_CHARS sits — the cap's value was never actually the
+// bug, so it is kept rather than raised or removed (300 characters of "alt text" is already
+// generous for an accessibility label; LinkedIn's 3 000-char caption ceiling would be a poor upper
+// bound to reuse here).
 const ALT_TEXT_MAX_CHARS = 300;
 
 export function mapLinkedInApiError(err: unknown): string {
@@ -124,6 +139,26 @@ export function mapLinkedInApiError(err: unknown): string {
         "de développement de l'API Community Management autorise 500 requêtes par application et par " +
         "jour, et une seule publication en consomme quatre. Réessayez demain, ou demandez le passage " +
         "au palier standard."
+      );
+    }
+    // 413 — LinkedIn itself rejected the image as too large (spec §3.2 step 1). Distinct from every
+    // token/permission/quota failure above: the render is the problem, not the credentials — review
+    // fix, Important 1 (see this file's header comment).
+    if (err.status === 413) {
+      return (
+        "LinkedIn a refusé l'image du rendu : elle dépasse la taille maximale acceptée (413). Ce " +
+        "n'est ni un problème de jeton ni de permission — réduisez la résolution ou le poids du " +
+        "fichier généré par le studio, puis réessayez."
+      );
+    }
+    // 415 — LinkedIn itself rejected the file FORMAT (spec §3.2 step 1: JPG, PNG or GIF only).
+    // Distinct from this adapter's own PRE-upload content-type guard in step 1 of send() — that
+    // guard only refuses an obviously non-image content-type; this is LinkedIn rejecting a format
+    // its own Images API doesn't accept even though our own guard let it through.
+    if (err.status === 415) {
+      return (
+        "LinkedIn a refusé le format de l'image du rendu (415) : seuls les formats JPG, PNG ou GIF " +
+        "sont acceptés. Vérifiez le format produit par le studio, puis réessayez."
       );
     }
     return `La publication LinkedIn a échoué : ${err.message}`;
@@ -335,6 +370,31 @@ export class LinkedInChannel {
   }
 }
 
+// Drops a trailing "<body> <url>" URL (the shape generateCaption produces — spec §2) before this
+// text is ever truncated. Matches the URL whether it is preceded by whitespace (the normal case) or
+// starts the string outright (a caption that is nothing BUT a URL) — review Important 2's whole
+// point is that a URL must never survive as a cut-off fragment, so it is removed first, not clipped.
+function stripTrailingUrl(text: string): string {
+  const trimmed = text.trimEnd();
+  const match = trimmed.match(/(?:^|\s)(https?:\/\/\S+)$/i);
+  if (!match) return trimmed;
+  return trimmed.slice(0, trimmed.length - match[1].length).trimEnd();
+}
+
+// Truncates on a WORD boundary, never mid-word — a blind slice() (the original implementation) is
+// what let a fragment of ANY word, URLs included, survive truncation (review Important 2).
+function truncateOnWordBoundary(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const clipped = text.slice(0, maxChars - 1);
+  const lastSpace = clipped.lastIndexOf(" ");
+  const safe = lastSpace > 0 ? clipped.slice(0, lastSpace) : clipped;
+  return `${safe}…`;
+}
+
 function truncateAltText(caption: string): string {
-  return caption.length > ALT_TEXT_MAX_CHARS ? `${caption.slice(0, ALT_TEXT_MAX_CHARS - 1)}…` : caption;
+  const withoutUrl = stripTrailingUrl(caption);
+  // A caption that is NOTHING BUT a URL (withoutUrl empty after stripping) has no non-URL text left
+  // to describe the image with — an empty alt text is honest; a truncated URL fragment is not.
+  if (withoutUrl.length === 0) return "";
+  return truncateOnWordBoundary(withoutUrl, ALT_TEXT_MAX_CHARS);
 }
