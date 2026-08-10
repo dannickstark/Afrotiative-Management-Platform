@@ -75,7 +75,25 @@ The image URL must be publicly reachable — R2 already satisfies this, which is
 
 **Tests** (fake Graph): the two-step happy path publishes and records `externalId`; a container stuck `IN_PROGRESS` times out with a French message; an `ERROR` status fails cleanly; a crash-after-publish scenario is described in the report even if not directly testable.
 
-### Task 4: Settings UI, docs, and the reaper cutoff
+### Task 4: In-app setup guide per channel
+
+**Files:** `lib/diffusion/setup-guide.ts`, `components/settings/channel-setup-guide.tsx`, `app/(app)/settings/social/[channel]/page.tsx`, `tests/diffusion-setup-guide.test.ts`
+
+**Why this exists.** The user's requirement, in their words: an admin should be able to *"just come and fill fields in the settings to do the connection"*, and each integration should *"give the instructions to follow to make the connection work — what needs to be created, where, with which parameters or rights"*.
+
+A token field with no guidance is not a self-serve integration. Nobody remembers that an Instagram Business account must be linked to a Facebook Page before `instagram_content_publish` is even requestable, or that a short-lived user token has to be exchanged twice to become a long-lived Page token.
+
+**Contract:** `setup-guide.ts` exports, **per channel**, a structured French guide — ordered steps, each with a title, a body, an optional external link, and an optional « valeur à copier ici » pointer naming the settings field it produces. Structured data, not a wall of prose, so the UI can render steps as a checklist beside the fields they fill.
+
+Rendered on `/settings/social/[channel]`, collapsed by default once credentials are set, expanded when they are not.
+
+Each guide must state: what to create and where; which permissions or scopes to request; which review or audit is required and that it takes time; where to find each id; how to obtain a long-lived token and when it expires.
+
+**This applies to every channel, not just Meta.** Write the Facebook and Instagram guides now; add a `linkedin` and `whatsapp` entry with an honest placeholder that says the adapter is not built yet, so the shape exists and D7/D4 only fill it in.
+
+**Tests:** every `Channel` has a guide entry (mirroring the registry test, so a new channel cannot ship without one); each guide has at least one step; every `fieldHint` names a real credential field for that channel.
+
+### Task 5: Settings UI, docs, and the reaper cutoff
 
 **Files:** `components/settings/social-channel-form.tsx`, `docs/DEPLOYMENT.md`, `README.md`, `lib/diffusion/scheduler.ts`, `tests/diffusion-reaper.test.ts`
 
@@ -91,9 +109,10 @@ Document in `docs/DEPLOYMENT.md`: the Meta app prerequisites, which permissions 
 
 ## Self-Review
 
-**Coverage:** credentials → Task 1; D2 → Task 2; D3 → Task 3; operations → Task 4.
+**Coverage:** credentials → Task 1; D2 → Task 2; D3 → Task 3; setup guides → Task 4; operations → Task 5.
 
 **Risks:**
 1. Task 1 is the security-sensitive one. A leaked secret in a log or a server-action return is the failure that matters; test for it explicitly rather than assuming.
 2. Instagram's asynchronous container is the piece most likely to work in a fake and fail against the real API. Say clearly in the report what could not be verified without credentials.
 3. Neither adapter can be verified end to end until the Meta app review clears. Everything here is fake-server-tested by construction — do not claim otherwise.
+4. Task 4's guides are the difference between a self-serve integration and a field an admin cannot fill. They are documentation *in the product*, and they go stale — each adapter task owns keeping its own guide true.

@@ -158,6 +158,23 @@ diffusion a besoin — est donc réalisable.
 **Réserve à lever en D4 :** ces méthodes sont sur `main` ; la version publiée sur npm peut être en
 retard. D4 devra vérifier et, le cas échéant, installer depuis GitHub plutôt que depuis npm.
 
+### Exigence transverse — guide de connexion dans le produit (2026-08-10)
+
+Demande de l'utilisateur : un admin doit pouvoir **remplir des champs dans les réglages** pour
+établir la connexion, et **chaque intégration doit porter ses instructions** — ce qu'il faut créer,
+où, avec quels paramètres et quels droits.
+
+Un champ « jeton » sans mode d'emploi n'est pas une intégration en libre-service. Chaque canal
+expose donc, sur `/settings/social/[canal]`, un guide **structuré** (étapes ordonnées, lien externe
+éventuel, et le champ de réglage que chaque étape permet de remplir), replié quand les identifiants
+sont déjà posés, déplié sinon. Chaque guide dit : quoi créer et où, quelles permissions demander,
+quelle revue est nécessaire et qu'elle prend du temps, où trouver chaque identifiant, comment
+obtenir un jeton longue durée et quand il expire.
+
+**Vaut pour les six canaux.** Un test vérifie que tout `Channel` possède un guide, sur le modèle du
+test qui vérifie que tout `Channel` possède une entrée de registre — de sorte qu'un nouveau canal ne
+puisse pas être livré sans mode d'emploi.
+
 ### Travail technique préalable aux adaptateurs
 
 Indépendant des identifiants, à faire avant ou avec le premier adaptateur :
