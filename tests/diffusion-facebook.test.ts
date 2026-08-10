@@ -201,6 +201,7 @@ describe("FacebookChannel through sendToChannelCore (D2) — real distributions 
   let templateId: string;
   let articleSuccess: string;
   let articleFailure: string;
+  let articleKeyRotated: string;
   let graphShouldFail = false;
 
   const FIXED_POST_ID = "998877665544332_123456789";
@@ -246,12 +247,13 @@ describe("FacebookChannel through sendToChannelCore (D2) — real distributions 
       }).returning();
     [{ id: articleSuccess }] = await mk("Diffusion Facebook — envoi réussi");
     [{ id: articleFailure }] = await mk("Diffusion Facebook — échec Graph");
+    [{ id: articleKeyRotated }] = await mk("Diffusion Facebook — clé de chiffrement changée");
   });
 
   afterAll(async () => {
     graphServer.stop(true);
     imageServer.stop(true);
-    const ids = [articleSuccess, articleFailure].filter(Boolean);
+    const ids = [articleSuccess, articleFailure, articleKeyRotated].filter(Boolean);
     if (ids.length) {
       await db.delete(renders).where(inArray(renders.subjectId, ids));
       await db.delete(distributions).where(inArray(distributions.articleId, ids));
@@ -302,5 +304,40 @@ describe("FacebookChannel through sendToChannelCore (D2) — real distributions 
     expect(row.attempts).toBe(1);
     expect(row.lastError).toContain("La publication Facebook a échoué");
     expect(row.externalId).toBeNull();
+  });
+
+  // Send-path regression test for review finding Important 1 — mirrors the wrong-key test at
+  // tests/diffusion-connection-test.test.ts:118-129, but through sendToChannelCore/the real
+  // distributions row rather than testFacebookConnection, since THIS is the path the finding is
+  // actually about: send-core.ts has no try/catch around socialChannel.send(), so before the fix a
+  // DecryptionFailedError thrown by getDecryptedCredentials mid-send escaped send-core.ts entirely,
+  // leaving the row wedged at 'pending' (written by step 4, just before send() is called) forever —
+  // no lastError, no attempts++, no article_revisions entry, blocking every retry with "Un envoi
+  // est déjà en cours" until the reaper's DIFFUSION_STALE_PENDING_MINUTES cutoff. A future refactor
+  // that reintroduces an unguarded getDecryptedCredentials call would make THIS test's `row.status`
+  // assertion fail (still 'pending', not 'failed') rather than silently reintroducing the bug.
+  it("a rotated/wrong encryption key does not wedge the distribution 'pending' — marks it 'failed', with lastError and an audit entry (Important 1 regression)", async () => {
+    process.env.CREDENTIALS_ENCRYPTION_KEY = randomBytes(32).toString("base64"); // simulates rotation without re-entering credentials
+    try {
+      const r = await sendToChannelCore({
+        articleId: articleKeyRotated, channel: CHANNEL, caption: "Légende.", triggeredBy: "manual", actorId: null,
+        renderStore: new MemoryRenderStore(), fetchImpl: fetch, channelOverride: fbOverride(graphBase),
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.message.toLowerCase()).toContain("déchiffr");
+
+      const [row] = await db.select().from(distributions)
+        .where(and(eq(distributions.articleId, articleKeyRotated), eq(distributions.channel, CHANNEL)));
+      expect(row.status).toBe("failed"); // NOT stuck at 'pending' — the bug this test regresses
+      expect(row.attempts).toBe(1);
+      expect(row.lastError?.toLowerCase()).toContain("déchiffr");
+      expect(row.externalId).toBeNull();
+
+      const revisions = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, articleKeyRotated));
+      expect(revisions.some((rv) => rv.action.includes("échec de diffusion sur Facebook"))).toBe(true);
+    } finally {
+      process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY; // restore — afterEach in this describe doesn't touch this var
+    }
   });
 });

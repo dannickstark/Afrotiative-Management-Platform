@@ -70,6 +70,21 @@ message français explicite plutôt que de planter — exactement l'idiome de `g
 > `BETTER_AUTH_SECRET` : générée une fois, sauvegardée dans le gestionnaire de secrets de l'hôte,
 > **jamais régénérée** sans planifier au préalable la re-saisie de chaque identifiant déjà stocké
 > (Facebook, Instagram, et tout canal ajouté ensuite).
+>
+> **Si c'est arrivé quand même — procédure de récupération :** un envoi ou un « Tester la
+> connexion » échoue alors avec « Impossible de déchiffrer les identifiants Facebook/Instagram
+> enregistrés… » (voir §10). Il n'y a pas de réparation possible du blob existant — sur
+> `/settings/social/facebook` et/ou `/settings/social/instagram`, cliquez sur **« Supprimer »** puis
+> **ressaisissez la TOTALITÉ des champs d'identifiants du canal** (Facebook : Page ID *et* jeton
+> d'accès ; Instagram : IG User ID *et* jeton d'accès), même si un seul champ semble en cause.
+> `setChannelCredentialsCore` (`lib/diffusion/settings-core.ts`) **fusionne** les valeurs
+> nouvellement soumises dans le blob `credentials` existant plutôt que de le remplacer en entier —
+> ne ressaisir qu'un seul champ laisserait les autres chiffrés sous l'ancienne clé, dans un blob
+> **mixte** qui échoue au déchiffrement en permanence, jeton neuf ou pas (`getDecryptedCredentials`
+> déchiffre TOUS les champs stockés en une fois ; un seul champ encore sous l'ancienne clé fait
+> échouer la lecture de tout le reste). Une fois les identifiants effacés puis intégralement
+> ressaisis, validez avec **« Tester la connexion »** avant de réactiver l'envoi automatique sur ce
+> canal.
 
 **Diffusion sociale — seuil du nettoyeur d'envois bloqués (D1, paramétré en Task 5)** :
 
@@ -488,5 +503,6 @@ de cette plateforme — il tourne tant que le processus Next.js tourne, sans end
 | Gabarit qui échoue avec « Valeurs manquantes pour : brand.logo. » | `STUDIO_BRAND_LOGO_URL` n'est pas posée (§2) — optionnelle, mais tout gabarit qui référence `{{brand.logo}}` l'exige. |
 | Publication qui échoue avec « Génération de l'image échouée — … » (article laissé `approved`) | R2 **est** configuré et un gabarit `article_image` s'est résolu pour la catégorie de l'article, mais son rendu a échoué (V3, §2/§8) — le message nomme la cause (jetons manquants, échec moteur…). Corriger la cause (ex. compléter l'image/la catégorie de l'article, ou `STUDIO_BRAND_LOGO_URL` si le gabarit y fait référence) puis relancer la publication (« Approuver & publier » ou **Republier**) ; la barrière de revue n'est pas affectée, l'article reste réessayable. |
 | « Le jeton d'accès Facebook/Instagram a expiré ou n'est plus valide » (envoi ou « Tester la connexion ») | Code Graph 190 — le jeton de Page stocké n'authentifie plus (§2, point 4). Régénérer un jeton de Page (§2, point 3) et l'enregistrer sur `/settings/social/facebook`/`instagram`, puis « Tester la connexion » avant de réessayer un envoi. |
+| « Impossible de déchiffrer les identifiants Facebook/Instagram enregistrés… » (envoi ou « Tester la connexion ») | `CREDENTIALS_ENCRYPTION_KEY` a changé depuis l'enregistrement des identifiants de ce canal (rotation accidentelle, ou un seul champ ressaisi après une rotation — voir l'avertissement en §2). Sur `/settings/social/facebook`/`instagram` : **« Supprimer »** puis ressaisir **tous** les champs d'identifiants du canal, pas seulement celui qui semble en cause — voir la procédure de récupération complète en §2. Un envoi automatique en échec pour cette raison n'écrit ni jeton ni clé dans `lastError` ; le message reste identique à celui affiché ici. |
 | « Tester la connexion » échoue avec une erreur Graph autre qu'un jeton expiré | Le plus souvent : App Review Meta pas encore passée (permissions encore limitées aux rôles admin/testeur, §2 point 2) ou identifiant de Page/IG User ID incorrect. Le détail affiché reprend le message Graph d'origine. |
 | Envoi Instagram qui échoue à l'étape du conteneur (« statut : ERROR »/« délai d'attente dépassé ») | L'image source (`featuredImageUrl` ou le rendu du gabarit) doit être accessible publiquement en HTTPS ; Instagram met parfois plus de temps que le sondage borné (~4,5 min pire cas, `lib/diffusion/meta/instagram.ts`) ne l'anticipe — réessayer l'envoi. Voir §6.5 pour le raisonnement derrière `DIFFUSION_STALE_PENDING_MINUTES`. |

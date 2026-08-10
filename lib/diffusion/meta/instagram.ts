@@ -52,6 +52,7 @@
 // exactly like Facebook's window, and for the same underlying reason: adapters have no direct DB
 // access in this architecture.
 import { getDecryptedCredentials } from "../settings-core";
+import { DecryptionFailedError } from "../crypto";
 import type { SendInput, SendResult } from "../channels";
 import { GraphClient, GraphApiError, type GraphClientConfig } from "./graph-client";
 
@@ -61,7 +62,22 @@ const SETTINGS_PATH = "/settings/social/instagram";
 const DEFAULT_POLL_MAX_ATTEMPTS = 10;
 const DEFAULT_POLL_INTERVAL_MS = 3_000; // 10 × 3s = 30s worst case — Meta's own guidance is "once per minute for up to 5 minutes" for a much heavier video container; a plain image container finishes far faster in practice, so a shorter/tighter bound is deliberate here rather than copied verbatim (INFERRED trade-off, not observed against real timing).
 
+// Final-review finding (Important 1) — same failure chain and same fix as facebook.ts's
+// mapFacebookGraphError (see that function's header comment for the full explanation): a
+// well-formed-but-wrong CREDENTIALS_ENCRYPTION_KEY makes getDecryptedCredentials THROW
+// DecryptionFailedError, not return null, and neither this file's send() nor send-core.ts used to
+// catch it — wedging the distributions row at 'pending'. This branch, reached from send()'s own
+// try/catch around getDecryptedCredentials below, turns that into the ordinary
+// `{ok:false,message}` shape, actionable and matching docs/DEPLOYMENT.md's recovery procedure.
 export function mapInstagramGraphError(err: unknown): string {
+  if (err instanceof DecryptionFailedError) {
+    return (
+      "Impossible de déchiffrer les identifiants Instagram enregistrés : la clé de chiffrement du " +
+      "serveur (CREDENTIALS_ENCRYPTION_KEY) a probablement changé depuis leur enregistrement. Dans " +
+      `Réglages → Réseaux sociaux → Instagram (${SETTINGS_PATH}), cliquez sur « Supprimer » puis ` +
+      "ressaisissez tous les champs d'identifiants."
+    );
+  }
   if (err instanceof GraphApiError) {
     if (err.code === TOKEN_EXPIRED_CODE) {
       return (
@@ -108,7 +124,15 @@ export class InstagramChannel {
   }
 
   async send(input: SendInput): Promise<SendResult> {
-    const credentials = await getDecryptedCredentials("instagram");
+    // Guarded (review finding, Important 1 — see mapInstagramGraphError's header comment above):
+    // getDecryptedCredentials can throw DecryptionFailedError, and send-core.ts has nothing
+    // catching send()'s own throw.
+    let credentials: Record<string, string> | null;
+    try {
+      credentials = await getDecryptedCredentials("instagram");
+    } catch (err) {
+      return { ok: false, message: mapInstagramGraphError(err) };
+    }
     const igUserId = credentials?.igUserId;
     const pageAccessToken = credentials?.pageAccessToken;
 

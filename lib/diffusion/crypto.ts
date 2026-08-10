@@ -14,6 +14,7 @@ import { randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 const ALGORITHM = "aes-256-gcm";
 const KEY_BYTES = 32; // AES-256
 const IV_BYTES = 12; // 96-bit IV — the size GCM is defined/optimized for (avoids the extra GHASH pass a non-96-bit IV requires)
+const AUTH_TAG_BYTES = 16; // GCM's standard/default tag length (node:crypto's own default when none is passed to createCipheriv)
 
 export type CryptoConfig = { key: Buffer };
 
@@ -25,12 +26,10 @@ export type CryptoConfig = { key: Buffer };
 export function getCryptoConfig(): CryptoConfig | null {
   const raw = process.env.CREDENTIALS_ENCRYPTION_KEY;
   if (!raw) return null;
-  let key: Buffer;
-  try {
-    key = Buffer.from(raw, "base64");
-  } catch {
-    return null;
-  }
+  // No try/catch here (removed, review finding — harmless dead code): Buffer.from(x, "base64")
+  // never throws, even on non-base64 input (it decodes leniently, dropping invalid characters) —
+  // the length check right below is what actually rejects a bad/truncated/non-base64 key.
+  const key = Buffer.from(raw, "base64");
   if (key.length !== KEY_BYTES) return null;
   return { key };
 }
@@ -65,15 +64,31 @@ function serialize(iv: Buffer, authTag: Buffer, ciphertext: Buffer): string {
   return `${iv.toString("base64")}:${authTag.toString("base64")}:${ciphertext.toString("base64")}`;
 }
 
+// Review finding (Important 2): createDecipheriv/setAuthTag (below, in decryptSecret) throw a raw
+// node:crypto TypeError — "Invalid initialization vector" / "Invalid authentication tag length: N"
+// — for an iv/authTag of the wrong BYTE LENGTH, and they do so OUTSIDE decryptSecret's own try
+// block, so that TypeError used to escape uncaught instead of becoming a DecryptionFailedError like
+// every other malformed-input case here. That defeats the whole point of this module's typed-error
+// contract (this file's header comment: "a corrupted DB row fails the same loud way... rather than
+// crashing deeper inside node:crypto with a less legible error") for the specific case of a
+// malformed-but-3-segment stored value (`decryptSecret("a:b:c")`, `decryptSecret("AAAA:BBBB:CCCC")`
+// — see tests/diffusion-crypto.test.ts). Validating both lengths HERE, before either byte buffer
+// ever reaches node:crypto, closes that gap at the one place both decryptSecret call sites
+// (encryptSecret never calls deserialize) share.
 function deserialize(stored: string): { iv: Buffer; authTag: Buffer; ciphertext: Buffer } {
   const parts = stored.split(":");
   if (parts.length !== 3) throw new DecryptionFailedError("format de secret chiffré invalide.");
   const [ivB64, tagB64, dataB64] = parts;
-  return {
-    iv: Buffer.from(ivB64, "base64"),
-    authTag: Buffer.from(tagB64, "base64"),
-    ciphertext: Buffer.from(dataB64, "base64"),
-  };
+  const iv = Buffer.from(ivB64, "base64");
+  const authTag = Buffer.from(tagB64, "base64");
+  const ciphertext = Buffer.from(dataB64, "base64");
+  if (iv.length !== IV_BYTES) {
+    throw new DecryptionFailedError(`taille d'IV invalide (${IV_BYTES} octets attendus, ${iv.length} reçus) — donnée altérée ou format invalide.`);
+  }
+  if (authTag.length !== AUTH_TAG_BYTES) {
+    throw new DecryptionFailedError(`taille d'empreinte d'authentification invalide (${AUTH_TAG_BYTES} octets attendus, ${authTag.length} reçus) — donnée altérée ou format invalide.`);
+  }
+  return { iv, authTag, ciphertext };
 }
 
 // Encrypts `plain` under CREDENTIALS_ENCRYPTION_KEY with a FRESH random IV every call — this is
@@ -101,9 +116,16 @@ export function decryptSecret(stored: string): string {
   if (!cfg) throw new CredentialsNotConfiguredError();
 
   const { iv, authTag, ciphertext } = deserialize(stored);
-  const decipher = createDecipheriv(ALGORITHM, cfg.key, iv);
-  decipher.setAuthTag(authTag);
+  // createDecipheriv/setAuthTag moved INSIDE the try (review finding, Important 2, belt-and-braces
+  // on top of deserialize's own length checks above): both used to sit outside this block and could
+  // throw a raw node:crypto TypeError of their own for a malformed iv/authTag — deserialize now
+  // rejects those before either buffer gets here, but keeping the two calls inside this try as well
+  // means ANY node:crypto exception on this path — not just decipher.final()'s auth-tag mismatch —
+  // becomes DecryptionFailedError, matching this file's header comment's promise in full rather
+  // than for only the cases anticipated today.
   try {
+    const decipher = createDecipheriv(ALGORITHM, cfg.key, iv);
+    decipher.setAuthTag(authTag);
     const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return plain.toString("utf8");
   } catch {

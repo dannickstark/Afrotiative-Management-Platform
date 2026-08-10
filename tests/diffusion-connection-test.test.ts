@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, afterEach, mock } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { db, socialChannelSettings } from "@/db";
+import { db, socialChannelSettings, user } from "@/db";
 import { setChannelCredentialsCore, deleteChannelCredentialsCore } from "@/lib/diffusion/settings-core";
 import { testFacebookConnection, testInstagramConnection } from "@/lib/diffusion/meta/connection-test";
 
@@ -24,6 +24,7 @@ describe("testFacebookConnection — fake Graph API (Task 5), no real network", 
   let lastMethod = "";
   let lastPath = "";
   let lastQuery: URLSearchParams | null = null;
+  let lastAuthHeader: string | null = null;
   let failWith: { status: number; body: unknown } | null = null;
 
   beforeAll(() => {
@@ -36,6 +37,7 @@ describe("testFacebookConnection — fake Graph API (Task 5), no real network", 
         lastMethod = req.method;
         lastPath = url.pathname;
         lastQuery = url.searchParams;
+        lastAuthHeader = req.headers.get("authorization");
         if (failWith) return Response.json(failWith.body, { status: failWith.status });
         return Response.json({ id: "112233445566778", name: "Afrotiative Media" });
       },
@@ -55,6 +57,7 @@ describe("testFacebookConnection — fake Graph API (Task 5), no real network", 
     lastMethod = "";
     lastPath = "";
     lastQuery = null;
+    lastAuthHeader = null;
     failWith = null;
     await clearCredentials("facebook");
   });
@@ -76,7 +79,12 @@ describe("testFacebookConnection — fake Graph API (Task 5), no real network", 
     expect(lastPath).toBe("/112233445566778");
     expect(lastPath).not.toContain("/photos"); // the brief's "no publish" requirement, made concrete
     expect(lastQuery?.get("fields")).toBe("id,name");
-    expect(lastQuery?.get("access_token")).toBe("tok-abc-123");
+    // Review finding (Important 3): the token travels as an Authorization: Bearer header now, NOT
+    // a query-string parameter — asserting BOTH halves (absent from the query AND present in the
+    // header, with the exact value) is what makes this test actually fail if a token reappeared in
+    // a GET URL, rather than merely "not testing the header at all".
+    expect(lastQuery?.get("access_token")).toBeNull();
+    expect(lastAuthHeader).toBe("Bearer tok-abc-123");
     // "show which channel/account it actually reached" (brief) — not a bare green tick.
     expect(result.detail).toContain("Afrotiative Media");
     expect(result.detail).toContain("112233445566778");
@@ -136,6 +144,7 @@ describe("testInstagramConnection — fake Graph API (Task 5), no real network",
   let lastMethod = "";
   let lastPath = "";
   let lastQuery: URLSearchParams | null = null;
+  let lastAuthHeader: string | null = null;
   let failWith: { status: number; body: unknown } | null = null;
 
   beforeAll(() => {
@@ -148,6 +157,7 @@ describe("testInstagramConnection — fake Graph API (Task 5), no real network",
         lastMethod = req.method;
         lastPath = url.pathname;
         lastQuery = url.searchParams;
+        lastAuthHeader = req.headers.get("authorization");
         if (failWith) return Response.json(failWith.body, { status: failWith.status });
         return Response.json({ id: "17841400000000000", username: "afrotiative.media" });
       },
@@ -167,6 +177,7 @@ describe("testInstagramConnection — fake Graph API (Task 5), no real network",
     lastMethod = "";
     lastPath = "";
     lastQuery = null;
+    lastAuthHeader = null;
     failWith = null;
     await clearCredentials("instagram");
   });
@@ -188,7 +199,10 @@ describe("testInstagramConnection — fake Graph API (Task 5), no real network",
     expect(lastPath).toBe("/17841400000000000");
     expect(lastPath).not.toContain("/media"); // never a container create/publish call
     expect(lastQuery?.get("fields")).toBe("id,username");
-    expect(lastQuery?.get("access_token")).toBe("tok-ig-456");
+    // Review finding (Important 3) — see the Facebook describe block above for the full rationale;
+    // same two-sided assertion here (absent from the query, present in the header).
+    expect(lastQuery?.get("access_token")).toBeNull();
+    expect(lastAuthHeader).toBe("Bearer tok-ig-456");
     expect(result.detail).toContain("afrotiative.media");
     expect(result.detail).toContain("17841400000000000");
   });
@@ -220,5 +234,69 @@ describe("testInstagramConnection — fake Graph API (Task 5), no real network",
     } finally {
       process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY;
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// lib/actions/diffusion-settings-actions.ts's testChannelConnection — the guarded Server Action
+// that fronts testFacebookConnection/testInstagramConnection above. Minor 10 (final review): this
+// is the one genuinely NEW network entry point this sub-project adds (every export of a "use
+// server" module is an unauthenticated Server Action per lib/actions/taxonomy-actions.ts's own
+// comment) — an unguarded version would be a Graph proxy / credential-validity oracle for anyone
+// who could call it. Had NO test at all before this fix. Same mock.module recipe as
+// tests/diffusion-crypto.test.ts's own guarded-action describe block (capture the real
+// session/cache exports, mock requireUser to a seeded admin/editor, dynamically import the action
+// module so its static imports resolve against the mocks, restore in afterAll).
+// ─────────────────────────────────────────────────────────────────────────────
+const { requireUser: realRequireUser, getSession: realGetSession } = await import("@/lib/session");
+const { revalidatePath: realRevalidatePath, revalidateTag: realRevalidateTag } = await import("next/cache");
+
+const [seededAdmin] = await db.select({ id: user.id, role: user.role })
+  .from(user).where(eq(user.email, "admin@afrotiative.com"));
+if (!seededAdmin) throw new Error("Seed manquant : admin@afrotiative.com introuvable (bun run db:seed).");
+const FAKE_ADMIN = {
+  id: seededAdmin.id, name: "Test Admin", email: "admin@afrotiative.com",
+  role: seededAdmin.role, banned: false, image: null,
+};
+
+const [seededEditor] = await db.select({ id: user.id, role: user.role })
+  .from(user).where(eq(user.email, "editor@afrotiative.com"));
+if (!seededEditor) throw new Error("Seed manquant : editor@afrotiative.com introuvable (bun run db:seed).");
+const FAKE_EDITOR = {
+  id: seededEditor.id, name: "Test Éditeur", email: "editor@afrotiative.com",
+  role: seededEditor.role, banned: false, image: null,
+};
+
+mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_ADMIN }));
+mock.module("next/cache", () => ({ revalidatePath: () => {}, revalidateTag: realRevalidateTag }));
+
+const { testChannelConnection } = await import("@/lib/actions/diffusion-settings-actions");
+
+describe("testChannelConnection (guarded Server Action) — Minor 10", () => {
+  afterAll(() => {
+    mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: realRequireUser }));
+    mock.module("next/cache", () => ({ revalidatePath: realRevalidatePath, revalidateTag: realRevalidateTag }));
+  });
+
+  // RBAC guard — same pattern as tests/diffusion-crypto.test.ts:369-376's "an editor (no
+  // social:manage) is refused". Without this, testChannelConnection would be an unauthenticated
+  // Graph proxy: anyone able to call the Server Action could probe whether ANY stored credential on
+  // ANY channel still authenticates against Meta, with no role check at all.
+  it("an editor (no social:manage) is refused", async () => {
+    mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_EDITOR }));
+    try {
+      await expect(testChannelConnection("facebook")).rejects.toThrow();
+    } finally {
+      mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_ADMIN }));
+    }
+  });
+
+  // Other-channel stub branch (lib/actions/diffusion-settings-actions.ts's testChannelConnection:
+  // every channel besides facebook/instagram still has no real adapter — StubChannel only, no Graph
+  // client to test at all) — an admin, so this exercises the branch itself, not the RBAC guard.
+  it("a channel with no real adapter yet (e.g. linkedin) returns the honest stub message, without attempting any Graph call", async () => {
+    const result = await testChannelConnection("linkedin");
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("Aucun test de connexion disponible");
   });
 });

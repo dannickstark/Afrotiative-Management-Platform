@@ -123,6 +123,37 @@ describe("decryptSecret — tampered ciphertext fails loudly (auth tag actually 
     setKey(VALID_KEY);
     expect(() => decryptSecret("not-a-valid-stored-secret")).toThrow(DecryptionFailedError);
   });
+
+  // Review finding (Important 2): before the fix, createDecipheriv/setAuthTag sat OUTSIDE
+  // decryptSecret's try block, so a stored value with the right number of ':'-delimited segments
+  // but the WRONG byte length for its iv/authTag component escaped as a raw node:crypto TypeError
+  // ("Invalid initialization vector" / "Invalid authentication tag length: N"), not this module's
+  // own DecryptionFailedError — defeating the "fails the same loud way... rather than crashing
+  // deeper inside node:crypto" promise this file's header comment makes. Both reproductions below
+  // are the reviewer's own verified repro strings.
+  it("throws DecryptionFailedError, not a raw node:crypto TypeError, for a 3-segment value with a too-short IV", () => {
+    setKey(VALID_KEY);
+    expect(() => decryptSecret("a:b:c")).toThrow(DecryptionFailedError);
+    try {
+      decryptSecret("a:b:c");
+      throw new Error("expected decryptSecret to throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DecryptionFailedError);
+      expect(e).not.toBeInstanceOf(TypeError);
+    }
+  });
+
+  it("throws DecryptionFailedError, not a raw node:crypto TypeError, for a 3-segment value with a too-short auth tag", () => {
+    setKey(VALID_KEY);
+    expect(() => decryptSecret("AAAA:BBBB:CCCC")).toThrow(DecryptionFailedError);
+    try {
+      decryptSecret("AAAA:BBBB:CCCC");
+      throw new Error("expected decryptSecret to throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(DecryptionFailedError);
+      expect(e).not.toBeInstanceOf(TypeError);
+    }
+  });
 });
 
 describe("no key configured — refuses instead of crashing", () => {

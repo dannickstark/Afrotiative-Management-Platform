@@ -45,7 +45,7 @@ describe("InstagramChannel.send — fake Graph API (D3), no real network", () =>
   let server: ReturnType<typeof Bun.serve>;
   let base: string;
   let requestCount = 0;
-  const requestLog: { method: string; path: string; body?: URLSearchParams }[] = [];
+  const requestLog: { method: string; path: string; body?: URLSearchParams; query?: URLSearchParams; authHeader?: string | null }[] = [];
 
   const CONTAINER_ID = "ig-container-777";
   const PUBLISHED_ID = "ig-media-999";
@@ -79,7 +79,7 @@ describe("InstagramChannel.send — fake Graph API (D3), no real network", () =>
           return Response.json({ id: PUBLISHED_ID });
         }
         if (method === "GET" && url.pathname === `/${CONTAINER_ID}`) {
-          requestLog.push({ method, path: url.pathname });
+          requestLog.push({ method, path: url.pathname, query: url.searchParams, authHeader: req.headers.get("authorization") });
           const status = statusQueue[Math.min(statusCallIndex, statusQueue.length - 1)];
           statusCallIndex++;
           return Response.json({ status_code: status });
@@ -144,6 +144,13 @@ describe("InstagramChannel.send — fake Graph API (D3), no real network", () =>
     expect(requestLog[0].body?.get("access_token")).toBe("tok-ig-abc");
     expect(requestLog[0].body?.get("media_type")).toBeNull(); // never sent for a plain image — see instagram.ts header comment
     expect(requestLog[2].body?.get("creation_id")).toBe(CONTAINER_ID);
+
+    // Review finding (Important 3): the container status poll is a GET — its access_token must
+    // travel as an Authorization: Bearer header, never in the query string (see graph-client.ts's
+    // GraphClient.get). Both halves asserted so this fails if a token ever reappeared in the URL.
+    const statusPoll = requestLog[1];
+    expect(statusPoll.query?.get("access_token")).toBeNull();
+    expect(statusPoll.authHeader).toBe("Bearer tok-ig-abc");
   });
 
   it("polls IN_PROGRESS a few times before FINISHED, sleeping (not busy-looping) between attempts", async () => {
@@ -269,6 +276,7 @@ describe("InstagramChannel through sendToChannelCore (D3) — real distributions
   let templateId: string;
   let articleSuccess: string;
   let articleFailure: string;
+  let articleKeyRotated: string;
   let graphShouldFail = false;
 
   const CONTAINER_ID = "ig-container-int-1";
@@ -324,12 +332,13 @@ describe("InstagramChannel through sendToChannelCore (D3) — real distributions
       }).returning();
     [{ id: articleSuccess }] = await mk("Diffusion Instagram — envoi réussi");
     [{ id: articleFailure }] = await mk("Diffusion Instagram — échec Graph");
+    [{ id: articleKeyRotated }] = await mk("Diffusion Instagram — clé de chiffrement changée");
   });
 
   afterAll(async () => {
     graphServer.stop(true);
     imageServer.stop(true);
-    const ids = [articleSuccess, articleFailure].filter(Boolean);
+    const ids = [articleSuccess, articleFailure, articleKeyRotated].filter(Boolean);
     if (ids.length) {
       await db.delete(renders).where(inArray(renders.subjectId, ids));
       await db.delete(distributions).where(inArray(distributions.articleId, ids));
@@ -380,5 +389,36 @@ describe("InstagramChannel through sendToChannelCore (D3) — real distributions
     expect(row.attempts).toBe(1);
     expect(row.lastError).toContain("La publication Instagram a échoué");
     expect(row.externalId).toBeNull();
+  });
+
+  // Send-path regression test for review finding Important 1 — mirrors the wrong-key test at
+  // tests/diffusion-connection-test.test.ts:118-129, and tests/diffusion-facebook.test.ts's own
+  // mirror of it, through sendToChannelCore/the real distributions row (see that Facebook test's
+  // comment for the full explanation of the bug this regresses: send-core.ts has no try/catch
+  // around socialChannel.send(), so an unguarded getDecryptedCredentials throw used to escape and
+  // wedge the row 'pending' forever instead of ever reaching container creation).
+  it("a rotated/wrong encryption key does not wedge the distribution 'pending' — marks it 'failed', with lastError and an audit entry (Important 1 regression)", async () => {
+    process.env.CREDENTIALS_ENCRYPTION_KEY = randomBytes(32).toString("base64"); // simulates rotation without re-entering credentials
+    try {
+      const r = await sendToChannelCore({
+        articleId: articleKeyRotated, channel: CHANNEL, caption: "Légende.", triggeredBy: "manual", actorId: null,
+        renderStore: new MemoryRenderStore(), fetchImpl: fetch, channelOverride: igOverride(),
+      });
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.message.toLowerCase()).toContain("déchiffr");
+
+      const [row] = await db.select().from(distributions)
+        .where(and(eq(distributions.articleId, articleKeyRotated), eq(distributions.channel, CHANNEL)));
+      expect(row.status).toBe("failed"); // NOT stuck at 'pending' — the bug this test regresses
+      expect(row.attempts).toBe(1);
+      expect(row.lastError?.toLowerCase()).toContain("déchiffr");
+      expect(row.externalId).toBeNull();
+
+      const revisions = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, articleKeyRotated));
+      expect(revisions.some((rv) => rv.action.includes("échec de diffusion sur Instagram"))).toBe(true);
+    } finally {
+      process.env.CREDENTIALS_ENCRYPTION_KEY = VALID_KEY; // restore — afterEach in this describe doesn't touch this var
+    }
   });
 });

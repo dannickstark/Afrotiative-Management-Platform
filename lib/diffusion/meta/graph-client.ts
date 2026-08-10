@@ -78,12 +78,36 @@ export class GraphClient {
     return this.parse<T>(res);
   }
 
-  // GET with query-string params — used for the Instagram container status poll
-  // (GET /{ig-container-id}?fields=status_code&access_token=...).
+  // GET with query-string params — used for the Instagram container status poll and both
+  // connection tests (lib/diffusion/meta/connection-test.ts).
+  //
+  // Review finding (Important 3): `access_token` is pulled OUT of `params` and sent as an
+  // `Authorization: Bearer <token>` header instead of a query-string parameter — a token in a GET
+  // URL is handed to every logger in the outbound path (reverse-proxy access logs, APM/OTel's
+  // `http.url` span attribute, Meta's own edge logs), which the project's Global Constraint ("never
+  // log a credential, not even truncated") is specifically written to prevent. Verified against
+  // Meta's current docs that Graph accepts this form: the WhatsApp Business Management API guide
+  // (developers.facebook.com/documentation/business-messaging/whatsapp/access-tokens/) and the
+  // Instagram Messaging API guide (both fetched 2026-08-10, both on this SAME graph.facebook.com
+  // host/auth layer this client calls) both explicitly document and give curl examples of
+  // `Authorization: Bearer <token>` authenticating a Graph API request — see this task's report for
+  // exactly what was fetched vs. inferred (the older Page/Photo-specific reference docs only show
+  // the `access_token` query-param style and don't call out Bearer, but don't contradict it either;
+  // Graph API validates a token against ONE shared OAuth layer regardless of which node/edge is
+  // requested, not per-endpoint, which is why a product doc that documents Bearer for one Graph
+  // endpoint is evidence it works for all of them). No caller of this method needed to change — they
+  // still pass `access_token` inside `params`, exactly as before; this function is the one place
+  // that decides how it actually travels over the wire.
+  //
+  // POST (above) is UNCHANGED and deliberately so (brief: "POST bodies already keep the token out
+  // of the URL; leave them as they are") — `access_token` stays a form-body field there.
   async get<T = unknown>(path: string, params: Record<string, string>): Promise<T> {
+    const { access_token: accessToken, ...queryParams } = params;
     const url = new URL(`${this.baseUrl}${path}`);
-    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-    const res = await this.fetchImpl(url.toString(), { signal: AbortSignal.timeout(this.timeoutMs) });
+    for (const [key, value] of Object.entries(queryParams)) url.searchParams.set(key, value);
+    const headers: Record<string, string> = {};
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    const res = await this.fetchImpl(url.toString(), { headers, signal: AbortSignal.timeout(this.timeoutMs) });
     return this.parse<T>(res);
   }
 

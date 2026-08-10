@@ -221,10 +221,23 @@ export async function deleteChannelCredentialsCore(channel: Channel): Promise<Se
 // building its Graph API request) or a free connectivity check (Task 4's testConnection-style
 // action) — never a "use server" action's return value, never a Client Component prop, never a log
 // line (Global Constraints: "a decrypted secret should exist only inside a server-side send").
-// Returns null (not a throw) both when nothing is stored AND when the key is missing/wrong — same
-// "unavailable, not a crash" contract as getCryptoConfig() itself; a caller that needs to
-// distinguish "no credential" from "can't decrypt it" should call getCryptoConfig()/
-// getChannelSettings().credentialsSetAt itself first.
+//
+// Returns null (not a throw) when nothing is stored, AND when the key is entirely MISSING or
+// malformed (getCryptoConfig() itself returns null for that case, checked below before decryption
+// is ever attempted) — same "unavailable, not a crash" contract as getCryptoConfig() itself.
+//
+// Correction (final-review finding, Important 1 — this comment previously, incorrectly, said "when
+// the key is missing/wrong" here, i.e. implied a WRONG key also just returns null; the reviewer
+// judged that inaccuracy the likely root cause of every caller below independently omitting a
+// guard for the case this paragraph is about): a well-formed key that is simply the WRONG one
+// (rotated without re-entering credentials, or a mixed-key blob from a partial re-save — see
+// docs/DEPLOYMENT.md §2's recovery procedure) is NOT caught here. It reaches decryptSecret
+// (lib/diffusion/crypto.ts), whose auth-tag check then fails and THROWS DecryptionFailedError —
+// this function does not catch it, so it propagates to the caller. Every current caller
+// (lib/diffusion/meta/facebook.ts's/instagram.ts's send(), lib/diffusion/meta/connection-test.ts)
+// wraps its own call to this function in a try/catch for exactly that reason; a new caller must do
+// the same, or call getCryptoConfig() itself first the way this comment used to (wrongly) imply
+// getDecryptedCredentials already did for it.
 export async function getDecryptedCredentials(channel: Channel): Promise<Record<string, string> | null> {
   const row = await getOrCreateSettingsRow(channel);
   if (!row.credentials) return null;

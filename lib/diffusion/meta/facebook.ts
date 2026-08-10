@@ -37,6 +37,7 @@
 // the practical mitigation available within the existing interface: minimize the window to as close
 // to zero as the single-call API allows, not eliminate it.
 import { getDecryptedCredentials } from "../settings-core";
+import { DecryptionFailedError } from "../crypto";
 import type { SendInput, SendResult } from "../channels";
 import { GraphClient, GraphApiError, type GraphClientConfig } from "./graph-client";
 
@@ -47,7 +48,31 @@ const SETTINGS_PATH = "/settings/social/facebook";
 // Exported (not just used internally) so tests/diffusion-facebook.test.ts can assert the exact
 // message shape independently of constructing a whole GraphApiError through a fake HTTP round trip
 // for every case, and so a future adapter reviewer can see the mapping in one place.
+//
+// Final-review finding (Important 1): getDecryptedCredentials (settings-core.ts) can THROW
+// DecryptionFailedError (lib/diffusion/crypto.ts) — not just return null — when
+// CREDENTIALS_ENCRYPTION_KEY has been rotated without re-entering credentials for this channel
+// (settings-core.ts's own comment on this function used to claim a wrong key also just returns
+// null; it doesn't — only a MISSING/malformed key short-circuits via getCryptoConfig(), a
+// well-formed-but-wrong key reaches decryptSecret and throws). Before this fix, send() (below)
+// called getDecryptedCredentials with no try/catch of its own, and sendToChannelCore
+// (send-core.ts) has no try/catch around socialChannel.send() either — the throw would escape
+// AFTER send-core.ts's step 4 already wrote status:'pending' to the distributions row, wedging it
+// there (blocking every retry with "Un envoi est déjà en cours") until the reaper's
+// DIFFUSION_STALE_PENDING_MINUTES cutoff, with none of step 5/6's lastError/attempts++/audit trail
+// ever written. This DecryptionFailedError branch — reached from send()'s own try/catch around
+// getDecryptedCredentials, added below — turns that crash into the same ordinary
+// `{ok:false,message}` shape every other failure in this file already returns, with an actionable
+// French message matching docs/DEPLOYMENT.md's recovery procedure (§2/§10).
 export function mapFacebookGraphError(err: unknown): string {
+  if (err instanceof DecryptionFailedError) {
+    return (
+      "Impossible de déchiffrer les identifiants Facebook enregistrés : la clé de chiffrement du " +
+      "serveur (CREDENTIALS_ENCRYPTION_KEY) a probablement changé depuis leur enregistrement. Dans " +
+      `Réglages → Réseaux sociaux → Facebook (${SETTINGS_PATH}), cliquez sur « Supprimer » puis ` +
+      "ressaisissez tous les champs d'identifiants."
+    );
+  }
   if (err instanceof GraphApiError) {
     if (err.code === TOKEN_EXPIRED_CODE) {
       // Distinct and actionable, per the brief: this WILL happen roughly every 60 days (Meta long-
@@ -73,7 +98,15 @@ export class FacebookChannel {
   constructor(private readonly clientConfig: GraphClientConfig = {}) {}
 
   async send(input: SendInput): Promise<SendResult> {
-    const credentials = await getDecryptedCredentials("facebook");
+    // Guarded (review finding, Important 1 — see mapFacebookGraphError's header comment above for
+    // the full failure chain this closes): getDecryptedCredentials can throw DecryptionFailedError,
+    // and send-core.ts has nothing catching send()'s own throw.
+    let credentials: Record<string, string> | null;
+    try {
+      credentials = await getDecryptedCredentials("facebook");
+    } catch (err) {
+      return { ok: false, message: mapFacebookGraphError(err) };
+    }
     const pageId = credentials?.pageId;
     const pageAccessToken = credentials?.pageAccessToken;
 
