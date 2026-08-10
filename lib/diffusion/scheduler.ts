@@ -10,15 +10,16 @@
 // escaping rejection here would surface only as an unlabeled unhandled rejection, with no
 // [scheduler]-prefixed trace for an operator to find. Same convention/wording as
 // lib/pipeline/scheduler.ts's own triggerScheduledRun.
-import { and, eq, lt, sql } from "drizzle-orm";
-import { db, distributions } from "@/db";
-import { CHANNELS, type Channel } from "@/lib/studio";
+import { and, eq, gt, lt, sql } from "drizzle-orm";
+import { db, distributions, alerts } from "@/db";
+import { CHANNELS, CHANNEL_LABELS, type Channel } from "@/lib/studio";
 import { isDue, selectNextArticle } from "./schedule-core";
-import { getChannelSettings, setLastAutoSendAt } from "./settings-core";
+import { getChannelSettings, hasAllCredentials, setLastAutoSendAt, type SocialChannelSettings } from "./settings-core";
 import { sendToChannelCore } from "./send-core";
 import { generateCaption } from "./caption";
 import { SOCIAL_CHANNELS, type SocialChannel } from "./channels";
 import { createAlert } from "@/lib/alerts/notify";
+import { formatDate } from "@/lib/format";
 import type { RenderStore } from "@/lib/studio/store";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -84,6 +85,61 @@ export async function reclaimStalePendingDistributions(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Token-expiry alerting (Task 2, D7 spec §4). Both Meta and LinkedIn issue ~60-day credentials with
+// no cheap way to read the real expiry back — tracked (social_channel_settings.tokenExpiresAt), not
+// discovered. Runs from the OUTER loop below, for every channel with a full credential set,
+// auto-publish or not: a token an operator uses by hand expires just the same, and auto-publish is
+// OFF by default (spec §5's own baseline), so gating this on autoEnabled — the way tickChannel's
+// own `!settings.enabled || !settings.autoEnabled` early return at line ~173 does — would silence
+// the alert for exactly the common case, not an edge one.
+export const TOKEN_EXPIRY_WARNING_DAYS = 7;
+
+async function warnIfTokenExpiring(channel: Channel, settings: SocialChannelSettings): Promise<void> {
+  if (!hasAllCredentials(channel, settings)) return;
+  if (!settings.tokenExpiresAt) return;
+  const days = (settings.tokenExpiresAt.getTime() - Date.now()) / 86_400_000;
+  if (days > TOKEN_EXPIRY_WARNING_DAYS) return;
+  if (await hasRecentTokenAlert(channel)) return;
+  await createAlert({
+    type: "token_expiring",
+    title: tokenExpiringAlertTitle(channel),
+    detail: `Le jeton d'accès ${CHANNEL_LABELS[channel]} expire le ${formatDate(settings.tokenExpiresAt)}. Générez-en un nouveau et enregistrez-le sur /settings/social/${channel}.`,
+    // entityId is deliberately left null, not the channel key. alerts.entity_id (db/schema.ts) is a
+    // `uuid` column — it already points at a pipeline_runs.id, a feeds.id or (for diffusion_blocked)
+    // an articles.id for every OTHER alert type, and a short channel key like "linkedin" is not a
+    // UUID: the INSERT itself would reject it (verified against tests/alerts.test.ts's own "a
+    // non-uuid string rejects" case), and createAlert's blanket try/catch (lib/alerts/notify.ts)
+    // would then swallow that failure silently — the alert would simply never be created, forever,
+    // with nothing but a console.error to notice by. The per-channel identity this feature actually
+    // needs — for hasRecentTokenAlert's 24h dedup below, and for this file's own tests — is carried
+    // instead by `title`, which is entirely deterministic per channel (CHANNEL_LABELS is a fixed
+    // 1:1 map, lib/studio/tokens.ts) via tokenExpiringAlertTitle.
+    entityId: null,
+  });
+}
+
+function tokenExpiringAlertTitle(channel: Channel): string {
+  return `Jeton ${CHANNEL_LABELS[channel]} bientôt expiré`;
+}
+
+// At most one token_expiring alert per channel per 24h (spec §4): the tick runs every 15 minutes, so
+// without this gate a token sitting inside the warning window for a week would raise roughly 672
+// rows. The cheapest honest gate: an existing token_expiring alert for this exact channel (matched
+// via its deterministic title — see warnIfTokenExpiring's comment on why entityId can't carry this)
+// newer than 24h.
+async function hasRecentTokenAlert(channel: Channel): Promise<boolean> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const [row] = await db.select({ id: alerts.id }).from(alerts)
+    .where(and(
+      eq(alerts.type, "token_expiring"),
+      eq(alerts.title, tokenExpiringAlertTitle(channel)),
+      gt(alerts.createdAt, since),
+    ))
+    .limit(1);
+  return row !== undefined;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export type DiffusionTickOptions = {
   now?: Date;
@@ -120,6 +176,19 @@ export async function triggerDiffusionTick(opts: DiffusionTickOptions = {}): Pro
   // tick from running either — that's what "a send failure does not wedge the scheduler" means in
   // practice (Task 9's required test).
   for (const channel of channels) {
+    // Token-expiry check runs BEFORE tickChannel, in its own try/catch (Task 2, D7 spec §4) — see
+    // this file's own comment above warnIfTokenExpiring for why it cannot live inside tickChannel,
+    // which returns early at `!settings.enabled || !settings.autoEnabled` (the majority case, since
+    // auto-publish is off by default). Separate try/catch from tickChannel's own below: a failure
+    // reading/alerting on the token's expiry must never block that SAME channel's send attempt, and
+    // vice versa.
+    try {
+      const settings = await getChannelSettings(channel);
+      await warnIfTokenExpiring(channel, settings);
+    } catch (e) {
+      console.error(`[scheduler] échec de l'alerte d'expiration de jeton (${channel}) : ` + (e as Error).message);
+    }
+
     try {
       await tickChannel(channel, now, opts.channelOverrides?.[channel], opts.renderStore, opts.fetchImpl);
     } catch (e) {

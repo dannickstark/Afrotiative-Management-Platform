@@ -127,6 +127,13 @@
       "when": 1786341427172,
       "tag": "0017_narrow_human_robot",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786366769882,
+      "tag": "0018_bumpy_warlock",
+      "breakpoints": true
     }
   ]
 }

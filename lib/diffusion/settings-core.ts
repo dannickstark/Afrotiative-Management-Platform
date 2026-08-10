@@ -13,6 +13,10 @@ import { CHANNELS, type Channel } from "@/lib/studio";
 import { getCryptoConfig, encryptSecret, decryptSecret, DecryptionFailedError } from "./crypto";
 import { validateChannelCredentialFields } from "@/lib/validation";
 
+// Task 2 (D7 spec §4) — both Meta's and LinkedIn's tokens are documented as ~60-day-lived; used by
+// setChannelCredentialsCore below to seed tokenExpiresAt on every credential write.
+const TOKEN_EXPIRY_DEFAULT_DAYS = 60;
+
 // Every column EXCEPT the encrypted `credentials` blob, PLUS `credentialKeys` (D7 credential debt,
 // spec §5 item 1) — the field NAMES currently present in that blob, derived below in omitCredentials.
 // A key list is not sensitive (unlike a value): it is what lets a caller tell "one of two fields
@@ -117,11 +121,18 @@ export async function getAllChannelSettings(): Promise<SocialChannelSettings[]> 
 // server-set (below). Credentials are a SEPARATE write path (setChannelCredentialsCore /
 // deleteChannelCredentialsCore) — deliberately excluded here so this patch can never accidentally
 // carry a plaintext secret through a code path that wasn't built to encrypt it.
+//
+// `tokenExpiresAt` (Task 2, D7 spec §4) rides this SAME patch, not the credentials one, precisely
+// BECAUSE it is not a secret: setChannelCredentialsCore already defaults it to now + 60 days on
+// every credential write (its own comment below), and this is the separate path that lets an admin
+// CORRECT that estimate afterward from LinkedIn's token generator or Meta's Access Token Debugger,
+// without re-submitting any credential value.
 export type UpdateChannelSettingsPatch = Partial<Pick<
   SocialChannelSettings,
   | "enabled" | "captionMaxChars" | "captionPrompt"
   | "autoEnabled" | "autoIntervalHours" | "autoMaxBacklogDays"
   | "autoWindowStartHour" | "autoWindowEndHour"
+  | "tokenExpiresAt"
 >>;
 
 export type UpdateChannelSettingsResult =
@@ -255,8 +266,18 @@ export async function setChannelCredentialsCore(
   const merged: Record<string, string> = { ...(current.credentials ?? {}) };
   for (const [key, value] of Object.entries(values)) merged[key] = encryptSecret(value);
 
+  // Task 2 (D7 spec §4) — every credential write resets tokenExpiresAt to now + 60 days,
+  // unconditionally: a fresh save (first entry, rotation, or partial re-entry) means whatever token
+  // is now stored is, as far as this app can know, a NEW one, so restarting the estimate from today
+  // is the honest default. Neither Meta nor LinkedIn exposes the real expiry on a cheap read (spec
+  // §4's whole premise — tracked, not discovered), so this is deliberately an ESTIMATE the admin can
+  // still correct afterward via updateChannelSettingsCore's own `tokenExpiresAt` field (see that
+  // type's comment) — this function itself takes no separate "explicit date" parameter, since
+  // nothing today calls it wanting one; adding an unused one would be speculative.
+  const tokenExpiresAt = new Date(Date.now() + TOKEN_EXPIRY_DEFAULT_DAYS * 24 * 60 * 60 * 1000);
+
   const [updated] = await db.update(socialChannelSettings)
-    .set({ credentials: merged, credentialsSetAt: new Date(), updatedAt: new Date() })
+    .set({ credentials: merged, credentialsSetAt: new Date(), tokenExpiresAt, updatedAt: new Date() })
     .where(eq(socialChannelSettings.channel, channel))
     .returning();
 

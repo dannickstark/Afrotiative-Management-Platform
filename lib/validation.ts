@@ -207,6 +207,10 @@ export const socialChannelSettingsSchema = z.object({
   autoWindowEndHour: z.number().int("Doit être un nombre entier.")
     .min(0, "L'heure de fin de fenêtre doit être comprise entre 0 et 23.")
     .max(23, "L'heure de fin de fenêtre doit être comprise entre 0 et 23.").optional(),
+  // Task 2 (D7 spec §4) — an admin correcting the estimate setChannelCredentialsCore defaulted to
+  // now + 60 days (LinkedIn's token generator / Meta's Access Token Debugger show the real date).
+  // Nullable: clearing the field means "expiry unknown", not "never expires".
+  tokenExpiresAt: z.date().nullable().optional(),
 });
 export type SocialChannelSettingsInput = z.infer<typeof socialChannelSettingsSchema>;
 

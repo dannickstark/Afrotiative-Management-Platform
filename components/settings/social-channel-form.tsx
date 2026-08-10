@@ -53,7 +53,16 @@ type FormState = {
   autoMaxBacklogDays: string;
   autoWindowStartHour: string;
   autoWindowEndHour: string;
+  // Task 2 (D7 spec §4) — "YYYY-MM-DD", the native <input type="date"> value shape (same convention
+  // as components/published/published-filter-bar.tsx's `ymd`). "" means "unknown" (null), never
+  // "never expires" — see handleSave's own parsing of this field below.
+  tokenExpiresAt: string;
 };
+
+// d.toISOString().slice(0, 10) — same helper shape as published-filter-bar.tsx's `ymd`.
+function tokenExpiresAtToInputValue(d: Date | null): string {
+  return d ? d.toISOString().slice(0, 10) : "";
+}
 
 function toFormState(settings: SocialChannelSettings): FormState {
   return {
@@ -65,6 +74,7 @@ function toFormState(settings: SocialChannelSettings): FormState {
     autoMaxBacklogDays: String(settings.autoMaxBacklogDays),
     autoWindowStartHour: String(settings.autoWindowStartHour),
     autoWindowEndHour: String(settings.autoWindowEndHour),
+    tokenExpiresAt: tokenExpiresAtToInputValue(settings.tokenExpiresAt),
   };
 }
 
@@ -150,6 +160,19 @@ export function SocialChannelForm({
       return;
     }
 
+    // Task 2 (D7 spec §4) — "" (cleared by the admin) means "expiry unknown" (null), never "never
+    // expires". A non-empty value that still fails to parse (should not happen from a native date
+    // input, but never trust client input) is refused rather than silently sent as an Invalid Date.
+    let tokenExpiresAt: Date | null = null;
+    if (form.tokenExpiresAt.trim() !== "") {
+      const parsed = new Date(form.tokenExpiresAt);
+      if (Number.isNaN(parsed.getTime())) {
+        setError("Date d'expiration du jeton invalide.");
+        return;
+      }
+      tokenExpiresAt = parsed;
+    }
+
     setError(null);
     startSaving(async () => {
       try {
@@ -162,6 +185,7 @@ export function SocialChannelForm({
           autoMaxBacklogDays,
           autoWindowStartHour,
           autoWindowEndHour,
+          tokenExpiresAt,
         });
         if (!res.ok) {
           setError(res.message);
@@ -307,6 +331,27 @@ export function SocialChannelForm({
                 />
               </div>
             ))}
+            {/* Task 2 (D7 spec §4) — tokenExpiresAt is PLAINTEXT, never inside credentialValues: it
+                is not a secret and must be visible/editable, unlike the write-only fields above. It
+                also rides the OTHER action (updateChannelSettings, the page-level "Enregistrer"
+                button below) — not handleSaveCredentials — so the help text says so explicitly to
+                avoid an admin typing a date here and clicking "Enregistrer les identifiants",
+                expecting it to be included. */}
+            <div className="space-y-1.5 border-t border-border pt-4">
+              <Label htmlFor="token-expires-at">Date d&apos;expiration du jeton</Label>
+              <Input
+                id="token-expires-at" type="date" disabled={isSaving}
+                value={form.tokenExpiresAt}
+                onChange={(e) => setForm((f) => ({ ...f, tokenExpiresAt: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Ni Meta ni LinkedIn n&apos;expose cette date de façon fiable — elle est estimée à 60
+                jours à chaque enregistrement d&apos;identifiant ; corrigez-la ici depuis le générateur
+                de jeton de LinkedIn ou le débogueur de jeton d&apos;accès de Meta. Une alerte est
+                envoyée avant l&apos;échéance. Enregistrée avec le bouton « Enregistrer » ci-dessous,
+                pas avec « Enregistrer les identifiants ».
+              </p>
+            </div>
           </CardContent>
           <CardFooter className="flex-col items-stretch gap-3">
             {credentialError && <p className="text-sm text-destructive" role="alert">{credentialError}</p>}

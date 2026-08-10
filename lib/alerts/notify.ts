@@ -13,7 +13,12 @@ import { sendEmail } from "@/lib/email/resend";
 // send-core.ts ever wrote a distributions row (render failure, R2 unconfigured, no `social_post`
 // template) — without this alert, that candidate would be reselected identically on every future
 // due tick with no trace anywhere but a console.error, silently wedging the whole channel.
-export type AlertType = "run_failed" | "feed_dark" | "diffusion_blocked";
+//
+// token_expiring (Task 2, D7 spec §4): a configured channel's tokenExpiresAt (social_channel_
+// settings, lib/diffusion/scheduler.ts's warnIfTokenExpiring) is within TOKEN_EXPIRY_WARNING_DAYS.
+// Meta and LinkedIn both issue ~60-day credentials with no cheap way to read the real expiry back,
+// so this is the only heads-up an operator gets before a send starts failing with 401.
+export type AlertType = "run_failed" | "feed_dark" | "diffusion_blocked" | "token_expiring";
 
 export type CreateAlertInput = {
   type: AlertType;

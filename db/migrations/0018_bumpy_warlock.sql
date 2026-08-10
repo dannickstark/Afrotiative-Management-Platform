@@ -1,0 +1,1 @@
+ALTER TABLE "social_channel_settings" ADD COLUMN "token_expires_at" timestamp;

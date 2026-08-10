@@ -2,7 +2,7 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Bell, AlertTriangle, WifiOff, Share2 } from "lucide-react";
+import { Bell, AlertTriangle, WifiOff, Share2, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { markAlertRead, markAllAlertsRead } from "@/lib/actions/alert-actions";
@@ -18,15 +18,21 @@ const ALERT_ICON: Record<AlertType, typeof AlertTriangle> = {
   run_failed: AlertTriangle,
   feed_dark: WifiOff,
   diffusion_blocked: Share2,
+  // Task 2 (D7 spec §4) — distinct from diffusion_blocked's Share2 (a send that already failed):
+  // this is a heads-up before anything has actually broken.
+  token_expiring: Clock,
 };
 
 // run_failed -> the runs history (/runs); feed_dark -> the feed that went quiet (/settings/feeds);
 // diffusion_blocked -> the channel settings list (/settings/social) — an operator fixes this by
 // reconfiguring the channel (R2, a social_post template) or by disabling it, not per-article.
+// token_expiring -> same target: the detail text already names the channel/date, and entityId is
+// null for this type (lib/diffusion/scheduler.ts), so there is no per-alert deep link to build.
 const ALERT_HREF: Record<AlertType, string> = {
   run_failed: "/runs",
   feed_dark: "/settings/feeds",
   diffusion_blocked: "/settings/social",
+  token_expiring: "/settings/social",
 };
 
 /**
