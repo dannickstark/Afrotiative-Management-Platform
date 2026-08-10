@@ -14,8 +14,8 @@ import {
   setChannelCredentialsCore, deleteChannelCredentialsCore, type SetCredentialsResult,
 } from "@/lib/diffusion/settings-core";
 import {
-  testFacebookConnection, testInstagramConnection, type ConnectionTestResult,
-} from "@/lib/diffusion/meta/connection-test";
+  testFacebookConnection, testInstagramConnection, testLinkedInConnection, type ConnectionTestResult,
+} from "@/lib/diffusion/connection-test";
 import type { Channel } from "@/lib/studio";
 
 // D1 spec §6: only "manage" may write channel settings (admin-only — the editor gets "send" from
@@ -86,17 +86,19 @@ export async function deleteChannelCredentials(channel: Channel): Promise<SetCre
   return res;
 }
 
-// Task 5 (D2+D3) — the "Tester la connexion" affordance. Same guard as the writes above (admin-only,
-// same "social"/"manage" gate) — modeled on lib/actions/integration-actions.ts's testIntegration:
-// makes exactly ONE free Graph read (lib/diffusion/meta/connection-test.ts), never a publish, never
-// token-spending. Read-only — no revalidatePath, nothing here writes any stored state.
+// Task 5 (D2+D3), extended Task 6 (D7) — the "Tester la connexion" affordance. Same guard as the
+// writes above (admin-only, same "social"/"manage" gate) — modeled on
+// lib/actions/integration-actions.ts's testIntegration: makes exactly ONE free read
+// (lib/diffusion/connection-test.ts), never a publish, never token-spending. Read-only — no
+// revalidatePath, nothing here writes any stored state.
 export async function testChannelConnection(channel: Channel): Promise<ConnectionTestResult> {
   const user = await requireUser();
   requirePermission(user.role, "social", "manage");
 
   if (channel === "facebook") return testFacebookConnection();
   if (channel === "instagram") return testInstagramConnection();
-  // Every other channel is still stub-only (channels.ts) — no real Graph/API call exists yet to test.
+  if (channel === "linkedin") return testLinkedInConnection();
+  // Every other channel is still stub-only (channels.ts) — no real API call exists yet to test.
   return {
     ok: false,
     detail: "Aucun test de connexion disponible pour ce canal : aucun adaptateur réel n'est encore branché.",

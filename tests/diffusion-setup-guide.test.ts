@@ -109,4 +109,58 @@ describe("SETUP_GUIDES (Task 4, D2+D3) — every Channel has a connection guide"
       expect(allText).toMatch(/report/i); // "reporté(e)"
     }
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Task 6 (D7, spec §6) — LinkedIn's guide grows from Task 4's deliberately minimal 3-step
+  // placeholder into the full, followable guide. The task brief gives this test almost verbatim
+  // (its `g.steps` reads as pseudocode for "the guide's steps" — SETUP_GUIDES[channel] IS already
+  // that array, per this file's every other test and setup-guide.ts's own SetupGuideStep type; there
+  // is no wrapping `.steps` property anywhere in the module, so this test targets the real shape,
+  // not a `.steps` indirection nothing else in the codebase has).
+  // ───────────────────────────────────────────────────────────────────────────
+  it("LinkedIn's guide is no longer Task 4's minimal placeholder", () => {
+    const g = SETUP_GUIDES.linkedin;
+    expect(g.length).toBeGreaterThan(3);
+    const allText = JSON.stringify(g);
+    expect(allText).toMatch(/Community Management/);
+    expect(allText).toMatch(/nouvelle application/i); // Dev Tier can only be requested by a NEW app
+    expect(allText).toMatch(/60 jours/);
+    const fieldKeys = SOCIAL_CHANNELS.linkedin.credentialFields.map((f) => f.key);
+    for (const s of g) if (s.fieldHint) expect(fieldKeys).toContain(s.fieldHint);
+  });
+
+  // The self-review's own bar: "a step that says 'request access' without naming the tier and the
+  // screencast is not followable." Each fact below is one of spec §6's bullet points, named
+  // explicitly enough that an admin who has never opened LinkedIn's developer portal knows exactly
+  // what to create/click/submit — not just that "access" or "review" is needed.
+  it("LinkedIn's guide names every fact spec §6 requires, not just vague pointers", () => {
+    const allText = SETUP_GUIDES.linkedin.map((s) => `${s.title} ${s.body}`).join(" ");
+    // Development Tier can only be requested by an app with NO OTHER products — greys out otherwise.
+    expect(allText).toMatch(/palier de développement|Development Tier/i);
+    expect(allText).toMatch(/gris|désactiv/i); // the option greying (grisée) out on an existing app
+    // Standard Tier requires a screencast.
+    expect(allText).toMatch(/palier standard|Standard Tier/i);
+    expect(allText).toMatch(/screencast|enregistrement vidéo/i);
+    // Page ADMIN + app-Page association/verification.
+    expect(allText).toMatch(/administrateur|ADMIN/);
+    // The Developer Portal Token Generator — no OAuth implementation needed.
+    expect(allText).toMatch(/générateur de jeton|Token Generator/i);
+    // Programmatic refresh is partner-only — there is no automation path.
+    expect(allText).toMatch(/partenaire|partner/i);
+    // Where to find the organization URN.
+    expect(allText).toMatch(/URN/);
+    // The Development Tier's 500/day ceiling, and that one publication costs four requests.
+    expect(allText).toMatch(/500/);
+    expect(allText).toMatch(/quatre/i);
+  });
+
+  // The setup guide must not promise anything the connection test or the adapter cannot actually
+  // back up (self-review's third question: "does any guide step promise something the code does not
+  // do?"). A successful "Tester la connexion" proves the token and the organization id resolve —
+  // never that publishing itself is authorized (that needs w_organization_social AND Page ADMIN
+  // rights, which only a real publish exercises) — so the guide must not claim otherwise.
+  it("LinkedIn's guide does not overclaim what a successful connection test proves", () => {
+    const allText = SETUP_GUIDES.linkedin.map((s) => `${s.title} ${s.body}`).join(" ");
+    expect(allText).not.toMatch(/garantit? la publication|confirme que la publication (?:est|sera) autorisée/i);
+  });
 });

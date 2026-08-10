@@ -314,9 +314,10 @@ export async function deleteChannelCredentialsCore(channel: Channel): Promise<Se
 // docs/DEPLOYMENT.md §2's recovery procedure) is NOT caught here. It reaches decryptSecret
 // (lib/diffusion/crypto.ts), whose auth-tag check then fails and THROWS DecryptionFailedError —
 // this function does not catch it, so it propagates to the caller. Every current caller
-// (lib/diffusion/meta/facebook.ts's/instagram.ts's send(), lib/diffusion/meta/connection-test.ts)
-// wraps its own call to this function in a try/catch for exactly that reason; a new caller must do
-// the same, or call getCryptoConfig() itself first the way this comment used to (wrongly) imply
+// (lib/diffusion/meta/facebook.ts's/instagram.ts's send(), lib/diffusion/linkedin/linkedin.ts's
+// send(), lib/diffusion/connection-test.ts — moved out of meta/ in Task 6, D7) wraps its own call
+// to this function in a try/catch for exactly that reason; a new caller must do the same, or call
+// getCryptoConfig() itself first the way this comment used to (wrongly) imply
 // getDecryptedCredentials already did for it.
 export async function getDecryptedCredentials(channel: Channel): Promise<Record<string, string> | null> {
   const row = await getOrCreateSettingsRow(channel);
