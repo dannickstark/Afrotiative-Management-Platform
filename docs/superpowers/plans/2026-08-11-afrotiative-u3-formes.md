@@ -383,3 +383,43 @@ porte de bordure par défaut, donc cela ne bloque rien ; mais la Tâche 4, qui t
 contours, doit soit résoudre le cas, soit l'annoncer dans l'interface comme les deux précédents.
 `clipPath` × `borderRadius` se composent proprement en **intersection** — la sonde l'a mesuré, ce qui
 répond par avance à une question que la Tâche 4 se serait posée.
+
+---
+
+## §0 généralisé — 2026-08-12, découvert par la Tâche 4
+
+§0 nommait **deux** chemins indépendants qu'un nouveau champ doit traverser : `shapeNode()` pour
+l'export et `ShapeContent()` pour l'éditeur. La Tâche 4 en a trouvé un troisième, d'une autre nature.
+
+`shadow.color` accepte un **jeton**. Or deux listes de champs de couleur sont tenues **à la main** :
+
+| Consommateur | Fichier | Ce qu'il fait |
+|---|---|---|
+| Extraction | `lib/studio/tokens.ts` → `extractTokens` | recense les jetons d'une scène, ce que `validateScene` vérifie |
+| Résolution | `lib/studio/values.ts` → `resolveTokens` | remplace un jeton par sa valeur avant le rendu |
+
+Ajouter un champ de couleur sans les étendre **laisse un jeton s'échapper de `validateScene` et arriver
+verbatim à satori** — donc un `{{brand.primary}}` littéral peint dans le PNG livré. Aucun des deux
+chemins de rendu ne le remarque : ils reçoivent la chaîne et la peignent.
+
+**La règle générale, dont §0 n'était qu'un cas particulier :** un nouveau champ de calque doit être
+recensé par *tous* ses consommateurs, et la liste des consommateurs est plus longue que « les deux
+chemins de rendu ». Avant d'ajouter un champ, chercher les listes tenues à la main qui devraient le
+connaître — un `grep` du nom d'un champ voisin de même nature (ici : n'importe quel autre champ de
+couleur) les révèle en un coup. Les gardes de complétude typées (`Record<ShapeKind, …>`) protègent la
+dimension « formes » ; **rien ne protège la dimension « champs »**, et c'est là que le prochain défaut
+de cette famille vivra.
+
+**Mesuré aussi, et c'est ce qui a changé un arbitrage :** `box-shadow` sur une forme **découpée** ne
+peint **AUCUNE** ombre dans satori — pas même une ombre rectangulaire, contrairement à la bordure. Le
+SVG produit l'explique : le masque de l'ombre est *le canevas moins la forme découpée* et son contenu
+est *cette même forme* — l'intersection est vide. Chromium classe les sept mêmes points à l'identique.
+Les deux chemins **s'accordent** donc, et l'ombre n'était pas la troisième divergence §0 attendue.
+
+Le remède du précédent a tout de même été appliqué (`layerBoxShadow()`, troisième sœur de
+`layerRotation()` et `layerBorder()`, plus la note `shape-shadow-none`), pour deux raisons : ils
+s'accordent par **deux mécanismes indépendants**, dont un accident d'implémentation — si satori
+composait un jour l'ombre avant son masque, l'export gagnerait un halo rectangulaire que l'écran
+n'aurait pas ; et sans la note, activer une ombre sur un triangle ne ferait **rien, en silence**, ce
+que ce programme a déjà tranché trois fois (`snap-rotation-note`, `safe-areas-none`, les notes de
+forme de la Tâche 3).
