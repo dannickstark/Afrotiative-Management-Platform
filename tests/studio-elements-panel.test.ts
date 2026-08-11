@@ -1,8 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ElementsPanel, insertShapeTile } from "@/components/studio/panels/elements-panel";
-import { shapeTilesFor } from "@/lib/studio/shape-gallery";
+import { ElementsPanel, iconFor, insertShapeTile } from "@/components/studio/panels/elements-panel";
+import { buildShapeLayer, shapeTilesFor, type ShapeTileRow } from "@/lib/studio/shape-gallery";
 import { editorReducer, initEditorState, type EditorAction } from "@/lib/studio/editor-state";
 import { SHAPE_KINDS, type Scene } from "@/lib/studio/scene";
 import type { TemplateContext } from "@/lib/studio/tokens";
@@ -188,6 +188,28 @@ describe("ElementsPanel — chaque forme a son icône (U3 Tâche 3)", () => {
     const html = render("social_post");
     const shapes = new Set(SHAPE_KINDS.map((kind) => iconOf(html, kind)));
     expect(shapes.has(iconOf(html, "qr"))).toBe(false);
+  });
+
+  it("une tuile de FORME sans champ `shape` LÈVE — jamais une icône de repli silencieuse", () => {
+    // Revue de la Tâche 3 (Low) : `iconFor` se rabattait en silence sur `QrCode`. SYMÉTRIE VOULUE avec
+    // `descriptorFor` (lib/studio/shapes.ts), qui lève plutôt que de rendre un rectangle, et avec
+    // `buildShapeLayer` (shape-gallery.ts), qui lève sur EXACTEMENT la même tuile — vérifié ici côte à
+    // côte pour que les deux gardes ne puissent pas diverger. Inatteignable par le catalogue (la garde
+    // de complétude de tests/studio-shape-gallery.test.ts lie SHAPE_TILES au schéma), et c'est
+    // justement pour ça qu'un repli s'y installerait sans que personne le voie.
+    const invalide = { id: "losange", label: "Losange", kind: "shape", available: true } as ShapeTileRow;
+    expect(() => iconFor(invalide)).toThrow(/losange/);
+    expect(() => buildShapeLayer(invalide, { width: 800, height: 600 }, "social_post")).toThrow(/losange/);
+    // TÉMOINS, sans quoi un `iconFor` qui lèverait TOUJOURS passerait la ligne du dessus : la MÊME
+    // tuile munie d'un `shape` rend une icône, et cette icône n'est PAS celle du QR — c'est-à-dire pas
+    // le repli que ce correctif vient de retirer. Et la tuile QR, qui n'est pas une forme du schéma,
+    // garde la sienne sans lever.
+    const qr = { id: "qr", label: "QR code", kind: "qr", available: true } as ShapeTileRow;
+    // (une icône lucide est un objet `forwardRef`, pas une fonction — d'où `toBeTruthy` ici.)
+    const étoile = iconFor({ ...invalide, shape: "star" } as ShapeTileRow);
+    expect(étoile).toBeTruthy();
+    expect(étoile).not.toBe(iconFor(qr));
+    expect(() => iconFor(qr)).not.toThrow();
   });
 
   it("l'icône suit la tuile dans « Utilisés récemment » aussi", () => {

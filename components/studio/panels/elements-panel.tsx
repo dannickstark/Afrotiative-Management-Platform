@@ -86,10 +86,27 @@ const SHAPE_ICON: Record<ShapeKind, typeof Square> = {
   bubble: MessageCircle,
 };
 
-function iconFor(row: ShapeTileRow): typeof Square {
-  // `row.shape` est présent si et seulement si `kind === "shape"` (voir ShapeTile) : la tuile QR n'est
-  // pas une forme du schéma et garde donc la sienne.
-  return row.kind === "shape" && row.shape ? SHAPE_ICON[row.shape] : QrCode;
+// `row.shape` est présent si et seulement si `kind === "shape"` (voir ShapeTile) : la tuile QR n'est
+// pas une forme du schéma et garde donc la sienne.
+//
+// UNE TUILE `kind: "shape"` SANS `shape` LÈVE — corrigé par la revue de la Tâche 3 (Low). Le repli
+// silencieux d'avant rendait un `QrCode` à une tuile de FORME mal formée : une icône fausse, sans un
+// mot, exactement la famille du défaut que le `Record<ShapeKind, …>` ci-dessus vient de corriger (huit
+// carrés identiques). SYMÉTRIE VOULUE avec `descriptorFor` (lib/studio/shapes.ts), qui lève au lieu de
+// se rabattre sur un rectangle, et avec `buildShapeLayer` (shape-gallery.ts), qui lève sur exactement
+// la même tuile invalide. Inatteignable aujourd'hui (le garde-fou de complétude de
+// tests/studio-shape-gallery.test.ts lie SHAPE_TILES au schéma), mais ce fichier a plaidé lui-même
+// contre les replis silencieux deux paragraphes plus haut : il n'en garde donc aucun.
+//
+// EXPORTÉE pour son test, même idiome et même raison que `insertShapeTile` ci-dessus : sans jsdom ni
+// React Testing Library sous `bun test`, une branche qui LÈVE ne peut être exercée qu'en appelant la
+// fonction.
+export function iconFor(row: ShapeTileRow): typeof Square {
+  if (row.kind !== "shape") return QrCode;
+  if (!row.shape) {
+    throw new Error(`elements-panel.tsx : la tuile « ${row.id} » est de type "shape" mais ne porte pas de champ shape.`);
+  }
+  return SHAPE_ICON[row.shape];
 }
 
 function ShapeTileButton({ row, onClick }: { row: ShapeTileRow; onClick: () => void }) {

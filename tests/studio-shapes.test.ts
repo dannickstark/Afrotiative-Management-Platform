@@ -211,8 +211,11 @@ describe("shapes.ts — polygonClip", () => {
     // Assertion structurelle, indépendante du littéral ci-dessus : chaque sommet est « x% y% » et
     // la SEULE espace d'un sommet est celle qui sépare l'abscisse de l'ordonnée. Une espace après
     // une virgule glisserait l'abscisse à l'indice 1 de satori, qui la résoudrait contre la HAUTEUR
-    // du cadre (mesuré en pixels, Tâche 1 réserve 2 — voir aussi le témoin de géométrie dans
-    // tests/studio-shape-render.test.ts, qui le prouve encore en pixels À TRAVERS renderScene()).
+    // du cadre (mesuré en pixels, Tâche 1 RÉSERVE 1 — « réserve 2 » ici était une erreur de citation,
+    // corrigée par la revue de la Tâche 3 : la réserve 2 est celle de la rotation qui ne traverse pas
+    // la découpe. La comparaison des deux écritures vit dans tests/studio-render-clippath.test.ts,
+    // describe « RÉSERVE 1 » ; sur le chemin de production, c'est le point (700,380) du triangle dans
+    // tests/studio-shape-render.test.ts qui la garde vivante — voir polygonClip dans shapes.ts).
     const inner = s.slice("polygon(".length, -1);
     for (const point of inner.split(",")) {
       expect(point).toMatch(/^-?[\d.]+% -?[\d.]+%$/);

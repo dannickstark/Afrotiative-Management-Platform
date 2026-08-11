@@ -98,9 +98,21 @@ export type ShapeDescriptor = {
  * `polygon(50% 0, 100% 100%, 0 100%)` perd silencieusement la moitié droite du triangle — et sur un
  * cadre CARRÉ le défaut est totalement invisible. Rien ne lève, jamais.
  *
- * La construction est donc centralisée ICI pour qu'aucun appelant n'ait plus à connaître ce piège,
- * et tests/studio-shape-render.test.ts le garde vivant en PIXELS : la même suite de sommets écrite
- * avec des espaces produit une géométrie DIFFÉRENTE à travers `renderScene()`.
+ * La construction est donc centralisée ICI pour qu'aucun appelant n'ait plus à connaître ce piège.
+ *
+ * OÙ CETTE RÈGLE EST GARDÉE VIVANTE — corrigé par la revue de la Tâche 3 (Low). Cette ligne renvoyait
+ * à une comparaison « compacte contre à espaces » DANS tests/studio-shape-render.test.ts : elle y a
+ * vécu, avec `stubShapeCss`, et elle est morte avec lui quand la Tâche 3 a supprimé toute
+ * substitution de ce fichier. La règle, elle, est bien vivante — en deux endroits, complémentaires :
+ *
+ *  — SUR LE CHEMIN DE PRODUCTION : tests/studio-shape-render.test.ts échantillonne le point
+ *    (700,380) du triangle sur un cadre 800×400 et l'exige « remplissage ». C'est très exactement le
+ *    point que la variante à espaces laisse VIDE. MESURÉ : remplacer `join(",")` par `join(", ")`
+ *    ci-dessous fait rougir 8 tests de ce seul fichier (21 sur les six fichiers de formes).
+ *  — LA COMPARAISON DES DEUX ÉCRITURES elle-même : tests/studio-render-clippath.test.ts, describe
+ *    « RÉSERVE 1 », qui rend la MÊME suite de sommets écrite des deux façons sur le MÊME cadre et
+ *    montre en pixels que la géométrie diffère, témoins compris. Aucune description n'émet ni ne peut
+ *    émettre une chaîne à espaces, donc cette moitié-là ne peut vivre que dans la sonde.
  *
  * @param points au moins trois sommets `[x, y]`, en pourcentage de la boîte.
  */
