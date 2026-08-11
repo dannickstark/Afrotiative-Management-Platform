@@ -8,6 +8,7 @@ import {
   createGestureEngine,
   HANDLES,
   type DragPreview,
+  type HandleId,
 } from "@/hooks/use-layer-drag";
 
 // Pas de DOM dans `bun test` (même convention que hooks/use-persisted-filters.ts) : le hook React
@@ -479,5 +480,321 @@ describe("createGestureEngine — la rotation du calque atteint bien le dispatch
       frame: { x: 80, y: 120, w: 240, h: 150 },
     });
     expect(getState().scene.layers[0].frame).toEqual({ x: 80, y: 120, w: 240, h: 150 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 2 (U2) — les trois modificateurs de geste : Maj (ratio verrouillé au redimensionnement,
+// accroche à 15° à la rotation) et Alt (redimensionner depuis le centre). Les deux nouveaux champs
+// de ResizeOptions (`lockAspectRatio`, `fromCenter`) et la nouvelle 5e option de computeRotationDeg
+// (`{ snap }`) suivent la même règle de composition que rotationDeg (Tâche 1) : le delta écran est
+// D'ABORD tourné dans le repère local du calque, ENSUITE le modificateur s'applique — jamais l'ordre
+// inverse. C'est cet ordre qui permet à Alt de garder le centre fixe à l'écran à N'IMPORTE QUEL
+// angle sans code spécifique à la rotation (voir le commentaire de `fromCenter` dans la source).
+
+describe("computeResizedFrame — Maj : verrouille le ratio w/h, coins seulement", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 }; // ratio 4/3
+  const ratio = start.w / start.h;
+  const opposite = { ne: "sw", nw: "se", se: "nw", sw: "ne" } as const;
+  const corners: Array<"ne" | "nw" | "se" | "sw"> = ["ne", "nw", "se", "sw"];
+
+  for (const handle of corners) {
+    it(`poignée '${handle}', axe X dominant (|dx|>|dy|) : ratio préservé, coin opposé '${opposite[handle]}' fixe`, () => {
+      const delta: Point = { x: 60, y: -8 };
+      const before = cornerOf(start, opposite[handle]);
+      const frame = computeResizedFrame(start, handle, delta, { lockAspectRatio: true });
+      const after = cornerOf(frame, opposite[handle]);
+      expect(frame.w / frame.h).toBeCloseTo(ratio, 9);
+      expect(after.x).toBeCloseTo(before.x, 9);
+      expect(after.y).toBeCloseTo(before.y, 9);
+    });
+
+    it(`poignée '${handle}', axe Y dominant (|dy|>|dx|) : ratio préservé, coin opposé '${opposite[handle]}' fixe`, () => {
+      const delta: Point = { x: 8, y: -60 };
+      const before = cornerOf(start, opposite[handle]);
+      const frame = computeResizedFrame(start, handle, delta, { lockAspectRatio: true });
+      const after = cornerOf(frame, opposite[handle]);
+      expect(frame.w / frame.h).toBeCloseTo(ratio, 9);
+      expect(after.x).toBeCloseTo(before.x, 9);
+      expect(after.y).toBeCloseTo(before.y, 9);
+    });
+  }
+});
+
+// Décision documentée (voir task-2-report.md) : sur une poignée de BORD, Maj n'a AUCUN effet — comme
+// dans la plupart des outils de conception, où le ratio n'a de sens que "depuis un coin". On le
+// vérifie ici par égalité STRICTE (toEqual, pas juste "même ratio") : le chemin de calcul doit être
+// EXACTEMENT le même, pas seulement produire un résultat qui ressemble.
+describe("computeResizedFrame — Maj sur poignée de BORD : aucun effet (choix documenté)", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+  const sides: HandleId[] = ["n", "s", "e", "w"];
+  for (const handle of sides) {
+    it(`poignée '${handle}' : résultat identique avec ou sans Maj`, () => {
+      const delta: Point = { x: 37, y: -19 };
+      const withoutShift = computeResizedFrame(start, handle, delta);
+      const withShift = computeResizedFrame(start, handle, delta, { lockAspectRatio: true });
+      expect(withShift).toEqual(withoutShift);
+    });
+  }
+});
+
+describe("computeResizedFrame — Maj composé avec une rotation à 37° : ratio préservé, coin opposé fixe à l'écran", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+  const ratio = start.w / start.h;
+  const rotation = 37;
+
+  it("poignée 'se' à 37°, Maj tenu : ratio préservé ET le coin 'nw' (opposé) ne bouge pas à l'écran", () => {
+    const screenDelta: Point = { x: 34, y: -6 };
+    const oldNwScreen = rotatePointAround(centerOf(start), cornerOf(start, "nw"), rotation);
+
+    const frame = computeResizedFrame(start, "se", screenDelta, { rotationDeg: rotation, lockAspectRatio: true });
+    const newNwScreen = rotatePointAround(centerOf(frame), cornerOf(frame, "nw"), rotation);
+
+    expect(frame.w / frame.h).toBeCloseTo(ratio, 9);
+    expect(newNwScreen.x).toBeCloseTo(oldNwScreen.x, 6);
+    expect(newNwScreen.y).toBeCloseTo(oldNwScreen.y, 6);
+  });
+});
+
+describe("computeResizedFrame — Alt : redimensionne depuis le centre, qui reste fixe (rotation 0)", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+
+  // Les deux bords ('w' non tiré et 'e' tiré) bougent chacun de 20 (la moitié du delta de 40) en
+  // sens opposé : le centre (200,175) ne bouge pas, et la poignée tirée n'avance que de la moitié du
+  // delta demandé — exactement le choix de conception énoncé dans le commentaire source de `fromCenter`.
+  it("poignée 'e' : les deux bords bougent symétriquement, le centre est inchangé", () => {
+    const frame = computeResizedFrame(start, "e", { x: 40, y: 0 }, { fromCenter: true });
+    expect(frame).toEqual({ x: 80, y: 100, w: 240, h: 150 });
+    expect(centerOf(frame)).toEqual(centerOf(start));
+  });
+
+  it("poignée 'se' (coin) : le centre est inchangé", () => {
+    const frame = computeResizedFrame(start, "se", { x: 40, y: -20 }, { fromCenter: true });
+    expect(frame).toEqual({ x: 80, y: 110, w: 240, h: 130 });
+    expect(centerOf(frame)).toEqual(centerOf(start));
+  });
+});
+
+// Preuve façon Tâche 1 : on ne fait PAS confiance aux seuls nombres du frame retourné, on tourne les
+// points nous-mêmes. Le centre est un cas particulier : il est le PIVOT de la rotation CSS de sa
+// propre boîte, donc sa position écran EST sa position en repère gabarit, sans rotation
+// supplémentaire à appliquer — contrairement à un coin/bord, qui est OFFSET par rapport au centre.
+// On le fait quand même passer par `rotatePointAround` (un point tourné autour de lui-même est une
+// identité mathématique) pour rester dans le même moule que les autres preuves écran de ce fichier,
+// plutôt que de comparer les deux frames "à la main" sans jamais invoquer une rotation.
+describe("computeResizedFrame — Alt à 37° : le centre reste fixe à l'écran, le coin tiré n'avance que de la moitié du delta écran", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+  const rotation = 37;
+  const screenDelta: Point = { x: 24, y: -10 };
+
+  it("le centre ne bouge pas à l'écran", () => {
+    const frame = computeResizedFrame(start, "se", screenDelta, { rotationDeg: rotation, fromCenter: true });
+    const oldCenterScreen = rotatePointAround(centerOf(start), centerOf(start), rotation);
+    const newCenterScreen = rotatePointAround(centerOf(frame), centerOf(frame), rotation);
+    expect(newCenterScreen.x).toBeCloseTo(oldCenterScreen.x, 6);
+    expect(newCenterScreen.y).toBeCloseTo(oldCenterScreen.y, 6);
+  });
+
+  it("le coin tiré ('se') n'avance à l'écran que de la MOITIÉ du delta écran demandé", () => {
+    const oldSeScreen = rotatePointAround(centerOf(start), cornerOf(start, "se"), rotation);
+    const frame = computeResizedFrame(start, "se", screenDelta, { rotationDeg: rotation, fromCenter: true });
+    const newSeScreen = rotatePointAround(centerOf(frame), cornerOf(frame, "se"), rotation);
+
+    expect(newSeScreen.x - oldSeScreen.x).toBeCloseTo(screenDelta.x / 2, 6);
+    expect(newSeScreen.y - oldSeScreen.y).toBeCloseTo(screenDelta.y / 2, 6);
+  });
+});
+
+// Maj+Alt combinés (voir task-2-report.md pour la justification) : redimensionner PROPORTIONNELLEMENT
+// depuis le CENTRE — le ratio de départ est verrouillé (comme Maj seul) ET le centre reste fixe
+// (comme Alt seul). L'ordre de composition dans la source est : ratio d'abord (agit sur w/h), centre
+// ensuite (ancre x/y à partir du w/h final) — ce qui donne exactement ce comportement.
+describe("computeResizedFrame — Maj+Alt combinés : redimensionnement proportionnel depuis le centre", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+  const ratio = start.w / start.h;
+
+  it("à rotation 0 : le ratio est préservé ET le centre reste fixe", () => {
+    const frame = computeResizedFrame(start, "se", { x: 60, y: -8 }, { lockAspectRatio: true, fromCenter: true });
+    expect(frame.w / frame.h).toBeCloseTo(ratio, 9);
+    expect(centerOf(frame).x).toBeCloseTo(centerOf(start).x, 9);
+    expect(centerOf(frame).y).toBeCloseTo(centerOf(start).y, 9);
+  });
+
+  it("à 37° : le ratio est préservé ET le centre reste fixe à l'écran", () => {
+    const rotation = 37;
+    const frame = computeResizedFrame(
+      start, "se", { x: 34, y: -6 }, { rotationDeg: rotation, lockAspectRatio: true, fromCenter: true },
+    );
+    expect(frame.w / frame.h).toBeCloseTo(ratio, 9);
+    const oldCenterScreen = rotatePointAround(centerOf(start), centerOf(start), rotation);
+    const newCenterScreen = rotatePointAround(centerOf(frame), centerOf(frame), rotation);
+    expect(newCenterScreen.x).toBeCloseTo(oldCenterScreen.x, 6);
+    expect(newCenterScreen.y).toBeCloseTo(oldCenterScreen.y, 6);
+  });
+});
+
+// Garde de non-régression explicite : `lockAspectRatio`/`fromCenter` à `false` (au lieu d'omis) doit
+// être RIGOUREUSEMENT identique à les omettre — les valeurs par défaut du destructuring, pas une
+// branche de code séparée qui pourrait diverger.
+describe("computeResizedFrame — Maj et Alt à false (ou omis) : identique à avant la Tâche 2", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+
+  it("lockAspectRatio et fromCenter explicitement à false donnent le même résultat que ne pas les fournir, à 0° et 37°", () => {
+    const delta: Point = { x: 20, y: -10 };
+    for (const rotationDeg of [0, 37]) {
+      const bare = computeResizedFrame(start, "se", delta, { rotationDeg });
+      const explicitFalse = computeResizedFrame(
+        start, "se", delta, { rotationDeg, lockAspectRatio: false, fromCenter: false },
+      );
+      expect(explicitFalse).toEqual(bare);
+    }
+  });
+});
+
+describe("computeRotationDeg — Maj (accroche à 15°)", () => {
+  it("un angle brut proche de 100° s'arrondit à 105° avec l'accroche ; reste ~100° sans accroche", () => {
+    const center = { x: 0, y: 0 };
+    const start = { x: 100, y: 0 };
+    const angleDeg = 100;
+    const current = {
+      x: 100 * Math.cos((angleDeg * Math.PI) / 180),
+      y: 100 * Math.sin((angleDeg * Math.PI) / 180),
+    };
+
+    expect(computeRotationDeg(center, start, current, 0)).toBeCloseTo(100, 5);
+    expect(computeRotationDeg(center, start, current, 0, { snap: false })).toBeCloseTo(100, 5);
+    expect(computeRotationDeg(center, start, current, 0, { snap: true })).toBeCloseTo(105, 5);
+  });
+
+  it("l'accroche porte sur l'angle RÉSULTANT (startDeg + delta), pas seulement sur le delta de geste", () => {
+    const center = { x: 0, y: 0 };
+    const start = { x: 100, y: 0 };
+    const angleDeg = 100; // delta de geste
+    const current = {
+      x: 100 * Math.cos((angleDeg * Math.PI) / 180),
+      y: 100 * Math.sin((angleDeg * Math.PI) / 180),
+    };
+    // brut = startDeg(53) + delta(100) = 153 -> multiple de 15 le plus proche = 150 (écart 3, contre
+    // 12 pour 165) — si l'accroche portait seulement sur le delta (100 -> 105), le résultat serait
+    // 53+105=158, PAS un multiple de 15 : ce test distingue donc bien les deux interprétations.
+    expect(computeRotationDeg(center, start, current, 53, { snap: true })).toBeCloseTo(150, 5);
+  });
+
+  it("sondage : pour de nombreux angles bruts, le résultat avec accroche est TOUJOURS un multiple de 15", () => {
+    const center = { x: 0, y: 0 };
+    const start = { x: 100, y: 0 };
+    for (let angleDeg = 0; angleDeg < 360; angleDeg += 7) {
+      const current = {
+        x: 100 * Math.cos((angleDeg * Math.PI) / 180),
+        y: 100 * Math.sin((angleDeg * Math.PI) / 180),
+      };
+      const snapped = computeRotationDeg(center, start, current, 0, { snap: true });
+      const nearestMultiple = Math.round(snapped / 15) * 15;
+      expect(snapped).toBeCloseTo(nearestMultiple, 6);
+    }
+  });
+});
+
+describe("computeRotationDeg — sans Maj (options omises ou snap:false) : identique à avant la Tâche 2", () => {
+  it("les cas déjà couverts avant la Tâche 2 restent identiques, avec ou sans options={}", () => {
+    const center = { x: 0, y: 0 };
+    const start = { x: 100, y: 0 };
+    const current = { x: 0, y: 100 };
+    expect(computeRotationDeg(center, start, current, 0)).toBeCloseTo(90, 5);
+    expect(computeRotationDeg(center, start, current, 0, {})).toBeCloseTo(90, 5);
+    expect(computeRotationDeg(center, start, current, 0, { snap: false })).toBeCloseTo(90, 5);
+    expect(computeRotationDeg(center, start, current, 45, { snap: false })).toBeCloseTo(135, 5);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Protection Tâche 2, même raisonnement que la protection Tâche 1 ci-dessus : `createGestureEngine`
+// est le SEUL endroit où `hooks/use-layer-drag.ts` relie Maj/Alt à `computeResizedFrame` /
+// `computeRotationDeg` (dans `computePreview()` et `end()`). Comme aucun test `createGestureEngine`
+// existant ne passe de modificateurs, oublier de les relayer depuis `move()`/`end()` repasserait toute
+// la suite au vert SAUF ces tests-ci. On exerce donc le VRAI chemin (begin -> move -> end -> dispatch),
+// en aperçu ET au commit, pour Maj comme pour Alt, y compris composé avec une rotation.
+describe("createGestureEngine — Maj/Alt atteignent bien l'aperçu ET le dispatch (protection Tâche 2)", () => {
+  it("Maj tenu pendant un redimensionnement par coin verrouille le ratio, en aperçu ET au commit", () => {
+    const layer = makeLayer({ frame: { x: 100, y: 100, w: 200, h: 150 } }); // ratio 4/3
+    const { dispatch, actions } = makeHarness(layer);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+    });
+
+    engine.beginResize(layer, "se", { x: 0, y: 0 });
+    engine.move({ x: 60, y: -8 }, { shift: true });
+    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 100, y: 100, w: 260, h: 195 } });
+
+    engine.end({ x: 60, y: -8 }, { shift: true });
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 100, y: 100, w: 260, h: 195 } }]);
+  });
+
+  it("Alt tenu pendant un redimensionnement garde le centre fixe, en aperçu ET au commit", () => {
+    const layer = makeLayer({ frame: { x: 100, y: 100, w: 200, h: 150 } });
+    const { dispatch, actions } = makeHarness(layer);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+    });
+
+    engine.beginResize(layer, "e", { x: 0, y: 0 });
+    engine.move({ x: 40, y: 0 }, { alt: true });
+    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 80, y: 100, w: 240, h: 150 } });
+
+    engine.end({ x: 40, y: 0 }, { alt: true });
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 80, y: 100, w: 240, h: 150 } }]);
+  });
+
+  it("Maj tenu pendant une rotation accroche à un multiple de 15, en aperçu ET au commit", () => {
+    const layer = makeLayer();
+    const { dispatch, actions } = makeHarness(layer);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+    });
+    const center = { x: 200, y: 175 };
+    const start = { x: 300, y: 175 }; // 0°
+    const angleDeg = 100;
+    const current = {
+      x: center.x + 100 * Math.cos((angleDeg * Math.PI) / 180),
+      y: center.y + 100 * Math.sin((angleDeg * Math.PI) / 180),
+    };
+
+    engine.beginRotate(layer, start, center);
+    engine.move(current, { shift: true });
+    expect(previewBox.current?.rotation).toBeCloseTo(105, 5);
+
+    engine.end(current, { shift: true });
+    expect(actions).toHaveLength(1);
+    const action = actions[0];
+    if (action.type !== "rotateLayer") throw new Error("attendu rotateLayer");
+    expect(action.deg).toBeCloseTo(105, 5);
+  });
+
+  it("Maj sur un calque TOURNÉ à 90°, poignée de BORD : aucun effet — identique à la Tâche 1 (composition correcte)", () => {
+    const layer = makeLayer({ frame: { x: 100, y: 100, w: 200, h: 150 }, rotation: 90 });
+    const { dispatch, actions } = makeHarness(layer);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginResize(layer, "e", { x: 0, y: 0 });
+    engine.end({ x: 0, y: 40 }, { shift: true }); // même scénario que la protection Tâche 1.
+
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 80, y: 120, w: 240, h: 150 } }]);
+  });
+
+  it("Maj sur un calque tourné à 37°, poignée d'ANGLE : le ratio reste préservé au travers du moteur de geste", () => {
+    const layer = makeLayer({ frame: { x: 100, y: 100, w: 200, h: 150 }, rotation: 37 });
+    const { dispatch, actions } = makeHarness(layer);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginResize(layer, "se", { x: 0, y: 0 });
+    engine.end({ x: 34, y: -6 }, { shift: true });
+
+    expect(actions).toHaveLength(1);
+    const action = actions[0];
+    if (action.type !== "resizeLayer") throw new Error("attendu resizeLayer");
+    expect(action.frame.w / action.frame.h).toBeCloseTo(200 / 150, 6);
   });
 });
