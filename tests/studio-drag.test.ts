@@ -926,6 +926,58 @@ describe("computeResizedFrame — Maj + clamp minimal : le plancher respecte lui
   });
 });
 
+// F2 (revue de revue) — le plancher ratio-aware ci-dessus pouvait lui-même AGRANDIR le calque : pour
+// un départ déjà plus fin qu'un pixel sur un axe (état légal du schéma — z.number().positive()
+// interdit 0, pas les sous-pixels), le plancher naturel (minSize/axe-le-plus-fin) dépasse 1 et gonfle
+// l'AUTRE axe dans des proportions absurdes, y compris pour un geste qui ne change presque rien.
+// `floorScale` est maintenant plafonné à 1 : le clamp ne renvoie plus JAMAIS un calque plus grand que
+// son point de départ sur un axe donné.
+describe("computeResizedFrame — Maj + clamp minimal : le plancher ne dépasse JAMAIS la taille de départ (protection F2)", () => {
+  it("calque 0.5×150 (sous-pixel en largeur) + glisser de 0,001px : h reste ~150, ne bondit pas à 300", () => {
+    const start: Frame = { x: 0, y: 0, w: 0.5, h: 150 };
+    const frame = computeResizedFrame(start, "se", { x: 0.001, y: 0 }, { lockAspectRatio: true });
+    expect(frame.h).toBeCloseTo(150, 3);
+    expect(frame.h).not.toBeCloseTo(300, 0);
+  });
+
+  it("calque 0.01×150 + glisser de 0,001px : h reste ~150, ne bondit pas à 15000", () => {
+    const start: Frame = { x: 0, y: 0, w: 0.01, h: 150 };
+    const frame = computeResizedFrame(start, "se", { x: 0.001, y: 0 }, { lockAspectRatio: true });
+    expect(frame.h).toBeCloseTo(150, 3);
+    expect(frame.h).not.toBeCloseTo(15000, 0);
+  });
+
+  it("calque 0×150 (largeur nulle) : ni Infinity ni -Infinity ne fuient, sur 'se' comme sur 'nw'", () => {
+    const start: Frame = { x: 0, y: 0, w: 0, h: 150 };
+    const se = computeResizedFrame(start, "se", { x: 2, y: 20 }, { lockAspectRatio: true });
+    const nw = computeResizedFrame(start, "nw", { x: -2, y: -20 }, { lockAspectRatio: true });
+    for (const f of [se, nw]) {
+      expect(Number.isFinite(f.x)).toBe(true);
+      expect(Number.isFinite(f.y)).toBe(true);
+      expect(Number.isFinite(f.w)).toBe(true);
+      expect(Number.isFinite(f.h)).toBe(true);
+    }
+  });
+
+  // La propriété qui généralise (demandée par la revue) : chaque fois qu'un glisser RÉTRÉCIT
+  // franchement (poignée 'se', delta négatif sur les deux axes) au point de déclencher le clamp, ni w
+  // ni h ne peuvent dépasser leur valeur de départ — "rétrécir" ne peut jamais faire grossir, que le
+  // calque de départ soit normal ou déjà plus fin qu'un pixel sur un axe.
+  it("propriété générale : un glisser qui rétrécit et déclenche le clamp ne fait JAMAIS grossir le calque au-delà de sa taille de départ", () => {
+    const cases: Array<{ start: Frame; delta: Point }> = [
+      { start: { x: 0, y: 0, w: 1000, h: 10 }, delta: { x: -2000, y: -2000 } },
+      { start: { x: 0, y: 0, w: 10, h: 1000 }, delta: { x: -2000, y: -2000 } },
+      { start: { x: 0, y: 0, w: 0.5, h: 150 }, delta: { x: -1, y: -1 } },
+      { start: { x: 0, y: 0, w: 0.01, h: 150 }, delta: { x: -1, y: -1 } },
+    ];
+    for (const { start, delta } of cases) {
+      const frame = computeResizedFrame(start, "se", delta, { lockAspectRatio: true });
+      expect(frame.w).toBeLessThanOrEqual(start.w + 1e-9);
+      expect(frame.h).toBeLessThanOrEqual(start.h + 1e-9);
+    }
+  });
+});
+
 // Cheap 2 — garde `start.h > 0` : le clamp ratio-aware divise par `start.h` (`ratio = start.w /
 // start.h`) ; sans la garde, un calque de départ à hauteur nulle ferait fuiter Infinity/NaN dans le
 // frame retourné dès que le clamp intervient sur l'axe Y dominant.
@@ -954,5 +1006,27 @@ describe("computeRotationDeg — Maj : l'accroche ne renvoie jamais -0 (protecti
     const result = computeRotationDeg(center, start, current, 0, { snap: true });
     expect(result).toBe(0);
     expect(Object.is(result, -0)).toBe(false);
+  });
+});
+
+// F3 (revue de revue) — le `clamped` combiné (Tâche 2 initiale) faisait dériver x ET y du w/h FINAL
+// dès qu'UN SEUL des deux axes clampait — mais dériver y d'un h qui n'a JAMAIS changé
+// (`start.y + (start.h - h)` avec `h` encore la valeur naïve) réintroduit exactement la perte de
+// bit-identité qu'Important 3 avait fermée sur l'AUTRE axe (`start.h − (start.h − local.y)` n'égale
+// `local.y` qu'à l'arrondi flottant près). `clampedW`/`clampedH` séparés ferment cette dernière fuite :
+// seule une poignée d'ANGLE (qui porte les deux axes indépendamment) peut la révéler — une poignée de
+// bord ne clampe jamais qu'un seul axe qui existe de toute façon (l'autre n'étant jamais touché,
+// naïf ou non), donc les tests fractionnaires précédents (poignées 'n'/'w' seules) étaient
+// structurellement aveugles à ce défaut précis, la même forme que la Critique 1 déjà fermée.
+describe("computeResizedFrame — clamp sur UN SEUL axe (poignée d'angle, SANS Maj) : l'axe NON clampé reste bit-identique (protection F3)", () => {
+  it("poignée 'nw', delta={5000.3, 0.3} : w clampe (énorme), h ne clampe PAS — y doit rester EXACTEMENT start.y + local.y", () => {
+    const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+    const delta: Point = { x: 5000.3, y: 0.3 };
+    const frame = computeResizedFrame(start, "nw", delta, { minSize: 1 });
+    expect(frame.w).toBe(1); // clampé (200 - 5000.3 est très négatif)
+    expect(frame.h).toBeCloseTo(149.7, 9); // PAS clampé (150 - 0.3 = 149.7 >> minSize)
+    expect(frame.y).toBe(start.y + delta.y); // bit-identique : l'axe H n'a jamais été touché par le clamp
+    // Sanity : le coin opposé ('se', que 'nw' ancre) reste bien fixe malgré le clamp sur W seul.
+    expect(frame.x + frame.w).toBeCloseTo(start.x + start.w, 6);
   });
 });

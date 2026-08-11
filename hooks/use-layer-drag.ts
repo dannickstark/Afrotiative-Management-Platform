@@ -154,6 +154,28 @@ export function computeResizedFrame(
   // pas de 0,05° sur un balayage circulaire, revue Tâche 2, Critique 1). La projection continue n'a
   // pas ce problème : une seule formule, linéaire en local.x/local.y — voir tests/studio-drag.test.ts,
   // describe "continuité".
+  //
+  // Une alternative (« axe dominant sur les variations RELATIVES SIGNÉES », proposée puis testée et
+  // REJETÉE lors de la revue de ce correctif, F1) a été écartée pour trois raisons, à garder ici pour
+  // qu'un futur lecteur ne rouvre pas le débat sans les revoir :
+  //  1. Sur un glisser le long de la DIAGONALE de la boîte — le geste Maj-coin le plus naturel — la
+  //     projection et l'alternative « max » coïncident bit à bit (ex. 260×195 pour un delta (60,45) sur
+  //     une boîte 200×150) : l'écart n'apparaît QUE quand la direction du glisser diverge du ratio
+  //     verrouillé, cas où un compromis est de toute façon obligatoire (le curseur n'est génériquement
+  //     PAS sur la droite de contrainte sous Maj, contrairement à Alt — voir raison 2).
+  //  2. L'analogie avec l'invariant de manipulation directe d'Alt (Important 2) ne tient PAS : Alt peut
+  //     garder la poignée EXACTEMENT sous le curseur parce que rien d'autre ne contraint sa position.
+  //     Sous Maj, le curseur est généralement HORS de la droite ratio-verrouillée — « la poignée sous
+  //     le curseur » est alors géométriquement impossible, et la seule question qui reste est QUEL point
+  //     de cette droite choisir. La projection orthogonale est ce choix ; « suivre le curseur » n'en est
+  //     pas un candidat valide ici.
+  //  3. L'alternative testée NE PEUT PAS rétrécir : un glisser (−60,0) sur la même boîte 200×150 laisse
+  //     le cadre totalement inchangé (200×150), et un glisser purement vertical vers l'intérieur fait de
+  //     même — sous Maj tenu, il deviendrait impossible de rétrécir une boîte en ne tirant que sur un
+  //     axe. La variante intermédiaire (axe dominant sur les valeurs relatives, qui est le bon diagnostic
+  //     du bug original) saute encore de 140,0 à 260,0px de part et d'autre de l'anti-diagonale. La
+  //     projection, elle, est continue PARTOUT, symétrique en rétrécissement comme en agrandissement,
+  //     exacte sur le ratio et monotone — sans cas d'échec connu.
   let aspectLocked = false;
   if (lockAspectRatio && isCorner) {
     const d2 = start.w * start.w + start.h * start.h;
@@ -187,22 +209,39 @@ export function computeResizedFrame(
 
   // Clamp — tient compte du ratio verrouillé quand Maj a RÉELLEMENT changé w/h (sinon un calque très
   // fin type 1000×10 partirait hors-ratio dès que le glisser atteint le clamp — revue Tâche 2,
-  // "cheap"). `minW`/`minH` sont dérivés pour que `minW / minH === start.w / start.h` : quand l'un des
-  // deux clampe, w/h valent alors `start.w·(1+t)`/`start.h·(1+t)` pour un même `t`, donc les DEUX
-  // atteignent leur plancher respectif AU MÊME `t` — jamais un seul des deux, jamais un ratio brisé au
-  // plancher. `start.h > 0` évite une division par zéro (`ratio` NaN/Infinity) pour un calque de
-  // départ dégénéré (hauteur nulle) ; la projection ci-dessus, elle, n'en a pas besoin — elle ne
-  // divise jamais par `start.h` directement, seulement par `d2` (déjà gardé par `d2 > 0`).
-  let clamped = false;
-  if (aspectLocked && start.h > 0) {
-    const ratio = start.w / start.h;
-    const minW = Math.max(minSize, minSize * ratio);
-    const minH = Math.max(minSize, minSize / ratio);
-    if (w < minW) { w = minW; clamped = true; }
-    if (h < minH) { h = minH; clamped = true; }
+  // "cheap"). `floorScale` est le facteur d'échelle commun aux deux axes qui satisfait `minSize` sur
+  // CHACUN d'eux (`minSize/start.w` pour l'axe W, `minSize/start.h` pour l'axe H — le plus grand des
+  // deux gagne, puisqu'un seul facteur s'applique aux deux dimensions à la fois) — `minW`/`minH` s'en
+  // déduisent (`start.w·floorScale`, `start.h·floorScale`), ce qui garantit `minW/minH === start.w/
+  // start.h` : les DEUX dimensions atteignent leur plancher respectif AU MÊME facteur, jamais une
+  // seule, jamais un ratio brisé au plancher.
+  //
+  // `Math.min(1, …)` — revue Tâche 2, F2 : SANS ce plafond, un calque de départ déjà plus fin qu'un
+  // seul pixel sur un axe (état légal du schéma — `z.number().positive()` interdit `0`, pas les
+  // sous-pixels) exige un `floorScale` > 1 pour satisfaire `minSize` sur cet axe, ce qui geste après
+  // geste GONFLE l'AUTRE axe dans des proportions absurdes (`{w:0.5,h:150}` + un glisser de 0,001px
+  // renvoyait `h:300`, doublant la hauteur pour un geste qui ne change presque rien) — y compris pour
+  // un geste qui RÉTRÉCIT à peine. Le clamp existe pour empêcher un geste de RÉTRÉCIR sous `minSize`,
+  // jamais pour AGRANDIR le calque au-delà de sa taille de départ : plafonner `floorScale` à 1 rend
+  // cette propriété vraie par construction (`minW ≤ start.w`, `minH ≤ start.h`, TOUJOURS), et pour un
+  // calque déjà dans les proportions normales (les deux axes ≥ `minSize`) le plafond ne joue aucun
+  // rôle, puisque `floorScale` y est de toute façon très inférieur à 1.
+  //
+  // `start.w > 0` s'ajoute à `start.h > 0` (Tâche 2, F2) : sans lui, `start.w === 0` fait diverger
+  // `minSize/start.w` vers `Infinity`, qui *survivrait* techniquement au `Math.min(1, …)` (`w` neutre)
+  // mais reste fragile à documenter comme une garde explicite plutôt que de compter sur l'arithmétique
+  // IEEE754 de l'infini pour s'annuler correctement à chaque futur remaniement.
+  let clampedW = false;
+  let clampedH = false;
+  if (aspectLocked && start.w > 0 && start.h > 0) {
+    const floorScale = Math.min(1, Math.max(minSize / start.w, minSize / start.h));
+    const minW = start.w * floorScale;
+    const minH = start.h * floorScale;
+    if (w < minW) { w = minW; clampedW = true; }
+    if (h < minH) { h = minH; clampedH = true; }
   } else {
-    if (w < minSize) { w = minSize; clamped = true; }
-    if (h < minSize) { h = minSize; clamped = true; }
+    if (w < minSize) { w = minSize; clampedW = true; }
+    if (h < minSize) { h = minSize; clampedH = true; }
   }
 
   // x/y : Alt ancre le CENTRE local (voir plus haut pour la preuve que cela suffit à garder le centre
@@ -210,17 +249,20 @@ export function computeResizedFrame(
   // exactement là où il était — `x + w/2 = centerX − w/2 + w/2 = centerX`, quel que soit `w` —, donc
   // l'étape 2 plus bas, qui ne fait que tourner le DÉPLACEMENT du centre local, reçoit un déplacement
   // nul). Sinon, l'ancrage par défaut de la Tâche 1 s'applique — mais dérivé du w/h FINAL UNIQUEMENT
-  // si Maj ou le clamp ont RÉELLEMENT changé `w`/`h` (`aspectLocked || clamped`) ; sur le chemin par
-  // défaut (aucun modificateur, pas de clamp), x/y restent les valeurs NAÏVES posées tout en haut,
-  // bit-identiques à la Tâche 1 (voir ce commentaire plus haut pour pourquoi cette distinction existe).
+  // sur L'AXE que Maj ou le clamp ont RÉELLEMENT changé (revue Tâche 2, F3 : `clampedW`/`clampedH`
+  // SÉPARÉS, pas un seul `clamped` combiné — un `clamped` unique dérivait `y` d'un `h` inchangé chaque
+  // fois que SEUL `w` clampait sur une poignée d'angle sans Maj, ce qui réintroduisait la même perte de
+  // bit-identité qu'Important 3 avait fermée sur l'AUTRE axe : `start.h − (start.h − local.y)` n'égale
+  // `local.y` qu'à l'arrondi flottant près). Sur le chemin par défaut pour un axe donné (ni Maj, ni
+  // clamp sur CET axe), x ou y garde sa valeur NAÏVE posée tout en haut, bit-identique à la Tâche 1.
   if (fromCenter) {
     const centerX = start.x + start.w / 2;
     const centerY = start.y + start.h / 2;
     x = centerX - w / 2;
     y = centerY - h / 2;
-  } else if (aspectLocked || clamped) {
-    if (hasW) x = start.x + (start.w - w);
-    if (hasN) y = start.y + (start.h - h);
+  } else {
+    if (hasW && (aspectLocked || clampedW)) x = start.x + (start.w - w);
+    if (hasN && (aspectLocked || clampedH)) y = start.y + (start.h - h);
   }
 
   if (rotationDeg === 0) return { x, y, w, h };
