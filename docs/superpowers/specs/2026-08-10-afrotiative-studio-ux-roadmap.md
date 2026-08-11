@@ -157,13 +157,66 @@ deux revues ont reproché des prédicats laissés en ligne alors qu'ils étaient
 | Les vignettes de la bande ne remontent pas leur propre indicateur `degraded` — seule la grande case le fait | `render-mode.tsx` | faible : le repli de police suit le jeu de polices de la scène, pas le format |
 | `getTaxonomy()` ramène des `wpTags` que personne ne consomme ; `listTemplates()` tourne à chaque ouverture d'éditeur pour un panneau que la plupart des sessions n'ouvrent pas | `queries/settings.ts`, `studio/[id]/page.tsx` | opportuniste |
 
-### U2 — Surface de précision
+### U2 — Surface de précision — ✅ Livré (2026-08-11), avec U0 — PR #11
 Magnétisme et repères intelligents (bords et centres des calques voisins, centre et tiers du plan de
 travail, espacement égal entre voisins), règles, grille, zones sûres, les trois modificateurs de
 geste, multi-sélection avec alignement et distribution, et **le correctif de la dérive au
 redimensionnement d'un calque pivoté — précédé d'un test qui la reproduit**, pour être sûr de
 corriger le vrai défaut. Le plus gros morceau, et celui qui répond réellement à « construire un
 gabarit est fastidieux ».
+
+**Livré aussi : U0, le harnais DOM**, sans nouvelle dépendance, opt-in par fichier (jamais dans
+`test-setup.ts` : un DOM global changerait silencieusement la branche exercée par ~1300 tests).
+
+#### La leçon de U2 : les fonctions de choix
+
+**Quatre défauts que la suite verte ne voyait pas, et les quatre étaient des fonctions de choix** —
+chacune tenait toutes ses propriétés *en chaque point testé* et sautait *entre* les points.
+
+| Défaut | Mesure |
+|---|---|
+| Verrou de ratio (Maj) | **198 px** de saut pour un mouvement de curseur de 0,002 px, invisible à 79 tests verts |
+| Son propre correctif | Réintroduit en plus étroit via un drapeau de clamp partagé |
+| Choix du candidat d'accroche | **2593 px**, soit 324× la borne voulue |
+| `computeRotationDeg` | Un geste de 20° depuis 170° rendait **−340°** |
+
+**Le quatrième n'a été trouvé que parce que la revue finale s'est vu demander s'il en existait un
+quatrième.** À faire systématiquement en U3–U5 : lister les fonctions de choix introduites, et
+balayer chacune.
+
+**La mutation est le seul juge qui ait trouvé quelque chose.** Deux pratiques n'ont rien attrapé et
+sont abandonnées : le décompte d'`expect()` comme mesure de force d'assertion, et `bun run build`
+comme preuve de la frontière client/`@db` (un pool `pg` dans un chunk client ne fait pas échouer le
+build de façon fiable — c'est le parcours du graphe de valeurs, plus un grep du bundle, qui tranche).
+
+**Sept assertions ne pouvaient pas échouer**, dont une garde « anti-vacuité » elle-même vacuante, et
+deux pièges de sous-chaîne naïve (`not.toContain("disabled")` que `disabled:pointer-events-none`
+satisfait ; `not.toContain("height:0px")` que React ne sérialise jamais ainsi).
+
+#### Défauts de plan #9, #10 et #11 — une forme qu'une revue par tâche ne peut pas voir
+
+**#9 et #10 partagent exactement la même structure** : le fichier nommé dans le plan était correct
+pour la sélection **simple** et faux pour le cas général, l'écart créé par une tâche **antérieure** et
+hérité par la liste de fichiers d'une tâche **ultérieure**, sans qu'aucun des deux textes ne le
+signale. C'est la même famille que la promesse centrale de U1, non tenue pendant six tâches sur sept.
+**À vérifier avant d'écrire le plan de U3** : quelle décision d'une tâche antérieure rend faux un
+fichier que je m'apprête à nommer ?
+
+**#11** — « frères visibles et **déverrouillés** » comme références d'accrochage. Une référence est en
+**lecture seule** ; l'exclusion venait de U2 Tâche 4, où elle est juste pour une autre raison. Coût
+réel : verrouiller un fond pour cesser de le bousculer est la façon normale de construire un gabarit,
+donc **verrouiller détruisait la capacité à s'aligner dessus**.
+
+#### Dette reportée depuis U2
+
+| Point | Statut |
+|---|---|
+| Clic simple sur un calque **déjà sélectionné** ne réduit plus la sélection | Régression connue, jugée non bloquante. Les outils de référence réduisent au `pointerup` **sans glissement** ; l'arbitrage n'a porté que sur le `pointerdown`. Contournement : cliquer le vide, puis le calque. |
+| `role="radiogroup"` au-dessus d'enfants `aria-pressed` (`mode-switch.tsx`) | Vrai défaut d'accessibilité, **antérieur à U2**. À traiter en U3. |
+| Recherche d'Images qui peut vider l'affichage de l'asset courant | Antérieur, hors diff |
+| Ouverture forcée de « Modèles » persistée entre gabarits | Antérieur, hors diff |
+| `studio-canvas.test.ts` structurellement aveugle au câblage des guides | Accepté : `studio-interactions` le couvre, `k ≠ 1` compris |
+| Décompte de tests faux dans le corps d'un commit (Tâche 4) | Accepté : réécrire l'historique est disproportionné, le rapport est juste |
 
 ### U3 — Système de formes
 Ellipse, trait, famille polygonale par `clipPath`, rayon par coin, ombres sur les formes. Commence
