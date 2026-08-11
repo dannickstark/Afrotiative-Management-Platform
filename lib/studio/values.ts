@@ -27,8 +27,8 @@ function resolveGradient(gradient: Gradient, values: TokenValues): Gradient {
 //
 // La substitution couvre EXACTEMENT les champs qu'extractTokens (tokens.ts) scanne, sans quoi les
 // deux fonctions divergeraient : arrière-plan du canevas, source/overlay d'image, contenu/couleur/
-// ombre/contour de texte, remplissage (couleur unie ou dégradé) et bordure de forme, avant-plan/
-// fond de QR code.
+// ombre/contour de texte, remplissage (couleur unie ou dégradé), bordure ET OMBRE de forme (U3
+// Tâche 4), avant-plan/fond de QR code.
 export function resolveTokens(scene: Scene, values: TokenValues): Scene {
   const missing = [...new Set(
     extractTokens(scene)
@@ -74,7 +74,13 @@ export function resolveTokens(scene: Scene, values: TokenValues): Scene {
         const border = layer.border
           ? { ...layer.border, color: substitute(layer.border.color, values) }
           : undefined;
-        return { ...layer, fill, ...(border ? { border } : {}) };
+        // L'ombre d'une forme (U3 Tâche 4) : douzième emplacement substituable, traité exactement
+        // comme celle d'un texte juste au-dessus. tests/studio-values.test.ts en fait le tour par un
+        // aller-retour avec extractTokens — un champ oublié ici y laisse un jeton détectable.
+        const shadow = layer.shadow
+          ? { ...layer.shadow, color: substitute(layer.shadow.color, values) }
+          : undefined;
+        return { ...layer, fill, ...(border ? { border } : {}), ...(shadow ? { shadow } : {}) };
       }
     }
   });

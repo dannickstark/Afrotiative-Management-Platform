@@ -194,6 +194,110 @@ describe("le rayon vu par l'interface — formatRadius / parseRadiusInput", () =
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 4 — L'OMBRE D'UNE FORME, DANS LE SCHÉMA.
+//
+// MIGRATION, énoncée explicitement : `shapeLayer.shadow` est un champ NOUVEAU et OPTIONNEL, de la
+// MÊME forme que `textLayer.shadow` (x, y, blur ≥ 0, color) — les deux partagent désormais UNE seule
+// définition zod, pour qu'aucune des deux ne puisse dériver de l'autre. Aucune scène déjà écrite ne
+// change : sans le champ, la relecture est identique octet pour octet (le test « une scène de forme
+// SANS ombre se relit inchangée » ci-dessous l'épingle).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("l'ombre d'une forme — le schéma (U3 Tâche 4)", () => {
+  function sceneWithShadow(shadow: unknown) {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 800, height: 400, background: "#000000" },
+      layers: [{
+        id: "s", name: "Forme", visible: true, locked: false,
+        frame: { x: 0, y: 0, w: 800, h: 400 },
+        type: "shape", shape: "rect", fill: "#FF0000",
+        ...(shadow === undefined ? {} : { shadow }),
+      }],
+    };
+  }
+  function shadowOf(shadow: unknown) {
+    const layer = parseScene(sceneWithShadow(shadow)).layers[0];
+    if (layer.type !== "shape") throw new Error("calque inattendu");
+    return layer.shadow;
+  }
+
+  it("une ombre de forme fait l'aller-retour par parseScene, intacte", () => {
+    expect(shadowOf({ x: 4, y: 8, blur: 12, color: "#00FF0080" }))
+      .toEqual({ x: 4, y: 8, blur: 12, color: "#00FF0080" });
+    // Décalages NÉGATIFS (une ombre en haut à gauche) et flou NUL : deux valeurs légales qu'un
+    // schéma trop serré refuserait, et que le panneau doit pouvoir écrire.
+    expect(shadowOf({ x: -6, y: -3, blur: 0, color: "#000000" }))
+      .toEqual({ x: -6, y: -3, blur: 0, color: "#000000" });
+  });
+
+  it("une scène de forme SANS ombre se relit inchangée — la migration est purement additive", () => {
+    expect(shadowOf(undefined)).toBeUndefined();
+    // Et l'objet relu ne fabrique PAS la clé : une scène sans ombre ne doit pas se mettre à porter
+    // « shadow: undefined » (ce que l'autosave sérialiserait, changeant les octets stockés).
+    const layer = parseScene(sceneWithShadow(undefined)).layers[0];
+    expect("shadow" in layer).toBe(false);
+  });
+
+  it("un jeton de couleur est accepté comme dans toute autre couleur", () => {
+    expect(shadowOf({ x: 0, y: 2, blur: 4, color: "{{category.color}}" }))
+      .toEqual({ x: 0, y: 2, blur: 4, color: "{{category.color}}" });
+  });
+
+  it("refuse une ombre malformée, en français", () => {
+    for (const bad of [
+      { x: 0, y: 2, blur: -1, color: "#000000" },   // flou négatif
+      { x: 0, y: 2, blur: 4, color: "rouge" },      // couleur invalide
+      { x: 0, y: 2, color: "#000000" },             // flou absent
+      { y: 2, blur: 4, color: "#000000" },          // décalage absent
+      "0 2 4 #000000",                              // pas un objet
+    ]) {
+      expect(() => parseScene(sceneWithShadow(bad))).toThrow(SceneError);
+      expect(() => parseScene(sceneWithShadow(bad))).toThrow(/Scène invalide/);
+    }
+  });
+
+  it("l'ombre d'un TEXTE et celle d'une FORME sont la MÊME définition — mêmes acceptations, mêmes refus", () => {
+    // Les deux champs partagent un seul objet zod : un durcissement de l'un doit valoir pour l'autre.
+    // Sans cette garde, deux définitions jumelles pourraient dériver (le défaut de famille que
+    // SHAPE_KINDS existe déjà pour tuer).
+    function textAccepts(shadow: unknown): boolean {
+      try {
+        parseScene({
+          schemaVersion: 1,
+          canvas: { width: 800, height: 400, background: "#000000" },
+          layers: [{
+            id: "t", name: "T", visible: true, locked: false,
+            frame: { x: 0, y: 0, w: 800, h: 400 },
+            type: "text", content: "x", font: { family: "Noto Sans", size: 20, weight: 400 },
+            color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2, shadow,
+          }],
+        });
+        return true;
+      } catch { return false; }
+    }
+    function shapeAccepts(shadow: unknown): boolean {
+      try { parseScene(sceneWithShadow(shadow)); return true; } catch { return false; }
+    }
+    const cases: unknown[] = [
+      { x: 0, y: 2, blur: 4, color: "#000000" },
+      { x: -6, y: -3, blur: 0, color: "{{category.color}}" },
+      { x: 0, y: 2, blur: -1, color: "#000000" },
+      { x: 0, y: 2, blur: 4, color: "rouge" },
+      { x: 0, y: 2, color: "#000000" },
+      { x: 0, y: 2, blur: 4, color: "transparent" },
+      "0 2 4 #000000",
+      null,
+    ];
+    for (const c of cases) {
+      expect(`${JSON.stringify(c)} texte=${textAccepts(c)}`).toBe(`${JSON.stringify(c)} texte=${shapeAccepts(c)}`);
+    }
+    // ANTI-VACUITÉ : sans au moins un accepté ET un refusé, l'égalité ci-dessus serait triviale.
+    expect(cases.filter(shapeAccepts).length).toBeGreaterThan(0);
+    expect(cases.filter((c) => !shapeAccepts(c)).length).toBeGreaterThan(0);
+  });
+});
+
 describe("FORMAT_PRESETS", () => {
   it("expose les huit préréglages avec des dimensions positives", () => {
     const keys = Object.keys(FORMAT_PRESETS);

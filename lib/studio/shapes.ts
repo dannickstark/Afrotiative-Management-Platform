@@ -23,6 +23,10 @@ import type { Layer, ShapeKind, ShapeLayer } from "./scene";
  * pour que `layerBorder()` ci-dessous ait un type de retour lisible. */
 export type ShapeBorder = NonNullable<ShapeLayer["border"]>;
 
+/** L'ombre telle que le SCHÉMA la décrit (`shapeLayer.shadow`, U3 Tâche 4) — la MÊME définition que
+ * celle d'un texte, partagée dans scene.ts. */
+export type ShapeShadow = NonNullable<ShapeLayer["shadow"]>;
+
 // LES SEULES propriétés CSS qui DÉFINISSENT la géométrie d'une forme, et les seules que le plafond
 // du moteur autorise pour cela (feuille de route, « Le plafond du moteur ») : `border-radius` — que
 // la sonde a mesuré capable d'une VRAIE ellipse en « 50% » — et `clip-path: polygon(…)`, mesuré
@@ -401,4 +405,57 @@ export function supportsBorder(kind: ShapeKind): boolean {
  * discipline, même raison que `layerRotation`). */
 export function layerBorder(layer: ShapeLayer): ShapeBorder | undefined {
   return supportsBorder(layer.shape) ? layer.border : undefined;
+}
+
+/**
+ * Cette forme peut-elle porter une OMBRE PORTÉE ? (U3 Tâche 4, réserve 4 de la sonde.)
+ *
+ * NON pour une forme découpée — et, cette fois, ce n'est PAS la divergence des deux précédents : c'est
+ * un contrôle qui ne peindrait RIEN, mesuré des deux côtés avant qu'une ligne de ce champ n'existe
+ * (tests/studio-render-clippath.test.ts, « RÉSERVE 4 »).
+ *
+ *  — SATORI n'en peint aucune, pas même rectangulaire comme la bordure. Le SVG qu'il émet l'explique :
+ *    l'ombre est un `<g mask filter>` dont le masque vaut « tout le canevas MOINS la forme découpée »
+ *    et dont le contenu est cette même forme découpée. Ombre ∩ forme, moins la forme : l'ensemble
+ *    vide. Un `<clipPath>` auto-référent achève l'affaire côté resvg.
+ *  — LE NAVIGATEUR n'en peint aucune non plus : `clip-path` s'applique au rendu ENTIER d'un élément,
+ *    ombre portée comprise (mesuré aussi, capture Chromium échantillonnée aux mêmes coordonnées).
+ *
+ * POURQUOI SUPPRIMER PLUTÔT QUE LAISSER INERTE. Les deux chemins sont d'accord, mais par deux
+ * mécanismes INDÉPENDANTS dont l'un est un accident d'implémentation : le jour où satori ferait entrer
+ * l'ombre avant son masque, le PNG livré porterait une ombre RECTANGULAIRE autour d'un remplissage
+ * triangulaire quand l'écran n'en montrerait toujours aucune — le §0 de ce sous-projet, en différé, et
+ * découvert par un designer plutôt que par un test. La question est donc tranchée ICI : l'accord
+ * devient structurel, et l'interface le dit (`shape-shadow-none`, property-panel.tsx) au lieu d'offrir
+ * un contrôle sans effet — le précédent que U2 a posé deux fois (`snap-rotation-note`,
+ * `safe-areas-none`) et que la Tâche 3 a suivi deux fois de plus.
+ *
+ * `rect`, `ellipse` et `line` en portent une, et l'ombre y SUIT le `border-radius` (mesuré : le coin
+ * de l'anneau d'ombre d'une ellipse reste au fond, dans satori COMME dans le navigateur) — c'est
+ * précisément ce qui fait que l'éditeur et l'export s'accordent, donc ce qui autorise le contrôle.
+ * Limite PAR FORME, jamais globale : l'ombre d'un TEXTE est un autre mécanisme (`text-shadow`) et
+ * n'est pas concernée.
+ */
+export function supportsShadow(kind: ShapeKind): boolean {
+  return !descriptorFor(kind).clipped;
+}
+
+/** La CSS `box-shadow` d'une ombre — la SEULE mise en forme, pour que les deux chemins ne puissent pas
+ * en écrire deux versions. Pure. */
+export function boxShadowCss(shadow: ShapeShadow): string {
+  return `${shadow.x}px ${shadow.y}px ${shadow.blur}px ${shadow.color}`;
+}
+
+/**
+ * Le `box-shadow` RÉELLEMENT peint pour ce calque, ou `undefined` — LE point d'interrogation unique
+ * des deux chemins de rendu, troisième de la famille après `layerRotation` et `layerBorder`.
+ *
+ * Il renvoie la CSS et non l'objet (contrairement à `layerBorder`) pour une raison précise : la
+ * bordure oblige chaque chemin à reconstruire ses quatre propriétés lui-même, donc à pouvoir diverger
+ * dans la mise en forme ; ici il n'y a rien à reconstruire, les deux chemins posent la MÊME chaîne.
+ * La valeur stockée n'est jamais touchée : elle réapparaît si la forme redevient un rectangle, comme
+ * `radius` sur une ellipse et `border` sur un triangle.
+ */
+export function layerBoxShadow(layer: ShapeLayer): string | undefined {
+  return supportsShadow(layer.shape) && layer.shadow ? boxShadowCss(layer.shadow) : undefined;
 }

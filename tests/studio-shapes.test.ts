@@ -1,10 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { parseScene, SHAPE_KINDS, type Scene, type ShapeKind, type ShapeLayer } from "@/lib/studio/scene";
+import { parseScene, SHAPE_KINDS, type Layer, type Scene, type ShapeKind, type ShapeLayer } from "@/lib/studio/scene";
 import {
-  SHAPE_DESCRIPTORS, descriptorFor, layerBorder, layerSupportsRotation, polygonClip, shapeCssFor,
-  shapeLabel, supportsBorder, supportsRotation, type ShapeCss,
+  SHAPE_DESCRIPTORS, boxShadowCss, descriptorFor, layerBorder, layerBoxShadow, layerSupportsRotation,
+  polygonClip, shapeCssFor, shapeLabel, supportsBorder, supportsRotation, supportsShadow,
+  type ShapeCss,
 } from "@/lib/studio/shapes";
 import { sceneToElement } from "@/lib/studio/element";
 import { SHAPE_TILES } from "@/lib/studio/shape-gallery";
@@ -688,5 +689,193 @@ describe("la bordure, sur les DEUX chemins (réserve 3)", () => {
     expect(editorDeclsOf(rect).get("border-top")).toBe("3px solid #FF00FF");
     // Et les côtés NON demandés restent absents partout — le rect prouve que le filtre `sides` vit.
     expect(exportStyleOf(rect).borderRight).toBeUndefined();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// L'OMBRE, SUR LES DEUX CHEMINS — U3 TÂCHE 4, ET LA MESURE QUI LA TRANCHE.
+//
+// MESURÉ EN PIXELS avant d'écrire une ligne de code (tests/studio-render-clippath.test.ts,
+// « RÉSERVE 4 ») : sur une forme DÉCOUPÉE, satori ne peint AUCUNE ombre — pas même rectangulaire
+// comme la bordure. Son masque d'ombre vaut « tout le canevas MOINS la forme découpée » et son
+// contenu est cette même forme : l'intersection est vide. Le navigateur, lui, découpe aussi l'ombre
+// (`clip-path` s'applique au rendu ENTIER d'un élément). Les deux chemins sont donc D'ACCORD — mais
+// par deux mécanismes INDÉPENDANTS, dont l'un est un accident d'implémentation.
+//
+// D'où la décision, la même que pour la rotation et la bordure : l'ombre est supprimée DES DEUX
+// CHEMINS pour les formes découpées, et l'interface le dit (property-panel.tsx,
+// `shape-shadow-none`). Offrir un contrôle qui ne peint rien est le défaut que U2 a déjà tranché
+// deux fois (`snap-rotation-note`, `safe-areas-none`) : « interdire en le disant vaut mieux
+// qu'autoriser sans effet ». Et rendre l'accord STRUCTUREL plutôt qu'accidentel est ce qui protège
+// du jour où satori ferait entrer l'ombre avant son masque : l'export porterait alors une ombre
+// rectangulaire quand l'écran n'en montrerait aucune — §0, en différé.
+//
+// MUTATION QUI FAIT ROUGIR : remplacer `layerBoxShadow(layer)` par `layer.shadow` dans
+// lib/studio/element.ts OU dans components/studio/layer-view.tsx (une seule des deux suffit — c'est
+// tout l'intérêt de vérifier les deux chemins séparément).
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("l'ombre, sur les DEUX chemins (U3 Tâche 4)", () => {
+  const OMBRE = { x: 4, y: 8, blur: 12, color: "#00FF00" } as const;
+  const CSS_ATTENDUE = "4px 8px 12px #00FF00";
+
+  it("la CSS d'une ombre est écrite UNE fois, et c'est celle-là", () => {
+    // Le format est asserté ICI, contre un littéral, pour que la boucle par forme ci-dessous puisse
+    // se contenter de comparer les deux chemins à `boxShadowCss` sans qu'une erreur de format passe
+    // (deux chemins d'accord sur une CSS FAUSSE resteraient d'accord).
+    expect(boxShadowCss(OMBRE)).toBe(CSS_ATTENDUE);
+    // Décalages négatifs, flou nul, couleur à alpha : la mise en forme reste littérale, sans arrondi
+    // ni valeur par défaut cachée.
+    expect(boxShadowCss({ x: -6, y: -3, blur: 0, color: "#00000080" })).toBe("-6px -3px 0px #00000080");
+    expect(boxShadowCss({ x: 0.5, y: 0, blur: 2.25, color: "transparent" })).toBe("0.5px 0px 2.25px transparent");
+  });
+
+  for (const kind of SHAPE_KINDS) {
+    it(`« ${kind} » : l'ombre est peinte SI ET SEULEMENT SI la forme peut en porter`, () => {
+      const attendue = supportsShadow(kind);
+      const layer = shapeLayerOf(kind, { shadow: { ...OMBRE } });
+
+      // La valeur STOCKÉE n'est jamais touchée — ni ici ni par le panneau : ce qui change est ce qui
+      // est PEINT. Même traitement que `radius` sur une ellipse et que `border` sur un triangle.
+      expect(layer.shadow).toEqual({ ...OMBRE });
+      expect(`${kind} peinte=${layerBoxShadow(layer) !== undefined}`).toBe(`${kind} peinte=${attendue}`);
+
+      // Chemin EXPORT — le style réellement remis à Satori.
+      expect(`${kind} export boxShadow=${String(exportStyleOf(layer).boxShadow)}`)
+        .toBe(`${kind} export boxShadow=${attendue ? CSS_ATTENDUE : "undefined"}`);
+
+      // Chemin ÉDITEUR — la déclaration réellement sérialisée par React, PARSÉE (jamais `toContain`,
+      // qui confondrait `box-shadow` avec un futur `-webkit-box-shadow` ou une valeur voisine).
+      expect(`${kind} éditeur box-shadow=${String(editorDeclsOf(layer).get("box-shadow"))}`)
+        .toBe(`${kind} éditeur box-shadow=${attendue ? CSS_ATTENDUE : "undefined"}`);
+    });
+  }
+
+  it("les deux camps existent — au moins une forme porte l'ombre, au moins une la refuse", () => {
+    // ANTI-VACUITÉ de la boucle ci-dessus, comme pour la rotation et la bordure : si toutes les
+    // formes tombaient du même côté, elle ne testerait qu'une moitié de la règle.
+    const ombrées = SHAPE_KINDS.filter((k) => supportsShadow(k));
+    expect(ombrées.length).toBeGreaterThan(0);
+    expect(ombrées.length).toBeLessThan(SHAPE_KINDS.length);
+  });
+
+  it("le verdict est celui du DÉCOUPAGE, jamais une liste de noms", () => {
+    // Si `supportsShadow` énumérait des noms, il pourrait dériver de `clipped` à la prochaine forme
+    // ajoutée. Et il doit dire EXACTEMENT la même chose que les deux verdicts frères, puisque c'est
+    // la même cause (la découpe) qui les motive tous les trois.
+    for (const kind of SHAPE_KINDS) {
+      expect(`${kind} : ${supportsShadow(kind)}`).toBe(`${kind} : ${!descriptorFor(kind).clipped}`);
+      expect(`${kind} ombre/bordure : ${supportsShadow(kind)}`).toBe(`${kind} ombre/bordure : ${supportsBorder(kind)}`);
+    }
+  });
+
+  it("sans ombre stockée, AUCUNE déclaration n'est émise — sur les deux chemins", () => {
+    // La convergence déjà obtenue pour `radius: 0` (l'éditeur écrivait `border-radius:0` là où
+    // l'export n'écrivait rien) : une propriété absente doit être absente PARTOUT, sinon deux scènes
+    // identiques produisent deux sorties différentes.
+    for (const kind of SHAPE_KINDS) {
+      const layer = shapeLayerOf(kind);
+      expect(layerBoxShadow(layer)).toBeUndefined();
+      expect(`${kind} : boxShadow exporté=${"boxShadow" in exportStyleOf(layer)}`).toBe(`${kind} : boxShadow exporté=false`);
+      expect(editorDeclsOf(layer).has("box-shadow")).toBe(false);
+    }
+  });
+
+  it("un calque TEXTE garde son ombre — la limite est PAR FORME, pas globale", () => {
+    // `textShadow` (element.ts#textStyleFor) est un tout autre mécanisme, et cette tâche ne doit pas
+    // l'effleurer : sans cette garde, supprimer l'ombre « des formes » pourrait supprimer celle des
+    // textes sans qu'aucun test de formes ne le voie.
+    const texte = {
+      ...BASE, id: "t", name: "t", frame: { ...FRAME },
+      type: "text", content: "x", font: { family: "Noto Sans", size: 20, weight: 400 },
+      color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      shadow: { x: 1, y: 2, blur: 3, color: "#000000" },
+    } as unknown as Parameters<typeof sceneToElement>[0]["layers"][number];
+    const scene = { schemaVersion: 1 as const, canvas: { width: 800, height: 400, background: "#0000FF" }, layers: [texte] };
+    const root = sceneToElement(scene, new Map());
+    const child = (root.props as { children: { props: { style: Record<string, unknown> } }[] }).children[0];
+    expect(child.props.style.textShadow).toBe("1px 2px 3px #000000");
+    // …et un texte ne reçoit JAMAIS de `boxShadow` au passage (ce serait une ombre de BOÎTE autour du
+    // cadre du calque, pas une ombre de lettres).
+    expect("boxShadow" in (child.props.style as Record<string, unknown>)).toBe(false);
+  });
+
+  // ── BALAYAGE de la fonction de choix `layerBoxShadow` ─────────────────────────────────────────
+  // Les quatre défauts invisibles de U2 étaient des fonctions de choix qui tenaient chaque propriété
+  // asseriée EN CHAQUE POINT testé tout en sautant ENTRE les points. Celle-ci prend une forme ET une
+  // ombre : on balaie donc le produit des deux, et on exige que les DEUX chemins restent d'accord en
+  // chaque point (un accord au point (0,2,4) ne dit rien du point (-2593, 0, 0)).
+  it("balayage : forme × ombre, les deux chemins d'accord en CHAQUE point", () => {
+    const OMBRES = [
+      { x: 0, y: 0, blur: 0, color: "#000000" },
+      { x: 0, y: 2, blur: 4, color: "#000000" },          // le défaut du panneau
+      { x: -2593, y: 2593, blur: 0, color: "#FFFFFF" },   // les extrêmes de U2, sur les décalages
+      { x: 0.5, y: -0.5, blur: 0.25, color: "#00000080" },
+      { x: 8, y: 8, blur: 2593, color: "transparent" },   // un flou démesuré
+      { x: -6, y: -3, blur: 12, color: "{{category.color}}" }, // un JETON, non résolu (voir values.ts)
+    ] as const;
+    let peintes = 0, muettes = 0;
+    for (const kind of SHAPE_KINDS) {
+      for (const shadow of OMBRES) {
+        const layer = shapeLayerOf(kind, { shadow: { ...shadow } });
+        const attendue = supportsShadow(kind) ? boxShadowCss(shadow) : undefined;
+        if (attendue) peintes += 1; else muettes += 1;
+        const étiquette = `${kind}@${shadow.x}/${shadow.y}/${shadow.blur}/${shadow.color}`;
+        expect(`${étiquette} peinte=${String(layerBoxShadow(layer))}`).toBe(`${étiquette} peinte=${String(attendue)}`);
+        expect(`${étiquette} export=${String(exportStyleOf(layer).boxShadow)}`).toBe(`${étiquette} export=${String(attendue)}`);
+        expect(`${étiquette} éditeur=${String(editorDeclsOf(layer).get("box-shadow"))}`).toBe(`${étiquette} éditeur=${String(attendue)}`);
+      }
+    }
+    // ANTI-VACUITÉ du balayage : les deux issues doivent avoir été réellement visitées.
+    expect(peintes).toBeGreaterThan(0);
+    expect(muettes).toBeGreaterThan(0);
+  });
+
+  // ── L'OMBRE EST-ELLE VISIBLE, ou seulement PRÉSENTE dans le balisage ? ────────────────────────
+  // Le piège de U1 : l'ombre de l'artboard était bien dans le style, et un conteneur `overflow-hidden`
+  // la ROGNAIT entièrement — un test vert au-dessus d'une propriété non tenue. Une ombre PORTÉE est
+  // peinte HORS de la boîte de son élément : elle ne survit donc que si aucun ancêtre ne coupe. Côté
+  // export, la preuve est en pixels (tests/studio-shape-render.test.ts). Côté ÉDITEUR, il n'y a pas de
+  // navigateur sous `bun test` : la seule preuve possible est de vérifier la COMPOSITION réellement
+  // sérialisée — l'ombre est sur le div INTÉRIEUR, et l'enrobage que LayerView pose autour ne doit
+  // PAS déclarer `overflow: hidden`. C'est le contrôle de confinement que la revue de U1 avait exigé
+  // pour canvas-chrome.tsx, appliqué ici.
+  //
+  // MUTATION QUI FAIT ROUGIR : remettre `overflow: "hidden"` inconditionnellement dans LayerView.
+  it("chemin ÉDITEUR : l'enrobage d'un calque FORME ne rogne pas l'ombre qu'il contient", () => {
+    const layer = shapeLayerOf("rect", { shadow: { ...OMBRE } });
+    const html = renderToStaticMarkup(
+      React.createElement(LayerView, { layer, frame: layer.frame, rotation: 0, selected: false }),
+    );
+    const styles = [...html.matchAll(/style="([^"]*)"/g)].map((m) => m[1]);
+    expect(styles).toHaveLength(2); // l'enrobage, puis le div peint par ShapeContent
+    const enrobage = new Map(styles[0].split(";").map((d) => [d.slice(0, d.indexOf(":")).trim(), d.slice(d.indexOf(":") + 1).trim()]));
+    // 1. L'enrobage ne coupe rien. `overflow` ABSENT (donc `visible`) ou explicitement `visible` :
+    //    tout le reste rognerait (`hidden`, `clip`, `auto`, `scroll` créent tous un contexte de
+    //    rognage). La déclaration est LUE, jamais cherchée par sous-chaîne.
+    const overflow = enrobage.get("overflow");
+    expect(`enrobage overflow=${overflow ?? "absent"} rogne=${overflow !== undefined && overflow !== "visible"}`)
+      .toBe(`enrobage overflow=${overflow ?? "absent"} rogne=false`);
+    // 2. Et l'ombre est bien LÀ, sur le div intérieur — sinon le point 1 ne protégerait rien.
+    expect(editorDeclsOf(layer).get("box-shadow")).toBe(CSS_ATTENDUE);
+    // 3. Le confinement testé est bien CELUI de l'ombre : l'enrobage n'a pas non plus de découpe.
+    expect(enrobage.has("clip-path")).toBe(false);
+  });
+
+  it("TÉMOIN : l'enrobage d'un calque TEXTE rogne toujours, lui — le point 1 n'est pas vacant", () => {
+    // Sans ce témoin, « overflow n'est pas hidden » passerait si LayerView avait cessé de rogner POUR
+    // TOUT LE MONDE — ce qui laisserait un texte trop long déborder de son cadre dans l'éditeur alors
+    // que l'export le coupe (textStyleFor pose `overflow: hidden`). C'est une propriété EXISTANTE, et
+    // ce témoin la protège de cette tâche.
+    const texte = {
+      ...BASE, id: "t", name: "t", frame: { ...FRAME },
+      type: "text", content: "x", font: { family: "Noto Sans", size: 20, weight: 400 },
+      color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+    } as unknown as Layer;
+    const html = renderToStaticMarkup(
+      React.createElement(LayerView, { layer: texte, frame: { ...FRAME }, rotation: 0, selected: false }),
+    );
+    const premier = /style="([^"]*)"/.exec(html)![1];
+    const decls = new Map(premier.split(";").map((d) => [d.slice(0, d.indexOf(":")).trim(), d.slice(d.indexOf(":") + 1).trim()]));
+    expect(decls.get("overflow")).toBe("hidden");
   });
 });

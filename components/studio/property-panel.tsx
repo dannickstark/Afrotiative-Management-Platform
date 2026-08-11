@@ -29,7 +29,7 @@ import { formatRadius, parseRadiusInput } from "@/lib/studio/scene";
 // U3 Tâche 3 : LA description d'une forme — celle que les deux chemins de rendu consultent. Ce panneau
 // lui demande sa liste d'options et ses deux verdicts (le rayon a-t-il un sens ? la forme est-elle
 // découpée ?) au lieu d'en tenir une seconde version.
-import { descriptorFor, SHAPE_OPTIONS } from "@/lib/studio/shapes";
+import { descriptorFor, SHAPE_OPTIONS, supportsShadow } from "@/lib/studio/shapes";
 import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
@@ -780,6 +780,51 @@ function ShapeFields({
                 />
               ))}
             </div>
+          </>
+        )}
+      </TypeSection>
+
+      <TypeSection title="Ombre" sectionId="ombre" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+        {/* U3 Tâche 4 — L'OMBRE PORTÉE D'UNE FORME, et le cas des formes découpées.
+            MESURÉ EN PIXELS AVANT D'ÉCRIRE CE CONTRÔLE (tests/studio-render-clippath.test.ts,
+            « RÉSERVE 4 ») : sur une forme découpée, satori ne peint AUCUNE ombre, et le navigateur non
+            plus — `clip-path` découpe le rendu ENTIER d'un élément, ombre portée comprise. Offrir le
+            contrôle là serait offrir un contrôle sans effet : le défaut que U2 a tranché deux fois
+            (`snap-rotation-note`, `safe-areas-none`) et la Tâche 3 deux fois de plus. Il est donc grisé
+            avec sa note — ET l'ombre est supprimée des DEUX chemins de rendu
+            (lib/studio/shapes.ts#layerBoxShadow), pour que l'accord entre l'écran et l'export soit
+            structurel plutôt qu'un accident d'implémentation de satori qu'un correctif amont pourrait
+            défaire. Sur les formes non découpées, l'ombre SUIT le `border-radius` dans les deux moteurs
+            (mesuré) : une ellipse ombrée est une ellipse ombrée. Piloté par la description, jamais par
+            une liste de noms. Mêmes quatre champs que l'ombre d'un texte, puisque c'est le même réglage
+            et — depuis cette tâche — la même définition de schéma. */}
+        <SwitchField
+          label="Activer l'ombre"
+          checked={!!layer.shadow}
+          disabled={!supportsShadow(layer.shape)}
+          dataField="shadow-enabled"
+          onCommit={(v) => patch({ shadow: v ? { x: 0, y: 2, blur: 4, color: "#000000" } : undefined })}
+        />
+        {!supportsShadow(layer.shape) && (
+          <p className="text-[11px] text-muted-foreground" data-testid="shape-shadow-none">
+            L&rsquo;ombre n&rsquo;est pas disponible sur la forme «&nbsp;{descriptor.label}&nbsp;» : une
+            ombre portée se peint AUTOUR de la boîte du calque, et le découpage l&rsquo;emporte avec le
+            reste — ni le canevas ni l&rsquo;image exportée n&rsquo;en montreraient quoi que ce soit.
+            Elle n&rsquo;est donc peinte nulle part ici, et une ombre déjà réglée reste conservée telle
+            quelle si vous revenez à une forme pleine.
+          </p>
+        )}
+        {supportsShadow(layer.shape) && layer.shadow && (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              <NumberField label="X" value={layer.shadow.x} onCommit={(v) => patch({ shadow: { ...layer.shadow, x: v } })} />
+              <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
+              <NumberField label="Flou" value={layer.shadow.blur} min={0} onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })} />
+            </div>
+            <ColorField
+              label="Couleur de l'ombre" value={layer.shadow.color} context={context}
+              onCommit={(v) => patch({ shadow: { ...layer.shadow, color: v } })}
+            />
           </>
         )}
       </TypeSection>

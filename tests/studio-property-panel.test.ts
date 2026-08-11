@@ -718,6 +718,121 @@ describe("PropertyPanel — la rotation d'une forme découpée (dette 2)", () =>
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 4 — L'OMBRE D'UNE FORME, ET LE CAS DES FORMES DÉCOUPÉES.
+//
+// MESURÉ AVANT D'ÉCRIRE LE CONTRÔLE (tests/studio-render-clippath.test.ts, « RÉSERVE 4 ») : sur une
+// forme découpée, satori ne peint AUCUNE ombre, et le navigateur non plus (`clip-path` découpe le
+// rendu ENTIER d'un élément, ombre portée comprise). Les deux chemins sont donc d'accord — mais par
+// deux mécanismes indépendants dont l'un est un accident d'implémentation, d'où la suppression dans
+// les deux chemins (lib/studio/shapes.ts#layerBoxShadow) plutôt qu'une inertie de chance.
+//
+// Côté interface, la règle de U2 s'applique telle quelle : « interdire en le disant vaut mieux
+// qu'autoriser sans effet » (`snap-rotation-note`, `safe-areas-none`, et les deux notes de la Tâche 3).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
+  const OMBRE = { x: 5, y: 7, blur: 9, color: "#ABCDEF" } as const;
+  function shapeOf(kind: string, extra: Partial<ShapeLayer> = {}): Layer {
+    return { ...shapeLayerSolid, shape: kind, ...extra } as Layer;
+  }
+  // Base UI ne rend PAS un `<button disabled>` pour un Switch : c'est un `<span role="switch">` portant
+  // `aria-disabled="true"` (vérifié dans node_modules/@base-ui/react/switch/root/SwitchRoot.js — le
+  // `disabled` natif vit sur l'`<input type="checkbox">` caché). Chercher `disabled` sur CETTE balise
+  // passerait donc quoi qu'il arrive : on lit `aria-disabled`, comme pour la bordure.
+  function shadowSwitchTag(html: string): string {
+    return openingTag(html, "data-field", "shadow-enabled");
+  }
+
+  it("la section Ombre existe pour une forme, et l'interrupteur reflète la valeur stockée", () => {
+    const avec = render([shapeOf("rect", { shadow: { ...OMBRE } })], "s1", "recap_card");
+    expect(avec).toContain('data-section="ombre"');
+    expect(shadowSwitchTag(avec)).toContain('aria-checked="true"');
+    const sans = render([shapeOf("rect")], "s1", "recap_card");
+    expect(sans).toContain('data-section="ombre"');
+    expect(shadowSwitchTag(sans)).toContain('aria-checked="false"');
+  });
+
+  it("les quatre champs de l'ombre n'apparaissent QUE lorsqu'une ombre est réglée", () => {
+    const avec = render([shapeOf("rect", { shadow: { ...OMBRE } })], "s1", "recap_card");
+    // Les trois valeurs numériques sont uniques dans cette fixture (le calque porte radius 4 et une
+    // bordure de 2 : 5, 7 et 9 n'y apparaissent nulle part ailleurs — vérifié champ par champ).
+    for (const v of ["5", "7", "9"]) expect(avec).toContain(`value="${v}"`);
+    expect(avec).toContain('value="#ABCDEF"');
+    const sans = render([shapeOf("rect")], "s1", "recap_card");
+    for (const v of ["5", "7", "9"]) expect(sans).not.toContain(`value="${v}"`);
+    expect(sans).not.toContain('value="#ABCDEF"');
+  });
+
+  it("l'interrupteur d'ombre est GRISÉ pour une forme découpée, actif pour les autres", () => {
+    const découpées = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(découpées.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(libres.length).toBeGreaterThan(0);
+
+    for (const kind of découpées) {
+      const tag = shadowSwitchTag(render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : true`);
+    }
+    for (const kind of libres) {
+      const tag = shadowSwitchTag(render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : false`);
+    }
+  });
+
+  it("la note n'apparaît QUE pour les formes découpées, et les sous-champs disparaissent avec elle", () => {
+    // Le calque PORTE une ombre : c'est exactement ce qu'on obtient en convertissant un rectangle
+    // ombré en triangle, donc le cas résiduel qui compte. Un interrupteur grisé au-dessus de quatre
+    // contrôles actifs n'aurait rien empêché.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card");
+      const découpée = descriptorFor(kind).clipped;
+      expect(`${kind} note : ${html.includes('data-testid="shape-shadow-none"')}`).toBe(`${kind} note : ${découpée}`);
+      expect(`${kind} champs : ${html.includes('value="#ABCDEF"')}`).toBe(`${kind} champs : ${!découpée}`);
+      expect(`${kind} flou : ${html.includes('value="9"')}`).toBe(`${kind} flou : ${!découpée}`);
+    }
+  });
+
+  it("la note dit POURQUOI, nomme la forme, et ne se contente pas d'« indisponible »", () => {
+    // Le précédent de U2 : expliquer la raison. La recherche du libellé se fait DANS la note (revue de
+    // la Tâche 3, Medium 3 : chercher « Étoile » dans tout le HTML se satisferait d'une note voisine
+    // qui nomme la même forme — les trois notes de forme coexistent dans ce panneau).
+    const html = render([shapeOf("star", { shadow: { ...OMBRE } })], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-shadow-none"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(note).not.toBeNull();
+    expect(note![1]).toContain("Étoile");
+    expect(note![1].length).toBeGreaterThan(40);
+    expect(note![1]).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
+    expect(render([shapeOf("rect")], "s1", "recap_card")).not.toContain('data-testid="shape-shadow-none"');
+  });
+
+  it("une ombre déjà réglée SURVIT sur le calque — le panneau n'écrit rien en la masquant", () => {
+    // Même garantie que le rayon d'une ellipse et que la bordure d'un triangle : convertir un
+    // rectangle ombré en étoile puis revenir doit rendre l'ombre intacte. Aucun patch
+    // « shadow: undefined » caché.
+    const layer = shapeOf("star", { shadow: { ...OMBRE } });
+    render([layer], "s1", "recap_card");
+    if (layer.type === "shape") expect(layer.shadow).toEqual({ ...OMBRE });
+    // Et l'interrupteur montre bien cette valeur STOCKÉE (coché), grisé — le même choix d'affichage
+    // que « Rotation (°) », qui montre 30 grisé plutôt que 0.
+    expect(shadowSwitchTag(render([layer], "s1", "recap_card"))).toContain('aria-checked="true"');
+  });
+
+  it("la section Ombre d'une FORME et celle d'un TEXTE sont deux sections distinctes", () => {
+    // Elles partagent le libellé « Ombre » : c'est exactement le cas que le préfixe par type
+    // (`${layerType}.${sectionId}`) doit couvrir — replier l'une ne doit pas replier l'autre.
+    const prefs = { "text.ombre": false };
+    const texte = render([textLayer], "t", "social_post", [], prefs);
+    const forme = render([shapeOf("rect", { shadow: { ...OMBRE } })], "s1", "recap_card", [], prefs);
+    expect(sectionIsOpen(texte, "ombre")).toBe(false);
+    expect(sectionIsOpen(forme, "ombre")).toBe(true);
+    // Et l'inverse, sans quoi la moitié de la biconditionnelle manquerait.
+    const inverse = { "shape.ombre": false };
+    expect(sectionIsOpen(render([textLayer], "t", "social_post", [], inverse), "ombre")).toBe(true);
+    expect(sectionIsOpen(render([shapeOf("rect")], "s1", "recap_card", [], inverse), "ombre")).toBe(false);
+  });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // U3 Tâche 3 — CHANGER LA FORME D'UN CALQUE depuis le panneau.
 // shape-gallery.ts promettait déjà, en commentaire, qu'« un designer peut ensuite modifier sa forme
 // depuis le panneau de propriétés » : avec huit formes, l'absence de ce contrôle rendait cette phrase
@@ -856,11 +971,15 @@ describe("PropertyPanel — sections repliables, mémorisées par type de calque
     const sectionsOpen = { "text.ombre": false };
     const textHtml = render([textLayer], "t", "social_post", [], sectionsOpen);
     expect(sectionIsOpen(textHtml, "ombre")).toBe(false);
-    // Un calque forme n'a pas de section "ombre" du tout ; sa section "bordure" à elle, jamais visée
-    // par ces prefs, doit rester ouverte — la clé plate "ombre" ne doit influencer AUCUNE section
-    // d'un type qui ne la porte même pas.
+    // Sa section "bordure", jamais visée par ces prefs, doit rester ouverte — la clé plate "ombre" ne
+    // doit influencer aucune AUTRE section.
     const shapeHtml = render([shapeLayerSolid], "s1", "recap_card", [], sectionsOpen);
     expect(sectionIsOpen(shapeHtml, "bordure")).toBe(true);
+    // U3 Tâche 4 : un calque FORME porte désormais lui aussi une section "Ombre" — le cas exact que le
+    // préfixe par type existe pour couvrir, comme "Apparence" entre texte et image. Replier celle du
+    // TEXTE ne doit pas replier celle de la FORME. (Le test dédié, dans « l'ombre d'une forme »,
+    // vérifie aussi le sens inverse.)
+    expect(sectionIsOpen(shapeHtml, "ombre")).toBe(true);
   });
 
   it("replier une section n'appelle JAMAIS dispatch — c'est un changement d'affichage pur, jamais une mutation de calque", () => {

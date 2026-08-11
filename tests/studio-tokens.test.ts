@@ -33,6 +33,34 @@ describe("extractTokens", () => {
       "article.byline", "article.title", "article.url", "category.color", "edition.title", "quote.text", "source.names",
     ]);
   });
+
+  it("trouve aussi le jeton de la couleur d'OMBRE d'une forme (U3 Tâche 4)", () => {
+    // `shapeLayer.shadow` est un champ neuf, et `usesInLayer` (tokens.ts) est une liste ÉCRITE À LA
+    // MAIN de champs porteurs de couleur : un champ de couleur ajouté au schéma sans être ajouté ICI
+    // laisserait passer un jeton inconnu jusqu'à satori, où il se peindrait en… rien, sans que
+    // `validateScene` n'ait rien à dire. Le même oubli est possible côté resolveTokens
+    // (lib/studio/values.ts), et tests/studio-values.test.ts en fait le tour par un aller-retour.
+    const s = scene([
+      { ...base, id: "s", name: "", type: "shape", shape: "rect", fill: "#FFFFFF",
+        shadow: { x: 0, y: 2, blur: 4, color: "{{category.color}}" } },
+    ]);
+    expect(extractTokens(s).map((t) => t.token)).toEqual(["category.color"]);
+    // Et le jeton est bien attendu comme une COULEUR : c'est ce qui fait refuser un jeton texte ici.
+    expect(extractTokens(s)[0].expected).toBe("color");
+  });
+
+  it("un jeton inconnu dans l'ombre d'une forme est REFUSÉ par validateScene", () => {
+    // La conséquence pratique du test précédent : sans le scan, cette scène passerait la validation et
+    // partirait au rendu avec un « {{jeton.inconnu}} » en guise de couleur.
+    const s = scene([
+      { ...base, id: "s", name: "Fond", type: "shape", shape: "rect", fill: "#FFFFFF",
+        shadow: { x: 0, y: 2, blur: 4, color: "{{jeton.inconnu}}" } },
+    ]);
+    const erreurs = validateScene(s, "social_post");
+    expect(erreurs).toHaveLength(1);
+    expect(erreurs[0]).toContain("jeton.inconnu");
+    expect(erreurs[0]).toContain("Fond");
+  });
 });
 
 describe("validateScene", () => {

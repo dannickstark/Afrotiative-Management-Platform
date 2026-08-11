@@ -48,6 +48,24 @@ const imageLayer = z.object({
   overlay: hexColor.optional(),
 });
 
+/**
+ * UNE ombre, pour un texte comme pour une forme (U3 Tâche 4).
+ *
+ * Extraite de `textLayer` où elle vivait en ligne, et partagée : `textLayer.shadow` devient une
+ * `text-shadow` (element.ts#textStyleFor), `shapeLayer.shadow` une `box-shadow`
+ * (shapes.ts#layerBoxShadow), mais ce qu'un designer RÈGLE est la même chose — un décalage, un flou,
+ * une couleur — et le panneau de propriétés offre les mêmes quatre champs dans les deux cas. Deux
+ * définitions jumelles auraient pu dériver (durcir l'une sans l'autre) ; tests/studio-scene.test.ts
+ * épingle l'équivalence des acceptations ET des refus dans les deux sens.
+ *
+ * `blur` est `nonnegative()` — un flou négatif n'a pas de sens ; `x` et `y` sont signés, une ombre
+ * peut porter en haut à gauche. La COULEUR passe par `hexColor`, donc un jeton `{{…}}` y est légal :
+ * tokens.ts le scanne et values.ts le résout, pour la forme comme pour le texte.
+ */
+const layerShadow = z.object({
+  x: z.number(), y: z.number(), blur: z.number().nonnegative(), color: hexColor,
+});
+
 const textLayer = z.object({
   ...layerBase,
   type: z.literal("text"),
@@ -66,7 +84,7 @@ const textLayer = z.object({
   letterSpacing: z.number().optional(),
   maxLines: z.number().int().positive().optional(),
   autoFit: z.boolean().optional(),
-  shadow: z.object({ x: z.number(), y: z.number(), blur: z.number().nonnegative(), color: hexColor }).optional(),
+  shadow: layerShadow.optional(),
   stroke: z.object({ width: z.number().positive(), color: hexColor }).optional(),
 });
 
@@ -173,6 +191,16 @@ const shapeLayer = z.object({
   shape: z.enum(SHAPE_KINDS),
   fill: z.union([hexColor, gradient]),
   radius: cssRadius.optional(),
+  // L'OMBRE PORTÉE d'une forme (U3 Tâche 4). MIGRATION : champ NOUVEAU et OPTIONNEL, donc toute scène
+  // déjà écrite se relit à l'identique — et une scène sans ombre ne se met pas à porter la clé (zod
+  // n'invente pas `shadow: undefined`, épinglé dans tests/studio-scene.test.ts, ce qui compte pour
+  // l'autosave qui compare des JSON).
+  //
+  // Elle n'est PAS peinte sur les formes découpées : mesuré en pixels avant d'écrire ce champ (satori
+  // n'en peint aucune, le navigateur non plus — tests/studio-render-clippath.test.ts « RÉSERVE 4 »).
+  // La décision vit dans lib/studio/shapes.ts#layerBoxShadow, que les DEUX chemins de rendu
+  // interrogent ; la valeur stockée, elle, survit intacte à un aller-retour par une forme découpée.
+  shadow: layerShadow.optional(),
   border: z.object({
     width: z.number().positive(),
     color: hexColor,

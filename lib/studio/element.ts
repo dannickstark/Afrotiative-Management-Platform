@@ -1,5 +1,5 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
-import { layerBorder, layerRotation, shapeCssFor } from "./shapes";
+import { layerBorder, layerBoxShadow, layerRotation, shapeCssFor } from "./shapes";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
 // code de bibliothèque.
@@ -103,6 +103,14 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
     }
   }
 
+  // `layerBoxShadow` et NON `layer.shadow` (U3 Tâche 4) : sur une forme découpée, satori ne peint
+  // AUCUNE ombre — son masque d'ombre vaut « tout le canevas MOINS la forme découpée » et son contenu
+  // est cette même forme, donc l'intersection est vide (mesuré, réserve 4 de la sonde). Le navigateur
+  // n'en peint pas davantage. Les deux chemins sont d'accord, mais par deux mécanismes indépendants :
+  // la description tranche pour que cet accord soit structurel, et les deux chemins la posent — même
+  // discipline que la rotation et la bordure ci-dessus.
+  const shadow = layerBoxShadow(layer);
+
   return {
     type: "div",
     props: {
@@ -111,6 +119,7 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
         ...frameStyle(layer),
         ...fill,
         ...border,
+        ...(shadow ? { boxShadow: shadow } : {}),
         // LA géométrie de la forme vient de lib/studio/shapes.ts — jamais d'un `switch` local. Ce
         // fichier ne sait PAS ce qu'est un rectangle ou une ellipse : il demande. C'est ce qui
         // garantit que le PNG exporté et le canevas de l'éditeur (layer-view.tsx, qui demande à la

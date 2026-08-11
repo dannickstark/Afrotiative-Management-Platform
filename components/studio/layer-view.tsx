@@ -3,7 +3,7 @@
 import type { CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
-import { layerBorder, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
+import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -122,6 +122,14 @@ function ShapeContent({ layer }: { layer: Extract<Layer, { type: "shape" }> }) {
       style={{
         width: "100%", height: "100%",
         ...fillStyle, ...borderStyle,
+        // `layerBoxShadow` et NON `layer.shadow` (U3 Tâche 4) : une forme DÉCOUPÉE ne porte pas
+        // d'ombre, et il faut que ce soit vrai ICI autant que dans l'export. Le navigateur découpe
+        // l'ombre portée avec le reste de l'élément, satori n'en peint aucune non plus (mesuré,
+        // réserve 4) — les deux sont d'accord, mais pour deux raisons indépendantes dont l'une est un
+        // accident d'implémentation. La description tranche (shapes.ts#supportsShadow), les deux
+        // chemins la posent, et l'accord ne dépend plus du hasard. `undefined` ne sérialise RIEN, donc
+        // une forme sans ombre reste octet pour octet celle d'avant cette tâche.
+        boxShadow: layerBoxShadow(layer),
         // C'EST le point de contact avec lib/studio/shapes.ts — LA MÊME description que le moteur
         // d'export interroge (element.ts:shapeNode). Ne pas redériver la géométrie ici : c'est
         // exactement la divergence silencieuse que §0 du plan U3 décrit (le designer dessine une

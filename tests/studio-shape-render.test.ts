@@ -355,3 +355,114 @@ describe("renderScene() — la bordure ne franchit pas la découpe (réserve 3)"
     expect(px(400, 200)).toBe("contour");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// L'OMBRE D'UNE FORME, EN PIXELS — U3 TÂCHE 4.
+//
+// « L'ombre est VISIBLE, pas seulement présente dans le balisage » (brief). Le piège est connu et
+// documenté : en U1, l'ombre de l'artboard était bien dans le style et un conteneur `overflow-hidden`
+// la rognait ENTIÈREMENT — un test vert au-dessus d'une propriété non tenue. Une ombre PORTÉE se
+// peint HORS de la boîte de son élément : la seule preuve qui vaille est donc la COULEUR d'un pixel
+// SITUÉ HORS du cadre du calque, dans l'image réellement produite.
+//
+// Et la seconde moitié : sur une forme DÉCOUPÉE, satori ne peint AUCUNE ombre (mesuré avant
+// implémentation, tests/studio-render-clippath.test.ts « RÉSERVE 4 »), pas plus que le navigateur.
+// L'ombre est donc supprimée des deux chemins (lib/studio/shapes.ts#layerBoxShadow) pour que cet
+// accord soit STRUCTUREL et non accidentel. Ce bloc le prouve là où ça compte : dans les pixels.
+//
+// MUTATION QUI FAIT ROUGIR : retirer `boxShadow` du style de `shapeNode()` (l'anneau disparaît) ;
+// remplacer `layerBoxShadow(layer)` par `layer.shadow` (le triangle se met à… ne rien peindre non
+// plus aujourd'hui, mais le test de CSS des deux chemins, lui, rougit — voir tests/studio-shapes).
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("renderScene() — l'ombre d'une forme, en pixels", () => {
+  const OMBRE_COULEUR = "#00FF00"; // vert pur : ni le remplissage (rouge) ni le fond (bleu)
+  // Un anneau de 40 px, sans flou : `0 0 0 40px` n'est pas exprimable par le modèle (pas de champ
+  // « spread »), donc on obtient l'équivalent avec un DÉCALAGE franc — une ombre déplacée de 60 px
+  // vers le bas-droit, sans flou, qui laisse une bande verte franche sur deux côtés.
+  const OMBRE = { x: 60, y: 60, blur: 0, color: OMBRE_COULEUR } as const;
+  // Cadre 400×200 (NON carré) posé en (200,100) sur un canevas 800×400 : détaché des quatre bords,
+  // pour qu'« aucune ombre » et « ombre hors canevas » ne puissent se confondre.
+  const CADRE = { x: 200, y: 100, w: 400, h: 200 };
+
+  // Échantillonneur à TROIS couleurs : sans la troisième, « ce point n'est pas du remplissage » ne
+  // distinguerait pas « fond » de « ombre » — et c'est justement cette distinction qui porte le test.
+  async function triColore(bytes: Uint8Array) {
+    const { data, info } = await sharp(Buffer.from(bytes)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    return (x: number, y: number) => {
+      const i = (y * info.width + x) * info.channels;
+      const p = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+      const near = (t: number[]) => t.every((v, k) => Math.abs(p[k] - v) <= TOLERANCE);
+      if (near([255, 0, 0])) return "remplissage";
+      if (near([0, 0, 255])) return "fond";
+      if (near([0, 255, 0])) return "ombre";
+      return `rgba(${p.join(",")})`;
+    };
+  }
+  async function pixelsTri(kind: ShapeKind, extra: Partial<ShapeLayer>) {
+    const scene = sceneOf(kind, { frame: { ...CADRE }, ...extra });
+    return triColore((await renderScene({ scene, values: {} })).bytes);
+  }
+
+  // Deux points HORS du cadre du calque, dans la bande que l'ombre décalée de 60/60 doit couvrir :
+  // sous le bord bas (y 300..360) et à droite du bord droit (x 600..660).
+  const SOUS = [400, 340] as const;
+  const DROITE = [640, 200] as const;
+
+  it("un rectangle ombré peint bien du VERT hors de son cadre — l'ombre n'est pas rognée", async () => {
+    const px = await pixelsTri("rect", { shadow: { ...OMBRE } });
+    expect(px(...SOUS)).toBe("ombre");
+    expect(px(...DROITE)).toBe("ombre");
+    // Et la forme elle-même est intacte : l'ombre est DERRIÈRE, elle ne remplace pas le remplissage.
+    expect(px(400, 200)).toBe("remplissage");
+    // Le coin opposé (haut-gauche, hors décalage) reste du fond : l'ombre est bien DÉCALÉE, elle
+    // n'inonde pas le canevas.
+    expect(px(180, 80)).toBe("fond");
+  });
+
+  it("TÉMOIN : le MÊME rectangle SANS ombre laisse ces deux points au fond", async () => {
+    const px = await pixelsTri("rect", {});
+    expect(px(...SOUS)).toBe("fond");
+    expect(px(...DROITE)).toBe("fond");
+    expect(px(400, 200)).toBe("remplissage");
+  });
+
+  it("TÉMOIN : le vert est DISTINGUABLE du fond et du remplissage par cet échantillonneur", async () => {
+    // Anti-vacuité des assertions « fond » ci-dessus : si l'échantillonneur classait le vert « fond »,
+    // le témoin précédent passerait même avec une ombre peinte.
+    const px = await pixelsTri("rect", { fill: OMBRE_COULEUR });
+    expect(px(400, 200)).toBe("ombre");
+  });
+
+  it("une forme DÉCOUPÉE ne peint AUCUNE ombre — et c'est la décision, pas un hasard", async () => {
+    const px = await pixelsTri("triangle", { shadow: { ...OMBRE } });
+    expect(px(...SOUS)).toBe("fond");
+    expect(px(...DROITE)).toBe("fond");
+    // Le triangle est bien là : sans ces points, une image entièrement bleue passerait pour un succès.
+    expect(px(400, 200)).toBe("remplissage");
+    expect(px(240, 290)).toBe("remplissage");
+  });
+
+  it("une ELLIPSE ombrée peint son ombre, et l'ombre SUIT l'arrondi", async () => {
+    // L'ellipse n'est pas découpée (`borderRadius: "50%"`) : elle porte donc l'ombre. Et la mesure
+    // (RÉSERVE 4) a montré que l'ombre épouse l'arrondi dans satori COMME dans le navigateur — c'est
+    // ce qui fait que l'éditeur et l'export s'accordent, donc ce qui autorise le contrôle ici.
+    const px = await pixelsTri("ellipse", { shadow: { ...OMBRE } });
+    // L'ellipse du remplissage : centre (400,200), demi-axes 200×100. Celle de l'ombre est la même,
+    // décalée de 60/60 : centre (460,260). (460,350) est sous le centre de l'ombre, à 0,81 — DEDANS —
+    // et hors du remplissage (0,09 + 2,25).
+    expect(px(460, 350)).toBe("ombre");
+    // (640,340) est le COIN bas-droit de la BOÎTE de l'ombre (260..660 × 160..360), à 20 px des deux
+    // bords. Il est HORS de l'ellipse d'ombre — ((460-640)/200)² + ((260-340)/100)² = 0,81 + 0,64 =
+    // 1,45 > 1 — et hors du remplissage (1,44 + 1,96). Une ombre RECTANGULAIRE l'aurait peint ; une
+    // ombre qui épouse l'arrondi, non. C'est LE point qui distingue les deux.
+    expect(px(640, 340)).toBe("fond");
+    expect(px(400, 200)).toBe("remplissage");
+  });
+
+  it("TÉMOIN : sur un RECT ombré, ce même coin d'ombre EST peint", async () => {
+    // La contre-épreuve : c'est bien `borderRadius` qui sculpte l'ombre, pas une limite de l'ombre
+    // elle-même ni un artefact de l'échantillonnage à cet endroit précis.
+    const px = await pixelsTri("rect", { shadow: { ...OMBRE } });
+    expect(px(640, 340)).toBe("ombre");
+  });
+});
