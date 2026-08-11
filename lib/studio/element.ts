@@ -1,4 +1,5 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
+import { shapeCssFor } from "./shapes";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
 // code de bibliothèque.
@@ -98,7 +99,11 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
         ...frameStyle(layer),
         ...fill,
         ...border,
-        ...(layer.radius ? { borderRadius: layer.radius } : {}),
+        // LA géométrie de la forme vient de lib/studio/shapes.ts — jamais d'un `switch` local. Ce
+        // fichier ne sait PAS ce qu'est un rectangle ou une ellipse : il demande. C'est ce qui
+        // garantit que le PNG exporté et le canevas de l'éditeur (layer-view.tsx, qui demande à la
+        // MÊME description) peignent la même chose, plan U3 §0.
+        ...shapeCssFor(layer),
       },
     },
   };

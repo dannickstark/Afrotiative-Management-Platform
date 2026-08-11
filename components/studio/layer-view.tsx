@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
+import { shapeCssFor } from "@/lib/studio/shapes";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -106,7 +107,12 @@ function ShapeContent({ layer }: { layer: Extract<Layer, { type: "shape" }> }) {
       style={{
         width: "100%", height: "100%",
         ...fillStyle, ...borderStyle,
-        borderRadius: layer.radius,
+        // C'EST le point de contact avec lib/studio/shapes.ts — LA MÊME description que le moteur
+        // d'export interroge (element.ts:shapeNode). Ne pas redériver la géométrie ici : c'est
+        // exactement la divergence silencieuse que §0 du plan U3 décrit (le designer dessine une
+        // forme, l'image exportée en contient une autre, aucun test ne rougit), et c'est la même
+        // discipline que TextContent applique déjà avec textStyleFor.
+        ...shapeCssFor(layer),
       }}
     />
   );

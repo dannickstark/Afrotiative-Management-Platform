@@ -18,6 +18,7 @@
 // le test de complétude itère `SHAPE_KINDS` directement plutôt qu'une copie — même construction que
 // lib/diffusion/channels.ts (itère CHANNELS) et lib/studio/dynamic-text.ts (itère TOKEN_IDS).
 import { SHAPE_KINDS, type Layer } from "./scene";
+import { shapeLabel } from "./shapes";
 import { CONTEXT_TOKENS, type TemplateContext, type TokenId } from "./tokens";
 import { centeredFrame } from "./layer-geometry";
 
@@ -31,8 +32,11 @@ export type ShapeTile = {
 // U3 ajoute ellipse/ligne/polygones EN AJOUTANT DES ENTRÉES ICI, une fois — et seulement une fois —
 // que SHAPE_KINDS (scene.ts) les accepte. La section « Formes » énumère ce tableau ; le garde-fou de
 // complétude le compare au SCHÉMA, pas à une copie de ce tableau.
+// U3 Tâche 2 : le libellé d'une FORME vient désormais de sa description (lib/studio/shapes.ts), la
+// même que consultent les deux chemins de rendu — plutôt que d'exister en deux exemplaires français
+// qui pourraient dériver. La tuile QR n'est pas une forme du schéma : elle garde le sien.
 export const SHAPE_TILES: readonly ShapeTile[] = [
-  { id: "rect", label: "Rectangle", kind: "shape", shape: "rect" },
+  { id: "rect", label: shapeLabel("rect"), kind: "shape", shape: "rect" },
   { id: "qr", label: "QR code", kind: "qr" },
 ];
 
