@@ -430,14 +430,28 @@ function EditorShellInner({
               <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
             </div>
 
+            {/* Tâche 6 (U1, spec §6) : `min-h-0 flex-1` sur le conteneur du panneau de propriétés
+                (au lieu d'un simple bloc à hauteur intrinsèque) lui donne une hauteur RÉELLEMENT
+                bornée, partagée avec PreviewPane en dessous — c'est ce qui rend la bande de géométrie
+                RÉELLEMENT épinglée à l'écran (property-panel.tsx#PropertyPanel n'utilise son
+                `h-full` interne que si un ancêtre lui donne une hauteur définie), pas seulement
+                première dans l'ordre du HTML. `overflow-auto` RESTE sur cette colonne (au lieu de
+                passer à `overflow-hidden`) : c'est le filet de sécurité si PreviewPane (dont la
+                hauteur suit l'aspect-ratio du gabarit, potentiellement haute pour un format portrait
+                — voir preview-pane.tsx) ne tient pas dans l'espace restant même une fois le panneau
+                réduit à son minimum ; `shrink-0` sur PreviewPane l'empêche par ailleurs d'être
+                comprimé en premier. Le défilement NORMAL, lui, se fait désormais À L'INTÉRIEUR du
+                panneau (`property-sections`, property-panel.tsx), pas sur cette colonne entière. */}
             <div className="flex w-[300px] shrink-0 flex-col gap-3 overflow-auto">
-              <div className="rounded-lg border">
+              <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
                 <PropertyPanel
                   scene={state.scene} selectedId={state.selectedId} context={template.context}
                   dispatch={dispatch} assets={assets}
+                  sectionsOpen={prefs.sectionsOpen}
+                  onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}
                 />
               </div>
-              <div className="rounded-lg border p-2">
+              <div className="shrink-0 rounded-lg border p-2">
                 <PreviewPane
                   templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles}
                   disabled={!storageConfigured}

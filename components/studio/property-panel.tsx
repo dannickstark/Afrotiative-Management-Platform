@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type Dispatch, type ReactNode } from "react";
-import { Trash2, Plus } from "lucide-react";
+import { ChevronDown, Trash2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -9,12 +9,14 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
 import { type EditorAction, setLayerProp } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
+import { GeometryStrip } from "./geometry-strip";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
 // les champs que l'union Layer autorise (spec Tâche 8). Deux principes traversent tout ce fichier :
@@ -31,6 +33,13 @@ import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./a
 //     jamais un correctif partiel sur un sous-objet : editor-state.ts fusionne LayerPatch en
 //     SUPERFICIEL (`{...layer, ...patch}`), donc un correctif `{ font: { size } }` remplacerait tout
 //     `layer.font` par `{ size }` et perdrait family/weight — ce fichier ne fait jamais cette erreur.
+//
+//  3. Tâche 6 (U1, spec §6) : les six champs de cadre (X, Y, largeur, hauteur, rotation, opacité) ont
+//     QUITTÉ ce fichier pour geometry-strip.tsx — une bande ÉPINGLÉE rendue avant le conteneur
+//     défilant (`PropertyPanel` plus bas), plutôt qu'une section parmi d'autres fermant la liste
+//     comme avant (le défaut que corrige cette tâche : nudger X forçait à défiler devant treize
+//     autres contrôles). Les sections RESTANTES (Texte/Police/Apparence/Ombre/Contour, etc.) sont
+//     repliables via `TypeSection`, mémorisées par type de calque (voir sa note).
 export interface PropertyPanelProps {
   scene: Scene;
   selectedId: string | null;
@@ -42,9 +51,18 @@ export interface PropertyPanelProps {
   // historiques (tests, Storybook éventuel) qui ne fournissent pas encore cette prop continuent de
   // rendre un panneau fonctionnel, simplement sans rien à choisir dans les sélecteurs d'assets.
   assets?: AssetRow[];
+  // Tâche 6 (U1, spec §6) : état replié/déplié des sections, PAR TYPE de calque —
+  // lib/studio/editor-prefs.ts#EditorPrefs.sectionsOpen, clé `${layerType}.${sectionId}`. Ce panneau
+  // ne consomme QUE cette tranche de EditorPrefs, jamais l'objet entier (il resterait autrement
+  // dépendant du zoom, du panneau de rail ouvert… autant de préférences qui ne le regardent pas).
+  // Défaut `{}` (même défaut que EditorPrefs.sectionsOpen) : un appelant qui n'a pas encore ces
+  // props (tests existants antérieurs à cette tâche) affiche toutes les sections OUVERTES, sans
+  // pouvoir persister un repli — même filet que `assets` ci-dessus.
+  sectionsOpen?: Record<string, boolean>;
+  onSectionsOpenChange?: (next: Record<string, boolean>) => void;
 }
 
-type Patch = (p: Record<string, unknown>) => void;
+export type Patch = (p: Record<string, unknown>) => void;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitives de champ — chacune tamponne localement, résout au blur/Entrée, et Échap annule.
@@ -109,7 +127,9 @@ function TextField({
   );
 }
 
-function NumberField({
+// Tâche 6 : exportée pour geometry-strip.tsx, seule et unique primitive dont la bande épinglée a
+// besoin (voir sa note de tête sur le cycle d'imports que cet export ouvre avec ce fichier).
+export function NumberField({
   label, value, onCommit, step, min, max, action, dataField,
 }: {
   label: string; value: number; onCommit: (v: number) => void;
@@ -239,12 +259,51 @@ function SelectField({
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+// Tâche 6 (U1, spec §6) : chaque section de champs restante (Texte/Police/Apparence/Ombre/Contour
+// pour un texte ; Source/Apparence pour une image ; Remplissage/Forme/Bordure pour une forme ; QR
+// code) devient REPLIABLE — seule « Cadre » a quitté ce mécanisme : ses six champs vivent désormais
+// dans GeometryStrip (geometry-strip.tsx), épinglée hors du conteneur défilant par PropertyPanel
+// plus bas. `Collapsible` vient de components/ui/collapsible.tsx (préréglage shadcn base-nova, Base
+// UI) — jamais rechevauché à la main.
+//
+// L'état replié/déplié est mémorisé PAR TYPE de calque (clé `${layerType}.${sectionId}`,
+// lib/studio/editor-prefs.ts#EditorPrefs.sectionsOpen) : un designer qui referme Ombre sur un calque
+// TEXTE ne referme donc PAS Bordure sur un calque FORME, même si les deux sections partageaient le
+// même libellé (ce qui arrive déjà ici : « Apparence » existe pour texte ET image, chacune sous sa
+// propre clé `text.apparence` / `image.apparence`, sans jamais se recouvrir).
+//
+// `data-section={sectionId}` porte l'identifiant COURT (minuscule, sans le type) sur le `Collapsible`
+// racine — Base UI y pose lui-même `data-open`/`data-closed` selon l'état courant (voir
+// node_modules/@base-ui/react/utils/collapsibleOpenStateMapping.js), ce que
+// tests/studio-property-panel.test.ts lit directement plutôt que de ré-implémenter sa propre
+// convention d'attribut.
+function TypeSection({
+  title, sectionId, layerType, sectionsOpen, onToggleSection, children,
+}: {
+  title: string;
+  sectionId: string;
+  layerType: Layer["type"];
+  sectionsOpen: Record<string, boolean>;
+  onToggleSection: (key: string, open: boolean) => void;
+  children: ReactNode;
+}) {
+  const key = `${layerType}.${sectionId}`;
+  // Absente de la carte -> OUVERTE par défaut (même défaut que EditorPrefs.sectionsOpen = {}) :
+  // une section jamais explicitement repliée par le designer reste visible dès le premier chargement.
+  const open = sectionsOpen[key] ?? true;
   return (
-    <div className="space-y-2.5 border-b pb-3 last:border-0" data-section={title}>
-      <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
-      <div className="space-y-2.5">{children}</div>
-    </div>
+    <Collapsible
+      open={open}
+      onOpenChange={(next) => onToggleSection(key, next)}
+      data-section={sectionId}
+      className="border-b pb-3 last:border-0"
+    >
+      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        {title}
+        <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2.5 pt-2.5">{children}</CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -266,11 +325,22 @@ const SIDE_LABEL: Record<"top" | "right" | "bottom" | "left", string> = { top: "
 const SIDES = ["top", "right", "bottom", "left"] as const;
 
 function TextFields({
-  layer, context, patch, assets,
-}: { layer: TextLayer; context: TemplateContext; patch: Patch; assets: AssetRow[] }) {
+  layer, context, patch, assets, sectionsOpen, onToggleSection,
+}: {
+  layer: TextLayer; context: TemplateContext; patch: Patch; assets: AssetRow[];
+  sectionsOpen: Record<string, boolean>; onToggleSection: (key: string, open: boolean) => void;
+}) {
+  const section = (sectionId: string, title: string, children: ReactNode) => (
+    <TypeSection
+      title={title} sectionId={sectionId} layerType="text"
+      sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}
+    >
+      {children}
+    </TypeSection>
+  );
   return (
     <>
-      <Section title="Texte">
+      {section("texte", "Texte", (
         <TextField
           label="Contenu"
           value={layer.content}
@@ -289,99 +359,110 @@ function TextFields({
             />
           }
         />
-      </Section>
+      ))}
 
-      <Section title="Police">
-        <FieldRow label="Police téléversée">
-          {/* Tâche 13 : choisir parmi les polices téléversées (Tâche 11), la police embarquée
-              (Noto Sans) restant toujours sélectionnable en premier — pickFont() écrit à la fois
-              font.assetId ET font.family, donc le champ "Famille" juste en dessous reflète
-              immédiatement le choix fait ici (et reste éditable à la main pour un ajustement fin). */}
-          <FontAssetPicker
-            assets={assets}
-            value={layer.font.assetId}
-            onPick={(pick) => patch({ font: pickFont(layer.font, pick) })}
-          />
-        </FieldRow>
-        <TextField label="Famille" value={layer.font.family} onCommit={(v) => patch({ font: { ...layer.font, family: v } })} />
-        <div className="grid grid-cols-2 gap-2">
-          <NumberField label="Taille" value={layer.font.size} min={1} onCommit={(v) => patch({ font: { ...layer.font, size: Math.max(1, v) } })} />
-          <SelectField
-            label="Graisse"
-            value={String(layer.font.weight)}
-            options={FONT_WEIGHTS}
-            onCommit={(v) => patch({ font: { ...layer.font, weight: Number(v) } })}
-          />
-        </div>
-        <SwitchField label="Italique" checked={!!layer.font.italic} onCommit={(v) => patch({ font: { ...layer.font, italic: v } })} />
-      </Section>
-
-      <Section title="Apparence">
-        <ColorField label="Couleur" value={layer.color} context={context} onCommit={(v) => patch({ color: v })} />
-        <div className="grid grid-cols-2 gap-2">
-          <SelectField label="Alignement" value={layer.align} options={ALIGN_OPTIONS} onCommit={(v) => patch({ align: v })} />
-          <SelectField label="Alignement vertical" value={layer.vAlign} options={VALIGN_OPTIONS} onCommit={(v) => patch({ vAlign: v })} />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <NumberField
-            label="Interligne" value={layer.lineHeight} step={0.1} min={0.1}
-            onCommit={(v) => patch({ lineHeight: Math.max(0.1, v) })}
-          />
-          <NumberField label="Espacement lettres" value={layer.letterSpacing ?? 0} onCommit={(v) => patch({ letterSpacing: v || undefined })} />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <NumberField
-            label="Lignes max (0 = illimité)" value={layer.maxLines ?? 0} min={0} step={1}
-            onCommit={(v) => patch({ maxLines: v > 0 ? Math.round(v) : undefined })}
-          />
-          <SwitchField label="Ajustement auto" checked={!!layer.autoFit} onCommit={(v) => patch({ autoFit: v })} />
-        </div>
-      </Section>
-
-      <Section title="Ombre">
-        <SwitchField
-          label="Activer l'ombre"
-          checked={!!layer.shadow}
-          onCommit={(v) => patch({ shadow: v ? { x: 0, y: 2, blur: 4, color: "#000000" } : undefined })}
-        />
-        {layer.shadow && (
-          <>
-            <div className="grid grid-cols-3 gap-2">
-              <NumberField label="X" value={layer.shadow.x} onCommit={(v) => patch({ shadow: { ...layer.shadow, x: v } })} />
-              <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
-              <NumberField label="Flou" value={layer.shadow.blur} min={0} onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })} />
-            </div>
-            <ColorField
-              label="Couleur de l'ombre" value={layer.shadow.color} context={context}
-              onCommit={(v) => patch({ shadow: { ...layer.shadow, color: v } })}
+      {section("police", "Police", (
+        <>
+          <FieldRow label="Police téléversée">
+            {/* Tâche 13 : choisir parmi les polices téléversées (Tâche 11), la police embarquée
+                (Noto Sans) restant toujours sélectionnable en premier — pickFont() écrit à la fois
+                font.assetId ET font.family, donc le champ "Famille" juste en dessous reflète
+                immédiatement le choix fait ici (et reste éditable à la main pour un ajustement fin). */}
+            <FontAssetPicker
+              assets={assets}
+              value={layer.font.assetId}
+              onPick={(pick) => patch({ font: pickFont(layer.font, pick) })}
             />
-          </>
-        )}
-      </Section>
-
-      <Section title="Contour">
-        <SwitchField
-          label="Activer le contour"
-          checked={!!layer.stroke}
-          onCommit={(v) => patch({ stroke: v ? { width: 1, color: "#000000" } : undefined })}
-        />
-        {layer.stroke && (
-          <>
-            <NumberField label="Épaisseur" value={layer.stroke.width} min={0.1} onCommit={(v) => patch({ stroke: { ...layer.stroke, width: Math.max(0.1, v) } })} />
-            <ColorField
-              label="Couleur du contour" value={layer.stroke.color} context={context}
-              onCommit={(v) => patch({ stroke: { ...layer.stroke, color: v } })}
+          </FieldRow>
+          <TextField label="Famille" value={layer.font.family} onCommit={(v) => patch({ font: { ...layer.font, family: v } })} />
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField label="Taille" value={layer.font.size} min={1} onCommit={(v) => patch({ font: { ...layer.font, size: Math.max(1, v) } })} />
+            <SelectField
+              label="Graisse"
+              value={String(layer.font.weight)}
+              options={FONT_WEIGHTS}
+              onCommit={(v) => patch({ font: { ...layer.font, weight: Number(v) } })}
             />
-          </>
-        )}
-      </Section>
+          </div>
+          <SwitchField label="Italique" checked={!!layer.font.italic} onCommit={(v) => patch({ font: { ...layer.font, italic: v } })} />
+        </>
+      ))}
+
+      {section("apparence", "Apparence", (
+        <>
+          <ColorField label="Couleur" value={layer.color} context={context} onCommit={(v) => patch({ color: v })} />
+          <div className="grid grid-cols-2 gap-2">
+            <SelectField label="Alignement" value={layer.align} options={ALIGN_OPTIONS} onCommit={(v) => patch({ align: v })} />
+            <SelectField label="Alignement vertical" value={layer.vAlign} options={VALIGN_OPTIONS} onCommit={(v) => patch({ vAlign: v })} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField
+              label="Interligne" value={layer.lineHeight} step={0.1} min={0.1}
+              onCommit={(v) => patch({ lineHeight: Math.max(0.1, v) })}
+            />
+            <NumberField label="Espacement lettres" value={layer.letterSpacing ?? 0} onCommit={(v) => patch({ letterSpacing: v || undefined })} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField
+              label="Lignes max (0 = illimité)" value={layer.maxLines ?? 0} min={0} step={1}
+              onCommit={(v) => patch({ maxLines: v > 0 ? Math.round(v) : undefined })}
+            />
+            <SwitchField label="Ajustement auto" checked={!!layer.autoFit} onCommit={(v) => patch({ autoFit: v })} />
+          </div>
+        </>
+      ))}
+
+      {section("ombre", "Ombre", (
+        <>
+          <SwitchField
+            label="Activer l'ombre"
+            checked={!!layer.shadow}
+            onCommit={(v) => patch({ shadow: v ? { x: 0, y: 2, blur: 4, color: "#000000" } : undefined })}
+          />
+          {layer.shadow && (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                <NumberField label="X" value={layer.shadow.x} onCommit={(v) => patch({ shadow: { ...layer.shadow, x: v } })} />
+                <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
+                <NumberField label="Flou" value={layer.shadow.blur} min={0} onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })} />
+              </div>
+              <ColorField
+                label="Couleur de l'ombre" value={layer.shadow.color} context={context}
+                onCommit={(v) => patch({ shadow: { ...layer.shadow, color: v } })}
+              />
+            </>
+          )}
+        </>
+      ))}
+
+      {section("contour", "Contour", (
+        <>
+          <SwitchField
+            label="Activer le contour"
+            checked={!!layer.stroke}
+            onCommit={(v) => patch({ stroke: v ? { width: 1, color: "#000000" } : undefined })}
+          />
+          {layer.stroke && (
+            <>
+              <NumberField label="Épaisseur" value={layer.stroke.width} min={0.1} onCommit={(v) => patch({ stroke: { ...layer.stroke, width: Math.max(0.1, v) } })} />
+              <ColorField
+                label="Couleur du contour" value={layer.stroke.color} context={context}
+                onCommit={(v) => patch({ stroke: { ...layer.stroke, color: v } })}
+              />
+            </>
+          )}
+        </>
+      ))}
     </>
   );
 }
 
 function ImageFields({
-  layer, context, patch, assets,
-}: { layer: ImageLayer; context: TemplateContext; patch: Patch; assets: AssetRow[] }) {
+  layer, context, patch, assets, sectionsOpen, onToggleSection,
+}: {
+  layer: ImageLayer; context: TemplateContext; patch: Patch; assets: AssetRow[];
+  sectionsOpen: Record<string, boolean>; onToggleSection: (key: string, open: boolean) => void;
+}) {
   const source = layer.source;
   const imageTokens = tokensFor(context, "image");
   // Premier asset image disponible — sert de valeur de repli VALIDE au premier passage sur l'onglet
@@ -396,7 +477,7 @@ function ImageFields({
   const canUseAssetTab = !!firstImageAssetId || source.kind === "asset";
   return (
     <>
-      <Section title="Source de l'image">
+      <TypeSection title="Source de l'image" sectionId="source" layerType="image" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
         <Tabs
           value={source.kind}
           onValueChange={(v) => {
@@ -467,9 +548,9 @@ function ImageFields({
             />
           </FieldRow>
         )}
-      </Section>
+      </TypeSection>
 
-      <Section title="Apparence">
+      <TypeSection title="Apparence" sectionId="apparence" layerType="image" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
         <SelectField
           label="Ajustement"
           value={layer.fit}
@@ -484,7 +565,7 @@ function ImageFields({
           label="Voile (overlay)" value={layer.overlay ?? "transparent"} context={context}
           onCommit={(v) => patch({ overlay: v === "transparent" || v === "" ? undefined : v })}
         />
-      </Section>
+      </TypeSection>
     </>
   );
 }
@@ -532,12 +613,17 @@ function GradientEditor({ gradient, context, onChange }: { gradient: Gradient; c
   );
 }
 
-function ShapeFields({ layer, context, patch }: { layer: ShapeLayer; context: TemplateContext; patch: Patch }) {
+function ShapeFields({
+  layer, context, patch, sectionsOpen, onToggleSection,
+}: {
+  layer: ShapeLayer; context: TemplateContext; patch: Patch;
+  sectionsOpen: Record<string, boolean>; onToggleSection: (key: string, open: boolean) => void;
+}) {
   const isGradient = typeof layer.fill !== "string";
   const sides = layer.border?.sides ?? SIDES;
   return (
     <>
-      <Section title="Remplissage">
+      <TypeSection title="Remplissage" sectionId="remplissage" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
         <Tabs
           value={isGradient ? "gradient" : "solid"}
           onValueChange={(v) => {
@@ -558,13 +644,13 @@ function ShapeFields({ layer, context, patch }: { layer: ShapeLayer; context: Te
         {isGradient && (
           <GradientEditor gradient={layer.fill as Gradient} context={context} onChange={(g) => patch({ fill: g })} />
         )}
-      </Section>
+      </TypeSection>
 
-      <Section title="Forme">
+      <TypeSection title="Forme" sectionId="forme" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
         <NumberField label="Rayon des coins" value={layer.radius ?? 0} min={0} onCommit={(v) => patch({ radius: v || undefined })} />
-      </Section>
+      </TypeSection>
 
-      <Section title="Bordure">
+      <TypeSection title="Bordure" sectionId="bordure" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
         <SwitchField
           label="Activer la bordure"
           checked={!!layer.border}
@@ -595,15 +681,20 @@ function ShapeFields({ layer, context, patch }: { layer: ShapeLayer; context: Te
             </div>
           </>
         )}
-      </Section>
+      </TypeSection>
     </>
   );
 }
 
-function QrFields({ layer, context, patch }: { layer: QrLayer; context: TemplateContext; patch: Patch }) {
+function QrFields({
+  layer, context, patch, sectionsOpen, onToggleSection,
+}: {
+  layer: QrLayer; context: TemplateContext; patch: Patch;
+  sectionsOpen: Record<string, boolean>; onToggleSection: (key: string, open: boolean) => void;
+}) {
   const urlTokens = tokensFor(context, "url");
   return (
-    <Section title="QR code">
+    <TypeSection title="QR code" sectionId="qrcode" layerType="qr" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
       {urlTokens.length > 0 ? (
         <SelectField
           label="Emplacement (jeton URL)"
@@ -617,12 +708,14 @@ function QrFields({ layer, context, patch }: { layer: QrLayer; context: Template
       <ColorField label="Couleur (premier plan)" value={layer.fg} context={context} onCommit={(v) => patch({ fg: v })} />
       <ColorField label="Couleur de fond" value={layer.bg} context={context} onCommit={(v) => patch({ bg: v })} />
       <NumberField label="Marge" value={layer.margin} min={0} step={1} onCommit={(v) => patch({ margin: Math.max(0, Math.round(v)) })} />
-    </Section>
+    </TypeSection>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function PropertyPanel({ scene, selectedId, context, dispatch, assets = [] }: PropertyPanelProps) {
+export function PropertyPanel({
+  scene, selectedId, context, dispatch, assets = [], sectionsOpen = {}, onSectionsOpenChange = () => {},
+}: PropertyPanelProps) {
   const layer = scene.layers.find((l) => l.id === selectedId) ?? null;
 
   if (!layer) {
@@ -637,38 +730,42 @@ export function PropertyPanel({ scene, selectedId, context, dispatch, assets = [
   }
 
   const patch: Patch = (p) => dispatch(setLayerProp(layer.id, p));
+  // Bascule PURE : ne touche JAMAIS `scene`/`dispatch` — replier une section est un changement
+  // d'affichage, pas une mutation de calque. tests/studio-property-panel.test.ts le vérifie
+  // directement (aucun appel à dispatch pendant un rendu, quel que soit l'état replié/déplié).
+  function onToggleSection(key: string, open: boolean) {
+    onSectionsOpenChange({ ...sectionsOpen, [key]: open });
+  }
 
   return (
     // key={layer.id} : REMONTE tout le sous-arbre de champs à chaque changement de sélection — voir
     // la note en tête de fichier, point 1. C'est ce qui évite qu'un tampon local (useCommitBuffer)
     // affiche encore la valeur d'un calque après avoir sélectionné le suivant.
-    <div className="flex flex-col gap-4 overflow-auto p-3" data-testid="property-panel" key={layer.id}>
-      <Section title="Cadre">
-        <div className="grid grid-cols-2 gap-2">
-          <NumberField label="X" value={layer.frame.x} dataField="frame.x" onCommit={(v) => patch({ frame: { ...layer.frame, x: v } })} />
-          <NumberField label="Y" value={layer.frame.y} dataField="frame.y" onCommit={(v) => patch({ frame: { ...layer.frame, y: v } })} />
-          <NumberField
-            label="Largeur" value={layer.frame.w} min={1} dataField="frame.w"
-            onCommit={(v) => patch({ frame: { ...layer.frame, w: Math.max(1, v) } })}
-          />
-          <NumberField
-            label="Hauteur" value={layer.frame.h} min={1} dataField="frame.h"
-            onCommit={(v) => patch({ frame: { ...layer.frame, h: Math.max(1, v) } })}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <NumberField label="Rotation (°)" value={layer.rotation ?? 0} dataField="rotation" onCommit={(v) => patch({ rotation: v || undefined })} />
-          <NumberField
-            label="Opacité (0–1)" value={layer.opacity ?? 1} step={0.05} min={0} max={1} dataField="opacity"
-            onCommit={(v) => patch({ opacity: Math.min(1, Math.max(0, v)) })}
-          />
-        </div>
-      </Section>
+    //
+    // Tâche 6 (U1, spec §6) : ce conteneur racine ne porte PLUS `overflow-auto` lui-même — GeometryStrip
+    // (les six champs de cadre, ex-section « Cadre ») est un FRÈRE placé AVANT le conteneur défilant
+    // ci-dessous (`data-testid="property-sections"`, seul à porter `overflow-auto`), jamais un
+    // descendant : elle ne peut donc structurellement pas défiler avec le reste. C'est précisément ce
+    // que vérifie tests/studio-property-panel.test.ts en comparant les POSITIONS des deux
+    // `data-testid` dans le HTML sérialisé (rien de plus : `renderToStaticMarkup` ne rend aucune boîte
+    // ni aucun `overflow` réel, voir le rapport de tâche pour la portée exacte de cette preuve).
+    <div className="flex h-full flex-col" data-testid="property-panel" key={layer.id}>
+      <GeometryStrip layer={layer} patch={patch} />
 
-      {layer.type === "text" && <TextFields layer={layer} context={context} patch={patch} assets={assets} />}
-      {layer.type === "image" && <ImageFields layer={layer} context={context} patch={patch} assets={assets} />}
-      {layer.type === "shape" && <ShapeFields layer={layer} context={context} patch={patch} />}
-      {layer.type === "qr" && <QrFields layer={layer} context={context} patch={patch} />}
+      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto p-3" data-testid="property-sections">
+        {layer.type === "text" && (
+          <TextFields layer={layer} context={context} patch={patch} assets={assets} sectionsOpen={sectionsOpen} onToggleSection={onToggleSection} />
+        )}
+        {layer.type === "image" && (
+          <ImageFields layer={layer} context={context} patch={patch} assets={assets} sectionsOpen={sectionsOpen} onToggleSection={onToggleSection} />
+        )}
+        {layer.type === "shape" && (
+          <ShapeFields layer={layer} context={context} patch={patch} sectionsOpen={sectionsOpen} onToggleSection={onToggleSection} />
+        )}
+        {layer.type === "qr" && (
+          <QrFields layer={layer} context={context} patch={patch} sectionsOpen={sectionsOpen} onToggleSection={onToggleSection} />
+        )}
+      </div>
     </div>
   );
 }
