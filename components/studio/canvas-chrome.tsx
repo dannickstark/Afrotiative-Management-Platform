@@ -1,9 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Ruler, Grid3x3, ShieldHalf } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
+import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
 import type { EditorPrefs } from "@/lib/studio/editor-prefs";
 
 // components/studio/canvas-chrome.tsx — Tâche 7 (U1, spec §7) : le CHROME autour de l'artboard —
@@ -13,11 +14,13 @@ import type { EditorPrefs } from "@/lib/studio/editor-prefs";
 //   U1 (ICI) : les pastilles, le rendu des règles/grille (décoratif, désactivé par défaut, état
 //   mémorisé par utilisateur via lib/studio/editor-prefs.ts — déjà persistées, Tâche 1), et le
 //   TOGGLE des zones sûres avec sa persistance (même mécanisme).
-//   U2 (PAS ICI) : le magnétisme, les guides intelligents, les BANDES de zones sûres elles-mêmes
-//   (le rectangle visuel marquant la zone protégée), et les modificateurs de geste. Ce fichier expose
-//   `prefs.safeAreas` et `onToggleSafeAreas` pour que U2 n'ait qu'à lire ce booléen et dessiner sa
-//   bande — aucune bande n'est dessinée ICI, volontairement (spec §7 : « safe-area bands » listées
-//   sous U2, pas sous U1).
+//   U2 (PAS ICI) : le magnétisme, les guides intelligents et les modificateurs de geste.
+//
+// MISE À JOUR — Tâche 6 (U2) : les BANDES de zones sûres, elles, sont désormais DESSINÉES ICI (elles
+// étaient annoncées « pas ici » tant que U2 ne les avait pas livrées). Leur table de chiffres, en
+// revanche, vit dans lib/studio/safe-areas.ts — un fait plateforme sourcé entrée par entrée, à lire
+// AVANT d'y toucher. Ce fichier n'en connaît que la forme (arête + fraction + étiquette) et les
+// convertit en pixels écran ; il ne décide d'aucun chiffre.
 //
 // « L'artboard visuellement distinct de son entourage » (spec §7) est la responsabilité de
 // components/studio/canvas.tsx lui-même (son propre conteneur `data-testid="studio-canvas"` porte
@@ -70,6 +73,57 @@ function rulerTicks(lengthNative: number): number[] {
   return ticks;
 }
 
+// ── Bandes de zones sûres (Tâche 6, U2) ──────────────────────────────────────
+// L'ambre : DÉLIBÉRÉMENT différent du bleu de sélection (#2563eb, poignées/contours de canvas.tsx) et
+// du rose des guides d'accrochage (#e11d48, Tâche 5). Une zone sûre n'est ni une sélection ni une
+// relation temporaire : c'est une contrainte permanente du format, et la confondre visuellement avec
+// l'une des deux autres surcouches serait le seul vrai risque de lisibilité de cette tâche.
+const SAFE_TINT = "rgba(245,158,11,0.14)";
+const SAFE_LINE = "1px dashed rgba(245,158,11,0.85)";
+
+// Les bandes vivent dans l'artboard de CE fichier (pixels ÉCRAN, conteneur JAMAIS mis à l'échelle),
+// pas dans le conteneur `transform: scale(k)` de canvas.tsx : `boxWidth`/`boxHeight` intègrent déjà le
+// zoom, donc AUCUNE compensation `/ scale` n'est nécessaire ici (contrairement aux poignées et aux
+// guides, qui vivent, eux, DANS le conteneur mis à l'échelle — voir canvas.tsx).
+//
+// Les bandes se CHEVAUCHENT dans les coins (une bande de côté couvre toute la hauteur, y compris sous
+// les bandes haut/bas) : voulu. Chaque bande vaut alors exactement `fraction × dimension`, une
+// géométrie que le lecteur peut vérifier arête par arête contre la source citée dans safe-areas.ts,
+// là où des bandes mutuellement rognées mélangeraient les quatre chiffres.
+function safeBandStyle(band: SafeAreaBand, boxWidth: number, boxHeight: number): CSSProperties {
+  const base: CSSProperties = { position: "absolute", background: SAFE_TINT, overflow: "hidden" };
+  if (band.edge === "top") {
+    return { ...base, top: 0, left: 0, width: boxWidth, height: boxHeight * band.fraction, borderBottom: SAFE_LINE };
+  }
+  if (band.edge === "bottom") {
+    return { ...base, bottom: 0, left: 0, width: boxWidth, height: boxHeight * band.fraction, borderTop: SAFE_LINE };
+  }
+  if (band.edge === "left") {
+    return { ...base, left: 0, top: 0, height: boxHeight, width: boxWidth * band.fraction, borderRight: SAFE_LINE };
+  }
+  return { ...base, right: 0, top: 0, height: boxHeight, width: boxWidth * band.fraction, borderLeft: SAFE_LINE };
+}
+
+// L'étiquette est en pixels ÉCRAN constants (9px), collée à l'arête INTÉRIEURE de sa bande. Les bandes
+// de côté ne font que 6 % de la largeur (≈65px à l'échelle 1, ≈20px pour `story` ajusté à la fenêtre) :
+// leur étiquette est donc écrite VERTICALEMENT (`vertical-rl`), seule façon qu'un mot y tienne sans
+// inventer un seuil arbitraire de « bande assez large pour un texte horizontal ».
+function safeLabelStyle(edge: SafeAreaBand["edge"]): CSSProperties {
+  const base: CSSProperties = {
+    position: "absolute",
+    fontSize: 9,
+    lineHeight: 1,
+    fontWeight: 500,
+    whiteSpace: "nowrap",
+    color: "rgba(245,158,11,0.95)",
+    textShadow: "0 1px 2px rgba(0,0,0,0.55)",
+  };
+  if (edge === "top") return { ...base, left: 4, bottom: 3 };
+  if (edge === "bottom") return { ...base, left: 4, top: 3 };
+  if (edge === "left") return { ...base, left: 3, top: 4, writingMode: "vertical-rl" };
+  return { ...base, right: 3, top: 4, writingMode: "vertical-rl" };
+}
+
 export function CanvasChrome({
   format,
   zoom,
@@ -83,6 +137,10 @@ export function CanvasChrome({
   const zoomPct = Math.round(zoom * 100);
   const boxWidth = preset.width * zoom;
   const boxHeight = preset.height * zoom;
+  // Tâche 6 (U2) : vide quand la préférence est éteinte, ET vide pour un format dont aucune zone sûre
+  // n'a pu être établie (lib/studio/safe-areas.ts) — dans les deux cas, RIEN n'est rendu plus bas,
+  // jamais un conteneur vide ni une bande de hauteur nulle.
+  const safeBands = prefs.safeAreas ? safeAreaBandsFor(format) : [];
 
   return (
     <div className="relative flex h-full w-full items-center justify-center" data-testid="canvas-chrome">
@@ -226,6 +284,35 @@ export function CanvasChrome({
                 backgroundSize: `${RULER_STEP * zoom}px ${RULER_STEP * zoom}px`,
               }}
             />
+          )}
+
+          {/* Bandes de zones sûres (Tâche 6, U2, spec §7). MÊME leçon que la grille juste au-dessus, et
+              c'est LA raison d'être du test de composition de cette tâche : rendues AVANT {children},
+              elles passeraient sous le rectangle plein-cadre opaque que <Canvas> peint pour
+              `scene.canvas.background`, et le bouton « Zones sûres » basculerait `aria-pressed` sans le
+              moindre effet visuel — exactement ce que la grille de U1 a livré « fonctionnel ». Elles sont
+              donc DERNIÈRES dans l'arbre, sans z-index (l'ordre du DOM EST l'ordre de peinture entre
+              éléments `z-index: auto` qui se chevauchent, et n'introduire aucun contexte d'empilement
+              garde cette garantie vraie). Après la grille, aussi : une contrainte de format doit rester
+              lisible par-dessus une aide au placement.
+
+              `pointer-events-none` sur le CONTENEUR : les bandes recouvrent jusqu'à 55 % de l'artboard
+              (`story`), donc sans cela elles voleraient clics et glissers du canevas. Aucun descendant ne
+              réactive `pointer-events` — verrouillé par test, puisque c'est le genre de détail qu'une
+              future étiquette « cliquable » réintroduirait sans y penser.
+
+              `inset-0` DANS l'artboard `relative`, dont la boîte est pixel-identique à celle de <Canvas>
+              (`preset.width * zoom` vs `scene.canvas.width * scale`, avec `zoom === scale` en composition
+              réelle) : « au-dessus » recouvre donc bien la MÊME surface, condition sans laquelle l'ordre
+              de peinture ne prouverait rien. */}
+          {safeBands.length > 0 && (
+            <div data-testid="safe-areas" className="pointer-events-none absolute inset-0" aria-hidden>
+              {safeBands.map((band) => (
+                <div key={band.edge} data-safe-band={band.edge} style={safeBandStyle(band, boxWidth, boxHeight)}>
+                  <span style={safeLabelStyle(band.edge)}>{band.label}</span>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>
