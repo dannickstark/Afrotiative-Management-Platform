@@ -146,6 +146,26 @@ Keep the existing static-markup tests passing; add interaction tests via the U0 
 
 **Verify first:** Task 3's `selectedIds`, and the room U1 left in `geometry-strip.tsx` for this row.
 
+> **Amendment, 2026-08-11 — PLAN DEFECT #9, mine: this task's file list would have hidden the feature
+> from its own primary use case.** "Modify `components/studio/geometry-strip.tsx`" is where the row
+> belongs for a *single* selection, but Task 3 made `PropertyPanel` return early for a multi selection
+> (`property-panel.tsx:679`, `if (selectedIds.length > 1)`), and `GeometryStrip` renders only *after*
+> that return. So a literal reading puts align/distribute exclusively on the single-selection path —
+> invisible whenever more than one layer is selected, which is what aligning is *for*. The defect was
+> created by Task 3 and inherited by this task's file list; neither task's text mentions it.
+>
+> **Delivered instead:** `geometry-strip.tsx` exports both `GeometryStrip` (which carries the row as its
+> third row, for artboard-relative alignment of one layer) and a standalone `AlignRow`, which
+> `PropertyPanel` also renders above the multi-selection message. Both placements are pinned by tests,
+> and U1's existing "no geometry-strip for a multi selection" assertion stays true and unmodified.
+>
+> **Also under-specified here, and resolved:** "locked layers are excluded and the rest still align" did
+> not say excluded *from what*. Locked layers are now excluded from the **bounding box** as well as from
+> the moved set — a layer you cannot move must not decide where the others land — and it is the
+> **participant count**, not `selectedIds.length`, that chooses artboard-relative versus
+> bounding-box-relative alignment. Both are pinned by tests that produce visibly different results under
+> the alternative reading.
+
 **Pure module.** Functions from a list of frames to a list of frames: align left / horizontal-centre / right / top / middle / bottom; distribute horizontally and vertically with equal gaps. Alignment is relative to the **selection's bounding box** for a multi selection; with a **single** selection, align relative to the **artboard** (that is what a designer expects, and it makes the row useful before multi-select is even used).
 
 **Properties:** aligning an already-aligned set is a no-op (idempotent); align-left sets every `x` equal to the bounding box's left; distribute with fewer than three frames is a no-op; distribute produces equal gaps within epsilon; rotation is **not** considered (state that explicitly — bounding boxes here are the unrotated frames, and say so in the UI's tooltip if it matters); locked layers are excluded and the rest still align.
