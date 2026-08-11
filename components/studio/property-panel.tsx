@@ -237,8 +237,17 @@ function RadiusField({ value, onCommit }: { value: number | string | undefined; 
           else if (e.key === "Escape") { setLocal(shown); setEditing(false); e.currentTarget.blur(); }
         }}
       />
-      <p className="text-[11px] text-muted-foreground">
-        Un nombre de pixels (« 12 ») ou une longueur CSS (« 50% ») — vide pour aucun arrondi.
+      {/* U3 Tâche 4 — LE RAYON PAR COIN EST DÉCOUVRABLE. Le modèle l'acceptait depuis la Tâche 2
+          (« une à quatre longueurs », scene.ts#RADIUS_LENGTH_RE) et les deux chemins de rendu le
+          transportaient déjà : il ne manquait QUE de le dire. Une capacité que rien n'annonce n'existe
+          pas pour le designer. L'ORDRE des quatre coins n'est pas repris de la spécification CSS de
+          mémoire : il est MESURÉ EN PIXELS à travers renderScene() (tests/studio-shape-render.test.ts,
+          « le rayon PAR COIN ») — satori honore bien haut-gauche, haut-droit, bas-droit, bas-gauche,
+          la forme à deux valeurs et les pourcentages. */}
+      <p className="text-[11px] text-muted-foreground" data-testid="shape-radius-help">
+        Un nombre de pixels (« 12 »), une longueur CSS (« 50% »), ou jusqu&rsquo;à quatre longueurs pour
+        régler chaque coin séparément (« 8px 24px 8px 24px » : haut-gauche, haut-droit, bas-droit,
+        bas-gauche). Vide pour aucun arrondi.
       </p>
     </FieldRow>
   );

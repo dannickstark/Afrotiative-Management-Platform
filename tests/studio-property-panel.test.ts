@@ -831,6 +831,56 @@ describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 4 — LE RAYON PAR COIN EST DÉCOUVRABLE.
+//
+// Le modèle acceptait déjà « 8px 24px 8px 24px » depuis la Tâche 2, et les deux chemins de rendu le
+// transportaient déjà : la fonctionnalité existait sans qu'AUCUN texte de l'interface ne l'annonce
+// (le champ disait « Un nombre de pixels (« 12 ») ou une longueur CSS (« 50% ») »). Une capacité que
+// rien n'annonce n'existe pas pour le designer — et l'ORDRE des quatre coins, lui, est mesuré en
+// pixels (tests/studio-shape-render.test.ts, « le rayon PAR COIN »), pas supposé.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — le rayon par coin est annoncé par le champ (U3 Tâche 4)", () => {
+  function aide(html: string): string {
+    // DANS l'élément d'aide, jamais dans tout le HTML du panneau : la leçon de la revue de la Tâche 3
+    // (Medium 3) — une note voisine peut contenir les mêmes mots (« rayon », « coins ») et rendre
+    // l'assertion vraie sans que le texte cherché soit au bon endroit.
+    return elementWith(html, "data-testid", "shape-radius-help");
+  }
+
+  it("le champ annonce la forme à quatre longueurs ET l'ordre des coins", () => {
+    const html = render([shapeLayerSolid], "s1", "recap_card");
+    const texte = aide(html);
+    // Un exemple à quatre longueurs, littéral : c'est ce qu'un designer peut copier.
+    expect(texte).toContain("8px 24px");
+    // …et l'ordre, en français, dans le même élément. Les quatre coins nommés dans l'ordre CSS.
+    for (const coin of ["haut-gauche", "haut-droit", "bas-droit", "bas-gauche"]) {
+      expect(`aide contient « ${coin} » : ${texte.includes(coin)}`).toBe(`aide contient « ${coin} » : true`);
+    }
+    // L'ordre d'apparition compte autant que la présence : « bas-gauche, haut-droit… » serait FAUX
+    // (mesuré en pixels : satori honore l'ordre CSS haut-gauche, haut-droit, bas-droit, bas-gauche).
+    const positions = ["haut-gauche", "haut-droit", "bas-droit", "bas-gauche"].map((c) => texte.indexOf(c));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  it("le champ reste utilisable pour les deux formes historiques du rayon", () => {
+    // La migration n'enlève rien : le texte d'aide doit continuer d'annoncer le nombre de pixels et la
+    // longueur unique, sinon un designer croirait devoir écrire quatre valeurs.
+    const texte = aide(render([shapeLayerSolid], "s1", "recap_card"));
+    expect(texte).toContain("12");
+    expect(texte).toContain("50%");
+  });
+
+  it("l'aide accompagne le CHAMP : elle disparaît là où le champ disparaît", () => {
+    // Sinon une note d'aide orpheline expliquerait comment écrire un rayon à côté d'une note disant
+    // que le rayon ne s'applique pas.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      const applique = descriptorFor(kind).radiusApplies;
+      expect(`${kind} aide : ${html.includes('data-testid="shape-radius-help"')}`).toBe(`${kind} aide : ${applique}`);
+    }
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // U3 Tâche 3 — CHANGER LA FORME D'UN CALQUE depuis le panneau.

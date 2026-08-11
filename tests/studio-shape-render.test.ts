@@ -466,3 +466,79 @@ describe("renderScene() — l'ombre d'une forme, en pixels", () => {
     expect(px(640, 340)).toBe("ombre");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// LE RAYON PAR COIN, EN PIXELS — U3 TÂCHE 4.
+//
+// Le modèle acceptait DÉJÀ « 8px 24px 8px 24px » (migration de la Tâche 2, arbitrage C) et les deux
+// chemins transportaient DÉJÀ la chaîne telle quelle (tests/studio-shapes.test.ts, balayage). Ce qui
+// n'était prouvé NULLE PART, c'est que satori HONORE la forme courte à plusieurs valeurs — il aurait
+// pu n'en lire que la première longueur, ou l'ignorer, et les assertions de CSS seraient restées
+// vertes pendant que l'export arrondissait les quatre coins pareil. C'est exactement la famille du
+// piège « stade au lieu d'ellipse » : la CSS était juste, le pixel non.
+//
+// MESURÉ ICI : satori honore l'ORDRE CSS (haut-gauche, haut-droit, bas-droit, bas-gauche), la forme
+// à deux valeurs, et les pourcentages. C'est ce qui autorise le texte d'aide du panneau à annoncer
+// cet ordre — il est asserté en pixels, pas supposé.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("renderScene() — le rayon PAR COIN, en pixels", () => {
+  // Cadre plein canevas 800×400 (non carré) : les quatre coins de l'image SONT les quatre coins du
+  // calque. À 20 px du sommet, un coin arrondi de 150 px laisse le pixel AU FOND, un coin vif le
+  // laisse REMPLI — le seul discriminant qui sépare « un coin » de « les quatre ».
+  const COINS = {
+    "haut-gauche": [20, 20],
+    "haut-droit": [779, 20],
+    "bas-droit": [779, 379],
+    "bas-gauche": [20, 379],
+  } as const;
+
+  // Chaque cas dit, coin par coin, s'il doit être ARRONDI (donc au fond).
+  const CAS: [string, number | string, Record<keyof typeof COINS, boolean>][] = [
+    ["aucun rayon (témoin)", 0,
+      { "haut-gauche": false, "haut-droit": false, "bas-droit": false, "bas-gauche": false }],
+    ["scalaire 150 — la forme HISTORIQUE, inchangée", 150,
+      { "haut-gauche": true, "haut-droit": true, "bas-droit": true, "bas-gauche": true }],
+    ["« 150px » (une longueur)", "150px",
+      { "haut-gauche": true, "haut-droit": true, "bas-droit": true, "bas-gauche": true }],
+    ["« 0px 150px 0px 0px » — le HAUT-DROIT seul", "0px 150px 0px 0px",
+      { "haut-gauche": false, "haut-droit": true, "bas-droit": false, "bas-gauche": false }],
+    ["« 0px 0px 150px 0px » — le BAS-DROIT seul", "0px 0px 150px 0px",
+      { "haut-gauche": false, "haut-droit": false, "bas-droit": true, "bas-gauche": false }],
+    ["« 0px 0px 0px 150px » — le BAS-GAUCHE seul", "0px 0px 0px 150px",
+      { "haut-gauche": false, "haut-droit": false, "bas-droit": false, "bas-gauche": true }],
+    ["« 150px 0px » — les DIAGONALES (forme à deux valeurs)", "150px 0px",
+      { "haut-gauche": true, "haut-droit": false, "bas-droit": true, "bas-gauche": false }],
+    ["« 0% 40% 0% 0% » — le haut-droit, en POURCENTAGE", "0% 40% 0% 0%",
+      { "haut-gauche": false, "haut-droit": true, "bas-droit": false, "bas-gauche": false }],
+  ];
+
+  for (const [nom, radius, attendu] of CAS) {
+    it(`${nom}`, async () => {
+      const px = await pixelsOf(sceneWith(radius));
+      for (const [coin, [x, y]] of Object.entries(COINS)) {
+        const arrondi = attendu[coin as keyof typeof COINS];
+        expect(`${coin} (${x},${y}) ${px(x, y)}`).toBe(`${coin} (${x},${y}) ${arrondi ? "fond" : "remplissage"}`);
+      }
+      // Le centre est TOUJOURS peint : sans lui, une image entièrement bleue satisferait chaque
+      // « fond » attendu ci-dessus.
+      expect(px(400, 200)).toBe("remplissage");
+    });
+  }
+
+  it("les huit cas ne sont pas tous identiques — la table sépare bien les coins", () => {
+    // ANTI-VACUITÉ de la table : si chaque ligne attendait la même chose partout, la boucle
+    // ci-dessus passerait sans jamais distinguer un coin d'un autre. On exige donc qu'au moins un cas
+    // attende des coins DIFFÉRENTS entre eux, et que les quatre coins soient chacun arrondi dans au
+    // moins un cas et vif dans au moins un autre.
+    const mixtes = CAS.filter(([, , a]) => new Set(Object.values(a)).size > 1);
+    expect(mixtes.length).toBeGreaterThan(0);
+    for (const coin of Object.keys(COINS) as (keyof typeof COINS)[]) {
+      expect(`${coin} arrondi au moins une fois`).toBe(
+        `${coin} ${CAS.some(([, , a]) => a[coin]) ? "arrondi au moins une fois" : "JAMAIS arrondi"}`,
+      );
+      expect(`${coin} vif au moins une fois`).toBe(
+        `${coin} ${CAS.some(([, , a]) => !a[coin]) ? "vif au moins une fois" : "JAMAIS vif"}`,
+      );
+    }
+  });
+});
