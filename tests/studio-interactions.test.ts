@@ -144,6 +144,7 @@ let ImagesPanelC: typeof import("@/components/studio/panels/images-panel").Image
 let TextePanelC: typeof import("@/components/studio/panels/texte-panel").TextePanel;
 let EditorShellC: typeof import("@/components/studio/editor-shell").EditorShell;
 let CanvasC: typeof import("@/components/studio/canvas").Canvas;
+let PropertyPanelC: typeof import("@/components/studio/property-panel").PropertyPanel;
 
 // `mock.module()` replaces a module in bun's process-wide registry — it does NOT scope to this
 // file. Captured here so `afterAll` can put the REAL module back before any file scheduled after
@@ -169,6 +170,7 @@ beforeAll(async () => {
   ({ TextePanel: TextePanelC } = await import("@/components/studio/panels/texte-panel"));
   ({ EditorShell: EditorShellC } = await import("@/components/studio/editor-shell"));
   ({ Canvas: CanvasC } = await import("@/components/studio/canvas"));
+  ({ PropertyPanel: PropertyPanelC } = await import("@/components/studio/property-panel"));
 });
 
 afterAll(() => {
@@ -776,6 +778,176 @@ describe("Canvas — sélection multiple par Maj-clic, à travers de VRAIS évé
     if (!resize || resize.type !== "resizeLayer") throw new Error("attendu resizeLayer");
     expect(resize.frame.w / resize.frame.h).toBeCloseTo(200 / 150, 6);
     expect(resize.frame.w).not.toBeCloseTo(260, 0);
+
+    unmount();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam 8 — La rangée ALIGNER/RÉPARTIR (Tâche 4, U2, spec §4), à travers de VRAIS clics DOM.
+// tests/studio-align.test.ts prouve la géométrie pure et tests/studio-editor-state.test.ts prouve que
+// `setFrames` n'empile QU'UNE entrée d'historique ; ni l'un ni l'autre ne dit un mot du CÂBLAGE. Une
+// mutation qui remplacerait `onClick` par un no-op, ou qui appellerait planAlign avec le mauvais mode,
+// laisserait ces deux fichiers entièrement verts. Les tests ci-dessous cliquent donc les VRAIS boutons
+// du VRAI PropertyPanel, derrière le VRAI réducteur, et vérifient les COORDONNÉES obtenues — plus le
+// compte d'entrées d'historique, qui est la propriété que cette tâche devait au reste de U2.
+function sceneWithThreeShapes(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 800, height: 600, background: "#000000" },
+    layers: [
+      {
+        id: "a", name: "A", visible: true, locked: false,
+        frame: { x: 40, y: 10, w: 100, h: 50 },
+        type: "shape", shape: "rect", fill: "#AAAAAA",
+      },
+      {
+        id: "b", name: "B", visible: true, locked: false,
+        frame: { x: 200, y: 100, w: 60, h: 80 },
+        type: "shape", shape: "rect", fill: "#BBBBBB",
+      },
+      {
+        id: "c", name: "C", visible: true, locked: false,
+        frame: { x: 120, y: 300, w: 40, h: 20 },
+        type: "shape", shape: "rect", fill: "#CCCCCC",
+      },
+    ],
+  };
+}
+
+/** Monte le VRAI `PropertyPanel` derrière un VRAI `editorReducer` — même recette que
+ * `mountCanvasWithReducer` ci-dessus (le panneau est contrôlé : scène et sélection en props). */
+async function mountPropertyPanelWithReducer(scene: Scene, initialSelection: string[]) {
+  const initial: EditorState = { ...initEditorState(scene), selectedIds: initialSelection };
+  const box: { state: EditorState; actions: EditorAction[] } = { state: initial, actions: [] };
+
+  function Host() {
+    const [state, rawDispatch] = React.useReducer(editorReducer, initial);
+    box.state = state;
+    return React.createElement(PropertyPanelC, {
+      scene: state.scene,
+      selectedIds: state.selectedIds,
+      context: "social_post" as TemplateContext,
+      dispatch: (a: EditorAction) => { box.actions.push(a); rawDispatch(a); },
+    });
+  }
+
+  const { container, unmount } = await mount(React.createElement(Host));
+  return { box, container, unmount };
+}
+
+function actionButton(container: HTMLElement, action: string): HTMLButtonElement {
+  const el = container.querySelector(`[data-action="${action}"]`) as HTMLButtonElement | null;
+  if (!el) throw new Error(`bouton « ${action} » absent du DOM monté`);
+  return el;
+}
+
+function frameOf(state: EditorState, id: string) {
+  const layer = state.scene.layers.find((l) => l.id === id);
+  if (!layer) throw new Error(`calque « ${id} » introuvable`);
+  return layer.frame;
+}
+
+describe("Aligner/répartir — un VRAI clic déplace les calques et n'empile QU'UNE entrée d'historique (Tâche 4, U2)", () => {
+  it("sélection MULTIPLE + « aligner à gauche » -> tous les x valent la gauche de la boîte englobante, en UNE entrée", async () => {
+    const { box, container, unmount } = await mountPropertyPanelWithReducer(sceneWithThreeShapes(), ["a", "b", "c"]);
+
+    await click(actionButton(container, "align-left"));
+
+    // Boîte englobante des trois : gauche = min(40, 200, 120) = 40.
+    expect(frameOf(box.state, "a").x).toBe(40);
+    expect(frameOf(box.state, "b").x).toBe(40);
+    expect(frameOf(box.state, "c").x).toBe(40);
+    // Les y n'ont pas bougé (aligner à gauche ne touche qu'un axe), et rien n'a été redimensionné.
+    expect(frameOf(box.state, "b").y).toBe(100);
+    expect(frameOf(box.state, "b").w).toBe(60);
+    // UNE seule action, UNE seule entrée d'historique pour ce geste unique.
+    expect(box.actions).toHaveLength(1);
+    expect(box.actions[0].type).toBe("setFrames");
+    expect(box.state.past).toHaveLength(1);
+
+    unmount();
+  });
+
+  it("sélection MULTIPLE + « répartir horizontalement » -> écarts égaux, extrêmes immobiles, UNE entrée", async () => {
+    const { box, container, unmount } = await mountPropertyPanelWithReducer(sceneWithThreeShapes(), ["a", "b", "c"]);
+
+    await click(actionButton(container, "distribute-horizontal"));
+
+    // Ordre des positions : a(40, w100, droite 140) · c(120, w40) · b(200, w60, droite 260).
+    // étendue = 260-40 = 220 · somme des largeurs = 200 · écart = 20/2 = 10
+    // -> a reste à 40 ; c passe de 120 à 150 ; b reste à 200.
+    expect(frameOf(box.state, "a").x).toBe(40);
+    expect(frameOf(box.state, "c").x).toBe(150);
+    expect(frameOf(box.state, "b").x).toBe(200);
+    expect(box.state.past).toHaveLength(1);
+
+    unmount();
+  });
+
+  it("« répartir VERTICALEMENT » agit bien sur l'axe vertical (et pas sur l'horizontal)", async () => {
+    // Le pendant du test ci-dessus sur l'autre axe. Ce que ce test attrape et que l'autre ne peut pas :
+    // un axe codé en dur dans le gestionnaire (les deux boutons répartiraient alors horizontalement).
+    const { box, container, unmount } = await mountPropertyPanelWithReducer(sceneWithThreeShapes(), ["a", "b", "c"]);
+
+    await click(actionButton(container, "distribute-vertical"));
+
+    // Ordre des positions : a(y10, h50, bas 60) · b(y100, h80, bas 180) · c(y300, h20, bas 320).
+    // étendue = 320-10 = 310 · somme des hauteurs = 150 · écart = 160/2 = 80
+    // -> a reste à 10 ; b passe de 100 à 140 ; c reste à 300.
+    expect(frameOf(box.state, "a").y).toBe(10);
+    expect(frameOf(box.state, "b").y).toBe(140);
+    expect(frameOf(box.state, "c").y).toBe(300);
+    // …et aucun x n'a bougé : répartir verticalement ne touche qu'un axe.
+    expect(frameOf(box.state, "b").x).toBe(200);
+    expect(box.state.past).toHaveLength(1);
+
+    unmount();
+  });
+
+  it("sélection SIMPLE + « centrer horizontalement » -> le calque se centre sur le PLAN DE TRAVAIL", async () => {
+    const { box, container, unmount } = await mountPropertyPanelWithReducer(sceneWithThreeShapes(), ["a"]);
+
+    await click(actionButton(container, "align-hcenter"));
+
+    // Canevas 800 de large, calque de 100 -> (800-100)/2 = 350. S'aligner sur sa PROPRE boîte
+    // englobante ne bougerait rien du tout : c'est exactement ce que ce test distingue.
+    expect(frameOf(box.state, "a").x).toBe(350);
+    expect(frameOf(box.state, "a").y).toBe(10);
+    expect(box.state.past).toHaveLength(1);
+
+    await click(actionButton(container, "align-bottom"));
+    expect(frameOf(box.state, "a").y).toBe(550); // 600 - 50
+    expect(box.state.past).toHaveLength(2); // deux gestes, deux entrées — pas un lot qui écrase l'autre
+
+    unmount();
+  });
+
+  it("un bouton de répartition DÉSACTIVÉ (deux calques) ne dispatche rien du tout", async () => {
+    const { box, container, unmount } = await mountPropertyPanelWithReducer(sceneWithThreeShapes(), ["a", "b"]);
+
+    const button = actionButton(container, "distribute-horizontal");
+    expect(button.disabled).toBe(true); // le VRAI attribut HTML, pas seulement une classe Tailwind
+
+    await click(button);
+
+    expect(box.actions).toEqual([]);
+    expect(box.state.past).toEqual([]);
+    expect(frameOf(box.state, "a")).toEqual({ x: 40, y: 10, w: 100, h: 50 });
+
+    unmount();
+  });
+
+  it("aligner un ensemble DÉJÀ aligné ne crée AUCUNE entrée d'historique (pas d'annulation fantôme)", async () => {
+    // Le pendant d'interface du no-op du réducteur : deux clics de suite sur le même bouton ne doivent
+    // pas laisser deux « annuler » à consommer pour un seul déplacement réel.
+    const { box, container, unmount } = await mountPropertyPanelWithReducer(sceneWithThreeShapes(), ["a", "b", "c"]);
+
+    await click(actionButton(container, "align-left"));
+    expect(box.state.past).toHaveLength(1);
+
+    await click(actionButton(container, "align-left"));
+    expect(box.state.past).toHaveLength(1);
 
     unmount();
   });

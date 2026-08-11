@@ -16,7 +16,7 @@ import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
-import { GeometryStrip } from "./geometry-strip";
+import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { FieldRow, NumberField, useCommitBuffer, type Patch } from "./property-fields";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
@@ -671,16 +671,22 @@ export function PropertyPanel({
   // Sélection MULTIPLE (Tâche 3, U2, spec §3) — avant l'état vide, car une sélection multiple n'est
   // PAS « rien de sélectionné » et le dire ainsi serait mentir à l'utilisateur. Message honnête : il
   // annonce le compte réel et pourquoi les sections n'apparaissent pas, plutôt que de laisser croire
-  // à une panne. La bande de géométrie n'est pas rendue non plus (elle édite UN cadre) ; la rangée
-  // aligner/répartir qui, elle, aura un sens ici arrive avec la Tâche 4.
+  // à une panne. La bande de géométrie n'est pas rendue non plus (elle édite UN cadre).
+  //
+  // Tâche 4 (U2, spec §4) : la rangée aligner/répartir, elle, a tout son sens ici — c'est même son cas
+  // d'usage principal. Elle est donc rendue AU-DESSUS du message, jamais dans une bande de géométrie
+  // (qui reste réservée à l'édition d'un cadre unique).
   if (selectedIds.length > 1) {
     return (
-      <div
-        className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground"
-        data-testid="property-panel-multi"
-      >
-        {selectedIds.length} calques sélectionnés — les propriétés d&rsquo;un calque ne s&rsquo;affichent
-        que pour une sélection unique.
+      <div className="flex h-full flex-col">
+        <AlignRow scene={scene} selectedIds={selectedIds} dispatch={dispatch} className="border-b p-3" />
+        <div
+          className="flex flex-1 items-center justify-center p-4 text-center text-xs text-muted-foreground"
+          data-testid="property-panel-multi"
+        >
+          {selectedIds.length} calques sélectionnés — les propriétés d&rsquo;un calque ne s&rsquo;affichent
+          que pour une sélection unique, mais la rangée ci-dessus les aligne et les répartit toutes.
+        </div>
       </div>
     );
   }
@@ -717,7 +723,7 @@ export function PropertyPanel({
     // `data-testid` dans le HTML sérialisé (rien de plus : `renderToStaticMarkup` ne rend aucune boîte
     // ni aucun `overflow` réel, voir le rapport de tâche pour la portée exacte de cette preuve).
     <div className="flex h-full flex-col" data-testid="property-panel" key={layer.id}>
-      <GeometryStrip layer={layer} patch={patch} />
+      <GeometryStrip layer={layer} patch={patch} scene={scene} selectedIds={selectedIds} dispatch={dispatch} />
 
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto p-3" data-testid="property-sections">
         {layer.type === "text" && (

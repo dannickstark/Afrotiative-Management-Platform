@@ -10,7 +10,9 @@
 // scène invalide, même de façon transitoire.
 //
 // Verrouillage (`layer.locked`). Ignoré par moveLayer / resizeLayer / rotateLayer / deleteLayer —
-// les quatre actions qui altèrent la position, la taille, l'angle ou l'existence d'un calque.
+// les quatre actions qui altèrent la position, la taille, l'angle ou l'existence d'un calque — et
+// par setFrames (Tâche 4, U2), qui saute LIGNE À LIGNE les calques verrouillés de son lot au lieu de
+// refuser le lot entier : aligner une sélection dont un calque est verrouillé aligne bien les autres.
 // setLayerProp, toggleVisible et reorderLayer NE sont PAS bloqués par le verrou : un calque
 // verrouillé protège contre une manipulation accidentelle à la souris sur le canevas (spec §2 :
 // « un calque locked ne répond ni au clic ni au glisser »), pas contre une édition explicite via
@@ -45,6 +47,11 @@
 //     `select`/`toggleSelection` continuent de NE PAS s'empiler : changer de sélection n'est pas une
 //     modification annulable, seulement une modification de la scène l'est.
 import { parseScene, SceneError, type Scene, type Layer, type Frame } from "./scene";
+// Tâche 4 (U2) : `FrameChange` et `sameFrame` viennent du module d'alignement — une FEUILLE pure
+// (aucun import de valeur, voir son en-tête), donc l'importer ici n'ajoute rien au graphe d'exécution
+// des composants client. Les réutiliser plutôt que de redéclarer une paire {id, frame} et une
+// comparaison de cadres évite d'avoir deux définitions à garder d'accord.
+import { sameFrame, type FrameChange } from "./align";
 
 const MAX_HISTORY = 50;
 
@@ -92,6 +99,9 @@ export type EditorAction =
   | { type: "toggleSelection"; id: string }
   | { type: "moveLayer"; id: string; dx: number; dy: number }
   | { type: "resizeLayer"; id: string; frame: Frame }
+  // Tâche 4 (U2, spec §4) : UN lot de cadres, UNE entrée d'historique — voir son cas dans le
+  // réducteur et le commentaire de `setFrames` plus bas.
+  | { type: "setFrames"; changes: readonly FrameChange[] }
   | { type: "rotateLayer"; id: string; deg: number }
   | { type: "setLayerProp"; id: string; patch: LayerPatch }
   | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
@@ -133,6 +143,16 @@ export function moveLayer(id: string, dx: number, dy: number): EditorAction {
 }
 export function resizeLayer(id: string, frame: Frame): EditorAction {
   return { type: "resizeLayer", id, frame };
+}
+// Tâche 4 (U2, spec §4) : « une action appliquant un lot de changements de cadre comme UNE SEULE
+// entrée d'annulation, pas une par calque ». C'est l'action des gestes qui déplacent PLUSIEURS calques
+// d'un coup — aligner et répartir aujourd'hui (components/studio/geometry-strip.tsx#AlignRow), et ce
+// qui manquait à la Tâche 3 pour généraliser Suppr et les flèches à une sélection multiple (voir
+// components/studio/canvas.tsx : les brancher sur N actions empilerait N entrées pour un seul geste).
+// Ne PAS l'utiliser pour un calque unique déplacé à la souris : `moveLayer`/`resizeLayer` disent
+// mieux l'intention et sont déjà couverts.
+export function setFrames(changes: readonly FrameChange[]): EditorAction {
+  return { type: "setFrames", changes };
 }
 export function rotateLayer(id: string, deg: number): EditorAction {
   return { type: "rotateLayer", id, deg };
@@ -309,6 +329,40 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "resizeLayer":
       return updateUnlockedLayer(state, action.id, (layer, layers, index) =>
         replaceAt(layers, index, { ...layer, frame: { ...action.frame } }));
+
+    // Tâche 4 (U2, spec §4). Trois propriétés, chacune épinglée par un test :
+    //
+    //  1. UNE SEULE ENTRÉE D'HISTORIQUE pour tout le lot — un seul `commit()`, quel que soit le nombre
+    //     de calques touchés. C'est LA raison d'être de cette action : une boucle sur `moveLayer`
+    //     empilerait N entrées et forcerait N « annuler » pour défaire un seul geste.
+    //  2. TOLÉRANTE ligne à ligne, ATOMIQUE sur la validation. Un id absent ou un calque verrouillé est
+    //     simplement SAUTÉ (même garde de verrou que move/resize/rotate/delete) et le reste s'applique ;
+    //     mais si la scène ainsi construite est invalide (largeur négative, par exemple), `commit()` la
+    //     refuse EN ENTIER et l'état revient inchangé — jamais un lot à moitié appliqué.
+    //  3. AUCUNE ENTRÉE FANTÔME. Si rien ne change réellement (lot vide, ou tous les cadres déjà à leur
+    //     place — le cas normal quand on aligne un ensemble déjà aligné), l'état est renvoyé TEL QUEL,
+    //     même référence : cliquer deux fois « aligner à gauche » ne laisse pas deux « annuler » à
+    //     consommer dont le second ne défait rien.
+    //
+    // Un même id présent deux fois dans le lot : la dernière occurrence gagne (application séquentielle).
+    // Aucun appelant ne le fait — planAlign/planDistribute produisent un id par calque participant.
+    case "setFrames": {
+      let layers = state.scene.layers;
+      let touched = false;
+      for (const change of action.changes) {
+        const index = layers.findIndex((l) => l.id === change.id);
+        if (index === -1) continue;
+        const layer = layers[index];
+        if (layer.locked) continue;
+        if (sameFrame(layer.frame, change.frame)) continue;
+        // Le cadre est RECOPIÉ : l'état ne doit jamais partager d'objet mutable avec la charge utile
+        // d'une action que l'appelant pourrait réutiliser.
+        layers = replaceAt(layers, index, { ...layer, frame: { ...change.frame } });
+        touched = true;
+      }
+      if (!touched) return state;
+      return commit(state, { ...state.scene, layers });
+    }
 
     case "rotateLayer":
       return updateUnlockedLayer(state, action.id, (layer, layers, index) =>

@@ -17,6 +17,7 @@ import {
   reorderLayer,
   toggleVisible,
   toggleLocked,
+  setFrames,
   undo,
   redo,
   toCanvasCoords,
@@ -306,6 +307,118 @@ describe("deleteLayer", () => {
   });
 });
 
+// ── Tâche 4 (U2, spec §4) — le LOT de cadres : « une action appliquant un lot de changements de
+// cadre comme UNE SEULE entrée d'annulation, pas une par calque » ───────────────────────────────
+describe("setFrames — un lot de cadres, UNE entrée d'historique", () => {
+  it("applique plusieurs cadres d'un coup et n'empile QU'UNE entrée d'historique", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "badge", frame: { x: 500, y: 40, w: 200, h: 60 } },
+      { id: "title", frame: { x: 500, y: 400, w: 1040, h: 200 } },
+      { id: "qr1", frame: { x: 500, y: 500, w: 120, h: 120 } },
+    ]));
+
+    expect(find(next, "badge").frame.x).toBe(500);
+    expect(find(next, "title").frame.x).toBe(500);
+    expect(find(next, "qr1").frame.x).toBe(500);
+    // LE cœur de cette action. Trois calques déplacés, UNE entrée : une implémentation qui bouclerait
+    // sur moveLayer/resizeLayer en empilerait TROIS, et l'utilisateur devrait annuler trois fois un
+    // geste unique. C'est aussi la raison pour laquelle la Tâche 3 a laissé Suppr/flèches en sélection
+    // simple (voir canvas.tsx) : elles attendaient cette action.
+    expect(next.past).toHaveLength(1);
+    expect(next.future).toEqual([]);
+  });
+
+  it("UN SEUL undo restaure les TROIS cadres à la fois", () => {
+    const state = makeState();
+    const before = state.scene.layers.map((l) => ({ id: l.id, frame: { ...l.frame } }));
+    const next = editorReducer(state, setFrames([
+      { id: "badge", frame: { x: 1, y: 2, w: 200, h: 60 } },
+      { id: "title", frame: { x: 3, y: 4, w: 1040, h: 200 } },
+      { id: "qr1", frame: { x: 5, y: 6, w: 120, h: 120 } },
+    ]));
+    const afterUndo = editorReducer(next, undo());
+    expect(afterUndo.scene.layers.map((l) => ({ id: l.id, frame: { ...l.frame } }))).toEqual(before);
+    expect(afterUndo.past).toEqual([]);
+    // …et rétablir les remet tous les trois, symétriquement.
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(afterRedo.scene).toEqual(next.scene);
+  });
+
+  it("saute les calques VERROUILLÉS et applique les autres — le lot n'est pas refusé en entier pour autant", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "locked1", frame: { x: 999, y: 999, w: 100, h: 40 } },
+      { id: "badge", frame: { x: 77, y: 40, w: 200, h: 60 } },
+    ]));
+    expect(find(next, "locked1").frame).toEqual({ x: 10, y: 10, w: 100, h: 40 });
+    expect(find(next, "badge").frame.x).toBe(77);
+    expect(next.past).toHaveLength(1);
+  });
+
+  it("saute un id absent de la scène et applique les autres", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "fantôme", frame: { x: 1, y: 1, w: 10, h: 10 } },
+      { id: "badge", frame: { x: 77, y: 40, w: 200, h: 60 } },
+    ]));
+    expect(find(next, "badge").frame.x).toBe(77);
+    expect(next.scene.layers).toHaveLength(state.scene.layers.length);
+    expect(next.past).toHaveLength(1);
+  });
+
+  it("un lot VIDE est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setFrames([]))).toBe(state);
+  });
+
+  it("un lot dont AUCUN cadre ne change réellement est un no-op — pas une entrée d'historique vide", () => {
+    // Le cas normal quand on aligne un ensemble déjà aligné : sans cette garde, chaque clic sur
+    // « Aligner à gauche » d'un ensemble déjà à gauche empilerait une entrée d'annulation fantôme.
+    const state = makeState();
+    const badge = find(state, "badge");
+    const same = editorReducer(state, setFrames([{ id: "badge", frame: { ...badge.frame } }]));
+    expect(same).toBe(state);
+    // Un lot mêlant un cadre identique et un cadre différent, lui, s'applique bien.
+    const mixed = editorReducer(state, setFrames([
+      { id: "badge", frame: { ...badge.frame } },
+      { id: "title", frame: { x: 0, y: 400, w: 1040, h: 200 } },
+    ]));
+    expect(mixed).not.toBe(state);
+    expect(mixed.past).toHaveLength(1);
+    expect(find(mixed, "badge").frame).toEqual(badge.frame);
+    expect(find(mixed, "title").frame.x).toBe(0);
+  });
+
+  it("un lot contenant UN cadre invalide est refusé EN ENTIER — atomicité, pas application partielle", () => {
+    // commit() valide la scène candidate ENTIÈRE (parseScene) : le premier cadre du lot est
+    // parfaitement légal, mais la largeur négative du second invalide la scène, donc RIEN n'entre.
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "badge", frame: { x: 77, y: 40, w: 200, h: 60 } },
+      { id: "title", frame: { x: 0, y: 0, w: -5, h: 200 } },
+    ]));
+    expect(next).toBe(state);
+    expect(find(next, "badge").frame.x).toBe(40);
+  });
+
+  it("ne touche pas la sélection, et l'undo restaure celle qui existait (même contrat que les autres modifications)", () => {
+    const state = { ...makeState(), selectedIds: ["badge", "title"] };
+    const next = editorReducer(state, setFrames([{ id: "badge", frame: { x: 1, y: 1, w: 200, h: 60 } }]));
+    expect(next.selectedIds).toEqual(["badge", "title"]);
+    const afterSelect = editorReducer(next, select("qr1"));
+    expect(editorReducer(afterSelect, undo()).selectedIds).toEqual(["badge", "title"]);
+  });
+
+  it("recopie le cadre fourni au lieu de le référencer — muter l'objet de l'action après coup ne change pas la scène", () => {
+    const state = makeState();
+    const frame = { x: 111, y: 40, w: 200, h: 60 };
+    const next = editorReducer(state, setFrames([{ id: "badge", frame }]));
+    frame.x = -1;
+    expect(find(next, "badge").frame.x).toBe(111);
+  });
+});
+
 describe("reorderLayer", () => {
   it("déplace un calque à un nouvel index — l'ordre du tableau EST l'ordre de peinture", () => {
     const state = makeState();
@@ -519,6 +632,10 @@ describe("absence de mutation", () => {
     editorReducer(initial, addLayer("text"));
     editorReducer(initial, deleteLayer("badge"));
     editorReducer(initial, reorderLayer("bg", 3));
+    editorReducer(initial, setFrames([
+      { id: "badge", frame: { x: 1, y: 2, w: 3, h: 4 } },
+      { id: "title", frame: { x: 5, y: 6, w: 7, h: 8 } },
+    ]));
     editorReducer(initial, toggleVisible("badge"));
     editorReducer(initial, toggleLocked("locked1"));
     editorReducer(initial, select("title"));

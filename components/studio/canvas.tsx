@@ -83,10 +83,13 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
   // Le calque à OUTILLER (poignées, rotation, clavier) : celui d'une sélection SIMPLE, jamais le
   // premier d'une sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une
   // sélection multiple laisserait croire qu'elles agissent sur l'ensemble. Les opérations par LOT sur
-  // une sélection multiple (aligner/répartir, et le déplacement clavier groupé) attendent l'action
-  // « un lot = une entrée d'historique » de la Tâche 4 : les dispatcher une par calque ici
-  // empilerait N entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une
-  // entrée » posé par U1.
+  // une sélection multiple attendaient l'action « un lot = une entrée d'historique » : la Tâche 4 l'a
+  // livrée (`setFrames`, lib/studio/editor-state.ts) et s'en sert pour aligner/répartir
+  // (components/studio/geometry-strip.tsx#AlignRow). Suppr et les flèches restent DÉLIBÉRÉMENT en
+  // sélection simple ici — les généraliser est un geste de produit à part entière (que faut-il faire
+  // d'un calque verrouillé dans le lot ? d'un calque masqué ?), hors du périmètre de la Tâche 4 ; ce
+  // qu'il ne faut surtout pas faire, c'est les dispatcher une action par calque, ce qui empilerait N
+  // entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
 

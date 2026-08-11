@@ -8,6 +8,10 @@ import { PropertyPanel } from "@/components/studio/property-panel";
 // / studio-elements-panel.test.ts / studio-mode-switch.test.ts : on affirme contre une valeur
 // IMPORTÉE plutôt qu'une chaîne re-dérivée à la main.
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
+// Tâche 4 (U2) : la liste CANONIQUE des six modes, importée plutôt que recopiée — même précédent que
+// SHAPE_KINDS pour shape-gallery (une garde de complétude qui compare deux copies manuscrites peut
+// dériver sans que rien ne le remarque, revue U1 Tâche 4, Important 1).
+import { ALIGN_MODES } from "@/lib/studio/align";
 
 // Même convention que tests/studio-layer-panel.test.ts : pas de DOM sous `bun test`, donc un rendu
 // STRUCTUREL (react-dom/server) plutôt qu'une simulation de clic/frappe — la logique de mutation
@@ -158,6 +162,109 @@ describe("PropertyPanel — sélection multiple", () => {
     expect(html).toContain('data-testid="property-sections"');
     expect(html).not.toContain('data-testid="property-panel-multi"');
     expect(html).toContain("Ajustement auto");
+  });
+});
+
+// ── Tâche 4 (U2, spec §4) — la rangée aligner/répartir ───────────────────────────────────────────
+// Elle vit dans geometry-strip.tsx (la place que U1 lui avait laissée) et apparaît DEUX fois : comme
+// troisième rangée de la bande de géométrie pour une sélection simple, et seule au-dessus du message
+// honnête pour une sélection multiple — le seul endroit du panneau qui ait un sens à plus d'un calque.
+describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
+  // `attrOn` isole la balise ouvrante d'un bouton avant de chercher un attribut : un
+  // `html.includes("disabled")` global serait vrai dès qu'UN SEUL bouton de la page est désactivé, et
+  // `disabled:opacity-50` figure de toute façon dans la classe Tailwind de chaque bouton (le piège
+  // déjà rencontré par tests/studio-interactions.test.ts sur le sélecteur d'assets).
+  function isDisabled(html: string, action: string): boolean {
+    return /\sdisabled(=|\s|\/|>)/.test(openingTag(html, "data-action", action));
+  }
+
+  const lockedLayer: Layer = {
+    id: "lk", name: "Verrouillé", visible: true, locked: true,
+    frame: { x: 0, y: 0, w: 50, h: 50 },
+    type: "shape", shape: "rect", fill: "#FFFFFF",
+  };
+  // Trois formes non pivotées, à des x différents — de quoi rendre la répartition légale (>= 3).
+  const trio: Layer[] = [0, 1, 2].map((i) => ({
+    id: `p${i}`, name: `Forme ${i}`, visible: true, locked: false,
+    frame: { x: i * 100, y: 0, w: 40, h: 40 },
+    type: "shape", shape: "rect", fill: "#CCCCCC",
+  }));
+
+  it("est présente pour une sélection MULTIPLE, à côté du message honnête et sans la bande de géométrie", () => {
+    const html = renderMulti([textLayer, imageLayer], ["t", "i"], "social_post");
+    expect(html).toContain('data-testid="align-row"');
+    expect(html).toContain('data-testid="property-panel-multi"');
+    expect(html).not.toContain('data-testid="geometry-strip"');
+  });
+
+  it("est présente pour une sélection SIMPLE, DANS la bande de géométrie et avant le conteneur défilant", () => {
+    const html = render([imageLayer], "i", "article_image");
+    const stripIdx = html.indexOf('data-testid="geometry-strip"');
+    const rowIdx = html.indexOf('data-testid="align-row"');
+    const scrollIdx = html.indexOf('data-testid="property-sections"');
+    expect(stripIdx).toBeGreaterThan(-1);
+    expect(rowIdx).toBeGreaterThan(stripIdx); // descendante de la bande, jamais un frère placé avant
+    expect(rowIdx).toBeLessThan(scrollIdx); // et toujours hors du conteneur défilant
+  });
+
+  it("est absente quand RIEN n'est sélectionné — il n'y a rien à aligner", () => {
+    expect(render([textLayer], null, "social_post")).not.toContain('data-testid="align-row"');
+  });
+
+  it("porte un bouton pour CHACUN des six modes de la liste canonique, plus les deux répartitions", () => {
+    const html = renderMulti(trio, ["p0", "p1", "p2"], "social_post");
+    for (const mode of ALIGN_MODES) {
+      expect(html).toContain(`data-action="align-${mode}"`);
+    }
+    expect(html).toContain('data-action="distribute-horizontal"');
+    expect(html).toContain('data-action="distribute-vertical"');
+  });
+
+  it("les deux boutons de répartition sont DÉSACTIVÉS en dessous de trois participants, et actifs à trois", () => {
+    const one = render([trio[0]], "p0", "social_post");
+    const two = renderMulti(trio, ["p0", "p1"], "social_post");
+    const three = renderMulti(trio, ["p0", "p1", "p2"], "social_post");
+    // TROIS calques sélectionnés dont un VERROUILLÉ ne font que DEUX participants : le seuil se compte
+    // en participants, pas en `selectedIds.length`. Sans ce cas, un seuil écrit sur la longueur de la
+    // sélection passerait les trois autres.
+    const threeWithLocked = renderMulti([...trio, lockedLayer], ["p0", "p1", "lk"], "social_post");
+    for (const action of ["distribute-horizontal", "distribute-vertical"]) {
+      expect(isDisabled(one, action)).toBe(true);
+      expect(isDisabled(two, action)).toBe(true);
+      expect(isDisabled(threeWithLocked, action)).toBe(true);
+      // La contre-épreuve : sans elle, des boutons désactivés en PERMANENCE passeraient les deux
+      // premières assertions.
+      expect(isDisabled(three, action)).toBe(false);
+    }
+  });
+
+  it("les six boutons d'alignement restent ACTIFS pour une sélection simple — c'est le plan de travail qui sert de référence", () => {
+    const html = render([trio[0]], "p0", "social_post");
+    for (const mode of ALIGN_MODES) expect(isDisabled(html, `align-${mode}`)).toBe(false);
+  });
+
+  it("tout est DÉSACTIVÉ quand le seul calque sélectionné est VERROUILLÉ (aucun participant)", () => {
+    const html = render([lockedLayer], "lk", "social_post");
+    for (const mode of ALIGN_MODES) expect(isDisabled(html, `align-${mode}`)).toBe(true);
+    expect(isDisabled(html, "distribute-horizontal")).toBe(true);
+  });
+
+  it("l'infobulle nomme la RÉFÉRENCE, et ce n'est pas la même à un calque qu'à plusieurs", () => {
+    const single = openingTag(render([trio[0]], "p0", "social_post"), "data-action", "align-left");
+    expect(single).toContain("plan de travail");
+
+    const multi = openingTag(renderMulti(trio, ["p0", "p1"], "social_post"), "data-action", "align-left");
+    expect(multi).toContain("sélection");
+    expect(multi).not.toContain("plan de travail");
+  });
+
+  it("prévient que la ROTATION est ignorée — mais seulement quand un participant est réellement pivoté", () => {
+    // textLayer porte `rotation: 5` ; imageLayer n'a pas de rotation. La note n'apparaît donc que là
+    // où elle apprend quelque chose, plutôt que d'être un avertissement permanent que personne ne lit.
+    const rotated = render([textLayer], "t", "social_post");
+    expect(rotated).toContain('data-testid="align-rotation-note"');
+    const straight = render([imageLayer], "i", "article_image");
+    expect(straight).not.toContain('data-testid="align-rotation-note"');
   });
 });
 
