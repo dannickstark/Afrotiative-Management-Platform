@@ -18,22 +18,58 @@ export const HANDLES: HandleId[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
 const MIN_SIZE = 1;
 
-// `delta` est déjà en pixels GABARIT (converti par toCanvasCoords avant d'arriver ici). Chaque
-// poignée ancre le ou les côtés qu'elle NE porte PAS : "se" ne touche jamais x/y, "nw" ancre le
-// coin bas-droit, etc. — le clamp au minimum préserve toujours le côté opposé à la poignée tirée,
-// jamais le côté qu'elle contrôle (sinon un redimensionnement au minimum ferait sauter le calque
-// ailleurs sur le canevas, une surprise pour l'utilisateur qui tire une poignée).
-export function computeResizedFrame(start: Frame, handle: HandleId, delta: Point, minSize = MIN_SIZE): Frame {
+// `delta` est déjà en pixels GABARIT (converti par toCanvasCoords avant d'arriver ici), mais dans
+// le repère ÉCRAN/canevas — PAS dans le repère LOCAL du calque. Les poignées sont rendues à
+// l'intérieur d'un conteneur `transform: rotate(rotationDeg)` (canvas.tsx:151-161), donc dès que
+// `rotationDeg !== 0`, "est" ne pointe plus vers +x écran : à 90°, par exemple, c'est +y écran qui
+// pointe vers +x LOCAL. Appliquer `delta` tel quel à x/y/w/h (comme avant Tâche 1, U2) élargit donc
+// le mauvais axe et fait glisser le calque au passage — non détecté jusqu'ici car la rotation est
+// rare en pratique (voir tests/studio-drag.test.ts, describe "la dérive de rotation").
+//
+// Le correctif tient en deux étapes :
+//  1. Tourner `delta` par R(-rotationDeg) pour retrouver le delta dans le repère LOCAL du calque
+//     (celui où "e" pointe bien vers +x, quelle que soit la rotation affichée à l'écran) — puis
+//     appliquer EXACTEMENT la même logique d'ancrage qu'avant (chaque poignée ancre le ou les
+//     côtés qu'elle NE porte PAS ; le clamp au minimum préserve toujours le côté opposé à la
+//     poignée tirée). Ceci calcule le bon w/h et un x/y "naïf", correct dans le repère local mais
+//     pas encore sur l'écran si rotationDeg !== 0.
+//  2. La rotation CSS se fait autour du CENTRE (transform-origin par défaut) : changer w/h déplace
+//     donc le centre DANS LE REPÈRE LOCAL — un déplacement qui, une fois le calque affiché tourné,
+//     doit lui-même être tourné par R(rotationDeg) pour connaître son effet réel à l'écran. Sans
+//     cette seconde rotation, le bord que la poignée ne porte pas ("l'ancre") dérive à l'écran dès
+//     que le calque est tourné (constaté empiriquement : coin/bord ancré qui bouge alors qu'il ne
+//     devrait pas). En dérivant x/y du NOUVEAU centre (= ancien centre + ce déplacement tourné)
+//     plutôt que du x/y naïf de l'étape 1, l'ancre reste immobile à l'écran à N'IMPORTE QUEL angle.
+//
+// À `rotationDeg === 0`, R(0) est l'identité : l'étape 1 restitue `delta` tel quel et l'étape 2 ne
+// change rien (le déplacement local du centre égale déjà son équivalent écran) — d'où le retour
+// anticipé ci-dessous, qui rend le comportement à 0° IDENTIQUE OCTET PRÈS à avant Tâche 1 (même
+// chemin de code, aucune dépendance à l'arithmétique flottante de sin/cos pour ce cas).
+export function computeResizedFrame(
+  start: Frame,
+  handle: HandleId,
+  delta: Point,
+  minSize = MIN_SIZE,
+  rotationDeg = 0,
+): Frame {
   const hasN = handle.includes("n");
   const hasS = handle.includes("s");
   const hasE = handle.includes("e");
   const hasW = handle.includes("w");
 
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  // R(-rotationDeg) appliqué à `delta` — voir étape 1 ci-dessus.
+  const local: Point = rotationDeg === 0
+    ? delta
+    : { x: delta.x * cos + delta.y * sin, y: -delta.x * sin + delta.y * cos };
+
   let { x, y, w, h } = start;
-  if (hasE) w = start.w + delta.x;
-  if (hasW) { w = start.w - delta.x; x = start.x + delta.x; }
-  if (hasS) h = start.h + delta.y;
-  if (hasN) { h = start.h - delta.y; y = start.y + delta.y; }
+  if (hasE) w = start.w + local.x;
+  if (hasW) { w = start.w - local.x; x = start.x + local.x; }
+  if (hasS) h = start.h + local.y;
+  if (hasN) { h = start.h - local.y; y = start.y + local.y; }
 
   if (w < minSize) {
     if (hasW) x = start.x + (start.w - minSize);
@@ -43,7 +79,25 @@ export function computeResizedFrame(start: Frame, handle: HandleId, delta: Point
     if (hasN) y = start.y + (start.h - minSize);
     h = minSize;
   }
-  return { x, y, w, h };
+
+  if (rotationDeg === 0) return { x, y, w, h };
+
+  // Étape 2 : le centre a bougé DANS LE REPÈRE LOCAL (localShift) — on le tourne par R(rotationDeg)
+  // pour obtenir son déplacement réel à l'écran, puis on re-dérive x/y du nouveau centre plutôt que
+  // de garder le x/y "naïf" calculé ci-dessus.
+  const oldCenter: Point = { x: start.x + start.w / 2, y: start.y + start.h / 2 };
+  const localCenter: Point = { x: x + w / 2, y: y + h / 2 };
+  const localShift: Point = { x: localCenter.x - oldCenter.x, y: localCenter.y - oldCenter.y };
+  const screenShift: Point = {
+    x: localShift.x * cos - localShift.y * sin,
+    y: localShift.x * sin + localShift.y * cos,
+  };
+  return {
+    x: oldCenter.x + screenShift.x - w / 2,
+    y: oldCenter.y + screenShift.y - h / 2,
+    w,
+    h,
+  };
 }
 
 // L'angle est invariant par mise à l'échelle uniforme (atan2(dy/k, dx/k) === atan2(dy, dx) pour
@@ -147,7 +201,7 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
     }
     if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      return { layerId: a.layerId, frame: computeResizedFrame(a.startFrame, a.handle!, d) };
+      return { layerId: a.layerId, frame: computeResizedFrame(a.startFrame, a.handle!, d, MIN_SIZE, a.startRotation) };
     }
     // rotate — pas de conversion d'échelle : l'angle est invariant (voir computeRotationDeg).
     const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation);
@@ -170,7 +224,7 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
       if (d.x !== 0 || d.y !== 0) dispatch(moveLayer(a.layerId, d.x, d.y));
     } else if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d)));
+      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d, MIN_SIZE, a.startRotation)));
     } else {
       const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation);
       dispatch(rotateLayer(a.layerId, rotation));
