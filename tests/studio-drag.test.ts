@@ -934,24 +934,55 @@ describe("computeResizedFrame — Maj + clamp minimal : le plancher respecte lui
 // `floorScale` est maintenant plafonné à 1 : le clamp ne renvoie plus JAMAIS un calque plus grand que
 // son point de départ sur un axe donné.
 describe("computeResizedFrame — Maj + clamp minimal : le plancher ne dépasse JAMAIS la taille de départ (protection F2)", () => {
-  it("calque 0.5×150 (sous-pixel en largeur) + glisser de 0,001px : h reste ~150, ne bondit pas à 300", () => {
+  // Les deux `not.toBeCloseTo(…)` qui suivaient les `toBeCloseTo(150, 3)` ont été RETIRÉS (revue
+  // finale U0+U2) : ils ne pouvaient pas échouer. `|h − 150| < 5e-4` implique `|h − 300| ≥ 0,5` et
+  // `|h − 15000| ≥ 0,5`, donc la négation était vraie par construction dès que la positive passait —
+  // deux assertions qui se lisaient comme un filet et n'en étaient pas un. Ce que la valeur historique
+  // du défaut apporte (300, 15000) est conservé dans le NOM du test et dans ce commentaire, là où c'est
+  // de la documentation et pas une assertion qui ment sur sa force. En échange, l'encadrement est
+  // resserré d'un facteur ~5 et devient BILATÉRAL : `[150, 150,0001[` au lieu de « à 5e-4 près », donc
+  // borne BASSE comprise — un glisser qui agrandit à peine ne peut pas non plus faire RÉTRÉCIR. Les
+  // valeurs réellement obtenues sont 150,0000033 et 150,00000007 (le clamp ne joue pas ici : `t` est
+  // simplement minuscule), ce qui laisse deux ordres de grandeur de marge sous la borne haute sans
+  // rien laisser passer de ce que ces deux tests existent pour attraper.
+  it("calque 0.5×150 (sous-pixel en largeur) + glisser de 0,001px : h reste dans [150 ; 150,0001[, ne bondit pas à 300", () => {
     const start: Frame = { x: 0, y: 0, w: 0.5, h: 150 };
     const frame = computeResizedFrame(start, "se", { x: 0.001, y: 0 }, { lockAspectRatio: true });
-    expect(frame.h).toBeCloseTo(150, 3);
-    expect(frame.h).not.toBeCloseTo(300, 0);
+    expect(frame.h).toBeGreaterThanOrEqual(150);
+    expect(frame.h).toBeLessThan(150.0001);
   });
 
-  it("calque 0.01×150 + glisser de 0,001px : h reste ~150, ne bondit pas à 15000", () => {
+  it("calque 0.01×150 + glisser de 0,001px : h reste dans [150 ; 150,0001[, ne bondit pas à 15000", () => {
     const start: Frame = { x: 0, y: 0, w: 0.01, h: 150 };
     const frame = computeResizedFrame(start, "se", { x: 0.001, y: 0 }, { lockAspectRatio: true });
-    expect(frame.h).toBeCloseTo(150, 3);
-    expect(frame.h).not.toBeCloseTo(15000, 0);
+    expect(frame.h).toBeGreaterThanOrEqual(150);
+    expect(frame.h).toBeLessThan(150.0001);
   });
 
-  it("calque 0×150 (largeur nulle) : ni Infinity ni -Infinity ne fuient, sur 'se' comme sur 'nw'", () => {
+  // CE QUE CE TEST PROTÈGE VRAIMENT, et ce qu'il ne protège pas (revue finale U0+U2). `w: 0` n'est
+  // PAS atteignable par une scène valide : `lib/studio/scene.ts` déclare les côtés en
+  // `z.number().positive()`, qui refuse 0. Ce n'est donc pas un scénario utilisateur mais le CONTRAT
+  // DÉFENSIF de `computeResizedFrame` sur une entrée dégénérée — la fonction est exportée, pure, et
+  // appelée par le moteur d'accrochage comme `probe` avec des cadres qu'elle n'a pas validés
+  // elle-même ; la garde `start.w > 0` existe pour qu'aucun `Infinity` n'entre dans le calcul, plutôt
+  // que pour compter sur l'arithmétique IEEE754 de l'infini pour s'annuler correctement au prochain
+  // remaniement.
+  //
+  // La version d'origine n'affirmait que `Number.isFinite` sur les quatre champs — et SURVIVAIT à la
+  // suppression de la garde qu'elle nomme : sans elle le résultat est `{0,0,0,170}` au lieu de
+  // `{0,0,1,170}`, fini dans les deux cas. Un test qu'aucune mutation ne peut rendre rouge est du
+  // théâtre. On épingle donc la VALEUR.
+  it("calque 0×150 (largeur nulle) : le clamp général s'applique (w = minSize), sur 'se' comme sur 'nw'", () => {
     const start: Frame = { x: 0, y: 0, w: 0, h: 150 };
     const se = computeResizedFrame(start, "se", { x: 2, y: 20 }, { lockAspectRatio: true });
     const nw = computeResizedFrame(start, "nw", { x: -2, y: -20 }, { lockAspectRatio: true });
+    // `start.w === 0` fait retomber sur la branche NON ratio-aware du clamp — la seule qui ait un sens
+    // ici, puisqu'un ratio 0/150 ne se préserve pas. Sans la garde, `floorScale` vaudrait
+    // `min(1, max(minSize/0, minSize/150))` = 1, `minW` vaudrait `0 × 1 = 0`, et `w` ressortirait à 0 :
+    // un cadre de largeur nulle, sous le minimum que le clamp existe pour garantir.
+    expect(se).toEqual({ x: 0, y: 0, w: 1, h: 170 });
+    // 'nw' ancre le coin 'se' : x recule d'exactement la largeur gagnée par le clamp.
+    expect(nw).toEqual({ x: -1, y: -20, w: 1, h: 170 });
     for (const f of [se, nw]) {
       expect(Number.isFinite(f.x)).toBe(true);
       expect(Number.isFinite(f.y)).toBe(true);
@@ -973,19 +1004,31 @@ describe("computeResizedFrame — Maj + clamp minimal : le plancher ne dépasse 
     ];
     for (const { start, delta } of cases) {
       const frame = computeResizedFrame(start, "se", delta, { lockAspectRatio: true });
-      expect(frame.w).toBeLessThanOrEqual(start.w + 1e-9);
-      expect(frame.h).toBeLessThanOrEqual(start.h + 1e-9);
+      // Sans epsilon (revue finale U0+U2) : le plancher vaut `start.* × floorScale` avec
+      // `floorScale ≤ 1`, donc l'inégalité est EXACTE — les quatre cas ci-dessus la vérifient au bit
+      // près. Une tolérance de 1e-9 était de la marge que rien n'exerçait, donc de la place laissée à
+      // une future dérive.
+      expect(frame.w).toBeLessThanOrEqual(start.w);
+      expect(frame.h).toBeLessThanOrEqual(start.h);
     }
   });
 });
 
-// Cheap 2 — garde `start.h > 0` : le clamp ratio-aware divise par `start.h` (`ratio = start.w /
-// start.h`) ; sans la garde, un calque de départ à hauteur nulle ferait fuiter Infinity/NaN dans le
-// frame retourné dès que le clamp intervient sur l'axe Y dominant.
-describe("computeResizedFrame — Maj avec start.h === 0 : ni NaN ni Infinity ne fuient (garde ratio)", () => {
-  it("poignée 'se', axe Y dominant (le cas qui divisait par ratio=Infinity avant la garde) reste fini", () => {
+// Cheap 2 — garde `start.h > 0` : le clamp ratio-aware divise par `start.h` ; sans la garde,
+// `minSize / start.h` diverge vers `Infinity` pour un calque de départ à hauteur nulle.
+//
+// MÊME CADRAGE QUE LA GARDE `start.w > 0` ci-dessus, et même correction (revue finale U0+U2) :
+// `h: 0` est INATTEIGNABLE par une scène valide (`z.number().positive()`), donc ce test protège le
+// CONTRAT DÉFENSIF de la fonction, pas un scénario utilisateur. Et la version d'origine, qui
+// n'affirmait que `Number.isFinite`, SURVIVAIT à la suppression de la garde qu'elle nomme : sans elle
+// `floorScale` vaut `min(1, Infinity) = 1`, `minH` vaut `0 × 1 = 0`, et le résultat est
+// `{0,0,102,0}` — fini, comme le vrai `{0,0,102,1}`. On épingle donc la VALEUR : c'est `h` qui
+// distingue les deux, et c'est exactement ce que le clamp doit garantir.
+describe("computeResizedFrame — Maj avec start.h === 0 : le clamp général garantit h = minSize (garde ratio)", () => {
+  it("poignée 'se', axe Y dominant (le cas qui divisait par ratio=Infinity avant la garde)", () => {
     const start: Frame = { x: 0, y: 0, w: 100, h: 0 };
     const frame = computeResizedFrame(start, "se", { x: 2, y: 20 }, { lockAspectRatio: true });
+    expect(frame).toEqual({ x: 0, y: 0, w: 102, h: 1 });
     expect(Number.isFinite(frame.x)).toBe(true);
     expect(Number.isFinite(frame.y)).toBe(true);
     expect(Number.isFinite(frame.w)).toBe(true);
@@ -1064,7 +1107,10 @@ describe("computeRotationDeg — forme canonique (protection Important 3)", () =
     expect(r).toBeLessThanOrEqual(180);
     // La démonstration que l'ancien résultat décrivait bien la même orientation — donc que le bogue
     // était invisible à l'œil, donc invisible aux 104 tests de glisser existants.
-    expect(angDist(-340, 20)).toBeLessThan(1e-9);
+    // `toBe(0)`, pas `toBeLessThan(1e-9)` (revue finale U0+U2) : la distance angulaire entre −340 et
+    // +20 est EXACTEMENT nulle en arithmétique flottante (360 et 540 sont représentables, le modulo
+    // l'est donc aussi) — l'epsilon n'était exercé par rien et n'affaiblissait que l'assertion.
+    expect(angDist(-340, 20)).toBe(0);
   });
 
   it("le résultat est TOUJOURS dans la plage canonique (−180, 180], à tout angle et toute rotation de départ", () => {
@@ -1437,7 +1483,15 @@ describe("createGestureEngine — REDIMENSIONNEMENT accroché (Tâche 5)", () =>
     });
     e2.beginResize(tourné, "e", { x: 0, y: 0 });
     e2.move({ x: 6, y: 0 });
-    expect(previewBox.current?.guides).toBeUndefined();
+    // `previewBox.current?.guides` seul était un COURT-CIRCUIT (revue finale U0+U2) : si `move()`
+    // n'appelait plus `onPreviewChange` du tout, `previewBox.current` resterait `null`, `?.` rendrait
+    // `undefined`, et l'assertion passerait — un aperçu MORT se lisait comme « aucun guide ». On exige
+    // donc d'abord que l'aperçu EXISTE et porte le bon cadre, puis que ce cadre soit celui de la
+    // Tâche 1 (non accroché), puis seulement qu'aucun guide ne s'allume.
+    const aperçu = previewBox.current;
+    expect(aperçu).not.toBeNull();
+    expect(aperçu!.frame).toEqual(computeResizedFrame(tourné.frame, "e", { x: 6, y: 0 }, { rotationDeg: 45 }));
+    expect(aperçu!.guides).toBeUndefined();
     e2.end({ x: 6, y: 0 });
     expect(h2.actions).toEqual([{
       type: "resizeLayer", id: "l1",

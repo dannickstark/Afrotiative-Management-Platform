@@ -684,17 +684,40 @@ describe("CanvasChrome ∘ Canvas — les BANDES de zones sûres, en composition
     expect(styleAttr(html, 'data-safe-band="left"')).toContain("width:32.4px"); // 1080 × 0,06 × 0,5
   });
 
-  it("un format SANS bandes n'en rend AUCUNE — ni conteneur, ni bande de hauteur nulle — alors que le toggle est ON", () => {
+  // MOTIF de bande dégénérée : une longueur NULLE posée par React. `(?<![-\w])` écarte
+  // `border-width:0` / `stroke-width:0`, qui contiennent bien la sous-chaîne « width:0 » sans être une
+  // dimension de bande ; `(?![\d.])` écarte `height:0.5px` et `height:0px` — non, justement : `0px`
+  // matche (le caractère qui suit le zéro est `p`), et c'est voulu, le motif couvre les DEUX
+  // sérialisations possibles pour que le test ne dépende pas de la façon dont React écrit un zéro.
+  const DIMENSION_NULLE = /(?<![-\w])(?:height|width):0(?![\d.])/;
+
+  it("un format SANS bandes n'en rend AUCUNE — ni conteneur, ni bande de dimension nulle — alors que le toggle est ON", () => {
     // Le contrôle POSITIF vit DANS ce test (leçon n°1 du brief) : sans lui, un composant qui ne
     // rendrait jamais rien passerait les trois assertions négatives.
     expect(renderComposed(ON, "story")).toContain("data-safe-band=");
+    // …et le format OUTILLÉ n'a lui non plus aucune bande dégénérée : c'est ce qui fait mordre le motif
+    // sur un vrai rendu de bandes, et pas seulement sur des rendus qui n'en contiennent aucune.
+    expect(renderComposed(ON, "story")).not.toMatch(DIMENSION_NULLE);
+
+    // SECOND contrôle, sur le MOTIF cette fois (revue finale U0+U2). L'assertion d'origine était
+    // `not.toContain("height:0px")`, et elle NE POUVAIT PAS ÉCHOUER : React sérialise `height: 0` en
+    // `height:0`, jamais en `height:0px` (les deux lignes ci-dessous le prouvent plutôt que de
+    // l'affirmer), si bien qu'une vraie bande dégénérée serait passée tout droit. Le motif retenu, lui,
+    // attrape les deux écritures — et on le vérifie ici, pour que l'assertion négative plus bas ne
+    // redevienne pas vacuité au premier changement de sérialisation de React.
+    const zéro = renderToStaticMarkup(React.createElement("div", { style: { height: 0, width: 0 } }));
+    expect(zéro).toContain("height:0");
+    expect(zéro).not.toContain("height:0px"); // <- pourquoi l'ancien motif était mort
+    expect(zéro).toMatch(DIMENSION_NULLE);
+    expect(DIMENSION_NULLE.test('style="border-width:0"')).toBe(false); // et pas de faux positif
 
     for (const key of ["ig_square", "ig_portrait", "fb_link"] as FormatKey[]) {
       const html = renderComposed(ON, key);
       expect(html).not.toContain("data-safe-band=");
       expect(html).not.toContain('data-testid="safe-areas"');
-      // « Pas d'artefact de hauteur nulle » : aucune bande dégénérée `height:0px` n'a été rendue.
-      expect(html).not.toContain("height:0px");
+      // « Pas d'artefact de dimension nulle » : aucune bande dégénérée n'a été rendue, ni en hauteur
+      // (bandes haut/bas) ni en largeur (bandes gauche/droite).
+      expect(html).not.toMatch(DIMENSION_NULLE);
     }
   });
 

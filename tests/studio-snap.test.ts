@@ -736,7 +736,15 @@ describe("snapResize — un calque TOURNÉ ne s'accroche pas (décision document
   const start = frame(100, 100, 200, 150);
   const ligne = sub("l", frame(308, 90, 60, 180));
 
-  it("à rotation ≠ 0 le delta ressort intact, aucun guide, et le cadre reste EXACTEMENT celui de la Tâche 1", () => {
+  it("à rotation ≠ 0 le delta ressort intact, aucun guide, et le cadre est celui d'une FORMULE INDÉPENDANTE", () => {
+    // L'assertion finale était `computeResizedFrame(start,"e",out.delta,opts)` comparé à
+    // `computeResizedFrame(start,"e",delta,opts)` — posée JUSTE APRÈS `expect(out.delta).toBe(delta)`,
+    // donc `f(x)` comparé à `f(x)` : une TAUTOLOGIE, verte quoi qu'il arrive à `computeResizedFrame`
+    // (revue finale U0+U2). On la remplace par un ORACLE FERMÉ, dérivé à la main de la géométrie
+    // documentée dans hooks/use-layer-drag.ts, donc capable de contredire l'implémentation :
+    //   local = R(−θ)·(6,0) = (6cos θ, −6 sin θ)  ->  w = 200 + 6cos θ, h inchangé
+    //   le centre local se déplace de (3cos θ, 0) ; tourné par R(+θ) il vaut (3cos²θ, 3cos θ sin θ)
+    //   d'où x = 100 + 3cos²θ − 3cos θ  et  y = 100 + 3cos θ sin θ
     const delta = { x: 6, y: 0 };
     for (const rotationDeg of [15, 45, 90, 180, -37]) {
       const options: ResizeOptions = { rotationDeg };
@@ -746,8 +754,18 @@ describe("snapResize — un calque TOURNÉ ne s'accroche pas (décision document
       });
       expect(out.delta).toBe(delta);
       expect(out.guides).toEqual([]);
-      expect(computeResizedFrame(start, "e", out.delta, options))
-        .toEqual(computeResizedFrame(start, "e", delta, options));
+
+      const rad = (rotationDeg * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const f = computeResizedFrame(start, "e", out.delta, options);
+      expect(f.w).toBeCloseTo(200 + 6 * cos, 12);
+      expect(f.h).toBe(150); // un glisser purement « e » ne touche jamais la hauteur
+      expect(f.x).toBeCloseTo(100 + 3 * cos * cos - 3 * cos, 12);
+      expect(f.y).toBeCloseTo(100 + 3 * cos * sin, 12);
+      // Et surtout : le bord droit n'a PAS atterri sur la ligne 308 du candidat — ce qui serait le
+      // signe que l'accroche a joué malgré la rotation.
+      expect(Math.abs(f.x + f.w - 308)).toBeGreaterThan(1);
     }
   });
 

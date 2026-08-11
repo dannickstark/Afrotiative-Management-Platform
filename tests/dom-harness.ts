@@ -22,7 +22,13 @@ const NOT_PRESENT = Symbol("dom-harness:not-present");
 // document, navigator, HTMLElement, Node, Event, KeyboardEvent, MouseEvent, localStorage) plus le
 // stub IntersectionObserver que render-mode.tsx exige. `IS_REACT_ACT_ENVIRONMENT` est géré à part
 // (voir plus bas) : ce n'est pas un global DOM, c'est un commutateur de React lui-même.
-const DOM_GLOBAL_KEYS = [
+//
+// EXPORTÉE (revue finale U0+U2) : le garde-fou de complétude de tests/dom-harness.test.ts en avait
+// une COPIE À LA MAIN, ce qui en faisait un garde-fou sur sa propre copie — ajouter un global ici sans
+// mettre la copie à jour laissait le test vert, exactement le défaut que U1 avait livré dans son
+// garde-fou de galerie de formes (corrigé là-bas de la même façon : exporter la vraie liste et la
+// faire consommer par les deux côtés, cf. SHAPE_KINDS dans lib/studio/scene.ts).
+export const DOM_GLOBAL_KEYS = [
   "window",
   "document",
   "navigator",
@@ -35,7 +41,12 @@ const DOM_GLOBAL_KEYS = [
   "IntersectionObserver",
 ] as const;
 
-type DomGlobalKey = (typeof DOM_GLOBAL_KEYS)[number];
+export type DomGlobalKey = (typeof DOM_GLOBAL_KEYS)[number];
+
+/** Le commutateur de React, installé/restauré par le même cycle mais volontairement HORS de
+ * `DOM_GLOBAL_KEYS` (ce n'est pas un global DOM). Exporté pour la même raison que la liste : le
+ * garde-fou de complétude doit pouvoir énumérer TOUT ce que `installDom()` touche sans le recopier. */
+export const REACT_ACT_ENV_KEY = "IS_REACT_ACT_ENVIRONMENT";
 
 /** Une instance du stub IntersectionObserver — le callback est CONSERVÉ (jamais jeté) sur
  * l'instance elle-même, et sur `instances` au niveau du constructeur, pour qu'une tâche future
@@ -100,8 +111,8 @@ export function installDom(): () => void {
   for (const key of DOM_GLOBAL_KEYS) {
     snapshot.set(key, Object.prototype.hasOwnProperty.call(g, key) ? g[key] : NOT_PRESENT);
   }
-  const priorActEnv = Object.prototype.hasOwnProperty.call(g, "IS_REACT_ACT_ENVIRONMENT")
-    ? (g.IS_REACT_ACT_ENVIRONMENT as unknown)
+  const priorActEnv = Object.prototype.hasOwnProperty.call(g, REACT_ACT_ENV_KEY)
+    ? (g[REACT_ACT_ENV_KEY] as unknown)
     : NOT_PRESENT;
 
   g.window = win;
@@ -118,7 +129,7 @@ export function installDom(): () => void {
   // test — sans lui, `act()` émet un avertissement « not configured to support act(...) ». Scopé au
   // même cycle install/teardown que le reste : un fichier qui n'opte jamais dans installDom() ne le
   // voit jamais apparaître sur globalThis.
-  g.IS_REACT_ACT_ENVIRONMENT = true;
+  g[REACT_ACT_ENV_KEY] = true;
 
   let torn = false;
   return function teardown() {
@@ -129,8 +140,8 @@ export function installDom(): () => void {
       if (prev === NOT_PRESENT) delete g[key];
       else g[key] = prev;
     }
-    if (priorActEnv === NOT_PRESENT) delete g.IS_REACT_ACT_ENVIRONMENT;
-    else g.IS_REACT_ACT_ENVIRONMENT = priorActEnv;
+    if (priorActEnv === NOT_PRESENT) delete g[REACT_ACT_ENV_KEY];
+    else g[REACT_ACT_ENV_KEY] = priorActEnv;
     win.close();
   };
 }

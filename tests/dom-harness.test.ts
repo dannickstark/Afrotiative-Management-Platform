@@ -4,7 +4,7 @@
 // permettre d'installer un DOM sans risquer de faire bifurquer un `typeof window === "undefined"`
 // ailleurs dans la suite (voir §1 de docs/superpowers/plans/2026-08-11-afrotiative-u0-harnais-dom.md).
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { installDom, mount, click, pressKey, flush } from "./dom-harness";
+import { installDom, mount, click, pressKey, flush, DOM_GLOBAL_KEYS, REACT_ACT_ENV_KEY } from "./dom-harness";
 import * as React from "react";
 
 let teardown: () => void;
@@ -116,13 +116,13 @@ describe("the harness itself", () => {
   // échouerait ici : après le teardown imbriqué, `document` serait `undefined`, pas la référence du
   // DOM extérieur (celui du beforeAll) — alors que le fichier n'a JAMAIS cessé d'avoir un DOM.
   it("installDom() followed by its teardown restores globalThis to exactly the keys/values it had before — not blind deletion", () => {
-    const DOM_KEYS = [
-      "window", "document", "navigator", "HTMLElement", "Node", "Event",
-      "KeyboardEvent", "MouseEvent", "localStorage", "IntersectionObserver",
-    ] as const;
+    // `DOM_GLOBAL_KEYS` est IMPORTÉE du harnais (revue finale U0+U2), plus recopiée à la main ici : une
+    // copie faisait de ce test un garde-fou sur sa propre copie, et ajouter un global au harnais sans
+    // toucher la copie le laissait vert. Même correction que le garde-fou de galerie de formes de U1
+    // (SHAPE_KINDS exportée, consommée par le code ET par le test).
     const g = globalThis as Record<string, unknown>;
 
-    const before = new Map(DOM_KEYS.map((k) => [k, g[k]]));
+    const before = new Map(DOM_GLOBAL_KEYS.map((k) => [k, g[k]]));
     const keysBefore = Object.keys(g).sort();
 
     const innerTeardown = installDom(); // empilé sur le DOM du beforeAll : une SECONDE instance jsdom
@@ -133,9 +133,40 @@ describe("the harness itself", () => {
 
     innerTeardown();
 
-    for (const k of DOM_KEYS) {
+    for (const k of DOM_GLOBAL_KEYS) {
       expect(g[k]).toBe(before.get(k)); // référence EXACTE restaurée, pas juste "un objet"
     }
     expect(Object.keys(g).sort()).toEqual(keysBefore); // aucune clé nouvelle n'a survécu au teardown
+  });
+
+  // LA complétude, mesurée plutôt que déclarée (revue finale U0+U2). Le test ci-dessus prouve que TOUT
+  // CE QUI EST DANS `DOM_GLOBAL_KEYS` est restauré ; il ne dit rien de ce qui n'y serait PAS. Or c'est
+  // là qu'est le vrai risque : `installDom()` pose ses globals par dix affectations écrites à la main
+  // (`g.window = …`, `g.document = …`, …) et non par une boucle sur la liste. Une onzième affectation
+  // ajoutée sans étendre la liste ne serait JAMAIS restaurée — le harnais fuirait dans les fichiers
+  // suivants, précisément ce que son commentaire d'en-tête promet d'éviter.
+  //
+  // On ne compare donc pas à une liste écrite ailleurs : on OBSERVE ce que `installDom()` change
+  // réellement sur `globalThis` et on confronte l'observation à la liste exportée.
+  it("DOM_GLOBAL_KEYS est COMPLÈTE : installDom() ne touche aucune clé qui n'y figure pas, et n'en laisse aucune inutilisée", () => {
+    const g = globalThis as Record<string, unknown>;
+    const avant = new Map(Object.keys(g).map((k) => [k, g[k]] as const));
+
+    const teardown = installDom();
+    const touchées = new Set(
+      Object.keys(g).filter((k) => !avant.has(k) || !Object.is(avant.get(k), g[k])),
+    );
+    teardown();
+
+    // (a) rien hors de la liste — le commutateur de React est nommé, pas deviné, et il est exporté par
+    //     le harnais pour la même raison que la liste elle-même.
+    const connues = new Set<string>([...DOM_GLOBAL_KEYS, REACT_ACT_ENV_KEY]);
+    expect([...touchées].filter((k) => !connues.has(k)).sort()).toEqual([]);
+    // (b) et aucune entrée MORTE dans la liste : chacune est bel et bien installée. Sans cette moitié,
+    //     la liste pourrait grossir de clés fantômes que le teardown « restaurerait » à vide.
+    expect([...DOM_GLOBAL_KEYS].filter((k) => !touchées.has(k)).sort()).toEqual([]);
+    // (c) garde anti-vacuité : l'observation a bien vu quelque chose (une mesure qui ne mesure rien
+    //     satisferait (a) et (b) d'un coup).
+    expect(touchées.size).toBeGreaterThanOrEqual(DOM_GLOBAL_KEYS.length);
   });
 });

@@ -94,6 +94,21 @@ function openingTag(html: string, attr: string, value: string): string {
   return match[0];
 }
 
+/** Nombre d'occurrences EXACTES d'une sous-chaîne dans le HTML rendu. Introduit par la revue finale
+ * U0+U2 : plusieurs assertions de ce fichier disaient un COMPTE en prose (« la rangée apparaît une
+ * fois », « un bouton pour chacun des six modes ») et ne vérifiaient qu'une PRÉSENCE — un composant
+ * qui rendrait la rangée deux fois, ou dix boutons au lieu de huit, les passait toutes. */
+function countOf(html: string, needle: string): number {
+  let n = 0;
+  let from = 0;
+  for (;;) {
+    const i = html.indexOf(needle, from);
+    if (i === -1) return n;
+    n += 1;
+    from = i + needle.length;
+  }
+}
+
 // Tâche 6 : `TypeSection` (property-panel.tsx) pose `data-section={sectionId}` sur le `Collapsible`
 // racine — Base UI y ajoute lui-même `data-open`/`data-closed` selon l'état courant (jamais les deux
 // à la fois, voir node_modules/@base-ui/react/utils/collapsibleOpenStateMapping.js) ; on lit CET
@@ -192,7 +207,11 @@ describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
 
   it("est présente pour une sélection MULTIPLE, à côté du message honnête et sans la bande de géométrie", () => {
     const html = renderMulti([textLayer, imageLayer], ["t", "i"], "social_post");
-    expect(html).toContain('data-testid="align-row"');
+    // COMPTE, pas présence (revue finale U0+U2) : la rangée a deux points de montage dans
+    // geometry-strip.tsx (sélection simple / sélection multiple) et le panneau doit en rendre
+    // EXACTEMENT UN à la fois. `toContain` laissait passer les deux montés ensemble — deux jeux de
+    // boutons superposés, dont un seul serait cliquable.
+    expect(countOf(html, 'data-testid="align-row"')).toBe(1);
     expect(html).toContain('data-testid="property-panel-multi"');
     expect(html).not.toContain('data-testid="geometry-strip"');
   });
@@ -202,6 +221,7 @@ describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
     const stripIdx = html.indexOf('data-testid="geometry-strip"');
     const rowIdx = html.indexOf('data-testid="align-row"');
     const scrollIdx = html.indexOf('data-testid="property-sections"');
+    expect(countOf(html, 'data-testid="align-row"')).toBe(1); // même compte, l'autre point de montage
     expect(stripIdx).toBeGreaterThan(-1);
     expect(rowIdx).toBeGreaterThan(stripIdx); // descendante de la bande, jamais un frère placé avant
     expect(rowIdx).toBeLessThan(scrollIdx); // et toujours hors du conteneur défilant
@@ -211,13 +231,20 @@ describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
     expect(render([textLayer], null, "social_post")).not.toContain('data-testid="align-row"');
   });
 
-  it("porte un bouton pour CHACUN des six modes de la liste canonique, plus les deux répartitions", () => {
+  it("porte UN bouton — un seul — pour CHACUN des six modes de la liste canonique, plus les deux répartitions", () => {
     const html = renderMulti(trio, ["p0", "p1", "p2"], "social_post");
     for (const mode of ALIGN_MODES) {
-      expect(html).toContain(`data-action="align-${mode}"`);
+      // Compte EXACT plutôt que présence (revue finale U0+U2). `toContain` disait « au moins un » là
+      // où le titre promet « un bouton pour chacun » : une rangée montée deux fois, ou un `map` sur une
+      // liste dupliquée, passait sans que rien ne bronche.
+      expect(countOf(html, `data-action="align-${mode}"`)).toBe(1);
     }
-    expect(html).toContain('data-action="distribute-horizontal"');
-    expect(html).toContain('data-action="distribute-vertical"');
+    expect(countOf(html, 'data-action="distribute-horizontal"')).toBe(1);
+    expect(countOf(html, 'data-action="distribute-vertical"')).toBe(1);
+    // Et AUCUN bouton d'alignement en plus des six canoniques : `ALIGN_MODES` est la liste exhaustive
+    // (le `Record<AlignMode, …>` de geometry-strip.tsx la consomme), donc un septième `data-action`
+    // commençant par `align-` serait un mode que la liste ne connaît pas.
+    expect(countOf(html, 'data-action="align-')).toBe(ALIGN_MODES.length);
   });
 
   it("les deux boutons de répartition sont DÉSACTIVÉS en dessous de trois participants, et actifs à trois", () => {
