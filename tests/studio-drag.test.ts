@@ -1030,3 +1030,329 @@ describe("computeResizedFrame — clamp sur UN SEUL axe (poignée d'angle, SANS 
     expect(frame.x + frame.w).toBeCloseTo(start.x + start.w, 6);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 5 (U2, spec §5) — CÂBLAGE de l'accrochage dans le moteur de geste.
+//
+// tests/studio-snap.test.ts prouve tout du moteur PUR (lib/studio/snap.ts) sans dire un mot du
+// câblage : une mutation qui passerait `scale: 1` au lieu de `getScale()`, qui construirait le `probe`
+// sans les modificateurs, qui oublierait de filtrer le calque manipulé, qui committerait le cadre
+// BRUT après avoir affiché l'aperçu ACCROCHÉ, ou qui n'effacerait pas les guides à la fin du geste,
+// laisserait ces 40 tests-là entièrement verts. Les tests ci-dessous pilotent donc `createGestureEngine`
+// bout en bout, contexte d'accroche fourni, jusqu'au VRAI réducteur.
+function makeSceneWith(layers: Layer[]): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 800, height: 600, background: "#000000" },
+    layers,
+  };
+}
+
+function makeHarnessWith(layers: Layer[]) {
+  let state = initEditorState(makeSceneWith(layers));
+  const actions: EditorAction[] = [];
+  const dispatch = (action: EditorAction) => {
+    actions.push(action);
+    state = editorReducer(state, action);
+  };
+  return { dispatch, actions, getState: () => state };
+}
+
+// Le voisin de référence : lignes x 400/430/460, lignes y 300/350/400. Sa ligne x=400 coïncide avec le
+// CENTRE du plan de travail (800/2) : le guide doit donc annoncer la nature la plus prioritaire
+// (« layer-edge ») et nommer le calque, pas le plan de travail.
+const VOISIN: Layer = {
+  id: "s1", name: "Voisin", visible: true, locked: false,
+  frame: { x: 400, y: 300, w: 60, h: 100 },
+  type: "shape", shape: "rect", fill: "#CCCCCC",
+} as Layer;
+
+function snapContextFrom(layers: Layer[]) {
+  return { layers, canvas: { width: 800, height: 600 } };
+}
+
+describe("createGestureEngine — DÉPLACEMENT accroché (Tâche 5) : aperçu, guides, commit exact", () => {
+  it("un glisser qui passe à 6px d'un bord voisin accroche l'aperçu, allume UN guide, et committe le cadre EXACT", () => {
+    // Calque en (100, 100), 200×150 ; glisser de +294 -> bord gauche brut 394, à 6 de la ligne 400.
+    // Les autres positions x (494 -> 460 = 34 ; 594 -> 533,33 = 60,67) et l'axe y (100/175/250, à ≥ 25
+    // de 0/200/300) sont hors seuil : un seul guide, sur l'axe x.
+    const layer = makeLayer();
+    const { dispatch, actions, getState } = makeHarnessWith([layer, VOISIN]);
+    const before = getState();
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1,
+      onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.move({ x: 294, y: 0 });
+
+    expect(previewBox.current?.frame).toEqual({ x: 400, y: 100, w: 200, h: 150 });
+    expect(previewBox.current?.guides).toEqual([
+      { axis: "x", at: 400, from: 100, to: 400, kind: "layer-edge", targetIds: ["s1"] },
+    ]);
+
+    engine.end({ x: 294, y: 0 });
+
+    // Le cadre COMMITTÉ est celui de l'aperçu, au bit près : `moveLayer(dx)` aurait posé
+    // `100 + (400 − 100)`, qui n'est pas garanti valoir 400 exactement pour un delta fractionnaire.
+    expect(actions).toEqual([{ type: "setFrames", changes: [{ id: "l1", frame: { x: 400, y: 100, w: 200, h: 150 } }] }]);
+    expect(getState().scene.layers[0].frame).toEqual({ x: 400, y: 100, w: 200, h: 150 });
+    // UN geste = UNE entrée d'historique, accroche comprise.
+    expect(getState().past).toHaveLength(before.past.length + 1);
+    expect(previewBox.current).toBeNull(); // les guides disparaissent avec l'aperçu
+  });
+
+  it("sans candidat à portée, le chemin HISTORIQUE est conservé : `moveLayer` avec le delta BRUT", () => {
+    // Glisser de +250,5 -> positions 350,5 / 450,5 / 550,5 : la plus proche des lignes est à 9,5
+    // (450,5 -> 460), hors seuil. Aucune accroche -> `moveLayer`, pas `setFrames`.
+    const layer = makeLayer();
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1,
+      onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.move({ x: 250.5, y: 0 });
+    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 350.5, y: 100, w: 200, h: 150 } });
+    expect(previewBox.current?.guides).toBeUndefined();
+
+    engine.end({ x: 250.5, y: 0 });
+    expect(actions).toEqual([{ type: "moveLayer", id: "l1", dx: 250.5, dy: 0 }]);
+  });
+
+  it("un calque DÉJÀ posé sur une ligne, cliqué sans bouger, ne committe TOUJOURS aucune action", () => {
+    // L'accroche s'applique (distance 0) mais ne change rien : le moteur doit retomber sur le chemin
+    // historique, où un delta nul ne dispatche RIEN — et non dispatcher un `setFrames` fantôme.
+    const layer = makeLayer({ frame: { x: 400, y: 90, w: 200, h: 150 } });
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+
+    engine.beginMove(layer, { x: 50, y: 50 });
+    engine.end({ x: 50, y: 50 });
+    expect(actions).toHaveLength(0);
+  });
+
+  it("le calque MANIPULÉ n'est jamais son propre candidat : un glisser franc n'est pas gelé", () => {
+    // Sans le filtre, ses trois propres bords seraient à distance 0 à chaque pas et le calque ne
+    // pourrait littéralement pas bouger. Le contexte passe la scène ENTIÈRE, calque manipulé compris.
+    const layer = makeLayer();
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.end({ x: 37, y: 0 });
+    expect(actions).toEqual([{ type: "moveLayer", id: "l1", dx: 37, dy: 0 }]);
+  });
+
+  it("`cancel()` efface aussi les guides", () => {
+    const layer = makeLayer();
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1,
+      onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.move({ x: 294, y: 0 });
+    expect(previewBox.current?.guides).toHaveLength(1);
+    engine.cancel();
+    expect(previewBox.current).toBeNull();
+    expect(actions).toHaveLength(0);
+  });
+
+  it("aucun contexte d'accroche fourni : comportement d'AVANT la Tâche 5, à l'octet près", () => {
+    // Même geste que le premier test de ce bloc, sans `getSnapContext` : aucune accroche, aucun guide,
+    // `moveLayer` avec le delta brut. C'est la garantie de compatibilité des ~90 tests de geste
+    // existants, rendue explicite plutôt que déduite.
+    const layer = makeLayer();
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+    });
+
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.move({ x: 294, y: 0 });
+    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 394, y: 100, w: 200, h: 150 } });
+    engine.end({ x: 294, y: 0 });
+    expect(actions).toEqual([{ type: "moveLayer", id: "l1", dx: 294, dy: 0 }]);
+  });
+});
+
+describe("createGestureEngine — le seuil d'accroche passe RÉELLEMENT par getScale() (Tâche 5)", () => {
+  // LE défaut le plus probable de cette tâche : comparer des distances en px GABARIT à un seuil en px
+  // ÉCRAN. Les deux gestes ci-dessous produisent le MÊME delta gabarit (285) et donc la MÊME distance
+  // gabarit (15) à la ligne 400 ; seule l'échelle change. À k=0,3 ces 15 px gabarit font 4,5 px écran
+  // (DEDANS) ; à k=1 ils en font 15 (DEHORS). Une mutation qui passerait `scale: 1` en dur à
+  // `snapMove` rendrait les deux cas identiques.
+  const layer = makeLayer({ frame: { x: 100, y: 90, w: 200, h: 150 } });
+
+  it("à k=0,3 le geste accroche", () => {
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 0.3, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.end({ x: 285 * 0.3, y: 0 }); // 85,5 px écran = 285 px gabarit
+    expect(actions).toHaveLength(1);
+    expect(actions[0].type).toBe("setFrames");
+    if (actions[0].type !== "setFrames") throw new Error("attendu setFrames");
+    expect(actions[0].changes[0].frame.x).toBe(400);
+  });
+
+  it("à k=1 le MÊME delta gabarit n'accroche pas", () => {
+    const { dispatch, actions } = makeHarnessWith([layer, VOISIN]);
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([layer, VOISIN]),
+    });
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.end({ x: 285, y: 0 });
+    expect(actions).toEqual([{ type: "moveLayer", id: "l1", dx: 285, dy: 0 }]);
+  });
+});
+
+describe("createGestureEngine — REDIMENSIONNEMENT accroché (Tâche 5)", () => {
+  // Voisin dont la ligne x vaut 304 : à 2 px du bord droit brut (306) pour un glisser de +6.
+  const BORD: Layer = {
+    id: "s2", name: "Bord", visible: true, locked: false,
+    frame: { x: 304, y: 90, w: 60, h: 180 },
+    type: "shape", shape: "rect", fill: "#CCCCCC",
+  } as Layer;
+
+  it("la poignée « e » accroche le bord est et committe le cadre accroché ; le bord ouest ne bouge pas", () => {
+    const layer = makeLayer();
+    const { dispatch, actions } = makeHarnessWith([layer, BORD]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([layer, BORD]),
+    });
+
+    engine.beginResize(layer, "e", { x: 0, y: 0 });
+    engine.move({ x: 6, y: 0 });
+    expect(previewBox.current?.frame).toEqual({ x: 100, y: 100, w: 204, h: 150 });
+    expect(previewBox.current?.guides?.[0].at).toBe(304);
+
+    engine.end({ x: 6, y: 0 });
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 100, y: 100, w: 204, h: 150 } }]);
+  });
+
+  it("Maj + accroche : le ratio reste EXACT et le bord accroché atterrit sur la ligne (précédence testée)", () => {
+    // « se » + Maj, glisser (20, 0) sur un calque 200×150 : bord droit brut 312,8 ; la ligne 310 est à
+    // 2,8. Le modificateur CONTRAINT, l'accroche se projette : w = 210, h = 157,5, ratio 4/3 intact.
+    // Les valeurs sont celles calculées à la main dans tests/studio-snap.test.ts, mais obtenues ici par
+    // le VRAI chemin (le `probe` du moteur doit porter `lockAspectRatio`).
+    const layer = makeLayer();
+    const ligne: Layer = {
+      id: "s3", name: "Ligne", visible: true, locked: false,
+      frame: { x: 310, y: 90, w: 60, h: 40 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    } as Layer;
+    const { dispatch, actions } = makeHarnessWith([layer, ligne]);
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([layer, ligne]),
+    });
+
+    engine.beginResize(layer, "se", { x: 0, y: 0 });
+    engine.end({ x: 20, y: 0 }, { shift: true });
+
+    expect(actions).toHaveLength(1);
+    if (actions[0].type !== "resizeLayer") throw new Error("attendu resizeLayer");
+    const frame = actions[0].frame;
+    expect(frame.w).toBeCloseTo(210, 9);
+    expect(frame.h).toBeCloseTo(157.5, 9);
+    expect(frame.x + frame.w).toBeCloseTo(310, 9);
+    expect(frame.w / frame.h).toBeCloseTo(200 / 150, 12);
+  });
+
+  it("calque TOURNÉ : le DÉPLACEMENT accroche, le REDIMENSIONNEMENT non (décision documentée)", () => {
+    const tourné = makeLayer({ rotation: 45 });
+
+    // (a) déplacement : accroche normalement — une translation commute avec la rotation.
+    const h1 = makeHarnessWith([tourné, VOISIN]);
+    const e1 = createGestureEngine({
+      dispatch: h1.dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([tourné, VOISIN]),
+    });
+    e1.beginMove(tourné, { x: 0, y: 0 });
+    e1.end({ x: 294, y: 0 });
+    expect(h1.actions).toEqual([{ type: "setFrames", changes: [{ id: "l1", frame: { x: 400, y: 100, w: 200, h: 150 } }] }]);
+
+    // (b) redimensionnement : AUCUNE accroche, et le cadre committé est EXACTEMENT celui de la Tâche 1.
+    const BORD_PROCHE: Layer = {
+      id: "s4", name: "Bord", visible: true, locked: false,
+      frame: { x: 304, y: 90, w: 60, h: 180 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    } as Layer;
+    const h2 = makeHarnessWith([tourné, BORD_PROCHE]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const e2 = createGestureEngine({
+      dispatch: h2.dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([tourné, BORD_PROCHE]),
+    });
+    e2.beginResize(tourné, "e", { x: 0, y: 0 });
+    e2.move({ x: 6, y: 0 });
+    expect(previewBox.current?.guides).toBeUndefined();
+    e2.end({ x: 6, y: 0 });
+    expect(h2.actions).toEqual([{
+      type: "resizeLayer", id: "l1",
+      frame: computeResizedFrame(tourné.frame, "e", { x: 6, y: 0 }, { rotationDeg: 45 }),
+    }]);
+
+    // (c) et la preuve que ce même geste accrocherait SANS la rotation : c'est bien la rotation qui
+    // change le résultat, pas une fixture hors de portée.
+    const droit = makeLayer();
+    const h3 = makeHarnessWith([droit, BORD_PROCHE]);
+    const e3 = createGestureEngine({
+      dispatch: h3.dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([droit, BORD_PROCHE]),
+    });
+    e3.beginResize(droit, "e", { x: 0, y: 0 });
+    e3.end({ x: 6, y: 0 });
+    expect(h3.actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 100, y: 100, w: 204, h: 150 } }]);
+  });
+
+  it("un calque VERROUILLÉ ou MASQUÉ ne sert pas de référence à travers le moteur", () => {
+    const layer = makeLayer();
+    const verrouillé = { ...VOISIN, id: "sv", locked: true } as Layer;
+    const masqué = { ...VOISIN, id: "sm", visible: false } as Layer;
+    const { dispatch, actions } = makeHarnessWith([layer, verrouillé, masqué]);
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: () => {},
+      getSnapContext: () => snapContextFrom([layer, verrouillé, masqué]),
+    });
+
+    engine.beginMove(layer, { x: 0, y: 0 });
+    engine.end({ x: 294, y: 0 });
+    // La ligne 400 du plan de travail (son CENTRE) reste, elle, un candidat légitime — l'accroche a donc
+    // bien lieu, mais le guide vient du PLAN DE TRAVAIL et ne nomme aucun calque.
+    expect(actions).toEqual([{ type: "setFrames", changes: [{ id: "l1", frame: { x: 400, y: 100, w: 200, h: 150 } }] }]);
+    const preview = { current: null as DragPreview | null };
+    const e2 = createGestureEngine({
+      dispatch: () => {}, getScale: () => 1, onPreviewChange: (p) => { preview.current = p; },
+      getSnapContext: () => snapContextFrom([layer, verrouillé, masqué]),
+    });
+    e2.beginMove(layer, { x: 0, y: 0 });
+    e2.move({ x: 294, y: 0 });
+    expect(preview.current?.guides).toEqual([
+      { axis: "x", at: 400, from: 0, to: 600, kind: "artboard-center", targetIds: [] },
+    ]);
+  });
+});

@@ -4,9 +4,14 @@ import { useRef, useState, useCallback } from "react";
 import type { Dispatch, PointerEvent as ReactPointerEvent } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import {
-  moveLayer, resizeLayer, rotateLayer, toCanvasCoords,
+  moveLayer, resizeLayer, rotateLayer, setFrames, toCanvasCoords,
   type EditorAction, type Point,
 } from "@/lib/studio/editor-state";
+import { sameFrame } from "@/lib/studio/align";
+import {
+  snapCandidates, snapMove, snapResize,
+  type SnapGuide, type SnapSubject,
+} from "@/lib/studio/snap";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Géométrie PURE — aucune dépendance à React ni au DOM. C'est ce qui rend ce fichier testable sans
@@ -343,6 +348,13 @@ export interface DragPreview {
   layerId: string;
   frame?: Frame;
   rotation?: number;
+  /** Tâche 5 (U2, spec §5) — les guides d'accrochage allumés par CE pas de geste, en coordonnées du
+   * gabarit. Ils voyagent sur le canal d'aperçu DÉJÀ existant (`onPreviewChange`), exigence explicite
+   * du plan : un second canal se désynchroniserait du cadre qu'il est censé expliquer, et il faudrait
+   * l'effacer à deux endroits au lieu d'un. Le champ est ABSENT (et non `[]`) quand rien n'accroche,
+   * pour que l'aperçu d'un geste sans accroche reste comparable à l'octet près à celui d'avant la
+   * Tâche 5 — plusieurs tests existants comparent l'objet d'aperçu entier avec `toEqual`. */
+  guides?: SnapGuide[];
 }
 
 // Tâche 2 (U2) — l'état des touches Maj/Alt, lu en LIVE à chaque pointermove/pointerup (pas figé au
@@ -380,10 +392,25 @@ function resizeOptionsFor(a: ActiveGesture, modifiers: GestureModifiers): Resize
   };
 }
 
+/** Ce que l'accrochage a besoin de savoir de la scène, lu en LIVE à chaque pas de geste (comme
+ * `getScale`) : les calques candidats et les dimensions du plan de travail. Le moteur en retire
+ * lui-même le calque manipulé, les masqués et les verrouillés via `snapCandidates` — l'appelant passe
+ * donc `scene.layers` tel quel, sans copie de la règle de filtrage (Tâche 5). */
+export interface SnapEngineContext {
+  layers: readonly SnapSubject[];
+  canvas: { width: number; height: number };
+  /** Seuil en px ÉCRAN ; omis, `SNAP_THRESHOLD_PX` (lib/studio/snap.ts) s'applique. */
+  threshold?: number;
+}
+
 export interface GestureEngineOptions {
   dispatch: Dispatch<EditorAction>;
   getScale: () => number;
   onPreviewChange: (preview: DragPreview | null) => void;
+  /** Tâche 5 (U2) — OPTIONNEL, et c'est délibéré : absent (ou rendant `null`), l'accrochage est
+   * entièrement désactivé et le moteur se comporte à l'octet près comme avant la Tâche 5. C'est ce qui
+   * laisse inchangés les ~90 tests de geste qui construisent un moteur avec trois options. */
+  getSnapContext?: () => SnapEngineContext | null;
 }
 
 export interface GestureEngine {
@@ -396,11 +423,31 @@ export interface GestureEngine {
   isActive(): boolean;
 }
 
-export function createGestureEngine({ dispatch, getScale, onPreviewChange }: GestureEngineOptions): GestureEngine {
+export function createGestureEngine({
+  dispatch,
+  getScale,
+  onPreviewChange,
+  getSnapContext,
+}: GestureEngineOptions): GestureEngine {
   let active: ActiveGesture | null = null;
 
   function screenDelta(pointer: Point, from: Point): Point {
     return toCanvasCoords({ x: pointer.x - from.x, y: pointer.y - from.y }, getScale());
+  }
+
+  /** Le contexte d'accrochage du geste en cours, candidats déjà filtrés — ou `null` quand
+   * l'accrochage est désactivé (aucun `getSnapContext`, ou l'appelant rend `null`). */
+  function snapFor(a: ActiveGesture) {
+    const ctx = getSnapContext?.();
+    if (!ctx) return null;
+    return {
+      candidates: snapCandidates(ctx.layers, a.layerId),
+      canvas: ctx.canvas,
+      // `getScale()` et non 1 : c'est ICI que le seuil en px ÉCRAN devient un seuil en px gabarit.
+      // Un moteur qui passerait 1 laisserait tous les tests de lib/studio/snap.ts au vert.
+      scale: getScale(),
+      threshold: ctx.threshold,
+    };
   }
 
   function begin(kind: GestureKind, layer: Layer, pointer: Point, extra?: { handle?: HandleId; center?: Point }) {
@@ -425,40 +472,92 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
     begin("rotate", layer, pointer, { center });
   }
 
-  function computePreview(a: ActiveGesture, pointer: Point, modifiers: GestureModifiers): DragPreview {
+  /** Le résultat d'un pas de geste — pour l'aperçu ET pour le commit, calculé par UNE SEULE fonction.
+   * Avant la Tâche 5, `computePreview` et `end` recalculaient chacun le cadre de leur côté ; l'accroche
+   * rend cette duplication intenable, puisque le cadre COMMITTÉ doit être celui que l'utilisateur a vu
+   * en aperçu, guides compris. (Même motif que le `resizeOptionsFor` hoisté par la revue Tâche 2 : deux
+   * sites à garder synchronisés à la main finissent par diverger.) */
+  interface GestureOutcome {
+    frame?: Frame;
+    rotation?: number;
+    guides: SnapGuide[];
+    /** Déplacement uniquement : le cadre AVANT accroche et le delta brut — `end` en a besoin pour
+     * choisir entre le chemin historique (`moveLayer` avec le delta tel quel, bit-identique à avant la
+     * Tâche 5) et le chemin accroché (`setFrames` avec le cadre exact). */
+    rawFrame?: Frame;
+    delta?: Point;
+  }
+
+  function computeGesture(a: ActiveGesture, pointer: Point, modifiers: GestureModifiers): GestureOutcome {
     if (a.kind === "move") {
       const d = screenDelta(pointer, a.startPointer);
-      return { layerId: a.layerId, frame: { ...a.startFrame, x: a.startFrame.x + d.x, y: a.startFrame.y + d.y } };
+      const rawFrame: Frame = { ...a.startFrame, x: a.startFrame.x + d.x, y: a.startFrame.y + d.y };
+      const snap = snapFor(a);
+      if (!snap) return { frame: rawFrame, rawFrame, delta: d, guides: [] };
+      const { frame, guides } = snapMove({ frame: rawFrame, ...snap });
+      return { frame, rawFrame, delta: d, guides };
     }
     if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      return { layerId: a.layerId, frame: computeResizedFrame(a.startFrame, a.handle!, d, resizeOptionsFor(a, modifiers)) };
+      const options = resizeOptionsFor(a, modifiers);
+      // Le `probe` de l'accrochage : `computeResizedFrame` liée à CE geste, modificateurs compris. Les
+      // options passent donc par le MÊME chemin que l'appel final — un modificateur oublié ici serait
+      // oublié dans les deux, jamais dans un seul (voir lib/studio/snap.ts, décisions 4 et 6).
+      const probe = (delta: Point) => computeResizedFrame(a.startFrame, a.handle!, delta, options);
+      const snap = snapFor(a);
+      if (!snap) return { frame: probe(d), guides: [] };
+      const { delta, guides } = snapResize({
+        probe, delta: d, axes: handleAxes(a.handle!), rotationDeg: a.startRotation, ...snap,
+      });
+      return { frame: probe(delta), guides };
     }
-    // rotate — pas de conversion d'échelle : l'angle est invariant (voir computeRotationDeg).
+    // rotate — pas de conversion d'échelle : l'angle est invariant (voir computeRotationDeg). Aucun
+    // accrochage de position : Maj accroche déjà l'ANGLE par multiples de 15° (Tâche 2).
     const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation, { snap: modifiers.shift });
-    return { layerId: a.layerId, rotation };
+    return { rotation, guides: [] };
+  }
+
+  function previewFrom(a: ActiveGesture, outcome: GestureOutcome): DragPreview {
+    const preview: DragPreview = { layerId: a.layerId };
+    if (outcome.frame) preview.frame = outcome.frame;
+    if (outcome.rotation !== undefined) preview.rotation = outcome.rotation;
+    // Champ ABSENT quand rien n'accroche — voir le commentaire de `DragPreview.guides`.
+    if (outcome.guides.length > 0) preview.guides = outcome.guides;
+    return preview;
   }
 
   function move(pointer: Point, modifiers: GestureModifiers = {}) {
     if (!active) return;
-    onPreviewChange(computePreview(active, pointer, modifiers));
+    onPreviewChange(previewFrom(active, computeGesture(active, pointer, modifiers)));
   }
 
   function end(pointer: Point, modifiers: GestureModifiers = {}) {
     if (!active) return;
     const a = active;
     active = null;
-    onPreviewChange(null);
+    onPreviewChange(null); // efface aussi les guides : un seul canal, un seul effacement.
+
+    const outcome = computeGesture(a, pointer, modifiers);
 
     if (a.kind === "move") {
-      const d = screenDelta(pointer, a.startPointer);
-      if (d.x !== 0 || d.y !== 0) dispatch(moveLayer(a.layerId, d.x, d.y));
+      const d = outcome.delta!;
+      const frame = outcome.frame!;
+      if (outcome.rawFrame && !sameFrame(outcome.rawFrame, frame)) {
+        // Le déplacement a ACCROCHÉ : on committe le CADRE, pas le delta. `moveLayer` ajouterait le
+        // delta au cadre courant, et `x + (cible − x)` ne rend pas `cible` au bit près en arithmétique
+        // flottante — le calque atterrirait à ~1e-14px de la ligne que le guide vient d'annoncer.
+        // `setFrames` (Tâche 4) pose le cadre tel quel, en UNE entrée d'historique, et ignore de toute
+        // façon un calque verrouillé comme `moveLayer`.
+        dispatch(setFrames([{ id: a.layerId, frame }]));
+      } else if (d.x !== 0 || d.y !== 0) {
+        // Chemin historique, BIT-IDENTIQUE à avant la Tâche 5 (y compris « un clic sans déplacement ne
+        // committe rien »).
+        dispatch(moveLayer(a.layerId, d.x, d.y));
+      }
     } else if (a.kind === "resize") {
-      const d = screenDelta(pointer, a.startPointer);
-      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d, resizeOptionsFor(a, modifiers))));
+      dispatch(resizeLayer(a.layerId, outcome.frame!));
     } else {
-      const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation, { snap: modifiers.shift });
-      dispatch(rotateLayer(a.layerId, rotation));
+      dispatch(rotateLayer(a.layerId, outcome.rotation!));
     }
   }
 
@@ -479,13 +578,21 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
 // `bun test` (pas de DOM disponible) — voir le rapport de tâche pour le détail de cette limite
 // assumée ; toute la logique de geste qui compte a déjà été vérifiée ci-dessus, indépendamment de
 // React et du DOM.
-export function useLayerDrag(dispatch: Dispatch<EditorAction>, scale: number) {
+export function useLayerDrag(
+  dispatch: Dispatch<EditorAction>,
+  scale: number,
+  /** Tâche 5 (U2) — omis ou `null` : aucun accrochage (comportement d'avant la Tâche 5). Relu par
+   * référence à chaque pas de geste, donc un objet reconstruit à chaque rendu ne réarme rien. */
+  snap?: SnapEngineContext | null,
+) {
   const [preview, setPreview] = useState<DragPreview | null>(null);
 
   const dispatchRef = useRef(dispatch);
   dispatchRef.current = dispatch;
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+  const snapRef = useRef(snap);
+  snapRef.current = snap;
 
   const engineRef = useRef<GestureEngine | null>(null);
   if (!engineRef.current) {
@@ -493,6 +600,7 @@ export function useLayerDrag(dispatch: Dispatch<EditorAction>, scale: number) {
       dispatch: (action) => dispatchRef.current(action),
       getScale: () => scaleRef.current,
       onPreviewChange: setPreview,
+      getSnapContext: () => snapRef.current ?? null,
     });
   }
   const engine = engineRef.current;

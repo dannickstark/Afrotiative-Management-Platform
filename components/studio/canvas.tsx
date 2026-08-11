@@ -48,6 +48,12 @@ const HANDLE_CURSOR: Record<HandleId, string> = {
 // `overflow: hidden` du conteneur pour tout calque proche du haut du canevas — donc impossible à
 // saisir. Corrigé en divisant chaque longueur par `scale` dans handleStyleFor()/le rendu ci-dessous,
 // pour qu'elles gardent une taille ÉCRAN constante quel que soit le format édité.
+// Couleur des guides d'accrochage (Tâche 5, U2). DÉLIBÉRÉMENT différente du bleu de sélection
+// (#2563eb, poignées et contours) : un guide n'est pas une partie du calque sélectionné mais une
+// relation TEMPORAIRE avec autre chose, et les outils de référence les distinguent tous par la
+// couleur. Le rose/rouge est le choix le plus répandu pour ce rôle.
+const GUIDE_COLOR = "#e11d48";
+
 const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
   n: { top: 0, left: "50%" }, s: { bottom: 0, left: "50%" },
   e: { right: 0, top: "50%" }, w: { left: 0, top: "50%" },
@@ -78,7 +84,13 @@ const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
 // inatteignable pour la moitié du parc.
 export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const { preview, getMoveHandler, getResizeHandler, getRotateHandler } = useLayerDrag(dispatch, scale);
+  // Tâche 5 (U2, spec §5) — le contexte d'accrochage : la scène ENTIÈRE plus les dimensions du plan de
+  // travail. Le moteur en retire lui-même le calque manipulé, les masqués et les verrouillés
+  // (`snapCandidates`, lib/studio/snap.ts) : refiltrer ici serait une deuxième copie de cette règle.
+  const { preview, getMoveHandler, getResizeHandler, getRotateHandler } = useLayerDrag(dispatch, scale, {
+    layers: scene.layers,
+    canvas: scene.canvas,
+  });
 
   // Le calque à OUTILLER (poignées, rotation, clavier) : celui d'une sélection SIMPLE, jamais le
   // premier d'une sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une
@@ -266,6 +278,43 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
             />
           </div>
         )}
+
+        {/* Guides d'accrochage (Tâche 5, U2, spec §5) — « des lignes fines, avec la surcouche d'aperçu
+            existante, qui disparaissent à la fin du geste ». Trois points :
+             - ILS VIVENT SUR LE CANAL D'APERÇU : `preview.guides` (hooks/use-layer-drag.ts), donc
+               `onPreviewChange(null)` au pointerup/pointercancel les efface SANS code d'effacement
+               dédié — il n'y a rien à oublier de nettoyer ;
+             - RENDUS EN DERNIER, à l'intérieur du conteneur mis à l'échelle : leurs coordonnées sont
+               celles du GABARIT (comme les cadres), et être le dernier enfant les met au-dessus des
+               calques comme des poignées, sans z-index (leçon de la grille de U1) ;
+             - ÉPAISSEUR `1 / scale` : même compensation que les poignées ci-dessus, pour un trait d'un
+               pixel ÉCRAN à tous les zooms plutôt qu'un trait invisible à k≈0,31. Le décalage d'un
+               demi-pixel centre le trait SUR la ligne au lieu de le poser à côté. */}
+        {preview?.guides?.map((guide) => (
+          <div
+            key={`${guide.axis}:${guide.at}:${guide.kind}`}
+            data-testid="snap-guide"
+            data-guide-axis={guide.axis}
+            data-guide-kind={guide.kind}
+            data-guide-at={guide.at}
+            style={{
+              position: "absolute",
+              background: GUIDE_COLOR,
+              pointerEvents: "none",
+              ...(guide.axis === "x"
+                ? {
+                    left: guide.at, top: guide.from,
+                    width: 1 / scale, height: guide.to - guide.from,
+                    marginLeft: -0.5 / scale,
+                  }
+                : {
+                    top: guide.at, left: guide.from,
+                    height: 1 / scale, width: guide.to - guide.from,
+                    marginTop: -0.5 / scale,
+                  }),
+            }}
+          />
+        ))}
       </div>
     </div>
   );
