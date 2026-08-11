@@ -64,9 +64,11 @@ export interface ResizeOptions {
    * dans computeResizedFrame juste avant son usage) : sur une poignée de bord, ce champ est ignoré. */
   lockAspectRatio?: boolean;
   /** Alt (Tâche 2, U2) — redimensionne depuis le CENTRE : les deux bords opposés bougent
-   * symétriquement, la poignée tirée n'avance que de la moitié du delta, et le centre reste fixe
-   * (voir le commentaire dans computeResizedFrame juste avant son usage, pour la preuve que cela
-   * reste vrai à l'écran quel que soit rotationDeg). */
+   * symétriquement et le centre reste fixe, la poignée TIRÉE restant SOUS LE CURSEUR (le cadre varie
+   * donc du DOUBLE du delta, pas de la moitié — revue Tâche 2, Important 2 ; ce commentaire affirmait
+   * la moitié, comportement de la première version, et le correctif l'avait laissé tel quel).
+   * Voir le commentaire dans computeResizedFrame juste avant son usage, pour la preuve que le centre
+   * reste fixe À L'ÉCRAN quel que soit rotationDeg. */
   fromCenter?: boolean;
 }
 

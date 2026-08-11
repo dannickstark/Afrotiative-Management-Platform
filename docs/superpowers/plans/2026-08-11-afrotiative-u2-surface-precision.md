@@ -79,6 +79,45 @@ Add, as pure options rather than new functions where possible:
 
 **Properties:** each modifier off reproduces today's behaviour exactly; Shift-resize preserves `w/h` ratio within epsilon across all eight handles; Shift-rotate yields only multiples of 15; Alt-resize keeps the centre fixed; Shift and Alt **combined** behave sensibly (state which you chose and why).
 
+> **Amendment, 2026-08-11 — the eight-handle contradiction was mine.** The bullet above tells the
+> implementer to decide whether Shift does anything on a *side* handle, then the properties line demands
+> the ratio hold "across all eight handles". Those cannot both bind: if a side handle ignores Shift, its
+> ratio is free by construction.
+>
+> **The delivered behaviour is Shift on CORNERS ONLY** (`lockAspectRatio && isCorner`), verified against
+> the built function rather than read off a comment: on a side handle the returned frame is
+> *byte-identical* to the unmodified drag, and on a corner the ratio is preserved exactly. The
+> properties line's "all eight handles" is therefore **struck** — read it as "across all four corner
+> handles; side handles ignore Shift".
+>
+> Two notes on how this amendment itself went wrong, because the failure is instructive. Its first
+> version asserted the opposite — "Shift constrains all eight, side handles included" — which I wrote
+> from memory of my own plan instead of from the source, in the same breath as telling the implementer
+> its side-handle decision stood. The implementer refused to reconcile the two and escalated rather than
+> guess, which was right. **A plan amendment is a durable claim about delivered behaviour and must be
+> checked against the code like any other.**
+>
+> The open question that remains is a matter of taste, not correctness, and is *not* settled by evidence:
+> whether Shift should also scale from an edge. Corners-only is what ships. The justification originally
+> given — "in most tools it does not" — was never verified and the Task 1+2 reviewer disputed it; neither
+> side had checked, so **no claim about other tools' behaviour is recorded here.** The geometric argument
+> that does hold: a side handle carries one degree of freedom, so constraining it forces a dimension the
+> user is not dragging to move. Revisit only on a real user complaint.
+>
+> Two further corrections from the same review, both about claims rather than code:
+>
+> - **Alt is centre-fixed with the handle under the cursor**, so the frame grows by twice the pointer
+>   delta. Nothing in this plan specified the factor; the first implementation chose half, which quietly
+>   repealed Task 1's direct-manipulation invariant. Figma, Sketch, Illustrator and Photoshop all keep
+>   the handle on the cursor. **The doubling is now the specified behaviour.**
+> - The aspect-lock rule must be **continuous in the pointer position**. The first implementation picked
+>   a dominant axis by `|Lx| >= |Ly|`, which disagrees with itself at the 45° line whenever the ratio is
+>   not 1:1 — a 0.002 px pointer move flipped the frame by up to 198 px, invisible to every pointwise
+>   assertion. The fix projects the cursor onto the ratio-locked diagonal, which is linear in the delta
+>   and therefore continuous by construction. **A continuity property test is required**, not optional:
+>   two deltas 0.001 apart must not produce frames more than ~0.01 px apart. This is the second time in
+>   this programme that a set of individually-true pointwise properties admitted a defect between them.
+
 - [ ] Step 1: failing tests · [ ] Step 2: confirm red · [ ] Step 3: implement · [ ] Step 4: green, plus `tests/studio-interactions.test.ts` · [ ] Step 5: commit
 
 ---
@@ -122,6 +161,26 @@ The reducer needs one action applying a batch of frame changes as **a single und
 **Files:** create `lib/studio/snap.ts`; modify `hooks/use-layer-drag.ts`, `components/studio/canvas.tsx`; tests
 
 **Verify first:** the `DragPreview` type at `hooks/use-layer-drag.ts:80` and how `onPreviewChange` feeds the canvas — guides must ride that existing preview channel rather than a second one.
+
+> **Added 2026-08-11, from the Task 1+2 review.** Three places this task will fight the existing code
+> unless you look before you write:
+>
+> 1. **Use Task 2's exported handle→anchor mapping.** Which point a handle drags and which it holds
+>    fixed is now exported from `hooks/use-layer-drag.ts` rather than living inline as ternaries. Snapping
+>    needs exactly that mapping to know which edge to snap during a resize. Do not re-derive it — two
+>    copies will drift, and the review that prompted this note had to reconstruct the functions by hand
+>    to check them.
+> 2. **Decide the precedence between snapping and the modifiers, and test it.** Shift's ratio lock and
+>    Alt's centre-fixed resize both constrain the frame; a snap that fires afterwards can break either.
+>    State the order — modifier constrains, then snap projects along the remaining freedom, or snap wins
+>    and the ratio bends — and assert it. Task 2's plan text already demands the ratio hold "within
+>    epsilon"; if a snap can violate that, one of the two properties needs qualifying **here**, in the
+>    plan, not in a comment.
+> 3. **Say what snaps on a rotated layer.** The snap engine works in artboard space, but a rotated
+>    layer's on-screen bounding box is not its frame, so "snap the left edge" is ambiguous the moment
+>    `rotation !== 0`. Pick one — the unrotated frame's edges, which is cheap and matches Task 4's
+>    explicitly rotation-blind bounding boxes — and write it down rather than leaving it to be
+>    discovered.
 
 **Pure snap engine.** Given the moving frame, the candidate frames (visible, unlocked siblings), the artboard size and a threshold in **screen** pixels (so it feels the same at every zoom — convert using the current scale), return the adjusted frame plus the guides that fired.
 
