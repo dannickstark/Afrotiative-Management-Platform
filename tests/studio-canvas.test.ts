@@ -3,6 +3,9 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene } from "@/lib/studio/scene";
 import { Canvas } from "@/components/studio/canvas";
+import { CanvasChrome, safeAreaDefaultFor } from "@/components/studio/canvas-chrome";
+import { DEFAULT_PREFS, type EditorPrefs } from "@/lib/studio/editor-prefs";
+import { FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
 
 // Pas de DOM dans `bun test` (voir tests/use-persisted-filters.test.ts) : on rend le composant en
 // chaîne HTML via react-dom/server, ce qui ne nécessite ni `document` ni `window`, et on inspecte
@@ -236,5 +239,112 @@ describe("Canvas — poignées et contour de sélection gardent une taille ÉCRA
     const titleLayer = styleAttr(html, 'data-layer-id="title"');
     expect(titleLayer).toContain("outline:4px solid #2563eb"); // 2 / 0.5
     expect(titleLayer).toContain("outline-offset:2px"); // 1 / 0.5
+  });
+});
+
+describe("Canvas — l'artboard reste visuellement distinct de son entourage même sans fond opaque (Tâche 7, spec §7)", () => {
+  // Avant cette tâche, un calque de fond `scene.canvas.background === "transparent"` ne posait AUCUN
+  // fond ni sur le conteneur intérieur (déjà le cas) NI sur le conteneur EXTÉRIEUR
+  // (`data-testid="studio-canvas"`) : la page (fond `bg-muted/20` posé par editor-shell.tsx) se
+  // voyait alors directement à travers tout le canevas, rendant ses limites indiscernables de son
+  // entourage — l'exact défaut que spec §7 demande de corriger (« l'artboard visuellement distinct de
+  // son entourage »). Ce test verrouille un habillage TOUJOURS présent sur ce conteneur, qu'importe le
+  // fond de la scène.
+  it('le conteneur "studio-canvas" porte un box-shadow qui le distingue de son entourage', () => {
+    const html = render(makeScene());
+    expect(styleAttr(html, 'data-testid="studio-canvas"')).toContain("box-shadow");
+  });
+
+  it("reste vrai même pour un fond de scène transparent, où rien d'autre ne distinguerait le canevas", () => {
+    const scene = makeScene();
+    scene.canvas = { ...scene.canvas, background: "transparent" };
+    const html = render(scene);
+    expect(styleAttr(html, 'data-testid="studio-canvas"')).toContain("box-shadow");
+  });
+});
+
+describe("CanvasChrome — pastilles flottantes, règles et grille optionnelles (Tâche 7, spec §7)", () => {
+  // renderCanvasChrome — scaffolding de test LOCAL (comme `render()` plus haut dans ce fichier) :
+  // `format`/`zoom` ont des valeurs par défaut ici pour que les tests qui ne les font pas varier
+  // (ex. la présence des règles) restent courts, exactement comme `render(scene, selectedId)` plus
+  // haut par défaut `selectedId` à `null`.
+  function renderCanvasChrome(opts: { format?: FormatKey; zoom?: number; prefs: EditorPrefs }) {
+    return renderToStaticMarkup(
+      React.createElement(
+        CanvasChrome,
+        { format: opts.format ?? "ig_square", zoom: opts.zoom ?? 1, prefs: opts.prefs },
+        React.createElement("div", { "data-testid": "canvas-slot" }),
+      ),
+    );
+  }
+
+  it("chips state the format name, its pixel size, and the zoom", () => {
+    const html = renderCanvasChrome({ format: "ig_portrait", zoom: 0.72, prefs: DEFAULT_PREFS });
+    expect(html).toContain("1080");
+    expect(html).toContain("1350");
+    expect(html).toMatch(/72\s?%/);
+  });
+
+  it("rulers and grid are OFF by default and render when enabled", () => {
+    expect(renderCanvasChrome({ prefs: DEFAULT_PREFS })).not.toContain('data-testid="rulers"');
+    expect(renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, rulers: true } })).toContain('data-testid="rulers"');
+  });
+
+  // Défaut du brief corrigé (voir le rapport de la Tâche 7) : le plan ne testait QUE les règles, pas
+  // la grille — alors que spec §7 les traite comme une paire symétrique (« rulers and grid rendered,
+  // available but off by default »). Un correctif qui n'implémenterait que les règles serait passé à
+  // travers les mailles du test du brief ; celui-ci comble le trou.
+  it("la grille suit la MÊME règle « off par défaut, rendue quand activée » que les règles", () => {
+    expect(renderCanvasChrome({ prefs: DEFAULT_PREFS })).not.toContain('data-testid="grid"');
+    expect(renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, grid: true } })).toContain('data-testid="grid"');
+  });
+
+  it("le contenu passé en enfant (le vrai Canvas, en composition réelle) est bien rendu à l'intérieur", () => {
+    expect(renderCanvasChrome({ prefs: DEFAULT_PREFS })).toContain('data-testid="canvas-slot"');
+  });
+
+  it('expose un bouton data-action="toggle-safe-areas" qui reflète prefs.safeAreas — le TOGGLE est de U1, les bandes elles-mêmes sont de U2 (spec §7)', () => {
+    const on = renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, safeAreas: true } });
+    const off = renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, safeAreas: false } });
+    expect(on).toContain('data-action="toggle-safe-areas"');
+    expect(off).toContain('data-action="toggle-safe-areas"');
+    // Témoin de sabotage (leçon de la Tâche 1 : une classe utilitaire dans `className` peut faire un
+    // faux positif en recherche de sous-chaîne naïve) — on isole le fragment du bouton précis plutôt
+    // que de chercher "aria-pressed" dans tout le HTML, qui pourrait apparaître ailleurs.
+    function buttonFragment(html: string): string {
+      const re = /<button[^>]*data-action="toggle-safe-areas"[^>]*>/;
+      const m = re.exec(html);
+      if (!m) throw new Error('bouton data-action="toggle-safe-areas" introuvable');
+      return m[0];
+    }
+    expect(buttonFragment(on)).toContain('aria-pressed="true"');
+    expect(buttonFragment(off)).toContain('aria-pressed="false"');
+  });
+});
+
+describe("safeAreaDefaultFor — dérivé de l'orientation du format, jamais une paire codée en dur (Tâche 7, spec §7)", () => {
+  // Défaut du brief corrigé (voir le rapport de la Tâche 7) : le plan ne donnait que QUATRE des huit
+  // formats (story/ig_portrait à true, fb_link/li_link à false) — juste assez pour qu'une paire
+  // codée en dur (`format === "story" || format === "ig_portrait"`) passe sans être dérivée de rien
+  // de réel. Ce test couvre les HUIT, y compris les deux formats carrés (ig_square/wa_square) que le
+  // brief ne mentionnait pas du tout : un futur format ajouté à FORMAT_PRESETS sans entrée explicite
+  // ici ferait échouer `FORMAT_KEYS.length` ci-dessous plutôt que de silencieusement hériter d'un
+  // défaut faux.
+  it("ON pour les formats PORTRAIT (plus hauts que larges — plein écran mobile, chrome d'appli en haut/bas), OFF pour tout le reste", () => {
+    const expected: Record<FormatKey, boolean> = {
+      website_featured: false, // 1200×675 — paysage, image à la une du site
+      fb_link: false, // 1200×630 — paysage, aperçu de lien
+      ig_square: false, // 1080×1080 — carré, publication de flux
+      ig_portrait: true, // 1080×1350 — portrait
+      story: true, // 1080×1920 — portrait plein écran
+      x_landscape: false, // 1600×900 — paysage
+      wa_square: false, // 1080×1080 — carré
+      li_link: false, // 1200×627 — paysage, aperçu de lien
+    };
+    expect(FORMAT_KEYS.length).toBe(8);
+    expect(Object.keys(expected).length).toBe(8);
+    for (const key of FORMAT_KEYS) {
+      expect(safeAreaDefaultFor(key)).toBe(expected[key]);
+    }
   });
 });

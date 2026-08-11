@@ -9,6 +9,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Canvas } from "./canvas";
+import { CanvasChrome, safeAreaDefaultFor } from "./canvas-chrome";
+import { SaveIndicator } from "./save-indicator";
 import { Rail } from "./rail";
 import { PanelHost } from "./panel-host";
 import { CalquesPanel } from "./panels/calques-panel";
@@ -55,15 +57,6 @@ const CONTEXT_LABEL: Record<TemplateContext, string> = {
   newsletter_header: "Bandeau newsletter",
   recap_card: "Carte récap",
 };
-
-function autosaveLabel(s: AutosaveState): string {
-  switch (s.status) {
-    case "saving": return "Enregistrement…";
-    case "saved": return "Enregistré";
-    case "error": return `Échec — ${s.message ?? "erreur inconnue"}`;
-    default: return s.dirty ? "Modifications non enregistrées" : "Enregistré";
-  }
-}
 
 export interface EditorShellTemplate {
   id: string;
@@ -159,7 +152,10 @@ function EditorShellInner({
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
 
   // ── Rail + panneau accosté (Tâche 1, spec §3) ────────────────────────────
-  const [prefs, setPrefs] = useEditorPrefs();
+  // Tâche 7 (U1, spec §7) : le défaut des zones sûres suit le FORMAT de CE gabarit uniquement au tout
+  // premier lancement dans ce navigateur (voir hooks/use-editor-prefs.ts et
+  // canvas-chrome.tsx#safeAreaDefaultFor) — une préférence déjà enregistrée reste prioritaire.
+  const [prefs, setPrefs] = useEditorPrefs(safeAreaDefaultFor(template.format));
 
   function selectRailCategory(category: RailCategory) {
     setPrefs((p) => ({ ...p, openPanel: nextOpenPanel(p.openPanel, category) }));
@@ -312,16 +308,6 @@ function EditorShellInner({
         </div>
 
         <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "text-xs",
-              autosaveState.status === "error" ? "text-destructive" : "text-muted-foreground",
-            )}
-            data-testid="autosave-status"
-            data-status={autosaveState.status}
-          >
-            {autosaveLabel(autosaveState)}
-          </span>
           <Button
             type="button" variant="ghost" size="icon-sm" title="Annuler"
             disabled={state.past.length === 0} onClick={() => dispatch(undo())}
@@ -369,12 +355,19 @@ function EditorShellInner({
           ModeSwitch (le contrôle segmenté flottant) est un FRÈRE du contenu propre au mode, PAS un
           enfant de l'une ou l'autre branche — spec §5 : « centré au-dessus du canevas, présent dans
           les DEUX états » — positionné en absolu sur ce conteneur `relative`, `pt-11` lui réservant
-          de la place plutôt que de chevaucher le haut du rail/canevas/case large. */}
+          de la place plutôt que de chevaucher le haut du rail/canevas/case large. SaveIndicator
+          (Tâche 7, spec §8) est désormais son FRÈRE dans le même groupe centré — « il se pose à côté
+          du sélecteur de mode » — plutôt qu'un enfant du bandeau d'en-tête ci-dessus, où il vivait
+          avant cette tâche (`data-testid="autosave-status"`, retiré). */}
       <div className="relative flex flex-1 gap-3 overflow-hidden pt-11">
-        <ModeSwitch
-          mode={mode} onChange={changeMode}
-          className="absolute left-1/2 top-0 z-10 -translate-x-1/2"
-        />
+        <div className="absolute left-1/2 top-0 z-10 flex -translate-x-1/2 items-center gap-3">
+          <ModeSwitch mode={mode} onChange={changeMode} />
+          <SaveIndicator
+            status={autosaveState.status}
+            message={autosaveState.message}
+            onRetry={() => void autosave.retry()}
+          />
+        </div>
 
         {mode === "montage" ? (
           <>
@@ -422,11 +415,26 @@ function EditorShellInner({
               </PanelHost>
             )}
 
+            {/* CanvasChrome (Tâche 7, spec §7) : pastilles flottantes (format + zoom), règles et
+                grille — rendues mais désactivées par défaut, état mémorisé par utilisateur — et le
+                TOGGLE des zones sûres (sa persistance vit dans EditorPrefs, Tâche 1 ; les BANDES elles-
+                mêmes restent de U2, voir canvas-chrome.tsx). `zoom={scale}` : la même échelle que
+                `<Canvas>` reçoit juste en dessous, jamais EditorPrefs.zoom (mémorisé mais sans
+                consommateur avant cette tâche, voir le commentaire de canvas-chrome.tsx). */}
             <div
               ref={canvasWrapRef}
               className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/20 p-4"
             >
-              <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
+              <CanvasChrome
+                format={template.format}
+                zoom={scale}
+                prefs={{ rulers: prefs.rulers, grid: prefs.grid, safeAreas: prefs.safeAreas }}
+                onToggleRulers={() => setPrefs((p) => ({ ...p, rulers: !p.rulers }))}
+                onToggleGrid={() => setPrefs((p) => ({ ...p, grid: !p.grid }))}
+                onToggleSafeAreas={() => setPrefs((p) => ({ ...p, safeAreas: !p.safeAreas }))}
+              >
+                <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
+              </CanvasChrome>
             </div>
 
             {/* Tâche 6 (U1, spec §6) : `h-full` + `overflow-hidden` donnent à cette colonne une

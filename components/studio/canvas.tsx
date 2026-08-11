@@ -106,6 +106,16 @@ export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasPro
         height: scene.canvas.height * scale,
         overflow: "hidden",
         outline: "none",
+        // Tâche 7 (U1, spec §7) : « l'artboard visuellement distinct de son entourage » — TOUJOURS
+        // présent, quel que soit scene.canvas.background. Avant ce correctif, un fond "transparent"
+        // (voir le rendu de fond, plus bas, qui pose alors `background: undefined`) ne posait AUCUN
+        // fond ni ombre sur CE conteneur non plus : la page (fond `bg-muted/20` de editor-shell.tsx)
+        // se voyait directement au travers de tout le canevas, rendant ses limites indiscernables de
+        // son entourage. Un box-shadow porté ICI (le conteneur EXTÉRIEUR, jamais mis à l'échelle) —
+        // plutôt que sur le conteneur intérieur `transform: scale(k)` — garde une épaisseur d'ombre
+        // ÉCRAN constante quel que soit le zoom, même raison que HANDLE_STYLE plus haut compense déjà
+        // par `/ scale`.
+        boxShadow: "0 0 0 1px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.12)",
       }}
     >
       <div

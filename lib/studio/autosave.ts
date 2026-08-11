@@ -37,6 +37,14 @@ export interface AutosaveController<T> {
    * *Publier* (spec §3 : la publication doit voir le tout dernier brouillon, pas un instantané
    * périmé par le différé encore en attente). */
   flush(): Promise<SaveResult | null>;
+  /** Tâche 7 (U1, spec §8) : ré-attaque EXACTEMENT la même valeur que le DERNIER enregistrement en
+   * échec, SANS exiger de nouvelle notification (`notifyChange`) entre-temps — c'est le défaut
+   * différé de V2 que components/studio/save-indicator.tsx ferme (« Échec — réessayer »). Réutilise
+   * runPendingSave(), le MÊME chemin qu'un enregistrement déclenché par le différé ou par flush(),
+   * plutôt que d'appeler `opts.save` une seconde fois depuis un endroit séparé. `null` si l'état
+   * courant n'est PAS "error" (rien à réessayer) — un double-clic sur *Réessayer* après un succès
+   * entre-temps, par exemple, ne redéclenche donc rien. */
+  retry(): Promise<SaveResult | null>;
   getState(): AutosaveState;
   /** Annule tout différé en attente sans enregistrer — démontage du composant. */
   destroy(): void;
@@ -128,6 +136,19 @@ export function createAutosaveController<T>(opts: AutosaveOptions<T>): AutosaveC
     return runPendingSave();
   }
 
+  // `pendingValue` n'est JAMAIS effacée par runPendingSave() (voir plus haut : seul `hasPending`
+  // repasse à false) — elle continue donc de porter la DERNIÈRE valeur tentée même après un échec.
+  // C'est ce qui permet à retry() de rejouer runPendingSave() SANS qu'aucun appelant n'ait besoin de
+  // repasser une valeur : `status === "error"` garantit qu'au moins un notifyChange() a eu lieu par
+  // le passé (voir la documentation de l'interface), donc `pendingValue` est bien de type T ici,
+  // jamais `undefined`.
+  async function retry(): Promise<SaveResult | null> {
+    if (state.status !== "error") return null;
+    clearTimer();
+    if (inFlight) await inFlight.catch(() => undefined);
+    return runPendingSave();
+  }
+
   function getState(): AutosaveState {
     return state;
   }
@@ -136,5 +157,5 @@ export function createAutosaveController<T>(opts: AutosaveOptions<T>): AutosaveC
     clearTimer();
   }
 
-  return { notifyChange, flush, getState, destroy };
+  return { notifyChange, flush, retry, getState, destroy };
 }
