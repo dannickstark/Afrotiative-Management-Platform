@@ -299,3 +299,87 @@ Quatre mutations exécutées, chacune fait rougir exactement ce qu'elle doit :
 | `probe()` : `quality: 86` → `85` | **1 test rouge** — le témoin de fidélité (2577 ≠ 2667) |
 | réserve 1 : chaîne à espaces → chaîne compacte | **1 test rouge** — l'assertion porte bien sur les espaces |
 | témoin « la rotation fonctionne » : `rotate(45deg)` → rien | **1 test rouge** |
+
+---
+
+## Arbitrages après la sonde — 2026-08-11 (contrôleur)
+
+La sonde a fait exactement ce qu'on lui demandait : elle a répondu à la question *et* trouvé quatre
+défauts dans ce plan, dont un dans une chaîne littérale que j'y avais écrite. Décisions, dans l'ordre
+où elles débloquent la suite.
+
+### A. Réserve 2 (`transform` ne tourne pas la découpe) — **les formes découpées ne tournent pas en U3, et l'interface le dit**
+
+C'est l'arbitrage qui bloquait la Tâche 2. Mesuré par la sonde : un triangle découpé puis pivoté de
+90° est **identique au pixel près** à sa version non pivotée — satori enveloppe la forme dans un
+`<g clip-path>` exprimé dans les coordonnées du **parent**, que `transform` ne traverse pas.
+
+**Décision : `rotation` est refusée sur les formes découpées (la famille polygonale), et le contrôle
+de rotation l'annonce en français.** Deux raisons, et la première suffit.
+
+1. **L'alternative « tourner les sommets » ne marche pas telle qu'on l'imagine.** Les sommets sont en
+   pourcentage du cadre : sur un cadre non carré, tourner en espace normalisé **cisaille** la forme au
+   lieu de la tourner (1 % de largeur et 1 % de hauteur ne valent pas le même nombre de pixels). En
+   espace pixel c'est exact, mais la forme tournée **déborde** alors de sa boîte — et `clipPath` coupe
+   à la boîte de l'élément. Une étoile pivotée de 45° y perdrait ses pointes. Un correctif qui coupe
+   les pointes d'une étoile est pire que pas de rotation.
+2. Le comportement actuel est déjà cassé **en silence** : l'utilisateur tourne, et rien ne bouge.
+   Interdire en le disant est strictement meilleur qu'autoriser sans effet. C'est le précédent que U2
+   a posé deux fois — `snap-rotation-note` et `safe-areas-none` — et la revue de U2 avait tranché que
+   « la fonctionnalité meurt en silence » justifiait à elle seule la note.
+
+**`rect` et `ellipse` ne sont pas concernés** : ils passent par `borderRadius`, pas par une découpe, et
+la sonde confirme que la rotation d'un `div` fonctionne de bout en bout. La rotation reste donc
+disponible pour eux — c'est une limite par forme, pas une limite globale, et l'interface doit le
+refléter (pas de contrôle grisé en permanence).
+
+**Amélioration future, hors U3** : tourner les sommets en espace pixel *et* agrandir le cadre pour
+contenir la forme tournée. C'est un changement de modèle, pas un correctif.
+
+### B. Réserve 1 — la chaîne à espaces était **dans ce plan**, et elle est corrigée
+
+La Tâche 1 citait `polygon(50% 0, 100% 100%, 0 100%)`. C'est la **forme défectueuse** : un espace
+après une virgule fait résoudre x contre la **hauteur** du cadre, et sur 800×400 la moitié droite du
+triangle disparaît. Un cadre carré masque complètement le défaut.
+
+**La forme compacte, sans espace après les virgules, est la seule à utiliser** — dans le code, dans les
+tests, et dans toute fixture. La Tâche 2 doit centraliser la construction de ces chaînes dans
+`shapes.ts` précisément pour qu'aucun appelant n'ait plus à connaître ce piège, et **le tester**
+(une chaîne à espaces doit produire une géométrie différente : c'est la mutation qui garde la règle).
+
+### C. Défaut de plan #12 — l'ordre des tâches 3 et 4 était faux
+
+La Tâche 3 a besoin de `borderRadius: "50%"` pour l'ellipse, mais `radius` est `z.number()`
+(`scene.ts:46` et `:91`) : à travers `renderScene()`, `radius: 200` sur 800×400 donne un **stade**, pas
+une ellipse. La migration de `radius` vers une forme acceptant les chaînes, que ce plan avait placée en
+Tâche 4, est donc un **prérequis** de la Tâche 3.
+
+**Correction : la migration de `radius` remonte dans la Tâche 2**, avec le reste du modèle partagé. La
+Tâche 4 garde les ombres et le rayon **par coin**. C'est le douzième défaut de plan de ce programme, et
+le troisième de la même famille : une dépendance entre tâches que le texte ne nommait pas.
+
+### D. Défaut de plan mineur — mauvais symbole
+
+La Tâche 3 cite `SHAPE_GALLERY` à `shape-gallery.ts:35`. L'export réel est **`SHAPE_TILES`, ligne 34**.
+Les autres numéros de ligne cités dans ce plan ont été vérifiés corrects par la sonde.
+
+### E. Ce que la sonde n'a pas pu établir, et qui reste ouvert
+
+`renderScene()` n'a **pas** pu être piloté de bout en bout pour `clipPath` : `ShapeLayer` n'a aujourd'hui
+aucun champ capable d'en porter un et `shapeNode()` n'en émet aucun — et la sonde avait interdiction de
+toucher au code de production. Elle a donc reproduit l'étape 5 de `renderScene()` et **prouvé la
+fidélité** de cette reproduction (sortie identique à l'octet, 2667 octets, sur une scène que le schéma
+sait exprimer ; témoin qui rougit sur `quality: 86→85`).
+
+**La Tâche 2 doit donc, en plus de son travail, refermer cette boucle** : une fois `shapes.ts` en place
+et `shapeNode()` capable d'émettre une découpe, refaire passer l'assertion en pixels **par
+`renderScene()` lui-même**. Tant que ce n'est pas fait, la preuve porte sur une reproduction fidèle du
+pipeline, pas sur le pipeline.
+
+### F. Réserve 3 (la bordure échappe à la découpe) — reportée à la Tâche 4, sciemment
+
+Le contour reste rectangulaire quand le remplissage est triangulaire. Aucune forme de la Tâche 3 ne
+porte de bordure par défaut, donc cela ne bloque rien ; mais la Tâche 4, qui touche aux ombres et aux
+contours, doit soit résoudre le cas, soit l'annoncer dans l'interface comme les deux précédents.
+`clipPath` × `borderRadius` se composent proprement en **intersection** — la sonde l'a mesuré, ce qui
+répond par avance à une question que la Tâche 4 se serait posée.
