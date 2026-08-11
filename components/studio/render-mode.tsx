@@ -338,7 +338,7 @@ export function RenderMode({
                 Légende SÉPARÉE et TOUJOURS visible plutôt qu'une extension du texte de la case large,
                 pour que ce fait reste vrai même si la case large montre un article. */}
             <span className="text-xs text-muted-foreground" data-testid="render-filmstrip-provenance">
-              {"toujours avec des valeurs d'exemple, quel que soit l'article choisi ci-dessus"}
+              {"Ces vignettes utilisent toujours des valeurs d'exemple, quel que soit l'article choisi ci-dessus."}
             </span>
           </div>
           {stale && (
@@ -348,7 +348,7 @@ export function RenderMode({
                 type="button" variant="outline" size="sm" data-action="rerender"
                 disabled={disabled} onClick={rerenderFilmstrip}
               >
-                <RefreshCw />↻ rendre
+                <RefreshCw />rendre
               </Button>
             </div>
           )}

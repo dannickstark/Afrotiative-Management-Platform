@@ -19,6 +19,13 @@ export const RAIL_LABELS: Record<RailCategory, string> = {
 
 export type EditorPrefs = {
   openPanel: RailCategory | null; // null = collapsed
+  // Correctif revue finale — Important 1 : le panneau que ⌘/ doit RÉOUVRIR quand `openPanel` est
+  // `null` (toggleCollapse, plus bas). Sans ce champ, une fermeture perdait la trace de "quel
+  // panneau" et ⌘/ ne pouvait que replier, jamais réafficher — un aller SANS retour, contraire à
+  // spec §3/§9 (« ⌘/ toggles »). Default "calques" : le premier panneau historique du rail (Tâche 1),
+  // un choix aussi raisonnable qu'un autre pour un utilisateur qui n'a encore jamais rien ouvert ni
+  // replié.
+  lastOpenPanel: RailCategory;
   rulers: boolean; // default false
   grid: boolean; // default false
   safeAreas: boolean; // default true
@@ -35,6 +42,7 @@ export type EditorPrefs = {
 
 export const DEFAULT_PREFS: EditorPrefs = {
   openPanel: null,
+  lastOpenPanel: "calques",
   rulers: false,
   grid: false,
   safeAreas: true,
@@ -55,6 +63,13 @@ function isRailCategory(value: unknown): value is RailCategory {
 function parseOpenPanel(value: unknown): RailCategory | null {
   if (value === null) return null;
   return isRailCategory(value) ? value : DEFAULT_PREFS.openPanel;
+}
+
+// Même discipline « par champ » que parseOpenPanel ci-dessus — mais SANS le cas `null` : contrairement
+// à `openPanel`, `null` n'a jamais été une valeur légale de `lastOpenPanel` (c'est justement le champ
+// qui garantit qu'on retombe TOUJOURS sur UNE catégorie concrète, jamais sur « rien »).
+function parseLastOpenPanel(value: unknown): RailCategory {
+  return isRailCategory(value) ? value : DEFAULT_PREFS.lastOpenPanel;
 }
 
 function parseBooleanField(value: unknown, fallback: boolean): boolean {
@@ -106,6 +121,7 @@ export function parsePrefs(raw: string | null): EditorPrefs {
   const obj = parsed as Record<string, unknown>;
   return {
     openPanel: parseOpenPanel(obj.openPanel),
+    lastOpenPanel: parseLastOpenPanel(obj.lastOpenPanel),
     rulers: parseBooleanField(obj.rulers, DEFAULT_PREFS.rulers),
     grid: parseBooleanField(obj.grid, DEFAULT_PREFS.grid),
     safeAreas: parseBooleanField(obj.safeAreas, DEFAULT_PREFS.safeAreas),
@@ -126,4 +142,45 @@ export function serializePrefs(p: EditorPrefs): string {
 // toujours `null`), plutôt que de dupliquer la règle de fermeture ailleurs.
 export function nextOpenPanel(current: RailCategory | null, clicked: RailCategory): RailCategory | null {
   return current === clicked ? null : clicked;
+}
+
+// Correctif revue finale — Important 1 : ⌘/ (spec §3/§9) était un aller SANS retour — voir
+// editor-shell.tsx avant ce correctif, qui appelait `nextOpenPanel(p.openPanel, p.openPanel)` (donc
+// toujours `null`) sous un garde qui ne faisait déjà rien quand `openPanel` valait déjà `null` :
+// une fois replié, plus aucune pression sur ⌘/ ne pouvait rouvrir quoi que ce soit. DÉCISION extraite
+// en fonction PURE (comme demandé par la revue : « this sub-project's reviews have twice faulted
+// inline predicates that were pure all along ») :
+//   - un panneau est ouvert -> le replier, et MÉMORISER lequel dans `lastOpenPanel` (c'est CE panneau
+//     qu'un ⌘/ suivant doit réafficher) ;
+//   - aucun panneau n'est ouvert -> réafficher `lastOpenPanel`.
+// Portée volontairement LIMITÉE à ⌘/ : un clic sur le rail ou sur le chevron de panel-host.tsx
+// continue de passer par `nextOpenPanel` seul, inchangé — ces deux gestes donnent déjà l'un des deux
+// à l'utilisateur (le rail sait toujours QUELLE catégorie vient d'être cliquée ; le chevron ne fait
+// que reproduire ce que le rail ferait pour la même catégorie), ils n'ont donc pas besoin de cette
+// mémoire à double sens.
+export function toggleCollapse(prefs: EditorPrefs): EditorPrefs {
+  if (prefs.openPanel) {
+    return { ...prefs, openPanel: null, lastOpenPanel: prefs.openPanel };
+  }
+  return { ...prefs, openPanel: prefs.lastOpenPanel };
+}
+
+// Correctif revue finale — amendement de spec §3 (« This is what a newly created template opens
+// onto ») fait par le produit : DEFAULT_PREFS.openPanel reste `null` (le plan de la Tâche 1 a raison
+// de ne forcer AUCUN panneau pour un gabarit ordinaire), mais un gabarit dont la scène ne porte
+// ENCORE AUCUN calque — un gabarit tout juste créé — doit ouvrir sur Modèles, pour que « dupliquer un
+// gabarit existant » (spec §3, colonne Sections de Modèles) reste découvrable sans devoir déjà
+// connaître le rail. PURE — hooks/use-editor-prefs.ts l'applique une fois, juste après avoir résolu
+// les préférences persistées (par défaut ou depuis localStorage), au montage de CHAQUE gabarit (ce
+// hook est ré-instancié à chaque navigation vers un gabarit différent, donc `hasLayers` y est
+// réellement réévalué par gabarit, pas une seule fois par navigateur comme `defaultSafeAreas`).
+//
+// Ne bouscule JAMAIS un panneau déjà ouvert (« without forcing the panel on returning users », la
+// ruling) : si les préférences persistées portent déjà une catégorie (l'utilisateur en a
+// délibérément laissé une ouverte, y compris sur un AUTRE gabarit — ces préférences sont partagées
+// par navigateur, pas par gabarit), ce panneau reste affiché tel quel plutôt que d'être remplacé par
+// Modèles.
+export function openModelesIfEmpty(prefs: EditorPrefs, hasLayers: boolean): EditorPrefs {
+  if (hasLayers || prefs.openPanel !== null) return prefs;
+  return { ...prefs, openPanel: "modeles" };
 }

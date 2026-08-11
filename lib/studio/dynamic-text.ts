@@ -16,6 +16,7 @@
 // aucune des deux n'est touchée.
 import { CONTEXT_TOKENS, TOKEN_IDS, TOKEN_KINDS, type TemplateContext, type TokenId } from "./tokens";
 import { TEXT_PRESETS, type TextPresetId } from "./text-presets";
+import { textFrameFor } from "./layer-geometry";
 import type { TextLayer } from "./scene";
 
 export type DynamicTextRow = {
@@ -26,15 +27,27 @@ export type DynamicTextRow = {
   reason?: string; // French, present iff !available
 };
 
+// Correctif revue finale (Minor) : `TextTokenId` type l'exact sous-ensemble de `TokenId` dont le
+// TOKEN_KINDS correspondant vaut "text" — `TOKEN_KINDS` est `as const satisfies Record<string,
+// TokenKind>` (tokens.ts), donc ce type conditionnel mappé se recalcule automatiquement si un jeton
+// change de nature. `DYNAMIC_TEXT_LABELS` ci-dessous, typé `Record<TextTokenId, …>`, EXIGE alors
+// une entrée pour CHAQUE jeton texte (clé manquante = erreur de compilation) et REFUSE toute clé qui
+// n'en serait pas un (jeton mal orthographié, ou un jeton texte retiré de tokens.ts = erreur de
+// compilation aussi) — TypeScript remplace ainsi la vérification que faisait auparavant un `throw`
+// au chargement du module. Ce `throw` s'exécutait dans le bundle CLIENT (ce module est importé par
+// components/studio/panels/texte-panel.tsx, "use client") : une divergence entre tokens.ts et cette
+// carte aurait fait planter `/studio` tout entier (écran blanc) plutôt qu'être détectée par `tsc`
+// avant même de committer.
+type TextTokenId = { [K in TokenId]: (typeof TOKEN_KINDS)[K] extends "text" ? K : never }[TokenId];
+
 // Étiquette + préréglage propres à CETTE section (spec §4, tableau). Distincte de
 // components/studio/token-picker.tsx (TOKEN_LABELS) : celle-là nomme un jeton pour n'importe quel
 // champ de propriété («Extrait de l'article»), celle-ci nomme une LIGNE du panneau Texte, au
 // vocabulaire du tableau §4 quand il en donne un (« Chapô », « Rubrique », « Signature », « Date »)
 // — deux vocabulaires légitimement différents pour deux usages différents, pas une duplication à
-// fusionner. Couvre la totalité des jetons de type "text" de TOKEN_KINDS : un jeton texte ajouté à
-// tokens.ts sans entrée ici lève au chargement du module plutôt que d'afficher un {{jeton.brut}} en
-// guise d'étiquette (voir la boucle de vérification juste après TEXT_TOKEN_IDS plus bas).
-const DYNAMIC_TEXT_LABELS: Record<string, { label: string; preset: TextPresetId }> = {
+// fusionner. Couvre la totalité des jetons de type "text" de TOKEN_KINDS — voir `TextTokenId`
+// ci-dessus pour la garantie de complétude, désormais vérifiée à la compilation.
+const DYNAMIC_TEXT_LABELS: Record<TextTokenId, { label: string; preset: TextPresetId }> = {
   "article.title": { label: "Titre de l'article", preset: "titre" },
   "article.excerpt": { label: "Chapô", preset: "corps" },
   "article.date": { label: "Date", preset: "corps" },
@@ -66,27 +79,34 @@ const CONTEXT_LABEL: Record<TemplateContext, string> = {
 };
 
 // L'univers COMPLET des jetons de type "text", dans l'ordre de TOKEN_KINDS (tokens.ts) — un ordre
-// stable, indépendant du contexte affiché. Lève au chargement si un jeton texte de tokens.ts n'a
-// pas d'entrée ci-dessus : mieux vaut un crash immédiat et explicite au démarrage des tests qu'une
-// ligne affichée sous sa forme technique brute en production.
+// stable, indépendant du contexte affiché.
 const TEXT_TOKEN_IDS: TokenId[] = TOKEN_IDS.filter((id) => TOKEN_KINDS[id] === "text");
-for (const id of TEXT_TOKEN_IDS) {
-  if (!DYNAMIC_TEXT_LABELS[id]) {
-    throw new Error(`dynamic-text.ts : jeton texte « ${id} » sans étiquette « Texte dynamique ».`);
-  }
-}
 
-// PURE — la règle testée par tests/studio-dynamic-text.test.ts. Une ligne par jeton texte de
-// l'univers COMPLET, jamais seulement ceux légaux ici : un jeton illégal dans ce contexte reste
-// visible, gréé (spec §4 : « Tokens illegal in this template's context appear disabled with the
-// reason »), plutôt que d'être simplement absent de la liste — c'est ce qui rend la contrainte
-// DÉCOUVRABLE plutôt que silencieuse.
+// Amendement de spec §4 (revue finale, décision produit) : les CINQ jetons nommés par le tableau §4
+// — SEULS candidats à une ligne GRISÉE quand ils sont illégaux dans ce contexte. Avant cet
+// amendement, `dynamicTextRowsFor` grisait l'univers "text" COMPLET (14 jetons) dans TOUS les
+// contextes — jusqu'à 12 lignes grisées contre 2 utilisables pour `newsletter_header`, quand
+// `quote.text`/`recap.item3` n'appartiennent même pas à ce type de gabarit. Les neuf autres jetons
+// "text" (récap, citation, édition, sources) n'apparaissent DÉSORMAIS que là où ils sont utilisables
+// — jamais grisés, jamais listés ailleurs. Garde TYPÉE (Set<TextTokenId>, pas une chaîne recopiée) :
+// un jeton retiré de tokens.ts ferait échouer la compilation ici, pas silencieusement disparaître.
+const TABLE_TOKEN_IDS: readonly TextTokenId[] = [
+  "article.title", "article.excerpt", "category.name", "article.byline", "article.date",
+];
+const TABLE_TOKEN_SET = new Set<TextTokenId>(TABLE_TOKEN_IDS);
+
+// PURE — la règle testée par tests/studio-dynamic-text.test.ts. Pour chaque jeton "text" : (a) légal
+// ici -> ligne disponible ; (b) illégal ici MAIS l'un des cinq du tableau §4 -> ligne grisée, avec sa
+// raison (spec §4 : « Tokens illegal in this template's context appear disabled with the reason ») ;
+// (c) illégal ici et hors du tableau §4 -> OMISE entièrement, jamais listée.
 export function dynamicTextRowsFor(context: TemplateContext): DynamicTextRow[] {
   const legal = new Set<string>(CONTEXT_TOKENS[context]);
-  return TEXT_TOKEN_IDS.map((tokenId) => {
-    const meta = DYNAMIC_TEXT_LABELS[tokenId];
+  const rows: DynamicTextRow[] = [];
+  for (const tokenId of TEXT_TOKEN_IDS) {
     const available = legal.has(tokenId);
-    return {
+    if (!available && !TABLE_TOKEN_SET.has(tokenId as TextTokenId)) continue;
+    const meta = DYNAMIC_TEXT_LABELS[tokenId as TextTokenId];
+    rows.push({
       tokenId,
       label: meta.label,
       preset: meta.preset,
@@ -94,35 +114,18 @@ export function dynamicTextRowsFor(context: TemplateContext): DynamicTextRow[] {
       reason: available
         ? undefined
         : `Indisponible pour ce type de gabarit (« ${CONTEXT_LABEL[context]} »).`,
-    };
-  });
-}
-
-// Marge horizontale/verticale relative au canevas, et nombre de lignes de hauteur allouées à la
-// boîte — un calque texte reste redimensionnable ensuite depuis la bande de propriétés (spec §4 :
-// « un designer peut le redimensionner... exactement comme aujourd'hui »), cette boîte n'a donc
-// besoin que d'atterrir DANS le canevas, pas d'épouser exactement le texte final.
-const MARGIN_RATIO = 0.08;
-const LINE_ALLOWANCE = 2;
-
-function frameFor(canvas: { width: number; height: number }, fontSize: number): TextLayer["frame"] {
-  const desiredW = canvas.width * (1 - 2 * MARGIN_RATIO);
-  const desiredH = fontSize * 1.2 * LINE_ALLOWANCE;
-  // Bornée AUX dimensions du canevas d'abord (jamais plus grande que lui), puis centrée et reclampée
-  // — garantit x/y >= 0 et x+w/y+h <= canevas quel que soit le format, y compris un format vertical
-  // étroit (story 1080×1920) où une boîte pensée pour un format large déborderait sans ce clamp final.
-  const w = Math.min(Math.max(desiredW, 1), canvas.width);
-  const h = Math.min(Math.max(desiredH, 1), canvas.height);
-  const x = Math.min(Math.max(Math.round((canvas.width - w) / 2), 0), canvas.width - w);
-  const y = Math.min(Math.max(Math.round((canvas.height - h) / 2), 0), canvas.height - h);
-  return { x, y, w, h };
+    });
+  }
+  return rows;
 }
 
 // PURE — le calque qu'un clic sur une ligne DISPONIBLE insère : un TextLayer NORMAL, sans statut
 // spécial, dont le seul contenu est le jeton brut « {{jeton}} » — EXACTEMENT le mécanisme de
 // liaison déjà lu par tokens.ts (usesInLayer) et déjà éditable depuis le panneau de propriétés
 // (TokenPicker, property-panel.tsx). Un designer peut donc le relier à un autre jeton ou le délier
-// ensuite exactement comme n'importe quel calque texte créé autrement (spec §4).
+// ensuite exactement comme n'importe quel calque texte créé autrement (spec §4). Le cadre vient de
+// `textFrameFor` (lib/studio/layer-geometry.ts, Correctif revue finale — Minor) : shape-gallery.ts
+// en portait auparavant une copie quasi identique.
 export function buildDynamicTextLayer(
   row: DynamicTextRow,
   canvas: { width: number; height: number },
@@ -133,7 +136,7 @@ export function buildDynamicTextLayer(
     name: row.label,
     visible: true,
     locked: false,
-    frame: frameFor(canvas, preset.size),
+    frame: textFrameFor(canvas, preset.size),
     type: "text",
     content: `{{${row.tokenId}}}`,
     font: { family: "Noto Sans", size: preset.size, weight: preset.weight },
@@ -142,4 +145,16 @@ export function buildDynamicTextLayer(
     vAlign: "top",
     lineHeight: 1.2,
   };
+}
+
+// PURE — ce qu'un clic sur une ligne de « Texte dynamique » doit RÉELLEMENT produire (spec §9 :
+// « a token illegal in the context is disabled and clicking it inserts nothing »), extrait en
+// fonction testable plutôt qu'un `if` inline dans le composant (leçon répétée de ce sous-projet : un
+// prédicat inline resté pur et jamais testé directement). `null` pour une ligne indisponible — le
+// composant (texte-panel.tsx) ne dispatch alors rien du tout.
+export function insertDynamicTextLayer(
+  row: DynamicTextRow,
+  canvas: { width: number; height: number },
+): TextLayer | null {
+  return row.available ? buildDynamicTextLayer(row, canvas) : null;
 }

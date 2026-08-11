@@ -19,6 +19,7 @@
 // lib/diffusion/channels.ts (itère CHANNELS) et lib/studio/dynamic-text.ts (itère TOKEN_IDS).
 import { SHAPE_KINDS, type Layer } from "./scene";
 import { CONTEXT_TOKENS, type TemplateContext, type TokenId } from "./tokens";
+import { centeredFrame } from "./layer-geometry";
 
 export type ShapeTile = {
   id: string;
@@ -87,15 +88,12 @@ export function shapeTilesFor(context: TemplateContext): ShapeTileRow[] {
 // 1080×1920) — une taille pensée pour l'un déborderait de l'autre sans cette relativisation.
 const SIZE_RATIO = 0.35;
 
+// Correctif revue finale (Minor) : le clamp centré vit désormais dans lib/studio/layer-geometry.ts
+// (`centeredFrame`) — ce fichier en portait auparavant une copie quasi identique à celle de
+// dynamic-text.ts:frameFor, désormais elle-même remplacée par le même appel partagé.
 function frameFor(canvas: { width: number; height: number }): Layer["frame"] {
   const desired = Math.min(canvas.width, canvas.height) * SIZE_RATIO;
-  // Bornée aux dimensions du canevas d'abord, puis centrée et reclampée — garantit x/y >= 0 et
-  // x+w/y+h <= canevas quel que soit le format (même clamp final que dynamic-text.ts:frameFor).
-  const w = Math.min(Math.max(desired, 1), canvas.width);
-  const h = Math.min(Math.max(desired, 1), canvas.height);
-  const x = Math.min(Math.max(Math.round((canvas.width - w) / 2), 0), canvas.width - w);
-  const y = Math.min(Math.max(Math.round((canvas.height - h) / 2), 0), canvas.height - h);
-  return { x, y, w, h };
+  return centeredFrame(canvas, desired, desired);
 }
 
 // PURE — le calque qu'un clic sur une tuile DISPONIBLE insère. Un calque NORMAL, sans statut

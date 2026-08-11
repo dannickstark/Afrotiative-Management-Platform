@@ -35,9 +35,17 @@ export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [mode, onChange]);
 
+  // Correctif revue finale (Minor) : `role="tablist"`/`role="tab"` promettait une sémantique de tabs
+  // (tabpanel associé via `aria-controls`, flèches gauche/droite pour naviguer, `aria-selected`) que
+  // ce contrôle ne tient PAS — il ne pilote aucun `tabpanel` (Montage/Rendu réel sont deux ARBRES DE
+  // COMPOSANTS entièrement différents rendus par editor-shell.tsx, jamais deux panneaux d'un même
+  // conteneur `role="tabpanel"`), et n'a jamais eu de gestion des flèches clavier. Un lecteur d'écran
+  // annonçant « onglet » pour un contrôle qui n'en est pas un est PIRE que deux boutons ordinaires —
+  // `role="radiogroup"` + `aria-pressed` (un groupe de bascules mutuellement exclusives, exactement
+  // ce que ce contrôle EST réellement) ne prétend à aucune capacité absente.
   return (
     <div
-      role="tablist"
+      role="radiogroup"
       aria-label="Mode d'édition"
       data-testid="mode-switch"
       className={cn(
@@ -47,8 +55,7 @@ export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
     >
       <button
         type="button"
-        role="tab"
-        aria-selected={mode === "montage"}
+        aria-pressed={mode === "montage"}
         data-action="mode-montage"
         onClick={() => onChange("montage")}
         className={cn(
@@ -60,8 +67,7 @@ export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
       </button>
       <button
         type="button"
-        role="tab"
-        aria-selected={mode === "rendu"}
+        aria-pressed={mode === "rendu"}
         data-action="mode-rendu"
         onClick={() => onChange("rendu")}
         className={cn(

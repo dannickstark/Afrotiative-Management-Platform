@@ -1,7 +1,7 @@
 "use client";
 
 import type { Layer } from "@/lib/studio/scene";
-import { NumberField, type Patch } from "./property-panel";
+import { NumberField, type Patch } from "./property-fields";
 
 // components/studio/geometry-strip.tsx — Tâche 6 (U1, spec §6) : les six champs de cadre (X, Y,
 // largeur, hauteur, rotation, opacité) extraits de l'ancienne section « Cadre » de property-panel.tsx
@@ -11,13 +11,13 @@ import { NumberField, type Patch } from "./property-panel";
 // sections"` porte seul `overflow-auto` ; celui-ci n'en porte aucun). Un designer qui vient nudger
 // une position n'a donc plus besoin de défiler devant treize autres contrôles pour l'atteindre.
 //
-// Ne réutilise QUE `NumberField` et le callback `patch`, tous deux déjà existants dans
-// property-panel.tsx — aucune primitive de champ n'est recréée ici (consigne de la Tâche 6 : une
-// réorganisation, pas une réécriture des contrôles). L'import ci-dessus ferme un cycle avec
-// property-panel.tsx (qui importe `GeometryStrip` en retour) : sans danger ici parce que
-// `NumberField` est une DÉCLARATION DE FONCTION (hissée à l'évaluation du module, donc déjà liée
-// avant que le corps de property-panel.tsx ne s'exécute), jamais une `const` — voir `bun run build`
-// dans le rapport de tâche pour la preuve que le graphe se résout bien.
+// Ne réutilise QUE `NumberField` et le callback `patch` — aucune primitive de champ n'est recréée
+// ici (consigne de la Tâche 6 : une réorganisation, pas une réécriture des contrôles). Correctif
+// revue finale (Minor) : les deux vivent désormais dans property-fields.tsx, une feuille commune
+// que property-panel.tsx importe ÉGALEMENT — ce fichier n'importe donc plus rien de property-panel.tsx
+// et le cycle d'imports qui existait auparavant entre les deux (property-panel.tsx -> ce fichier ->
+// property-panel.tsx, inoffensif seulement parce que `NumberField` était une déclaration de fonction
+// hissée) a disparu structurellement, pas seulement par chance d'ordre d'évaluation.
 export interface GeometryStripProps {
   layer: Layer;
   patch: Patch;

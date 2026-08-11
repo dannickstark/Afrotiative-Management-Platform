@@ -5,7 +5,7 @@ import {
   ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont, BUNDLED_FONT_PICK,
 } from "@/components/studio/asset-picker";
 import { PropertyPanel } from "@/components/studio/property-panel";
-import { ImagesPanel } from "@/components/studio/panels/images-panel";
+import { ImagesPanel, pickImageForSelection, filterAssetsBySearch } from "@/components/studio/panels/images-panel";
 import { FALLBACK_FONT_FAMILY } from "@/lib/studio/fonts";
 import { editorReducer, initEditorState, setLayerProp, type EditorAction } from "@/lib/studio/editor-state";
 import type { AssetRow } from "@/lib/queries/assets";
@@ -243,8 +243,45 @@ function fixtureAsset(overrides: Partial<AssetRow> = {}): AssetRow {
   };
 }
 
-function renderImagesPanel({ context, assets }: { context: TemplateContext; assets: AssetRow[] }): string {
-  return renderToStaticMarkup(React.createElement(ImagesPanel, { context, assets }));
+const NOOP_DISPATCH = (() => {}) as unknown as React.Dispatch<EditorAction>;
+
+function sceneWith(layer: Layer): Scene {
+  return { schemaVersion: 1, canvas: { width: 1200, height: 675, background: "#0B0B0B" }, layers: [layer] };
+}
+
+const textLayerFixture: TextLayer = {
+  id: "t", name: "Titre", visible: true, locked: false,
+  frame: { x: 10, y: 10, w: 400, h: 100 }, type: "text", content: "Bonjour",
+  font: { family: "Noto Sans", size: 32, weight: 400 },
+  color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+};
+
+const imageLayerFixture: ImageLayer = {
+  id: "i", name: "Image", visible: true, locked: false,
+  frame: { x: 0, y: 0, w: 300, h: 200 }, type: "image",
+  source: { kind: "slot", slot: "article.image" }, fit: "cover",
+};
+
+function renderImagesPanel(
+  { context, assets, scene, selectedId, dispatch = NOOP_DISPATCH }:
+  { context: TemplateContext; assets: AssetRow[]; scene?: Scene; selectedId?: string | null; dispatch?: React.Dispatch<EditorAction> },
+): string {
+  return renderToStaticMarkup(
+    React.createElement(ImagesPanel, {
+      context, assets, dispatch,
+      scene: scene ?? sceneWith(textLayerFixture),
+      selectedId: selectedId === undefined ? null : selectedId,
+    }),
+  );
+}
+
+// Isole la balise OUVRANTE du déclencheur du sélecteur — même précaution que buttonTagFor ailleurs
+// dans ce fichier de suite : la classe Tailwind statique du bouton contient elle-même la sous-chaîne
+// "disabled:", présente que le calque sélectionné soit une image ou non.
+function pickerTriggerTag(html: string): string {
+  const m = /<button[^>]*data-action="asset-picker-image"[^>]*>/.exec(html);
+  if (!m) throw new Error('bouton data-action="asset-picker-image" introuvable');
+  return m[0];
 }
 
 describe("ImagesPanel — héberge asset-picker.tsx, ne réimplémente pas une grille d'assets (Tâche 2)", () => {
@@ -252,5 +289,92 @@ describe("ImagesPanel — héberge asset-picker.tsx, ne réimplémente pas une g
     const html = renderImagesPanel({ context: "article_image", assets: [fixtureAsset()] });
     expect(html).toContain('data-testid="asset-picker"');
     expect(html).toContain("article.image");
+  });
+});
+
+// Correctif revue finale — Important 3 : `ImageAssetPicker` était monté avec `value=""` et
+// `onPick={() => {}}` — un clic sur n'importe quel asset était silencieusement avalé. Ce bloc
+// verrouille le comportement réel : désactivé + expliqué quand rien d'assignable n'est sélectionné,
+// actionnable et branché sur le VRAI réducteur sinon.
+describe("ImagesPanel — la grille d'assets est désormais RÉELLEMENT branchée, jamais inerte (Important 3, revue finale)", () => {
+  it("aucun calque image sélectionné (rien du tout) : le déclencheur est VRAIMENT désactivé (attribut HTML, pas une classe) et l'explique en français", () => {
+    const html = renderImagesPanel({ context: "article_image", assets: [fixtureAsset()], selectedId: null });
+    expect(pickerTriggerTag(html)).toContain('disabled=""');
+    expect(html).toContain("Sélectionnez un calque image pour y placer un visuel.");
+  });
+
+  it("un calque TEXTE est sélectionné (pas une image) : toujours désactivé", () => {
+    const html = renderImagesPanel({
+      context: "article_image", assets: [fixtureAsset()],
+      scene: sceneWith(textLayerFixture), selectedId: "t",
+    });
+    expect(pickerTriggerTag(html)).toContain('disabled=""');
+  });
+
+  it("un calque IMAGE est sélectionné : le déclencheur est actionnable, et le message change", () => {
+    const html = renderImagesPanel({
+      context: "article_image", assets: [fixtureAsset()],
+      scene: sceneWith(imageLayerFixture), selectedId: "i",
+    });
+    expect(pickerTriggerTag(html)).not.toContain('disabled=""');
+    expect(html).toContain("Cliquez un asset pour l’assigner au calque image sélectionné.");
+    expect(html).not.toContain("Sélectionnez un calque image pour y placer un visuel.");
+  });
+
+  it("pickImageForSelection, composé avec le VRAI réducteur : assigne l'asset au calque image sélectionné", () => {
+    let state = initEditorState(sceneWith(imageLayerFixture));
+    const dispatch = (a: EditorAction) => { state = editorReducer(state, a); };
+    pickImageForSelection(state.scene.layers[0], "fixture-image-asset", dispatch);
+    const updated = state.scene.layers[0] as ImageLayer;
+    expect(updated.source).toEqual({ kind: "asset", assetId: "fixture-image-asset" });
+  });
+
+  it("pickImageForSelection ne fait RIEN quand le calque sélectionné n'est pas une image — aucun dispatch", () => {
+    const calls: EditorAction[] = [];
+    pickImageForSelection(textLayerFixture, "fixture-image-asset", (a) => calls.push(a));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("pickImageForSelection ne fait RIEN quand rien n'est sélectionné (null) — aucun dispatch", () => {
+    const calls: EditorAction[] = [];
+    pickImageForSelection(null, "fixture-image-asset", (a) => calls.push(a));
+    expect(calls).toHaveLength(0);
+  });
+});
+
+// Correctif revue finale — Important 2 : le champ de recherche du panneau Images filtre CÔTÉ CLIENT
+// sur les assets déjà reçus en prop (aucune requête réseau).
+describe("filterAssetsBySearch — pure, client-side (Images a une recherche, spec révisée)", () => {
+  it("requête vide : renvoie la liste complète", () => {
+    const list = [fixtureAsset({ id: "1", name: "Logo" }), fixtureAsset({ id: "2", name: "Bannière" })];
+    expect(filterAssetsBySearch(list, "")).toEqual(list);
+  });
+
+  it("filtre insensible à la casse sur le nom", () => {
+    const list = [fixtureAsset({ id: "1", name: "Logo Marque" }), fixtureAsset({ id: "2", name: "Bannière" })];
+    expect(filterAssetsBySearch(list, "logo").map((a) => a.id)).toEqual(["1"]);
+  });
+
+  it("aucune correspondance : liste vide", () => {
+    expect(filterAssetsBySearch([fixtureAsset({ name: "Logo" })], "zzz")).toEqual([]);
+  });
+});
+
+describe("ImagesPanel — search et primaryAction sont bien câblés dans les slots de PanelHost, pas ailleurs (Important 2, revue finale)", () => {
+  it("le champ de recherche apparaît dans la zone dédiée de PanelHost", () => {
+    const html = renderImagesPanel({ context: "article_image", assets: [fixtureAsset()] });
+    const searchIdx = html.indexOf('data-testid="panel-search"');
+    const inputIdx = html.indexOf('data-testid="images-search"');
+    expect(searchIdx).toBeGreaterThan(-1);
+    expect(inputIdx).toBeGreaterThan(searchIdx);
+  });
+
+  it("« Importer un fichier » apparaît dans la zone dédiée de PanelHost, avant le corps du panneau", () => {
+    const html = renderImagesPanel({ context: "article_image", assets: [] });
+    const actionIdx = html.indexOf('data-testid="panel-primary-action"');
+    const bodyIdx = html.indexOf('data-testid="images-panel"');
+    expect(actionIdx).toBeGreaterThan(-1);
+    expect(actionIdx).toBeLessThan(bodyIdx);
+    expect(html).toContain("Importer un fichier");
   });
 });

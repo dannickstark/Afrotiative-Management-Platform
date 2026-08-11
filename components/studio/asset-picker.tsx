@@ -52,9 +52,15 @@ export interface ImageAssetPickerProps {
   assets: AssetRow[];
   value: string;
   onPick: (assetId: string) => void;
+  // Correctif revue finale — Important 3 (images-panel.tsx) : le déclencheur ci-dessous doit pouvoir
+  // être RÉELLEMENT désactivé — l'attribut HTML natif `disabled`, pas seulement une classe Tailwind
+  // `disabled:` (un piège déjà rencontré par ce sous-projet : une recherche de sous-chaîne "disabled"
+  // fait un faux positif sur la classe utilitaire, présente qu'il soit désactivé ou non). `Button`
+  // (components/ui/button.tsx) transmet ce prop tel quel à l'élément `<button>` sous-jacent.
+  disabled?: boolean;
 }
 
-export function ImageAssetPicker({ assets, value, onPick }: ImageAssetPickerProps) {
+export function ImageAssetPicker({ assets, value, onPick, disabled }: ImageAssetPickerProps) {
   const images = useMemo(() => assets.filter((a) => a.kind === "image"), [assets]);
   const current = images.find((a) => a.id === value) ?? null;
 
@@ -66,6 +72,7 @@ export function ImageAssetPicker({ assets, value, onPick }: ImageAssetPickerProp
             type="button" variant="outline" size="sm"
             className="w-full justify-start gap-2 font-normal"
             data-action="asset-picker-image"
+            disabled={disabled}
             // testid EXPORTÉ (Tâche 2, U1 spec §3) : components/studio/panels/images-panel.tsx
             // héberge ce MÊME déclencheur plutôt que de reconstruire une grille d'assets — seul CE
             // composant pose cet attribut, c'est ce que tests/studio-asset-picker.test.ts vérifie.

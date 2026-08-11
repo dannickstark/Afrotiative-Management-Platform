@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type Dispatch, type ReactNode } from "react";
+import type { Dispatch, ReactNode } from "react";
 import { ChevronDown, Trash2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +17,7 @@ import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 import { GeometryStrip } from "./geometry-strip";
+import { FieldRow, NumberField, useCommitBuffer, type Patch } from "./property-fields";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
 // les champs que l'union Layer autorise (spec Tâche 8). Deux principes traversent tout ce fichier :
@@ -62,29 +63,11 @@ export interface PropertyPanelProps {
   onSectionsOpenChange?: (next: Record<string, boolean>) => void;
 }
 
-export type Patch = (p: Record<string, unknown>) => void;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitives de champ — chacune tamponne localement, résout au blur/Entrée, et Échap annule.
-
-function FieldRow({ label, action, children }: { label: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-1">
-        <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function useCommitBuffer<T>(value: T) {
-  const [local, setLocal] = useState(value);
-  const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setLocal(value); }, [value, editing]);
-  return { local, setLocal, editing, setEditing };
-}
+// `FieldRow`/`useCommitBuffer`/`NumberField` vivent désormais dans property-fields.tsx (Correctif
+// revue finale, Minor) — voir son commentaire d'en-tête pour la raison (cycle d'imports avec
+// geometry-strip.tsx, désormais résolu).
 
 function TextField({
   label, value, onCommit, action, multiline, placeholder, hint, dataField,
@@ -123,45 +106,6 @@ function TextField({
         />
       )}
       {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
-    </FieldRow>
-  );
-}
-
-// Tâche 6 : exportée pour geometry-strip.tsx, seule et unique primitive dont la bande épinglée a
-// besoin (voir sa note de tête sur le cycle d'imports que cet export ouvre avec ce fichier).
-export function NumberField({
-  label, value, onCommit, step, min, max, action, dataField,
-}: {
-  label: string; value: number; onCommit: (v: number) => void;
-  step?: number; min?: number; max?: number; action?: ReactNode; dataField?: string;
-}) {
-  const strValue = Number.isFinite(value) ? String(value) : "0";
-  const { local, setLocal, editing, setEditing } = useCommitBuffer(strValue);
-  function commit() {
-    setEditing(false);
-    const n = Number(local);
-    if (!Number.isFinite(n)) { setLocal(strValue); return; }
-    if (n !== value) onCommit(n);
-    else setLocal(strValue);
-  }
-  return (
-    <FieldRow label={label} action={action}>
-      <Input
-        type="number"
-        inputMode="decimal"
-        step={step}
-        min={min}
-        max={max}
-        value={local}
-        data-field={dataField}
-        onFocus={() => setEditing(true)}
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          else if (e.key === "Escape") { setLocal(strValue); setEditing(false); e.currentTarget.blur(); }
-        }}
-      />
     </FieldRow>
   );
 }

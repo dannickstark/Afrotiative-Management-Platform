@@ -43,7 +43,11 @@ export function Rail({ selected, onSelect }: RailProps) {
             onClick={() => onSelect(category)}
             className={cn(
               "flex w-14 flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] leading-tight font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
-              isSelected && "bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary",
+              // Correctif revue finale (Minor) : la même phrase de spec §3 (« selected state a
+              // filled pill ») avait deux lectures différentes ici et dans mode-switch.tsx:56,
+              // visibles côte à côte à l'écran (rail à gauche, sélecteur de mode flottant au-dessus
+              // du canevas). Alignée sur le style plein de mode-switch.tsx plutôt que l'inverse.
+              isSelected && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
             )}
           >
             <Icon className="size-4" aria-hidden="true" />

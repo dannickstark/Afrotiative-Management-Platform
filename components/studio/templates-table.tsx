@@ -171,7 +171,7 @@ export function CreateTemplateDialog({ categories }: { categories: CategoryOptio
       <DialogTrigger render={<Button data-action="create-template"><Plus aria-hidden />Nouveau gabarit vierge</Button>} />
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Nouveau gabarit</DialogTitle>
+          <DialogTitle>Nouveau gabarit vierge</DialogTitle>
           <DialogDescription>
             Le format choisi fige la largeur et la hauteur du gabarit — il ne pourra plus être
             modifié une fois créé.

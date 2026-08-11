@@ -29,44 +29,47 @@ function buttonFragment(html: string, action: "mode-montage" | "mode-rendu"): st
 }
 
 describe("ModeSwitch — le rendu suit RÉELLEMENT la prop `mode` (Important 3, revue Tâche 5)", () => {
-  it('data-testid="mode-switch" et role="tablist" présents, quel que soit le mode', () => {
+  // Correctif revue finale (Minor) : `role="tablist"`/`role="tab"`/`aria-selected` remplacés par
+  // `role="radiogroup"` + `aria-pressed` — ce contrôle ne pilote aucun `tabpanel` et n'a jamais géré
+  // les flèches clavier, une sémantique de tabs qu'il ne tenait donc pas (voir mode-switch.tsx).
+  it('data-testid="mode-switch" et role="radiogroup" présents, quel que soit le mode', () => {
     for (const mode of ["montage", "rendu"] as StudioMode[]) {
       const html = render(mode);
       expect(html).toContain('data-testid="mode-switch"');
-      expect(html).toContain('role="tablist"');
+      expect(html).toContain('role="radiogroup"');
     }
   });
 
-  it('mode="montage" : le bouton Montage est aria-selected="true" et porte le style actif ; Rendu réel ne l\'est pas', () => {
+  it('mode="montage" : le bouton Montage est aria-pressed="true" et porte le style actif ; Rendu réel ne l\'est pas', () => {
     const html = render("montage");
     const montage = buttonFragment(html, "mode-montage");
     const rendu = buttonFragment(html, "mode-rendu");
 
-    expect(montage).toContain('aria-selected="true"');
+    expect(montage).toContain('aria-pressed="true"');
     expect(montage).toContain("bg-primary");
     expect(montage).toContain(">Montage<");
 
-    expect(rendu).toContain('aria-selected="false"');
+    expect(rendu).toContain('aria-pressed="false"');
     expect(rendu).not.toContain("bg-primary");
     expect(rendu).toContain(">Rendu réel<");
   });
 
-  it('mode="rendu" : c\'est l\'INVERSE — le bouton Rendu réel devient aria-selected="true" et porte le style actif', () => {
+  it('mode="rendu" : c\'est l\'INVERSE — le bouton Rendu réel devient aria-pressed="true" et porte le style actif', () => {
     const html = render("rendu");
     const montage = buttonFragment(html, "mode-montage");
     const rendu = buttonFragment(html, "mode-rendu");
 
-    expect(rendu).toContain('aria-selected="true"');
+    expect(rendu).toContain('aria-pressed="true"');
     expect(rendu).toContain("bg-primary");
 
-    expect(montage).toContain('aria-selected="false"');
+    expect(montage).toContain('aria-pressed="false"');
     expect(montage).not.toContain("bg-primary");
   });
 
-  it("témoin de sabotage : les deux boutons ne sont JAMAIS aria-selected=\"true\" en même temps, dans aucun des deux modes", () => {
+  it("témoin de sabotage : les deux boutons ne sont JAMAIS aria-pressed=\"true\" en même temps, dans aucun des deux modes", () => {
     for (const mode of ["montage", "rendu"] as StudioMode[]) {
       const html = render(mode);
-      const selectedCount = [...html.matchAll(/aria-selected="true"/g)].length;
+      const selectedCount = [...html.matchAll(/aria-pressed="true"/g)].length;
       expect(selectedCount).toBe(1);
     }
   });

@@ -280,29 +280,32 @@ function openTag(html: string, marker: string): string {
   return html.slice(start, end + 1);
 }
 
-describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.tsx (revue Tâche 7) : le box-shadow de l'artboard ne doit pas être rogné par son propre enrobage", () => {
-  // Revue : les deux tests de box-shadow ci-dessus rendent <Canvas> SEUL, jamais enrobé de
-  // <CanvasChrome> — exactement la composition que editor-shell.tsx utilise réellement
-  // (`<CanvasChrome format={template.format} zoom={scale}>…<Canvas … scale={scale} /></CanvasChrome>`,
-  // MÊME valeur pour `zoom` et `scale`). Cette suite reproduit CETTE composition, avec `zoom === scale`
-  // et un format dont les dimensions égalent celles de `scene.canvas` (`ig_square`, 1080×1080, comme
-  // `makeScene()` — non, `makeScene()` fait 800×600 : le format n'a PAS besoin de correspondre pixel
-  // pour pixel à la scène pour que le bogue existe, puisque c'est la boîte de CanvasChrome
-  // (`preset.width*zoom`) et la boîte de Canvas (`scene.canvas.width*scale`) qui doivent coïncider —
-  // ici les deux valent 1080*1 = 1080 côté CanvasChrome ; pour que le test soit fidèle à la vraie
-  // composition, on donne à la scène les MÊMES dimensions que le format `ig_square` (1080×1080)).
-  function renderComposed(prefs: EditorPrefs = DEFAULT_PREFS) {
-    const scene = makeScene();
-    scene.canvas = { ...scene.canvas, width: 1080, height: 1080 };
-    return renderToStaticMarkup(
-      React.createElement(
-        CanvasChrome,
-        { format: "ig_square", zoom: 1, prefs },
-        React.createElement(Canvas, { scene, selectedId: null, dispatch: () => {}, scale: 1 }),
-      ),
-    );
-  }
+// Composition RÉELLE, comme editor-shell.tsx (revue Tâche 7, puis revue finale pour la grille) :
+// `<CanvasChrome format={template.format} zoom={scale}>…<Canvas … scale={scale} /></CanvasChrome>`,
+// MÊME valeur pour `zoom` et `scale`. Hissée au niveau du module (elle vivait seulement dans le
+// describe du box-shadow ci-dessous) pour que le describe de la grille, plus bas, la réutilise TELLE
+// QUELLE plutôt que d'en écrire une seconde copie qui pourrait diverger — exactement la composition
+// réelle que editor-shell.tsx utilise, jamais un espace réservé `<div data-testid="canvas-slot">`
+// (voir le describe "pastilles flottantes" plus haut, qui EN a un, volontairement limité aux chips/
+// règles/zones sûres qui ne composent rien avec le VRAI Canvas). `zoom === scale` et un format dont
+// les dimensions égalent celles de `scene.canvas` (`ig_square`, 1080×1080 — `makeScene()` fait
+// 800×600 par défaut, donc on l'écrase ici) : le format n'a pas besoin de correspondre pixel pour
+// pixel à la scène pour que les bogues visés existent, puisque c'est la boîte de CanvasChrome
+// (`preset.width*zoom`) et la boîte de Canvas (`scene.canvas.width*scale`) qui doivent coïncider —
+// ici les deux valent 1080*1 = 1080 côté CanvasChrome.
+function renderComposed(prefs: EditorPrefs = DEFAULT_PREFS) {
+  const scene = makeScene();
+  scene.canvas = { ...scene.canvas, width: 1080, height: 1080 };
+  return renderToStaticMarkup(
+    React.createElement(
+      CanvasChrome,
+      { format: "ig_square", zoom: 1, prefs },
+      React.createElement(Canvas, { scene, selectedId: null, dispatch: () => {}, scale: 1 }),
+    ),
+  );
+}
 
+describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.tsx (revue Tâche 7) : le box-shadow de l'artboard ne doit pas être rogné par son propre enrobage", () => {
   it('l\'enrobage "artboard" (canvas-chrome.tsx) ne porte PAS sa propre classe overflow-hidden — un overflow:hidden ICI rognerait le box-shadow de "studio-canvas" qu\'il enrobe, pixel-identique à cette taille (zoom === scale, mêmes dimensions)', () => {
     const html = renderComposed();
     expect(openTag(html, 'data-testid="artboard"')).not.toMatch(/\boverflow-hidden\b/);
@@ -311,6 +314,27 @@ describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.ts
   it("le box-shadow reste bien présent dans cette composition réelle (sanity — ne garantit PAS seul qu'il n'est pas rogné, voir le test précédent)", () => {
     const html = renderComposed();
     expect(styleAttr(html, 'data-testid="studio-canvas"')).toContain("box-shadow");
+  });
+
+  // CRITIQUE (revue finale) : la grille peint sous un artboard OPAQUE. `data-testid="grid"` et la
+  // racine de <Canvas> (`data-testid="studio-canvas"`) sont tous deux `z-index: auto` — ils peignent
+  // donc dans l'ordre de l'arbre, <Canvas> EN DERNIER (il vient après la grille dans le JSX de
+  // canvas-chrome.tsx), donc AU-DESSUS. Le conteneur intérieur de <Canvas> couvre exactement la boîte
+  // de l'artboard et peint `scene.canvas.background` (jamais transparent pour un gabarit "normal" —
+  // les nouveaux gabarits partent de `#0B0B0B`, lib/studio/template-core.ts) : la grille est donc
+  // invisible sur un gabarit ordinaire, alors que le bouton "Grille" bascule `aria-pressed` et
+  // "réussit" sans le moindre effet visuel. Le test des chips/règles ci-dessus (describe précédent)
+  // rend un `<div data-testid="canvas-slot">` VIDE à la place de <Canvas> — un calque totalement
+  // transparent — donc il ne PEUT PAS détecter ce recouvrement : la même substitution que le bogue de
+  // box-shadow déjà corrigé plus haut dans ce fichier (describe "composition RÉELLE" ci-dessus).
+  // Preuve directe et suffisante en HTML sérialisé : l'ORDRE DE PEINTURE == l'ordre du DOM pour deux
+  // éléments `position` par défaut/`z-index: auto` qui se chevauchent — un nœud "grid" qui apparaît
+  // AVANT "studio-canvas" dans le HTML peint donc AVANT lui, et se fait recouvrir.
+  it("CRITIQUE : la grille peint APRÈS le vrai Canvas (ordre de peinture), jamais en dessous d'un artboard opaque", () => {
+    const html = renderComposed({ ...DEFAULT_PREFS, grid: true });
+    expect(html).toContain('data-testid="grid"');
+    expect(html).toContain('data-testid="studio-canvas"');
+    expect(html.indexOf('data-testid="grid"')).toBeGreaterThan(html.indexOf('data-testid="studio-canvas"'));
   });
 });
 
@@ -344,7 +368,9 @@ describe("CanvasChrome — pastilles flottantes, règles et grille optionnelles 
   // Défaut du brief corrigé (voir le rapport de la Tâche 7) : le plan ne testait QUE les règles, pas
   // la grille — alors que spec §7 les traite comme une paire symétrique (« rulers and grid rendered,
   // available but off by default »). Un correctif qui n'implémenterait que les règles serait passé à
-  // travers les mailles du test du brief ; celui-ci comble le trou.
+  // travers les mailles du test du brief ; celui-ci comble le trou côté "rendu ou non", mais UTILISE
+  // le placeholder `<div data-testid="canvas-slot">` plutôt qu'un vrai `<Canvas>` — voir le describe
+  // "peinture réelle" plus bas (revue finale) pour la raison pour laquelle ce n'était pas suffisant.
   it("la grille suit la MÊME règle « off par défaut, rendue quand activée » que les règles", () => {
     expect(renderCanvasChrome({ prefs: DEFAULT_PREFS })).not.toContain('data-testid="grid"');
     expect(renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, grid: true } })).toContain('data-testid="grid"');

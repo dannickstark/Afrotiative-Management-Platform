@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene } from "@/lib/studio/scene";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
+import { RULER_SIZE } from "@/components/studio/canvas-chrome";
 
 // tests/studio-editor-shell.test.ts — revue de la Tâche 6 (U1, spec §2/§5). Ce fichier n'existait
 // pas avant cette revue : le panneau de propriétés et l'aperçu (PreviewPane) partageaient la même
@@ -34,7 +35,7 @@ mock.module("next/navigation", () => ({
   }),
 }));
 
-const { EditorShell } = await import("@/components/studio/editor-shell");
+const { EditorShell, computeCanvasScale } = await import("@/components/studio/editor-shell");
 
 function scene(): Scene {
   return {
@@ -78,5 +79,40 @@ describe("EditorShell — mode Montage (revue Tâche 6, spec §2/§5)", () => {
     // ...ni le mode Rendu réel (non actif par défaut, mais vérifié pour éviter tout faux positif si
     // le mode par défaut changeait un jour sans que ce test s'en aperçoive autrement).
     expect(html).not.toContain('data-testid="render-large"');
+  });
+});
+
+// Correctif revue finale — Important 6 (spec §7) : « la mise à l'échelle du canevas ignore les
+// bandes de règles ». `computeCanvasScale` est PURE (aucun DOM, aucun ResizeObserver) : testable
+// directement, sans avoir besoin de monter le composant ni de simuler une mesure de conteneur.
+describe("computeCanvasScale — l'échelle tient compte des bandes de règles (Important 6, revue finale)", () => {
+  it("AVANT le correctif conceptuel : sans les règles, le calcul historique (pad=32 fixe)", () => {
+    // Conteneur large, gabarit carré : l'échelle est bornée à 1 (jamais un agrandissement au-delà
+    // de la taille native), exactement le comportement d'avant ce correctif pour ce cas.
+    expect(computeCanvasScale({ width: 2000, height: 2000 }, { width: 936, height: 936 }, false)).toBe(1);
+  });
+
+  it("activer les règles RÉDUIT l'échelle obtenue pour un même conteneur — le bogue corrigé : avant, l'échelle ne changeait JAMAIS", () => {
+    const available = { width: 500, height: 500 };
+    const template = { width: 1000, height: 1000 };
+    const withoutRulers = computeCanvasScale(available, template, false)!;
+    const withRulers = computeCanvasScale(available, template, true)!;
+    expect(withRulers).toBeLessThan(withoutRulers);
+  });
+
+  it("le montant exact retranché est 2×RULER_SIZE par axe, en plus du pad de 32 existant", () => {
+    const available = { width: 500, height: 500 };
+    const template = { width: 1000, height: 1000 };
+    const withoutRulers = computeCanvasScale(available, template, false)!;
+    const withRulers = computeCanvasScale(available, template, true)!;
+    expect(withoutRulers).toBeCloseTo((500 - 32) / 1000, 10);
+    expect(withRulers).toBeCloseTo((500 - 32 - 2 * RULER_SIZE) / 1000, 10);
+  });
+
+  it("conteneur trop petit une fois le pad (avec règles) retranché : renvoie null — ne réinitialise JAMAIS à 1, comme le `return;` d'origine qui laissait l'échelle inchangée", () => {
+    // 60px de large tient dans le pad SANS les règles (60 - 32 = 28 > 0) mais plus une fois le pad
+    // des règles ajouté (60 - 32 - 2×20 = -12 <= 0) — précisément le cas que ce correctif introduit.
+    expect(computeCanvasScale({ width: 60, height: 200 }, { width: 1000, height: 1000 }, false)).not.toBeNull();
+    expect(computeCanvasScale({ width: 60, height: 200 }, { width: 1000, height: 1000 }, true)).toBeNull();
   });
 });

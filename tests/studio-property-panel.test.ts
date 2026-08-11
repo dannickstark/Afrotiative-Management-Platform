@@ -251,10 +251,23 @@ describe("PropertyPanel — bande de géométrie épinglée (Tâche 6)", () => {
     expect(scrollTag).toContain("overflow-auto");
   });
 
+  // Correctif revue finale (Minor) : ce titre affirmait « quel que soit le type de calque » mais ne
+  // rendait QUE textLayer — les trois autres fixtures de ce fichier (imageLayer, shapeLayerSolid,
+  // qrLayer) n'étaient jamais exercées ici, alors que GeometryStrip (geometry-strip.tsx) est monté
+  // pour LES QUATRE (elle ne lit que `layer.frame`/`layer.rotation`/`layer.opacity`, communs à
+  // l'union Layer entière — rien de spécifique au texte). La boucle rend le titre vrai.
   it("la bande de géométrie porte les six champs de cadre, quel que soit le type de calque", () => {
-    const html = render([textLayer], "t", "social_post");
-    for (const f of ["frame.x", "frame.y", "frame.w", "frame.h", "rotation", "opacity"]) {
-      expect(html).toContain(`data-field="${f}"`);
+    const fixtures: [Layer, string, Parameters<typeof PropertyPanel>[0]["context"]][] = [
+      [textLayer, "t", "social_post"],
+      [imageLayer, "i", "article_image"],
+      [shapeLayerSolid, "s1", "recap_card"],
+      [qrLayer, "q", "social_post"],
+    ];
+    for (const [layer, id, context] of fixtures) {
+      const html = render([layer], id, context);
+      for (const f of ["frame.x", "frame.y", "frame.w", "frame.h", "rotation", "opacity"]) {
+        expect(html).toContain(`data-field="${f}"`);
+      }
     }
   });
 

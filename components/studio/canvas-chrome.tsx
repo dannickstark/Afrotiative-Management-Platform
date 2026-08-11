@@ -57,7 +57,11 @@ export function safeAreaDefaultFor(format: FormatKey): boolean {
   return height > width;
 }
 
-const RULER_SIZE = 20; // px écran de large/haut pour les bandes de règles
+// Exportée (correctif revue finale, spec §7) : editor-shell.tsx#computeCanvasScale doit réserver
+// EXACTEMENT ce même nombre de pixels par bande pour que l'artboard mis à l'échelle continue de
+// coïncider pixel pour pixel avec la boîte que ce fichier calcule (`preset.width * zoom` /
+// `preset.height * zoom`) — une constante recopiée à la main aurait pu diverger silencieusement.
+export const RULER_SIZE = 20; // px écran de large/haut pour les bandes de règles
 const RULER_STEP = 100; // px NATIFS (gabarit) entre deux graduations
 
 function rulerTicks(lengthNative: number): number[] {
@@ -199,6 +203,18 @@ export function CanvasChrome({
           className="relative"
           style={{ width: boxWidth, height: boxHeight }}
         >
+          {/* CRITIQUE (revue finale) : la grille doit peindre APRÈS {children} (le vrai <Canvas>),
+              jamais avant. Les deux sont `z-index: auto` dans ce conteneur `relative` : l'ordre de
+              peinture suit donc l'ordre du DOM, et <Canvas> pose un rectangle plein-cadre pour
+              `scene.canvas.background` (jamais transparent pour un gabarit "normal" — les nouveaux
+              gabarits partent de `#0B0B0B`, lib/studio/template-core.ts) qui couvrait la grille
+              entièrement quand elle était posée EN PREMIER — le bouton "Grille" bascule
+              `aria-pressed` sans le moindre effet visuel. `pointer-events-none` la maintient hors du
+              chemin des clics/du glisser sur le canevas même en dernière position dans l'arbre.
+              Verrouillé par tests/studio-canvas.test.ts (describe "composition RÉELLE"), qui enrobe
+              un VRAI <Canvas> plutôt qu'un espace réservé — voir son commentaire pour l'historique
+              (même substitution que le bogue de box-shadow déjà corrigé dans ce fichier). */}
+          {children}
           {prefs.grid && (
             <div
               data-testid="grid"
@@ -211,7 +227,6 @@ export function CanvasChrome({
               }}
             />
           )}
-          {children}
         </div>
       </div>
     </div>

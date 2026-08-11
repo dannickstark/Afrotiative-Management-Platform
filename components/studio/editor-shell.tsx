@@ -9,7 +9,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { Canvas } from "./canvas";
-import { CanvasChrome, safeAreaDefaultFor } from "./canvas-chrome";
+import { CanvasChrome, safeAreaDefaultFor, RULER_SIZE } from "./canvas-chrome";
 import { SaveIndicator } from "./save-indicator";
 import { Rail } from "./rail";
 import { PanelHost } from "./panel-host";
@@ -30,7 +30,7 @@ import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
 import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions";
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
-import { nextOpenPanel, type RailCategory } from "@/lib/studio/editor-prefs";
+import { nextOpenPanel, toggleCollapse, type RailCategory } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
 import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
@@ -57,6 +57,30 @@ const CONTEXT_LABEL: Record<TemplateContext, string> = {
   newsletter_header: "Bandeau newsletter",
   recap_card: "Carte récap",
 };
+
+// Correctif revue finale — Important 6 (spec §7) : PURE, exportée pour un test direct sans DOM ni
+// ResizeObserver (tests/studio-editor-shell.test.ts). Avant ce correctif, `pad` était figé à 32
+// (annulant tout juste le `p-4` du conteneur qui enrobe <CanvasChrome>) — les règles ajoutent
+// `RULER_SIZE` (canvas-chrome.tsx) de CHAQUE côté sans jamais faire grandir ce pad, donc l'artboard
+// grandissait de `2 × RULER_SIZE` par axe sans jamais se rééchelonner : activer les règles ajoutait
+// des barres de défilement et les rendait pourtant invisibles (le bord de DÉPART, haut/gauche — là où
+// vivent les règles — reste hors de portée du défilement dans un conteneur `justify-center` +
+// `overflow-auto`).
+// `null` (jamais `1`) quand le conteneur est trop petit pour être mesuré, UNE FOIS le pad des
+// règles retranché : reproduit fidèlement le `return;` d'origine (qui laissait `scale` INCHANGÉ,
+// sans jamais le réinitialiser) plutôt que d'inventer un comportement différent pour ce cas limite.
+export function computeCanvasScale(
+  available: { width: number; height: number },
+  template: { width: number; height: number },
+  rulers: boolean,
+): number | null {
+  const pad = 32 + (rulers ? 2 * RULER_SIZE : 0);
+  const availW = available.width - pad;
+  const availH = available.height - pad;
+  if (availW <= 0 || availH <= 0) return null;
+  const k = Math.min(availW / template.width, availH / template.height, 1);
+  return k > 0 ? k : 1;
+}
 
 export interface EditorShellTemplate {
   id: string;
@@ -155,20 +179,33 @@ function EditorShellInner({
   // Tâche 7 (U1, spec §7) : le défaut des zones sûres suit le FORMAT de CE gabarit uniquement au tout
   // premier lancement dans ce navigateur (voir hooks/use-editor-prefs.ts et
   // canvas-chrome.tsx#safeAreaDefaultFor) — une préférence déjà enregistrée reste prioritaire.
-  const [prefs, setPrefs] = useEditorPrefs(safeAreaDefaultFor(template.format));
+  // Correctif revue finale (amendement de spec §3) : `hasLayers` ouvre Modèles pour un gabarit tout
+  // juste créé (scène sans le moindre calque) — voir lib/studio/editor-prefs.ts#openModelesIfEmpty
+  // pour la règle exacte (jamais si un panneau est déjà ouvert).
+  const [prefs, setPrefs] = useEditorPrefs({
+    defaultSafeAreas: safeAreaDefaultFor(template.format),
+    hasLayers: initialScene.layers.length > 0,
+  });
 
   function selectRailCategory(category: RailCategory) {
     setPrefs((p) => ({ ...p, openPanel: nextOpenPanel(p.openPanel, category) }));
   }
 
-  // Replie le panneau au clavier (⌘/) — voir COLLAPSE_PANEL_KEY ci-dessus pour le choix documenté.
-  // Ne fait rien quand aucun panneau n'est ouvert : le rail (clic) reste la SEULE façon d'en OUVRIR
-  // un ; ce raccourci ne fait que reproduire l'action du chevron de panel-host.tsx.
+  function collapsePanel(next: RailCategory | null) {
+    setPrefs((p) => ({ ...p, openPanel: next }));
+  }
+
+  // Bascule le panneau accosté au clavier (⌘/) — voir COLLAPSE_PANEL_KEY ci-dessus pour le choix
+  // documenté. Correctif revue finale — Important 1 : `toggleCollapse` (lib/studio/editor-prefs.ts)
+  // est un VRAI aller-retour — replie en mémorisant quel panneau était ouvert, et réaffiche ce même
+  // panneau la fois suivante quand rien n'est ouvert — remplaçant l'ancien
+  // `nextOpenPanel(p.openPanel, p.openPanel)` sous garde, qui valait toujours `null` et ne pouvait
+  // donc jamais rouvrir quoi que ce soit une fois replié.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== COLLAPSE_PANEL_KEY || (!e.metaKey && !e.ctrlKey)) return;
       e.preventDefault();
-      setPrefs((p) => (p.openPanel ? { ...p, openPanel: nextOpenPanel(p.openPanel, p.openPanel) } : p));
+      setPrefs((p) => toggleCollapse(p));
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -259,7 +296,7 @@ function EditorShellInner({
     }
   }
 
-  // ── Mise à l'échelle du canevas (spec §2) ────────────────────────────────
+  // ── Mise à l'échelle du canevas (spec §2, §7) ────────────────────────────
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   useEffect(() => {
@@ -268,18 +305,26 @@ function EditorShellInner({
     function computeScale() {
       const el2 = canvasWrapRef.current;
       if (!el2) return;
-      const pad = 32;
-      const availW = el2.clientWidth - pad;
-      const availH = el2.clientHeight - pad;
-      if (availW <= 0 || availH <= 0) return;
-      const k = Math.min(availW / template.width, availH / template.height, 1);
-      setScale(k > 0 ? k : 1);
+      const next = computeCanvasScale(
+        { width: el2.clientWidth, height: el2.clientHeight },
+        { width: template.width, height: template.height },
+        prefs.rulers,
+      );
+      if (next !== null) setScale(next);
     }
     computeScale();
     const ro = new ResizeObserver(computeScale);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [template.width, template.height]);
+    // Correctif revue finale — Important 6 : `prefs.rulers` doit être une dépendance de cet effet.
+    // Avant ce correctif, `pad` était figé à 32 (annulant tout juste le `p-4` de ce conteneur) : les
+    // règles ajoutent `RULER_SIZE` de chaque côté (canvas-chrome.tsx) SANS jamais redéclencher un
+    // recalcul d'échelle — l'artboard grandissait de `2 × RULER_SIZE` par axe et débordait par le
+    // bord de DÉPART (haut/gauche, ce conteneur étant `justify-center` + `overflow-auto` : le
+    // débordement côté FIN reste atteignable au défilement, jamais celui côté départ) — exactement
+    // là où vivent les règles, les rendant de facto invisibles en plus de faire apparaître des
+    // barres de défilement inattendues.
+  }, [template.width, template.height, prefs.rulers]);
 
   const showUnpublishedBadge = shouldShowUnpublishedBadge(template.publishedVersion, state.scene, publishedScene);
 
@@ -373,45 +418,52 @@ function EditorShellInner({
           <>
             <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
 
-            {prefs.openPanel && (
-              <PanelHost
-                open={prefs.openPanel}
-                onOpenChange={(next) => setPrefs((p) => ({ ...p, openPanel: next }))}
-              >
-                {prefs.openPanel === "calques" && (
-                  <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
-                )}
-                {/* Modèles / Images / Marque (Tâche 2, U1 spec §3) : chaque panneau HÉBERGE une surface
-                    existante (templates-table.tsx, asset-picker.tsx) plutôt que d'en reconstruire une
-                    copie — voir le rapport de la Tâche 2. Texte (Tâche 3, spec §4) et Éléments (Tâche 4,
-                    spec §3) insèrent désormais un calque via `dispatch` — voir
-                    components/studio/panels/texte-panel.tsx et panels/elements-panel.tsx pour le
-                    cheminement complet clic -> calque lié. */}
-                {prefs.openPanel === "modeles" && (
-                  <ModelesPanel templates={templates} categories={categories} />
-                )}
-                {prefs.openPanel === "elements" && (
-                  <ElementsPanel
-                    context={template.context}
-                    canvas={{ width: template.width, height: template.height }}
-                    recentShapes={prefs.recentShapes}
-                    dispatch={dispatch}
-                    onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
-                  />
-                )}
-                {prefs.openPanel === "texte" && (
-                  <TextePanel
-                    context={template.context}
-                    canvas={{ width: template.width, height: template.height }}
-                    dispatch={dispatch}
-                  />
-                )}
-                {prefs.openPanel === "images" && (
-                  <ImagesPanel context={template.context} assets={assets} />
-                )}
-                {prefs.openPanel === "marque" && (
-                  <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
-                )}
+            {/* Correctif revue finale — Important 2 : Modèles, Texte et Images enrobent désormais
+                EUX-MÊMES `<PanelHost>` (voir leurs fichiers respectifs) pour pouvoir peupler ses
+                slots `search`/`primaryAction`, restés morts tant qu'un seul `<PanelHost>` ici les
+                enrobait tous en simples `children` sans jamais leur passer ces deux props. Calques,
+                Éléments et Marque n'ont ni l'un ni l'autre (spec §3, tableau : « — ») et restent donc
+                de simples `children` enrobés ICI, inchangé. */}
+            {prefs.openPanel === "calques" && (
+              <PanelHost open="calques" onOpenChange={collapsePanel}>
+                <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
+              </PanelHost>
+            )}
+            {prefs.openPanel === "modeles" && (
+              <ModelesPanel templates={templates} categories={categories} onOpenChange={collapsePanel} />
+            )}
+            {prefs.openPanel === "elements" && (
+              <PanelHost open="elements" onOpenChange={collapsePanel}>
+                <ElementsPanel
+                  context={template.context}
+                  canvas={{ width: template.width, height: template.height }}
+                  recentShapes={prefs.recentShapes}
+                  dispatch={dispatch}
+                  onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
+                />
+              </PanelHost>
+            )}
+            {prefs.openPanel === "texte" && (
+              <TextePanel
+                context={template.context}
+                canvas={{ width: template.width, height: template.height }}
+                dispatch={dispatch}
+                onOpenChange={collapsePanel}
+              />
+            )}
+            {prefs.openPanel === "images" && (
+              <ImagesPanel
+                context={template.context}
+                assets={assets}
+                scene={state.scene}
+                selectedId={state.selectedId}
+                dispatch={dispatch}
+                onOpenChange={collapsePanel}
+              />
+            )}
+            {prefs.openPanel === "marque" && (
+              <PanelHost open="marque" onOpenChange={collapsePanel}>
+                <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
               </PanelHost>
             )}
 

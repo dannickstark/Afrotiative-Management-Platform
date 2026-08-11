@@ -11,6 +11,22 @@ import { RAIL_LABELS, nextOpenPanel, type RailCategory } from "@/lib/studio/edit
 // le panneau. Le chevron réutilise `nextOpenPanel` — jamais un simple `onCollapse` opaque — pour
 // rester la MÊME règle que le clic sur le rail (lib/studio/editor-prefs.ts) plutôt qu'une deuxième
 // implémentation de « fermer » qui pourrait diverger.
+//
+// Correctif revue finale — Important 2 : les slots `search`/`primaryAction` ci-dessous sont restés
+// MORTS pendant tout U1 — chaque panneau rendait sa propre action dans son corps au lieu de la
+// passer ici, et aucun panneau n'avait de champ de recherche alors que spec §3 en promet un pour
+// « every panel ». Répartition DÉCIDÉE par la revue (spec §3 amendée) plutôt que « chaque panneau
+// comme il veut » :
+//   - `primaryAction` : câblé pour Modèles, Images et Texte — les trois seuls panneaux qui EN ONT
+//     une (spec §3, tableau : Éléments/Marque/Calques listent « — »).
+//   - `search` : câblé pour Modèles et Images UNIQUEMENT — les deux listes vraiment longues
+//     (l'ensemble des gabarits ; toute la bibliothèque d'assets). PAS Texte ni Éléments : filtrer
+//     trois préréglages, quatorze lignes de jetons ou deux tuiles de forme serait du théâtre.
+// components/studio/panels/modeles-panel.tsx et images-panel.tsx enrobent désormais eux-mêmes ce
+// composant (au lieu d'être de simples `children` enrobés par editor-shell.tsx) pour pouvoir peupler
+// ces deux slots ; components/studio/panels/calques-panel.tsx, elements-panel.tsx et marque-panel.tsx
+// restent de simples `children`, toujours enrobés par editor-shell.tsx — ils n'ont ni l'un ni
+// l'autre.
 export interface PanelHostProps {
   open: RailCategory;
   onOpenChange: (next: RailCategory | null) => void;
@@ -40,8 +56,12 @@ export function PanelHost({ open, onOpenChange, search, primaryAction, children 
         </Button>
       </div>
 
-      {search && <div className="px-2 pt-2">{search}</div>}
-      {primaryAction && <div className="px-2">{primaryAction}</div>}
+      {/* `data-testid` propres à CHAQUE slot (Correctif revue finale) : permet aux tests de vérifier
+          qu'un nœud passé en `search`/`primaryAction` atterrit RÉELLEMENT dans la zone dédiée du
+          skeleton, pas seulement « quelque part dans le panneau » — exactement le doute que la revue
+          soulève pour ces deux slots. */}
+      {search && <div className="px-2 pt-2" data-testid="panel-search">{search}</div>}
+      {primaryAction && <div className="px-2" data-testid="panel-primary-action">{primaryAction}</div>}
 
       <div className="flex-1 overflow-auto px-2 pb-2">{children}</div>
     </div>

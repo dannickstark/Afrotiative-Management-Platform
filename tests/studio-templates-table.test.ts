@@ -61,7 +61,7 @@ mock.module("@/lib/auth-client", () => ({
 
 const { createTemplate, archiveTemplate } = await import("@/lib/actions/studio-actions");
 const { buildCreateTemplateInput, nextArchivedState } = await import("@/components/studio/templates-table");
-const { ModelesPanel } = await import("@/components/studio/panels/modeles-panel");
+const { ModelesPanel, filterTemplatesBySearch } = await import("@/components/studio/panels/modeles-panel");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Portées STATIQUES possédées par ce fichier (registre tests/studio-fixtures.ts, à tenir à jour) :
@@ -235,5 +235,44 @@ describe("ModelesPanel — héberge templates-table.tsx, ne le réimplémente pa
   it("the Modèles panel offers « Nouveau gabarit vierge » as its primary action", async () => {
     const html = renderModelesPanel({ templates: [] });
     expect(html).toContain("Nouveau gabarit vierge");
+  });
+
+  // Correctif revue finale — Important 2 : les deux slots de panel-host.tsx (`search`,
+  // `primaryAction`) étaient morts — chaque panneau rendait son action dans son propre corps. Ce
+  // bloc vérifie STRUCTURELLEMENT que les deux atterrissent bien dans la zone dédiée du skeleton
+  // commun, pas seulement « le texte apparaît quelque part dans le panneau ».
+  it("le champ de recherche apparaît dans le slot `search` DÉDIÉ de PanelHost, pas ailleurs", async () => {
+    const html = renderModelesPanel({ templates: [fixtureTemplate()] });
+    const searchIdx = html.indexOf('data-testid="panel-search"');
+    const inputIdx = html.indexOf('data-testid="modeles-search"');
+    expect(searchIdx).toBeGreaterThan(-1);
+    expect(inputIdx).toBeGreaterThan(searchIdx);
+  });
+
+  it("« Nouveau gabarit vierge » apparaît dans le slot `primaryAction` DÉDIÉ de PanelHost, AVANT le corps du panneau", async () => {
+    const html = renderModelesPanel({ templates: [] });
+    const actionIdx = html.indexOf('data-testid="panel-primary-action"');
+    const bodyIdx = html.indexOf('data-testid="modeles-panel"');
+    expect(actionIdx).toBeGreaterThan(-1);
+    expect(actionIdx).toBeLessThan(bodyIdx);
+  });
+});
+
+// Correctif revue finale — Important 2, amendement de spec §3 : Modèles a désormais un champ de
+// recherche (la liste des gabarits est potentiellement longue) — filtrage CÔTÉ CLIENT sur `templates`,
+// déjà reçu en prop.
+describe("filterTemplatesBySearch — pure, client-side (Modèles a une recherche, spec révisée)", () => {
+  it("requête vide : renvoie la liste complète", () => {
+    const list = [fixtureTemplate({ id: "1", name: "Carte Alpha" }), fixtureTemplate({ id: "2", name: "Bandeau Beta" })];
+    expect(filterTemplatesBySearch(list, "")).toEqual(list);
+  });
+
+  it("filtre insensible à la casse sur le nom", () => {
+    const list = [fixtureTemplate({ id: "1", name: "Carte Alpha" }), fixtureTemplate({ id: "2", name: "Bandeau Beta" })];
+    expect(filterTemplatesBySearch(list, "alpha").map((t) => t.id)).toEqual(["1"]);
+  });
+
+  it("aucune correspondance : liste vide", () => {
+    expect(filterTemplatesBySearch([fixtureTemplate({ name: "Alpha" })], "zzz")).toEqual([]);
   });
 });
