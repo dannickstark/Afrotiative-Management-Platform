@@ -78,12 +78,24 @@ function filmstripFormats(html: string): string[] {
   return [...html.matchAll(/data-testid="filmstrip-thumb" data-format="([a-z_]+)"/g)].map((m) => m[1]!);
 }
 
-function provenanceText(html: string): string {
-  const m = /data-testid="render-provenance"[^>]*>([^<]*)</.exec(html);
-  if (!m) throw new Error("data-testid=\"render-provenance\" introuvable dans le HTML rendu");
+function decodeApostrophes(s: string): string {
   // react-dom/server échappe l'apostrophe en entité HTML (&#x27;) — décodée ici pour que les
   // expressions régulières du test restent lisibles avec de VRAIES apostrophes françaises.
-  return m[1]!.replace(/&#x27;/g, "'");
+  return s.replace(/&#x27;/g, "'");
+}
+
+function textOf(html: string, testid: string): string {
+  const m = new RegExp(`data-testid="${testid}"[^>]*>([^<]*)<`).exec(html);
+  if (!m) throw new Error(`data-testid="${testid}" introuvable dans le HTML rendu`);
+  return decodeApostrophes(m[1]!);
+}
+
+function provenanceText(html: string): string {
+  return textOf(html, "render-provenance");
+}
+
+function filmstripProvenanceText(html: string): string {
+  return textOf(html, "render-filmstrip-provenance");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -156,6 +168,40 @@ describe("RenderMode — provenance affichée (spec §5 : « sample values or a 
     }));
     expect(provenanceText(html)).toMatch(/valeurs d'exemple/i);
     expect(provenanceText(html)).toMatch(/article/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Important 1 (revue Tâche 5) : la légende de la case large disait « valeurs d'exemple, ou
+// l'article choisi… » sans jamais préciser qu'elle décrit UNIQUEMENT la case large — alors que
+// FilmstripThumb (components/studio/render-mode.tsx) appelle previewTemplate SANS `articleId`,
+// donc la bande entière reste TOUJOURS aux valeurs d'exemple, quel que soit l'article choisi pour
+// la case large. Corrigé par une légende SÉPARÉE (`render-filmstrip-provenance`), toujours visible,
+// jamais dépendante du contexte/des articles fournis — les tests ci-dessous le prouvent pour les
+// DEUX familles de contexte (avec et sans sélecteur d'article dans la case large).
+describe("RenderMode — la bande a sa PROPRE légende de provenance, distincte de celle de la case large (Important 1)", () => {
+  it("contexte SANS sélecteur d'article (recap_card) : la bande énonce quand même sa portée (toujours des valeurs d'exemple)", () => {
+    const html = render(fixtureProps({ context: "recap_card", articles: [] }));
+    expect(filmstripProvenanceText(html)).toMatch(/valeurs d'exemple/i);
+  });
+
+  it("contexte AVEC sélecteur d'article ET un article fourni : la case large mentionne l'article, la bande précise qu'elle l'ignore quand même", () => {
+    const html = render(fixtureProps({
+      context: "social_post",
+      articles: [{ id: "a1", title: "Un article de test" }],
+    }));
+    // La case large PEUT montrer l'article (son propre sélecteur, testé plus haut) — la bande, elle,
+    // dit explicitement le contraire : c'est le fait précis que Important 1 reprochait d'omettre.
+    expect(filmstripProvenanceText(html)).toMatch(/valeurs d'exemple/i);
+    expect(filmstripProvenanceText(html)).toMatch(/quel que soit l'article/i);
+  });
+
+  it("la légende de la bande ne varie PAS avec showArticlePicker — témoin de sabotage : un texte identique dans les deux contextes ci-dessus", () => {
+    const withoutPicker = filmstripProvenanceText(render(fixtureProps({ context: "recap_card", articles: [] })));
+    const withPicker = filmstripProvenanceText(render(fixtureProps({
+      context: "social_post", articles: [{ id: "a1", title: "Un article de test" }],
+    })));
+    expect(withoutPicker).toBe(withPicker);
   });
 });
 

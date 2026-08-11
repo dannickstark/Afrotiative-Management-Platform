@@ -32,6 +32,24 @@ import type { PreservedView } from "@/lib/studio/studio-mode";
 // (recadré/mal placé). C'est un signal UTILE (« ce gabarit ne s'adapte pas encore »), pas un bug à
 // masquer : AUCUNE affordance « adapter »/« réagencer » n'apparaît nulle part dans ce fichier, et
 // aucune bulle d'aide ne promet cette fonctionnalité — voir tests/studio-render-mode.test.ts.
+//
+// COÛT DES RENDUS (Important 2, revue Tâche 5) : entrer en Rendu réel déclenche jusqu'à HUIT appels
+// previewTemplate() — un pour la case large (PreviewPane) et sept pour la bande — et AUCUN des deux
+// chemins ne passe par le cache de rendu de V1 (lib/studio/store.ts : computeInputHash/
+// findCachedRender/saveRender). Vérifié, pas supposé : previewTemplateCore (lib/studio/preview-core.ts,
+// le cœur derrière previewTemplate) appelle renderScene() DIRECTEMENT, jamais renderForArticle
+// (lib/studio/index.ts, le SEUL appelant réel de ce cache) — et tests/studio-preview.test.ts prouve
+// STRUCTURELLEMENT (parcours du graphe d'imports réel) que store.ts n'est atteignable PAR AUCUN
+// CHEMIN depuis preview-core.ts ni depuis render.ts. C'est un choix DÉLIBÉRÉ de V2 (l'aperçu doit
+// refléter le brouillon EN MÉMOIRE, jamais une version en cache clé par templateVersion — une scène
+// non enregistrée n'a pas de version stable à cacher) et il serait FAUX d'y greffer ce cache : la
+// garantie testée « l'aperçu n'écrit rien » (même fichier) inclut `saveRender`, le seul chemin
+// d'écriture du cache. Chaque vignette est donc un VRAI rendu satori/resvg/sharp à chaque entrée en
+// Rendu réel — pas un lookup DB bon marché. Le correctif proportionné (spec de la revue) est de ne
+// PAS re-rendre les vignettes hors champ : voir l'IntersectionObserver de FilmstripThumb ci-dessous.
+// Une mémoïsation inter-bascules de mode (survivre à un démontage de RenderMode) résoudrait aussi le
+// problème mais construirait un second cache côté client — délibérément hors du périmètre de ce
+// correctif, noté comme suite possible dans le rapport de la Tâche 5.
 const MAX_RENDER_ZOOM = 1; // spec §5 : « zoomable à 100 % pour inspecter la typo » — jamais au-delà.
 
 export interface RenderModeProps {
@@ -92,15 +110,46 @@ function FilmstripThumb({
   const preset = FORMAT_PRESETS[format];
   const [state, setState] = useState<ThumbState>({ status: "idle" });
   const requestIdRef = useRef(0);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
-  // Se déclenche au montage puis à chaque bascule de `refreshNonce` (« ↻ rendre », voir RenderMode
-  // ci-dessous) — JAMAIS à chaque frappe dans l'éditeur : sept rendus satori/resvg par touche serait
-  // un coût réel (spec §5 : « le rendu est asynchrone » — c'est précisément ce qui justifie le badge
-  // « Périmé » plutôt qu'un rafraîchissement automatique comme PreviewPane). `scene` est
-  // délibérément ABSENTE des dépendances : elle est lue depuis la fermeture au moment où l'effet
-  // s'exécute (montage, ou nonce bascule après un rendu PARENT à jour) — jamais mémorisée séparément.
+  // Important 2 (revue Tâche 5) : previewTemplate() n'est JAMAIS gratuit ici (voir le commentaire
+  // d'en-tête du fichier — aucun cache ne l'absorbe), donc rendre les SEPT vignettes inconditionnellement
+  // au montage revient à sept rendus satori/resvg/sharp à chaque entrée en Rendu réel, même pour les
+  // vignettes hors champ (la bande défile horizontalement, `overflow-x-auto` sur son conteneur).
+  // IntersectionObserver ne déclenche `visible` qu'une fois cette vignette PRÉCISE entrée dans le
+  // viewport — l'observateur tient compte de TOUT ancêtre à défilement/`overflow` qui la clippe, pas
+  // seulement de `root` (comportement standard de l'API), donc une vignette scrollée hors de la bande
+  // reste bien `isIntersecting: false` même avec `root` par défaut (le viewport du navigateur).
+  // `.disconnect()` dès la première apparition : on ne veut PAS re-déclencher `visible` à chaque
+  // sortie/entrée du viewport lors d'un défilement, seulement en découvrir l'existence une fois.
+  const [visible, setVisible] = useState(false);
   useEffect(() => {
-    if (disabled) return;
+    const el = buttonRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setVisible(true); // repli : pas d'IntersectionObserver (jamais le cas en navigateur réel) -> rendu immédiat, comportement d'avant ce correctif.
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" }, // amorce un peu AVANT l'entrée réelle dans le viewport, pour un défilement fluide.
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Se déclenche à la PREMIÈRE apparition dans le viewport (`visible`) puis à chaque bascule de
+  // `refreshNonce` (« ↻ rendre », voir RenderMode ci-dessous) — JAMAIS à chaque frappe dans l'éditeur
+  // (voir le commentaire de PÉRIMÉ plus bas) NI pour une vignette jamais scrollée jusqu'ici. `scene`
+  // est délibérément ABSENTE des dépendances : elle est lue depuis la fermeture au moment où l'effet
+  // s'exécute (première apparition, ou nonce bascule après un rendu PARENT à jour) — jamais mémorisée
+  // séparément.
+  useEffect(() => {
+    if (disabled || !visible) return;
     const id = ++requestIdRef.current;
     setState({ status: "loading" });
     const variant = sceneForFormat(scene, format, nativeFormat);
@@ -113,10 +162,11 @@ function FilmstripThumb({
         if (id === requestIdRef.current) setState({ status: "error" });
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId, format, nativeFormat, refreshNonce, disabled]);
+  }, [templateId, format, nativeFormat, refreshNonce, disabled, visible]);
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       data-testid="filmstrip-thumb"
       data-format={format}
@@ -209,8 +259,10 @@ export function RenderMode({
   // article_image/social_post — components/studio/preview-pane.tsx) mais ne l'affiche QUE quand des
   // articles sont fournis pour un contexte éligible ; les trois contextes à saisie manuelle (citation,
   // bandeau, récap — components/studio/manual-generate.tsx) n'ont, eux, JAMAIS d'article associé et
-  // utilisent toujours les valeurs d'exemple. Cette légende, TOUJOURS visible, couvre les deux cas
-  // sans dupliquer l'état interne (privé) du sélecteur de PreviewPane — `ARTICLE_SELECTABLE_CONTEXTS`
+  // utilisent toujours les valeurs d'exemple. Cette légende décrit UNIQUEMENT la case large — voir
+  // Important 1 de la revue Tâche 5 : la bande de vignettes ci-dessous n'a PAS ce choix (FilmstripThumb
+  // n'envoie jamais `articleId` à previewTemplate, ligne ~107) et porte donc sa PROPRE légende, plus
+  // bas, pour ne jamais laisser croire qu'elle suit le même sélecteur. `ARTICLE_SELECTABLE_CONTEXTS`
   // est réexportée par preview-pane.tsx pour cette raison précise, pas recopiée ici.
   const showArticlePicker = ARTICLE_SELECTABLE_CONTEXTS.includes(context) && !!articles?.length;
 
@@ -248,8 +300,8 @@ export function RenderMode({
 
         <p className="text-xs text-muted-foreground" data-testid="render-provenance">
           {showArticlePicker
-            ? "Provenance : valeurs d'exemple, ou l'article choisi dans le sélecteur ci-dessous."
-            : "Provenance : valeurs d'exemple."}
+            ? "Provenance de cette case : valeurs d'exemple, ou l'article choisi dans le sélecteur ci-dessous."
+            : "Provenance de cette case : valeurs d'exemple."}
         </p>
 
         <div
@@ -278,7 +330,17 @@ export function RenderMode({
 
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-medium">Autres formats</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm font-medium">Autres formats</span>
+            {/* Important 1 (revue Tâche 5) : la bande n'a PAS le choix « article » de la case large
+                — FilmstripThumb (ci-dessus) appelle previewTemplate SANS `articleId`, toujours avec
+                les valeurs d'exemple, quel que soit l'article sélectionné dans PreviewPane au-dessus.
+                Légende SÉPARÉE et TOUJOURS visible plutôt qu'une extension du texte de la case large,
+                pour que ce fait reste vrai même si la case large montre un article. */}
+            <span className="text-xs text-muted-foreground" data-testid="render-filmstrip-provenance">
+              {"toujours avec des valeurs d'exemple, quel que soit l'article choisi ci-dessus"}
+            </span>
+          </div>
           {stale && (
             <div className="flex items-center gap-2">
               <Badge variant="secondary" data-testid="render-stale-badge">Périmé</Badge>
