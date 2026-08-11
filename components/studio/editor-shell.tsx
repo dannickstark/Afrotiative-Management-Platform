@@ -19,7 +19,6 @@ import { TextePanel } from "./panels/texte-panel";
 import { ElementsPanel } from "./panels/elements-panel";
 import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
-import { PreviewPane } from "./preview-pane";
 import { ModeSwitch } from "./mode-switch";
 import { RenderMode } from "./render-mode";
 import { editorReducer, initEditorState, undo, redo } from "@/lib/studio/editor-state";
@@ -430,33 +429,23 @@ function EditorShellInner({
               <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
             </div>
 
-            {/* Tâche 6 (U1, spec §6) : `min-h-0 flex-1` sur le conteneur du panneau de propriétés
-                (au lieu d'un simple bloc à hauteur intrinsèque) lui donne une hauteur RÉELLEMENT
-                bornée, partagée avec PreviewPane en dessous — c'est ce qui rend la bande de géométrie
-                RÉELLEMENT épinglée à l'écran (property-panel.tsx#PropertyPanel n'utilise son
-                `h-full` interne que si un ancêtre lui donne une hauteur définie), pas seulement
-                première dans l'ordre du HTML. `overflow-auto` RESTE sur cette colonne (au lieu de
-                passer à `overflow-hidden`) : c'est le filet de sécurité si PreviewPane (dont la
-                hauteur suit l'aspect-ratio du gabarit, potentiellement haute pour un format portrait
-                — voir preview-pane.tsx) ne tient pas dans l'espace restant même une fois le panneau
-                réduit à son minimum ; `shrink-0` sur PreviewPane l'empêche par ailleurs d'être
-                comprimé en premier. Le défilement NORMAL, lui, se fait désormais À L'INTÉRIEUR du
-                panneau (`property-sections`, property-panel.tsx), pas sur cette colonne entière. */}
-            <div className="flex w-[300px] shrink-0 flex-col gap-3 overflow-auto">
-              <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
-                <PropertyPanel
-                  scene={state.scene} selectedId={state.selectedId} context={template.context}
-                  dispatch={dispatch} assets={assets}
-                  sectionsOpen={prefs.sectionsOpen}
-                  onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}
-                />
-              </div>
-              <div className="shrink-0 rounded-lg border p-2">
-                <PreviewPane
-                  templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles}
-                  disabled={!storageConfigured}
-                />
-              </div>
+            {/* Tâche 6 (U1, spec §6) : `h-full` + `overflow-hidden` donnent à cette colonne une
+                hauteur RÉELLEMENT bornée — c'est ce qui rend la bande de géométrie de PropertyPanel
+                RÉELLEMENT épinglée à l'écran (property-panel.tsx#PropertyPanel n'utilise son propre
+                `h-full` que si un ancêtre lui donne une hauteur définie), pas seulement première
+                dans l'ordre du HTML. La colonne ne porte plus PreviewPane depuis la revue de cette
+                tâche (spec §2 : panneau + aperçu empilés se disputant 300px de largeur ET la même
+                hauteur était LE défaut de l'ancienne colonne unique) — Rendu réel (Tâche 5, spec §5)
+                est désormais le SEUL foyer de l'aperçu, accessible via ModeSwitch ou `R`. Un seul
+                enfant (PropertyPanel) gère lui-même son propre défilement interne
+                (`property-sections`, property-panel.tsx) : rien ici n'a besoin de défiler. */}
+            <div className="h-full w-[300px] shrink-0 overflow-hidden rounded-lg border">
+              <PropertyPanel
+                scene={state.scene} selectedId={state.selectedId} context={template.context}
+                dispatch={dispatch} assets={assets}
+                sectionsOpen={prefs.sectionsOpen}
+                onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}
+              />
             </div>
           </>
         ) : (
