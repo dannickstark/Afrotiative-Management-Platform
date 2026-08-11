@@ -144,25 +144,34 @@ export function nextOpenPanel(current: RailCategory | null, clicked: RailCategor
   return current === clicked ? null : clicked;
 }
 
-// Correctif revue finale — Important 1 : ⌘/ (spec §3/§9) était un aller SANS retour — voir
-// editor-shell.tsx avant ce correctif, qui appelait `nextOpenPanel(p.openPanel, p.openPanel)` (donc
-// toujours `null`) sous un garde qui ne faisait déjà rien quand `openPanel` valait déjà `null` :
-// une fois replié, plus aucune pression sur ⌘/ ne pouvait rouvrir quoi que ce soit. DÉCISION extraite
-// en fonction PURE (comme demandé par la revue : « this sub-project's reviews have twice faulted
-// inline predicates that were pure all along ») :
-//   - un panneau est ouvert -> le replier, et MÉMORISER lequel dans `lastOpenPanel` (c'est CE panneau
-//     qu'un ⌘/ suivant doit réafficher) ;
-//   - aucun panneau n'est ouvert -> réafficher `lastOpenPanel`.
-// Portée volontairement LIMITÉE à ⌘/ : un clic sur le rail ou sur le chevron de panel-host.tsx
-// continue de passer par `nextOpenPanel` seul, inchangé — ces deux gestes donnent déjà l'un des deux
-// à l'utilisateur (le rail sait toujours QUELLE catégorie vient d'être cliquée ; le chevron ne fait
-// que reproduire ce que le rail ferait pour la même catégorie), ils n'ont donc pas besoin de cette
-// mémoire à double sens.
-export function toggleCollapse(prefs: EditorPrefs): EditorPrefs {
-  if (prefs.openPanel) {
+// Correctif revue finale (Minor, second passage) — Close 1 : la portée « limitée à ⌘/ » ci-dessous
+// décrite pour la première version de `toggleCollapse` était TROP étroite en pratique : `lastOpenPanel`
+// n'était écrit QUE par `toggleCollapse`, donc un panneau ouvert par le rail puis fermé par le RAIL
+// (re-clic sur la même catégorie) ou par le CHEVRON de panel-host.tsx laissait `lastOpenPanel`
+// périmé — scénario concret signalé en revue : ouvrir Images depuis le rail, le replier au chevron,
+// presser ⌘/ -> restaurait Calques (le défaut), pas Images. `setOpenPanel` est désormais LE seul
+// point d'écriture de `openPanel`, quel que soit le geste : il mémorise `lastOpenPanel` à CHAQUE
+// fermeture RÉELLE (une transition non-null -> null), jamais à l'ouverture ni quand rien n'était
+// ouvert pour commencer (rien à mémoriser). `nextOpenPanel` (la règle rail/chevron : cliquer la
+// catégorie déjà ouverte la referme) reste la fonction qui décide QUEL `next` passer — celle-ci
+// décide seulement CE QUI ACCOMPAGNE un `next` donné.
+export function setOpenPanel(prefs: EditorPrefs, next: RailCategory | null): EditorPrefs {
+  if (next === null && prefs.openPanel !== null) {
     return { ...prefs, openPanel: null, lastOpenPanel: prefs.openPanel };
   }
-  return { ...prefs, openPanel: prefs.lastOpenPanel };
+  return { ...prefs, openPanel: next };
+}
+
+// ⌘/ (spec §3/§9) : un VRAI aller-retour, plutôt que l'ancien `nextOpenPanel(p.openPanel,
+// p.openPanel)` sous garde (toujours `null`, et un no-op une fois déjà replié — aucune pression
+// suivante ne pouvait rien rouvrir). DÉCISION extraite en fonction PURE (comme demandé par la revue :
+// « this sub-project's reviews have twice faulted inline predicates that were pure all along ») :
+//   - un panneau est ouvert -> le replier via `setOpenPanel` (qui mémorise lequel) ;
+//   - aucun panneau n'est ouvert -> réafficher `lastOpenPanel`, celui mémorisé par la DERNIÈRE
+//     fermeture réelle — quel qu'en ait été le geste (rail, chevron ou ⌘/ lui-même), puisque les
+//     trois passent maintenant par `setOpenPanel`.
+export function toggleCollapse(prefs: EditorPrefs): EditorPrefs {
+  return prefs.openPanel ? setOpenPanel(prefs, null) : setOpenPanel(prefs, prefs.lastOpenPanel);
 }
 
 // Correctif revue finale — amendement de spec §3 (« This is what a newly created template opens

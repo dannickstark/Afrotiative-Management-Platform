@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   parsePrefs, serializePrefs, DEFAULT_PREFS, RAIL_CATEGORIES, RAIL_LABELS,
-  toggleCollapse, openModelesIfEmpty,
+  toggleCollapse, openModelesIfEmpty, setOpenPanel, nextOpenPanel,
 } from "@/lib/studio/editor-prefs";
 
 describe("editor prefs — pure, never throws", () => {
@@ -98,6 +98,57 @@ describe("toggleCollapse — ⌘/ est un VRAI aller-retour (Important 1, revue f
     expect(next.grid).toBe(true);
     expect(next.safeAreas).toBe(false);
     expect(next.zoom).toBe(0.5);
+  });
+});
+
+// Correctif revue finale (Minor, second passage) — Close 1 : `lastOpenPanel` n'était écrit QUE par
+// `toggleCollapse` — un panneau fermé par le RAIL (re-clic sur la même catégorie) ou par le CHEVRON
+// de panel-host.tsx laissait donc `lastOpenPanel` périmé. Scénario concret signalé en revue : ouvrir
+// Images depuis le rail, le replier au chevron, presser ⌘/ -> restaurait Calques (le défaut), pas
+// Images. `setOpenPanel` est désormais LE seul point d'écriture de `openPanel`, quel que soit le
+// geste, et mémorise `lastOpenPanel` à CHAQUE fermeture RÉELLE (une transition non-null -> null).
+describe("setOpenPanel — mémorise lastOpenPanel à CHAQUE fermeture réelle, quel que soit le geste (Minor, second passage)", () => {
+  it("fermer un panneau ouvert (next: null) mémorise lequel dans lastOpenPanel", () => {
+    const prefs = { ...DEFAULT_PREFS, openPanel: "images" as const, lastOpenPanel: "calques" as const };
+    const next = setOpenPanel(prefs, null);
+    expect(next.openPanel).toBeNull();
+    expect(next.lastOpenPanel).toBe("images");
+  });
+
+  it("ouvrir ou changer de panneau (next non-null) ne touche JAMAIS lastOpenPanel", () => {
+    const prefs = { ...DEFAULT_PREFS, openPanel: "calques" as const, lastOpenPanel: "calques" as const };
+    const next = setOpenPanel(prefs, "texte");
+    expect(next.openPanel).toBe("texte");
+    expect(next.lastOpenPanel).toBe("calques"); // inchangé
+  });
+
+  it("fermer alors que rien n'était déjà ouvert ne touche pas lastOpenPanel — rien à mémoriser", () => {
+    const prefs = { ...DEFAULT_PREFS, openPanel: null, lastOpenPanel: "images" as const };
+    const next = setOpenPanel(prefs, null);
+    expect(next.openPanel).toBeNull();
+    expect(next.lastOpenPanel).toBe("images"); // inchangé
+  });
+
+  // Le scénario CONCRET de la revue, reconstruit geste par geste : rail (ouverture) -> chevron
+  // (fermeture, PAS ⌘/) -> ⌘/ (réouverture). Avant ce correctif, la dernière étape restaurait
+  // "calques" (le défaut de lastOpenPanel, jamais mis à jour par une fermeture au chevron) au lieu
+  // d'"images", le panneau RÉELLEMENT ouvert juste avant.
+  it("scénario de la revue : Images ouvert au RAIL, replié au CHEVRON, puis ⌘/ restaure Images — jamais Calques", () => {
+    let prefs: typeof DEFAULT_PREFS = { ...DEFAULT_PREFS, openPanel: null, lastOpenPanel: "calques" };
+
+    // 1. Clic sur le rail : ouvre "images" (editor-shell.tsx#selectRailCategory).
+    prefs = setOpenPanel(prefs, nextOpenPanel(prefs.openPanel, "images"));
+    expect(prefs.openPanel).toBe("images");
+
+    // 2. Clic sur le CHEVRON de panel-host.tsx : `onOpenChange(nextOpenPanel(open, open))`, qui
+    //    vaut toujours `null` — jamais ⌘/, jamais toggleCollapse directement.
+    prefs = setOpenPanel(prefs, nextOpenPanel(prefs.openPanel!, prefs.openPanel!));
+    expect(prefs.openPanel).toBeNull();
+    expect(prefs.lastOpenPanel).toBe("images"); // la fermeture au chevron a bien été mémorisée
+
+    // 3. ⌘/ (toggleCollapse) : doit restaurer EXACTEMENT ce qui était ouvert avant l'étape 2.
+    prefs = toggleCollapse(prefs);
+    expect(prefs.openPanel).toBe("images");
   });
 });
 

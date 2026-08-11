@@ -89,7 +89,7 @@ décisions : la barre d'outils n'a rien à offrir sans les nouvelles formes, la 
 la vérité qu'une fois la re-mise en page acquise, et les repères sont inséparables de la
 multi-sélection. D'où ce re-découpage, dans cet ordre.
 
-### U1 — Coque, rail et modes
+### U1 — Coque, rail et modes — ✅ Livré (2026-08-11)
 Rail d'icônes libellées avec ses six catégories, un panneau accosté par catégorie (recherche, action
 principale, sections), pastilles flottantes, commutateur de mode, mode rendu avec sa bande de
 formats, restructuration du rail de propriétés (bande épinglée + sections repliables), indicateur
@@ -108,6 +108,54 @@ migrent depuis leurs modales et pages vers les panneaux.
 porte déjà, en lecture, pour griser un jeton indisponible dans le contexte du gabarit. U4 livre
 l'autre moitié — le sélecteur de jetons **à l'intérieur des champs** du rail de propriétés, et
 `parseScene` qui remonte toutes les erreurs au lieu de la première.
+
+#### Ce qui a été livré, et à quel prix
+
+Sept tâches, chacune revue ; cinq ont demandé une vague de correctifs, puis une revue complète du
+sous-projet et sa propre vague. Le rail à six catégories libellées avec son panneau accosté ;
+« Texte dynamique » où un clic insère un calque déjà lié au jeton ; la galerie de formes bornée par
+`SHAPE_KINDS`, exporté par `scene.ts` et consommé par le schéma comme par la garde ;
+`Montage ⇄ Rendu réel` avec sa bande de formats chargée paresseusement ; la géométrie épinglée hors du
+conteneur de défilement ; les pastilles, règles et grille ; et le réessai d'enregistrement qui repart
+sans exiger une modification. Spec : `2026-08-10-afrotiative-u1-shell-modes-design.md` ; plan :
+`../plans/2026-08-10-afrotiative-u1-shell-modes.md`.
+
+#### La leçon de U1, qui vaut pour U2 → U5
+
+**Six tests verts sur une propriété non tenue**, dont quatre parce qu'un composant était testé isolé
+alors que la production le compose autrement :
+
+| Test vert | Propriété non tenue |
+|---|---|
+| Ombre portée de l'artboard | Le conteneur `CanvasChrome`, identique au pixel et en `overflow-hidden`, la rognait |
+| Grille rendue quand activée | Elle peignait **sous** l'artboard opaque : le bouton changeait d'état, l'écran non |
+| `preserveView(preserveView(v)) === v` | Vrai pour `x => x` — l'identité aurait suffi |
+| Garde de complétude des formes | Comparait un miroir recopié à la main, pas le vrai schéma |
+| Jeton illégal grisé | Utilisait un jeton de genre `url`, qui n'aurait jamais pu être une ligne |
+| — | Et l'aperçu n'avait **jamais quitté** la colonne des propriétés : la promesse centrale du spec, non tenue pendant six des sept tâches, l'omission vivant dans la couture entre deux tâches chacune défendable |
+
+**Cinq de ces défauts venaient du plan lui-même**, pas de l'implémentation — chacun est désormais
+consigné comme amendement daté dans le plan. La règle qui en sort, à appliquer dès U2 : **tester la
+composition là où la composition est le risque**, et demander de chaque test porteur non pas
+« passe-t-il ? » mais « que faudrait-il pour qu'il échoue ? ».
+
+Deux motifs à réutiliser : une **source canonique** consommée par le schéma *et* par la garde
+(`SHAPE_KINDS`), et l'**extraction des prédicats purs** testés sur des objets littéraux
+(`isModeToggleShortcut`, `toggleCollapse`, `computeCanvasScale`) — ce dépôt n'a pas de harnais DOM, et
+deux revues ont reproché des prédicats laissés en ligne alors qu'ils étaient purs.
+
+#### Dette reportée à l'issue de U1
+
+| Point | Où | Pour qui |
+|---|---|---|
+| `role="radiogroup"` au-dessus d'enfants qui ne sont pas des `radio` — une promesse ARIA échangée contre une autre ; `role="group"` ou aucun rôle conviendrait | `mode-switch.tsx` | U2 |
+| La recherche du panneau Images peut vider l'affichage de l'asset courant quand celui-ci sort de la liste filtrée | `panels/images-panel.tsx` | U2 |
+| L'ouverture forcée de « Modèles » sur un gabarit vide est persistée : elle suit l'utilisateur d'un gabarit à l'autre jusqu'à fermeture | `editor-prefs.ts`, `use-editor-prefs.ts` | U2 |
+| `EditorPrefs.zoom` reste non branché — le spec §7 ne demande que la pastille, mais un champ persisté qui ne vaut jamais que `"fit"` ne doit pas traverser un troisième sous-projet | `editor-prefs.ts` | U2 : brancher ou supprimer |
+| Cinq coutures non couvertes faute de harnais DOM : le `onPick` d'Images, le `onClick` des styles, celui des lignes de jetons, l'enregistrement du `keydown` de `⌘/`, et le passage de `prefs.rulers` à l'effet d'échelle. Une mutation dans l'une des cinq laisserait la suite verte | — | **candidat sérieux : installer un harnais DOM avant U2** |
+| `DYNAMIC_TEXT_LABELS` redouble 11 libellés de `TOKEN_LABELS` (aucun fichier de `lib/studio` ne peut importer depuis `components/`) | `dynamic-text.ts` | quand un libellé canonique montera dans `tokens.ts` |
+| Les vignettes de la bande ne remontent pas leur propre indicateur `degraded` — seule la grande case le fait | `render-mode.tsx` | faible : le repli de police suit le jeu de polices de la scène, pas le format |
+| `getTaxonomy()` ramène des `wpTags` que personne ne consomme ; `listTemplates()` tourne à chaque ouverture d'éditeur pour un panneau que la plupart des sessions n'ouvrent pas | `queries/settings.ts`, `studio/[id]/page.tsx` | opportuniste |
 
 ### U2 — Surface de précision
 Magnétisme et repères intelligents (bords et centres des calques voisins, centre et tiers du plan de
