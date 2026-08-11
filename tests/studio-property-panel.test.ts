@@ -98,6 +98,25 @@ function openingTag(html: string, attr: string, value: string): string {
   return match[0];
 }
 
+/** L'ÉLÉMENT ENTIER (balise ouvrante + contenu + fermante) portant `attr="value"`, et non sa seule
+ * balise ouvrante — introduit par la revue de la Tâche 3 (Medium 3) : `openingTag` ne peut RIEN dire
+ * du TEXTE affiché à l'intérieur d'un élément, si bien qu'une assertion « le libellé est là » se
+ * rabattait sur tout le HTML du panneau et se satisfaisait d'une note voisine qui nommait la même
+ * forme. Refuse un élément qui en contiendrait un autre de MÊME nom de balise : la recherche du
+ * premier `</tag>` serait alors fausse, et échouer franchement vaut mieux que rendre un fragment. */
+function elementWith(html: string, attr: string, value: string): string {
+  const tag = openingTag(html, attr, value);
+  const name = /^<([a-z]+)/.exec(tag)![1];
+  const start = html.indexOf(tag);
+  const end = html.indexOf(`</${name}>`, start + tag.length);
+  if (end === -1) throw new Error(`aucune fermeture </${name}> après ${attr}="${value}"`);
+  const element = html.slice(start, end + name.length + 3);
+  if (element.indexOf(`<${name}`, 1) !== -1) {
+    throw new Error(`<${name}> imbriqué dans ${attr}="${value}" : l'extraction serait tronquée`);
+  }
+  return element;
+}
+
 /** Nombre d'occurrences EXACTES d'une sous-chaîne dans le HTML rendu. Introduit par la revue finale
  * U0+U2 : plusieurs assertions de ce fichier disaient un COMPTE en prose (« la rangée apparaît une
  * fois », « un bouton pour chacun des six modes ») et ne vérifiaient qu'une PRÉSENCE — un composant
@@ -642,13 +661,29 @@ describe("PropertyPanel — le sélecteur de forme", () => {
     // Mutation qui rougit : retirer le mappeur `<SelectValue>{(v) => …}</SelectValue>` de SelectField —
     // Base UI afficherait alors la valeur brute (« star »), le piège déjà corrigé une fois dans ce
     // panneau et une fois dans preview-pane.tsx.
+    //
+    // CE TEST ÉTAIT VACANT POUR SIX DES HUIT FORMES (revue de la Tâche 3, Medium 3). Sa seule preuve
+    // du libellé était `html.includes(shapeLabel(kind))`, sur TOUT le panneau — or les notes
+    // `shape-radius-ignored` et `shape-rotation-none` NOMMENT la forme concernée dans leur phrase
+    // (« La forme « Étoile » est dessinée par un découpage… »), et « Étoile » apparaît 3 fois dans ce
+    // panneau. Mesuré, mappeur retiré : le libellé restait présent pour ellipse, triangle, star,
+    // hexagon, arrow et bubble ; seuls `rect` et `line` — les deux formes SANS note — faisaient
+    // rougir. Le libellé est donc désormais cherché DANS le déclencheur du sélecteur lui-même, qui ne
+    // contient que lui et un chevron.
     for (const kind of SHAPE_KINDS) {
       const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
       expect(`${kind} : ${html.includes(shapeLabel(kind))}`).toBe(`${kind} : true`);
-      // Et le libellé de la forme est bien celui du sélecteur, pas seulement le nom du calque :
-      // `shapeLayerSolid` s'appelle « Fond », donc aucun libellé de forme ne peut venir de là.
-      const trigger = openingTag(html, "role", "combobox");
-      expect(trigger).toBeTruthy();
+      // Le panneau d'une forme n'a QU'UN sélecteur : l'extraction est donc sans ambiguïté (et si un
+      // second en apparaissait un jour, ce compte le dirait plutôt que de laisser l'extraction viser
+      // le mauvais).
+      expect(`${kind} : ${countOf(html, 'role="combobox"')}`).toBe(`${kind} : 1`);
+      // Et le libellé de la forme est bien celui du sélecteur, pas seulement le nom du calque
+      // (`shapeLayerSolid` s'appelle « Fond ») ni celui d'une note voisine.
+      const trigger = elementWith(html, "role", "combobox");
+      expect(`${kind} déclencheur : ${trigger.includes(shapeLabel(kind))}`).toBe(`${kind} déclencheur : true`);
+      // L'autre moitié, explicite : la CLÉ TECHNIQUE n'y est jamais — c'est exactement ce que Base UI
+      // affiche à la place du libellé quand le mappeur manque.
+      expect(`${kind} clé brute : ${trigger.includes(`>${kind}<`)}`).toBe(`${kind} clé brute : false`);
     }
   });
 });
