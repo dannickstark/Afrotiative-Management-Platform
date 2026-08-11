@@ -81,7 +81,16 @@ const gradient = z.object({
 // tests/studio-shape-gallery.test.ts plutôt que de laisser un designer sans moyen de l'insérer
 // (revue Tâche 4, Important 1 : le garde-fou d'origine comparait deux copies manuscrites qui
 // pouvaient dériver ensemble sans qu'aucun test ne le remarque).
-export const SHAPE_KINDS = ["rect"] as const;
+//
+// U3 Tâche 3 — la liste passe d'une forme à HUIT. L'ordre est celui de la galerie d'insertion : les
+// deux formes « pleines » (rect, ellipse), le trait, puis la famille polygonale. Chaque entrée
+// ajoutée ici doit, sous peine de test rouge (jamais de revue) :
+//   — porter une description dans lib/studio/shapes.ts (Record<ShapeKind, …> : sinon `tsc` refuse,
+//     et tests/studio-shapes.test.ts refuse aussi à l'exécution) ;
+//   — porter une tuile dans lib/studio/shape-gallery.ts (garde de complétude, U1 Tâche 4) ;
+//   — porter une preuve EN PIXELS dans tests/studio-shape-render.test.ts (table Record<ShapeKind, …>).
+// Aucune scène déjà écrite ne change : ce n'est qu'un élargissement du z.enum.
+export const SHAPE_KINDS = ["rect", "ellipse", "line", "triangle", "star", "hexagon", "arrow", "bubble"] as const;
 
 /** LA forme d'un calque forme — le type que lib/studio/shapes.ts décrit et que les deux chemins de
  * rendu consomment. Dérivé de SHAPE_KINDS, jamais recopié. */

@@ -7,6 +7,10 @@ import {
   type EditorAction, select, toggleSelection, clearSelection, singleSelectedId, deleteLayer, moveLayer,
 } from "@/lib/studio/editor-state";
 import { useLayerDrag, HANDLES, nudgeDelta, type HandleId } from "@/hooks/use-layer-drag";
+// U3 Tâche 3 (arbitrage A) : LA MÊME question que les deux chemins de rendu posent — cette forme
+// tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
+// que le rendu ne fera pas.
+import { layerSupportsRotation } from "@/lib/studio/shapes";
 import { LayerView } from "./layer-view";
 
 // Le canevas est du DOM, pas un `<canvas>` (spec §2) : chaque calque est une `div` positionnée en
@@ -118,6 +122,11 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
     return preview?.layerId === layer.id && preview.frame ? preview.frame : layer.frame;
   }
   function rotationFor(layer: Layer) {
+    // U3 Tâche 3 (arbitrage A) : une forme DÉCOUPÉE ne tourne dans AUCUN des deux moteurs de rendu
+    // (lib/studio/shapes.ts#layerRotation supprime la `transform` côté export comme côté éditeur). Le
+    // contour de sélection et les poignées doivent donc rester droits eux aussi : un cadre penché
+    // autour d'un triangle droit annoncerait une rotation qui n'existe pas.
+    if (!layerSupportsRotation(layer)) return 0;
     return preview?.layerId === layer.id && preview.rotation !== undefined
       ? preview.rotation
       : (layer.rotation ?? 0);
@@ -303,6 +312,12 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
                 }}
               />
             ))}
+            {/* U3 Tâche 3 (arbitrage A) : PAS de poignée de rotation pour une forme découpée — le
+                geste n'aurait aucun effet visible (les deux chemins de rendu ignorent la rotation
+                d'une telle forme), et « la fonctionnalité meurt en silence » est exactement ce que U2
+                a déjà tranché deux fois. Le panneau de propriétés grise le champ de rotation et
+                affiche la note qui dit pourquoi (geometry-strip.tsx, `shape-rotation-none`). */}
+            {layerSupportsRotation(selectedLayer) && (
             <div
               data-handle="rotate"
               onPointerDown={handleRotateDown(selectedLayer)}
@@ -317,6 +332,7 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
                 cursor: "grab", pointerEvents: "auto",
               }}
             />
+            )}
           </div>
         )}
 

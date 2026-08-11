@@ -40,10 +40,14 @@ export function useCommitBuffer<T>(value: T) {
 // (les six champs de la bande épinglée, Tâche 6) — la seule primitive de champ dont la bande a
 // besoin.
 export function NumberField({
-  label, value, onCommit, step, min, max, action, dataField,
+  label, value, onCommit, step, min, max, action, dataField, disabled,
 }: {
   label: string; value: number; onCommit: (v: number) => void;
   step?: number; min?: number; max?: number; action?: ReactNode; dataField?: string;
+  /** U3 Tâche 3 : un champ dont l'édition n'aurait AUCUN effet (la rotation d'une forme découpée,
+   * arbitrage A) est grisé plutôt que silencieusement inerte — l'appelant DOIT alors afficher une
+   * note qui dit pourquoi, sur le modèle de `snap-rotation-note` / `safe-areas-none` (U2). */
+  disabled?: boolean;
 }) {
   const strValue = Number.isFinite(value) ? String(value) : "0";
   const { local, setLocal, editing, setEditing } = useCommitBuffer(strValue);
@@ -64,6 +68,7 @@ export function NumberField({
         max={max}
         value={local}
         data-field={dataField}
+        disabled={disabled}
         onFocus={() => setEditing(true)}
         onChange={(e) => setLocal(e.target.value)}
         onBlur={commit}

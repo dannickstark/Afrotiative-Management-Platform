@@ -3,8 +3,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseScene, SHAPE_KINDS, type Scene, type ShapeKind, type ShapeLayer } from "@/lib/studio/scene";
 import {
-  SHAPE_DESCRIPTORS, descriptorFor, polygonClip, shapeCssFor, shapeLabel, supportsRotation,
-  type ShapeCss,
+  SHAPE_DESCRIPTORS, descriptorFor, layerSupportsRotation, polygonClip, shapeCssFor, shapeLabel,
+  supportsRotation, type ShapeCss,
 } from "@/lib/studio/shapes";
 import { sceneToElement } from "@/lib/studio/element";
 import { SHAPE_TILES } from "@/lib/studio/shape-gallery";
@@ -103,6 +103,11 @@ describe("shapes.ts — garde-fou de complétude sur SHAPE_KINDS", () => {
         expect(d.kind).toBe(kind);
         expect(d.label.trim().length).toBeGreaterThan(0);
         expect(typeof d.clipped).toBe("boolean");
+        // U3 Tâche 3 : deux décisions de plus, EXPLICITES par forme plutôt que devinées ailleurs —
+        // le rayon s'applique-t-il (sinon il est ignoré, pas mal appliqué), et la galerie insère-t-elle
+        // cette forme comme une BARRE fine (la « ligne ») plutôt que comme un carré.
+        expect(typeof d.radiusApplies).toBe("boolean");
+        expect(typeof d.thin).toBe("boolean");
       });
 
       it("déclare une CSS non vide, et LES DEUX chemins la peignent à l'identique", () => {
@@ -347,30 +352,253 @@ describe("garde — les libellés sont UNIQUES", () => {
   });
 });
 
-describe("PIÈGE POUR LA TÂCHE 3 — à lire quand ce test casse", () => {
-  it("le nombre de formes n'a pas changé sans que les deux dettes ci-dessous soient réglées", () => {
-    // CE TEST EST CONÇU POUR ÉCHOUER dès que `SHAPE_KINDS` grandit. Ce n'est pas un bug : c'est le
-    // seul mécanisme qui force à traiter deux dettes que la Tâche 2 ne POUVAIT pas régler (avec
-    // « rect » seul, les deux branches sont du code mort qu'aucune mutation ne peut faire rougir).
-    // La revue a été explicite : « rien n'oblige la Tâche 3, il n'y a qu'un commentaire ».
+describe("le catalogue des formes — la garde de comptage, ex-« PIÈGE POUR LA TÂCHE 3 »", () => {
+  it("le catalogue compte huit formes, et les trois dettes du piège sont réglées", () => {
+    // CE TEST ÉTAIT UN PIÈGE : il affirmait `length === 1` pour ÉCHOUER dès que la Tâche 3 ajoute une
+    // forme, parce que trois dettes ne pouvaient pas être réglées avec « rect » seul (chacune était
+    // une branche morte qu'aucune mutation ne pouvait faire rougir). Les trois sont réglées, et
+    // chacune a désormais un test qui la garde VIVANTE — c'est ce qui remplace le piège :
     //
-    // AVANT de mettre ce nombre à jour, régler les DEUX :
+    //  1. Le champ « Rayon des coins » (property-panel.tsx) n'est plus numérique : il affiche la
+    //     valeur STOCKÉE telle qu'elle est et ne l'écrase pas.
+    //     → tests/studio-property-panel.test.ts, « le rayon d'une forme (dette 1) » ;
+    //       tests/studio-scene.test.ts, « le rayon vu par l'interface ».
+    //     → et, pour les formes où le rayon n'a AUCUN sens, le champ disparaît derrière une note
+    //       plutôt que d'être appliqué de travers : « le rayon est ignoré, pas mal appliqué » ci-dessous.
     //
-    //  1. `components/studio/property-panel.tsx` — le champ NUMÉRIQUE « Rayon des coins » affiche 0
-    //     pour un rayon en CHAÎNE (« 50% ») et l'ÉCRASE à la première édition. Inatteignable tant
-    //     qu'aucune forme n'utilise de pourcentage ; vivant à l'instant où l'ellipse est livrée.
+    //  2. `supportsRotation(kind)` fait bien DEUX choses : la `transform` de rotation est supprimée
+    //     pour les formes découpées DANS LES DEUX CHEMINS DE RENDU (sinon toute scène portant déjà une
+    //     rotation sur une forme découpée s'afficherait autrement dans l'éditeur que dans l'export —
+    //     le §0 de ce sous-projet réintroduit par son propre correctif), ET le contrôle de rotation est
+    //     grisé avec une note française.
+    //     → « la rotation, sur les DEUX chemins » ci-dessous (CSS) ;
+    //       tests/studio-shape-render.test.ts (PIXELS : la rotation est inerte, octet pour octet) ;
+    //       tests/studio-property-panel.test.ts (le contrôle grisé et sa note).
     //
-    //  2. `supportsRotation(kind)` doit faire DEUX choses, pas une : griser le contrôle de rotation
-    //     AVEC une note en français, ET supprimer la `transform` de rotation pour les formes
-    //     découpées DANS LES DEUX CHEMINS DE RENDU. Dans le navigateur `transform` tourne bel et bien
-    //     la découpe ; dans satori NON (sonde Tâche 1, réserve 2). Ne griser que le contrôle laisse
-    //     toute scène portant DÉJÀ une rotation sur une forme découpée s'afficher différemment dans
-    //     l'éditeur et dans l'export — soit exactement le §0 de ce sous-projet, réintroduit par son
-    //     propre correctif.
+    //  3. `stubShapeCss` est SUPPRIMÉ de tests/studio-shape-render.test.ts : la preuve en pixels d'une
+    //     découpe passe maintenant par la description RÉELLE du triangle, sans aucune substitution.
     //
-    //  3. Accessoirement : la première description RÉELLEMENT découpée rend `stubShapeCss`
-    //     supprimable dans tests/studio-shape-render.test.ts, et la preuve en pixels cesse alors de
-    //     passer par une substitution (revue Tâche 2, arbitrage 1).
-    expect(SHAPE_KINDS.length).toBe(1);
+    // Ce que ce test garde encore : le COMPTE. Le changer sans relire ce qui précède est exactement le
+    // geste que le piège interdisait ; toute forme ajoutée doit repasser par les quatre garde-fous
+    // (les deux chemins, la rotation, le rayon, les pixels) qui itèrent tous `SHAPE_KINDS`.
+    expect(SHAPE_KINDS.length).toBe(8);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// U3 TÂCHE 3 — LA FAMILLE DE FORMES.
+//
+// Ce qui suit itère `SHAPE_KINDS` sans exception : une forme ajoutée sans rayon décidé, sans polygone
+// sain ou sans position sur la rotation fait rougir ce fichier, pas une revue.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Relit une chaîne `polygon(x% y%,…)` en sommets — pour vérifier la TABLE, pas la mise en forme. */
+function verticesOf(clipPath: string): Point[] {
+  const m = /^polygon\((.*)\)$/.exec(clipPath);
+  if (!m) throw new Error(`chaîne de découpe inattendue : ${clipPath}`);
+  return m[1].split(",").map((point) => {
+    const parts = point.split(" ");
+    if (parts.length !== 2) throw new Error(`sommet inattendu « ${point} » dans ${clipPath}`);
+    return parts.map((v) => {
+      if (!v.endsWith("%")) throw new Error(`sommet non percentuel « ${point} » dans ${clipPath}`);
+      return Number(v.slice(0, -1));
+    }) as Point;
+  });
+}
+
+/** Aire signée (formule du lacet), en % ² de la boîte — > 0 dans le sens horaire écran. */
+function signedArea(pts: readonly Point[]): number {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[(i + 1) % pts.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return a / 2;
+}
+
+type Point = [number, number];
+const cross = (p: Point, q: Point, r: Point) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+
+// Deux arêtes NON ADJACENTES sont-elles en conflit ? Sert à prouver qu'aucune table de sommets n'est
+// auto-sécante : un polygone croisé se rend en « evenodd » et fabrique des trous que personne n'a
+// demandés — le genre de faute qu'une coquille dans un tableau produit et qu'un rendu de 30 px ne
+// montre pas.
+//
+// DEUX cas, et le second a été ajouté parce qu'une MUTATION est passée sans lui : permuter deux
+// sommets de la bulle produit deux arêtes COLINÉAIRES qui se recouvrent (toutes deux sur y = 72 %)
+// plutôt qu'un croisement franc — les quatre tests d'orientation valent alors 0 et le premier cas
+// répond « non ». L'aire ne bougeait pas assez pour rougir non plus. C'est exactement la sorte de
+// trou qu'on ne trouve qu'en mutant, donc il est refermé ici.
+function segmentsConflict(a1: Point, a2: Point, b1: Point, b2: Point): boolean {
+  const sign = (v: number) => (Math.abs(v) < 1e-9 ? 0 : Math.sign(v));
+  const d1 = sign(cross(a1, a2, b1)), d2 = sign(cross(a1, a2, b2));
+  const d3 = sign(cross(b1, b2, a1)), d4 = sign(cross(b1, b2, a2));
+  // 1. Croisement PROPRE (en dehors des extrémités).
+  if (d1 !== 0 && d2 !== 0 && d3 !== 0 && d4 !== 0 && d1 !== d2 && d3 !== d4) return true;
+  // 2. Colinéaires ET recouvrantes. Deux arêtes non adjacentes ne peuvent pas se toucher en UN point
+  //    sans partager un sommet (déjà interdit par la garde des doublons), donc tout recouvrement de
+  //    longueur non nulle est un défaut.
+  if (d1 !== 0 || d2 !== 0) return false;
+  const axis = Math.abs(a2[0] - a1[0]) >= Math.abs(a2[1] - a1[1]) ? 0 : 1;
+  const chevauchement = Math.min(Math.max(a1[axis], a2[axis]), Math.max(b1[axis], b2[axis]))
+    - Math.max(Math.min(a1[axis], a2[axis]), Math.min(b1[axis], b2[axis]));
+  return chevauchement > 1e-9;
+}
+
+describe("la famille de formes — le rayon est appliqué où il a un sens, IGNORÉ ailleurs", () => {
+  // Cadres délibérément extrêmes : `minSize` sur un axe (hooks/use-layer-drag.ts, MIN_SIZE = 1),
+  // sur les deux, et des rapports d'aspect violents dans les deux sens. Tous les défauts de U2
+  // vivaient à un extrême.
+  const FRAMES = [
+    { x: 0, y: 0, w: 800, h: 400 },
+    { x: 0, y: 0, w: 1, h: 1 },       // minSize sur les DEUX axes
+    { x: 0, y: 0, w: 1, h: 400 },     // minSize sur l'axe fin, vertical
+    { x: 0, y: 0, w: 800, h: 1 },     // minSize sur l'axe fin, horizontal
+    { x: 0, y: 0, w: 2593, h: 7 },    // rapport 370:1
+    { x: 0, y: 0, w: 7, h: 2593 },    // et son inverse
+  ] as const;
+
+  for (const kind of SHAPE_KINDS) {
+    it(`« ${kind} » : la CSS dépend du rayon SI ET SEULEMENT SI la description le dit`, () => {
+      const applies = descriptorFor(kind).radiusApplies;
+      const sorties = [undefined, 0, 12, 77, "50%", "8px 24px"].map((radius) =>
+        JSON.stringify(shapeCssFor(shapeLayerOf(kind, { radius: radius as never }))),
+      );
+      const distinctes = new Set(sorties).size;
+      // `radiusApplies: false` veut dire IGNORÉ, pas « mal appliqué » : la sortie est LA MÊME pour
+      // les six valeurs, y compris « 8px 24px ». `true` veut dire qu'au moins deux valeurs de rayon
+      // produisent deux CSS différentes — sinon le drapeau mentirait dans l'autre sens.
+      expect(`${kind} applique=${applies} sorties distinctes=${distinctes > 1}`)
+        .toBe(`${kind} applique=${applies} sorties distinctes=${applies}`);
+    });
+
+    it(`« ${kind} » : la CSS ne dépend PAS du cadre — donc aucun extrême ne la dégénère`, () => {
+      // La géométrie de toute forme livrée ici est PERCENTUELLE (borderRadius « 50% », sommets en %) :
+      // elle est donc invariante d'échelle par construction, et c'est CE fait qui la rend sûre à
+      // `minSize` comme à un rapport d'aspect de 370:1. Une description qui se mettrait à calculer en
+      // pixels depuis `layer.frame` (un « chevron dont la pointe fait 20 px ») romprait cette
+      // invariance et pourrait dégénérer sur un cadre de 1 px — ce test l'interdit.
+      const reference = JSON.stringify(shapeCssFor(shapeLayerOf(kind, { frame: { ...FRAMES[0] } })));
+      for (const frame of FRAMES) {
+        expect(`${kind}@${frame.w}x${frame.h} ${JSON.stringify(shapeCssFor(shapeLayerOf(kind, { frame: { ...frame } })))}`)
+          .toBe(`${kind}@${frame.w}x${frame.h} ${reference}`);
+      }
+    });
+  }
+});
+
+describe("la famille de formes — la table de sommets de chaque forme découpée", () => {
+  const clippedKinds = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+
+  it("il existe bien des formes découpées — sans quoi tout ce bloc serait vide", () => {
+    // ANTI-VACUITÉ : `SHAPE_KINDS.filter(...)` vide ferait passer chaque boucle ci-dessous SANS RIEN
+    // vérifier (le défaut exact relevé en revue de U2 : une garde anti-vacuité elle-même vide).
+    expect(clippedKinds.length).toBeGreaterThan(0);
+  });
+
+  for (const kind of clippedKinds) {
+    it(`« ${kind} » : sommets DANS la boîte, sans doublon, aire franche, polygone SIMPLE`, () => {
+      const clip = shapeCssFor(shapeLayerOf(kind)).clipPath!;
+      const pts = verticesOf(clip);
+      expect(pts.length).toBeGreaterThanOrEqual(3);
+
+      // 1. DANS la boîte. `clip-path` coupe au bord de l'élément : un sommet à 110 % serait
+      //    silencieusement rogné, et la forme dessinée ne serait pas celle de la table.
+      for (const [x, y] of pts) {
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(100);
+        expect(y).toBeGreaterThanOrEqual(0);
+        expect(y).toBeLessThanOrEqual(100);
+      }
+
+      // 2. Aucun sommet consécutif dupliqué (une coquille classique dans une table recopiée).
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        expect(`${kind} sommets ${i} et ${(i + 1) % pts.length} distincts`)
+          .toBe(`${kind} sommets ${i} et ${(i + 1) % pts.length} ${a[0] === b[0] && a[1] === b[1] ? "CONFONDUS" : "distincts"}`);
+      }
+
+      // 3. Une aire FRANCHE : au moins 10 % de la boîte. Une table dont les sommets s'alignent
+      //    presque (aire ≈ 0) donnerait une forme invisible sans que rien ne lève.
+      expect(Math.abs(signedArea(pts)) / 100).toBeGreaterThan(10);
+
+      // 4. Polygone SIMPLE : aucun croisement entre deux arêtes non adjacentes.
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 2; j < pts.length; j++) {
+          if (i === 0 && j === pts.length - 1) continue; // arêtes adjacentes par la fermeture
+          const croise = segmentsConflict(pts[i], pts[(i + 1) % pts.length], pts[j], pts[(j + 1) % pts.length]);
+          expect(`${kind} arêtes ${i}/${j} : ${croise ? "SE CROISENT" : "ne se croisent pas"}`)
+            .toBe(`${kind} arêtes ${i}/${j} : ne se croisent pas`);
+        }
+      }
+    });
+
+    it(`« ${kind} » : la chaîne est COMPACTE — aucune espace après une virgule`, () => {
+      // La règle d'espacement (arbitrage B, réserve 1 de la sonde) appliquée à CHAQUE forme livrée,
+      // et pas seulement au constructeur : une description qui assemblerait sa chaîne à la main
+      // contournerait `polygonClip` sans que le test de `polygonClip` ne s'en aperçoive.
+      const clip = shapeCssFor(shapeLayerOf(kind)).clipPath!;
+      expect(clip.includes(", ")).toBe(false);
+      expect(clip.startsWith("polygon(")).toBe(true);
+    });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// LA ROTATION, SUR LES DEUX CHEMINS (arbitrage A, dette 2 du piège).
+//
+// Griser le contrôle ne suffit pas : une scène écrite AVANT cette tâche (ou par un import, ou par
+// l'IA) peut déjà porter `rotation` sur une forme découpée. Dans le navigateur, `transform` tourne
+// bel et bien la découpe ; dans satori, NON (sonde Tâche 1, réserve 2 — le remplissage tourne, le
+// masque non). Laisser la `transform` en place, c'est donc livrer un éditeur en désaccord avec son
+// export : §0 de ce sous-projet, réintroduit par son propre correctif. Elle est supprimée DES DEUX.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("la rotation, sur les DEUX chemins", () => {
+  for (const kind of SHAPE_KINDS) {
+    it(`« ${kind} » : la transform de rotation est présente SI ET SEULEMENT SI la forme peut tourner`, () => {
+      const attendue = supportsRotation(kind);
+      const layer = shapeLayerOf(kind, { rotation: 45 });
+
+      // Chemin EXPORT — le style réellement remis à Satori.
+      const exportée = exportStyleOf(layer).transform;
+      expect(`${kind} export transform=${String(exportée)}`)
+        .toBe(`${kind} export transform=${attendue ? "rotate(45deg)" : "undefined"}`);
+
+      // Chemin ÉDITEUR — le PREMIER attribut style du HTML (le cadre posé par LayerView), lu par
+      // déclaration parsée plutôt que par `toContain("rotate")` : `transform` peut porter d'autres
+      // fonctions, et une sous-chaîne ne dirait pas laquelle.
+      const html = renderToStaticMarkup(
+        React.createElement(LayerView, { layer, frame: layer.frame, rotation: 45, selected: false }),
+      );
+      const cadre = /style="([^"]*)"/.exec(html)![1];
+      const decls = new Map(cadre.split(";").map((d) => [d.slice(0, d.indexOf(":")).trim(), d.slice(d.indexOf(":") + 1).trim()]));
+      expect(`${kind} éditeur transform=${String(decls.get("transform"))}`)
+        .toBe(`${kind} éditeur transform=${attendue ? "rotate(45deg)" : "undefined"}`);
+    });
+  }
+
+  it("les deux camps existent — au moins une forme tourne, au moins une ne tourne pas", () => {
+    // ANTI-VACUITÉ de la boucle ci-dessus : si toutes les formes tombaient du même côté, elle
+    // passerait en ne testant qu'une moitié de la règle.
+    const tournent = SHAPE_KINDS.filter((k) => supportsRotation(k));
+    expect(tournent.length).toBeGreaterThan(0);
+    expect(tournent.length).toBeLessThan(SHAPE_KINDS.length);
+  });
+
+  it("un calque NON forme garde sa rotation — la limite est PAR FORME, pas globale", () => {
+    // `layerSupportsRotation` est interrogée par les deux chemins pour TOUT calque : si elle se
+    // trompait sur un calque texte ou image, cette tâche casserait la rotation de la moitié de
+    // l'éditeur sans qu'aucun test de formes ne le voie.
+    const texte = {
+      ...BASE, id: "t", name: "t", frame: { ...FRAME }, rotation: 45,
+      type: "text", content: "x", font: { family: "Noto Sans", size: 20, weight: 400 },
+      color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+    } as unknown as Parameters<typeof sceneToElement>[0]["layers"][number];
+    expect(layerSupportsRotation(texte)).toBe(true);
+    const scene = { schemaVersion: 1 as const, canvas: { width: 800, height: 400, background: "#0000FF" }, layers: [texte] };
+    const root = sceneToElement(scene, new Map());
+    const child = (root.props as { children: { props: { style: Record<string, unknown> } }[] }).children[0];
+    expect(child.props.style.transform).toBe("rotate(45deg)");
   });
 });

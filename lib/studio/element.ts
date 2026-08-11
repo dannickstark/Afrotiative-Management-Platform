@@ -1,5 +1,5 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
-import { shapeCssFor } from "./shapes";
+import { layerRotation, shapeCssFor } from "./shapes";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
 // code de bibliothèque.
@@ -16,7 +16,14 @@ export function gradientCss(g: Gradient): string {
 
 function frameStyle(layer: Layer): Record<string, unknown> {
   const transforms: string[] = [];
-  if (layer.rotation) transforms.push(`rotate(${layer.rotation}deg)`);
+  // `layerRotation` et NON `layer.rotation` (U3 Tâche 3, arbitrage A) : une forme DÉCOUPÉE ne tourne
+  // pas, et il faut que ce soit vrai ICI autant que dans l'éditeur. Satori tourne le remplissage mais
+  // pas le masque (`<g clip-path>` exprimé dans le repère du parent, réserve 2 de la sonde) : laisser
+  // passer la rotation d'un triangle n'aurait pas fait « rien », ça aurait abîmé l'export sur tout
+  // cadre non carré — et le navigateur, lui, aurait tourné la découpe. Exactement le désaccord
+  // éditeur/export que §0 décrit. lib/studio/shapes.ts porte la décision, les deux chemins la posent.
+  const rotation = layerRotation(layer);
+  if (rotation) transforms.push(`rotate(${rotation}deg)`);
   return {
     position: "absolute",
     left: layer.frame.x,

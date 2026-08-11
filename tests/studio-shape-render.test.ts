@@ -1,9 +1,7 @@
-import { describe, it, expect, mock } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import sharp from "sharp";
 import { renderScene } from "@/lib/studio/render";
-import type { Scene } from "@/lib/studio/scene";
-import * as shapesModule from "@/lib/studio/shapes";
-import { polygonClip, type ShapeCss } from "@/lib/studio/shapes";
+import { SHAPE_KINDS, type Scene, type ShapeKind, type ShapeLayer } from "@/lib/studio/scene";
 
 // ============================================================================
 // U3 Tâche 2 — LA BOUCLE QUE LA SONDE N'A PAS PU REFERMER (arbitrage E).
@@ -22,6 +20,17 @@ import { polygonClip, type ShapeCss } from "@/lib/studio/shapes";
 //     polygonale), donc le seul moyen d'en faire arriver une jusqu'à `renderScene()` est de
 //     substituer la SORTIE de la description — c'est exactement la couture testée : « ce que
 //     `shapes.ts` renvoie arrive-t-il aux pixels ? ». Tout le reste du chemin est le vrai code.
+//
+// ── U3 TÂCHE 3 : LA SUBSTITUTION A DISPARU (dette 3 du piège de la Tâche 2). ────────────────────
+// `stubShapeCss` (et le `mock.module` qu'il posait) n'existe plus : la famille polygonale étant
+// livrée, une découpe arrive aux pixels par la DESCRIPTION RÉELLE d'une forme du catalogue. Plus
+// aucune couture n'est simulée dans ce fichier — de `parseScene`-able jusqu'au JPEG, tout est le code
+// de production. La seule assertion qui EXIGEAIT la substitution — rendre une chaîne de polygone
+// « à espaces », qu'aucune description n'émet ni ne peut émettre — vit toujours en PIXELS, sur le même
+// cadre 800×400 et aux mêmes points, dans tests/studio-render-clippath.test.ts (« RÉSERVE 1 », avec
+// son témoin) ; elle n'est donc pas perdue. Ce qui la garde vivante ICI, sur le chemin de production,
+// est le point (700,380) du triangle ci-dessous : c'est exactement le point que la variante à espaces
+// laisse VIDE, et il est asserté « remplissage ».
 //
 // POURQUOI DES PIXELS. Un `clipPath` ignoré produit un PNG parfaitement valide et parfaitement
 // rectangulaire : « ça n'a pas levé » ne prouve rien, et une assertion sur le SVG intermédiaire ne
@@ -64,6 +73,20 @@ function sceneWith(radius?: number | string): Scene {
   };
 }
 
+// U3 Tâche 3 — une scène 800×400 portant UNE forme du catalogue, telle quelle. Aucun style injecté :
+// la géométrie vient entièrement de la description (lib/studio/shapes.ts) via `shapeNode()`.
+function sceneOf(kind: ShapeKind, extra: Partial<ShapeLayer> = {}): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 800, height: 400, background: BG },
+    layers: [{
+      id: "s", name: "forme", visible: true, locked: false,
+      frame: { x: 0, y: 0, w: 800, h: 400 },
+      type: "shape", shape: kind, fill: FILL, ...extra,
+    } as ShapeLayer],
+  };
+}
+
 async function pixelsOf(scene: Scene): Promise<Sampler> {
   return sampler((await renderScene({ scene, values: {} })).bytes);
 }
@@ -99,35 +122,19 @@ describe("renderScene() — l'ellipse, par le VRAI point d'entrée (arbitrages C
 });
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-// LA DÉCOUPE, À TRAVERS renderScene()
+// LA DÉCOUPE, À TRAVERS renderScene() — SANS AUCUNE SUBSTITUTION (U3 Tâche 3, dette 3).
 //
-// La seule chose substituée est la SORTIE de `shapeCssFor` — la description. `shapeNode()`,
-// `sceneToElement()`, `renderScene()`, satori, resvg et sharp sont le code de production réel.
+// `shapeNode()`, `sceneToElement()`, `renderScene()`, satori, resvg et sharp sont le code de
+// production réel, ET la géométrie vient maintenant de la DESCRIPTION RÉELLE du triangle
+// (lib/studio/shapes.ts) au lieu d'une sortie de `shapeCssFor` substituée par `mock.module`.
 // MUTATION QUI FAIT ROUGIR : retirer `...shapeCssFor(layer)` du style de `shapeNode()` (ou le poser
 // sur un nœud enfant) — la découpe n'arrive alors jamais aux pixels et les quatre points basculent.
+// AUTRE MUTATION : faire émettre à `polygonClip` une virgule SUIVIE D'UNE ESPACE — (700,380) bascule
+// à « fond » (mesuré, sonde Tâche 1, réserve 1 : l'abscisse se résout alors contre la HAUTEUR).
 // ────────────────────────────────────────────────────────────────────────────────────────────────
-const REAL_SHAPES = { ...shapesModule }; // capturé AVANT tout mock.module (cf. tests/ai-fallback.test.ts)
-
-function stubShapeCss(css: ShapeCss): void {
-  mock.module("@/lib/studio/shapes", () => ({ ...REAL_SHAPES, shapeCssFor: () => css }));
-}
-function restoreShapes(): void {
-  mock.module("@/lib/studio/shapes", () => ({ ...REAL_SHAPES }));
-}
-async function pixelsWithCss(css: ShapeCss): Promise<Sampler> {
-  stubShapeCss(css);
-  try {
-    return await pixelsOf(sceneWith());
-  } finally {
-    restoreShapes();
-  }
-}
-
 describe("renderScene() — une découpe émise par la description arrive bien aux pixels", () => {
-  const TRIANGLE_PTS = [[50, 0], [100, 100], [0, 100]] as const;
-
-  it("le triangle construit par polygonClip() est réellement découpé", async () => {
-    const px = await pixelsWithCss({ clipPath: polygonClip(TRIANGLE_PTS) });
+  it("le triangle du catalogue est réellement découpé", async () => {
+    const px = await pixelsOf(sceneOf("triangle"));
     expect(px(40, 40)).toBe("fond");           // coin haut-gauche : EXCLU (arête à x=360 pour y=40)
     expect(px(760, 40)).toBe("fond");          // coin haut-droit  : EXCLU (arête à x=440)
     expect(px(400, 200)).toBe("remplissage");  // centre
@@ -135,31 +142,153 @@ describe("renderScene() — une découpe émise par la description arrive bien a
   });
 
   it("TÉMOIN : sans découpe, ces deux coins sont du remplissage", async () => {
-    const px = await pixelsWithCss({});
+    const px = await pixelsOf(sceneOf("rect"));
     expect(px(40, 40)).toBe("remplissage");
     expect(px(760, 40)).toBe("remplissage");
     expect(px(400, 200)).toBe("remplissage");
   });
 
-  // LA MUTATION QUI GARDE LA RÈGLE D'ESPACEMENT VIVANTE (arbitrage B). La chaîne « à espaces » est
-  // dérivée de la sortie du constructeur lui-même : si `polygonClip` se mettait un jour à émettre
-  // « , », le test précédent basculerait sur CE résultat-ci. Les deux géométries diffèrent, en
-  // pixels, à travers le pipeline de production — sur un cadre CARRÉ elles seraient identiques.
-  it("la MÊME suite de sommets écrite avec une espace après la virgule donne une AUTRE géométrie", async () => {
-    const espacee = polygonClip(TRIANGLE_PTS).replaceAll(",", ", ");
-    expect(espacee).toContain(", "); // la variante testée est bien celle qu'on croit
-    const px = await pixelsWithCss({ clipPath: espacee });
-    expect(px(700, 380)).toBe("fond");          // DANS le triangle voulu, et pourtant vide
-    expect(px(200, 300)).toBe("remplissage");   // la découpe a bien eu lieu : ce n'est pas « ignoré »
-    expect(px(40, 40)).toBe("fond");
-  });
-
-  it("la description réelle est RESTAURÉE — aucun mock ne fuit hors de ce fichier", async () => {
-    // Sans cette garde, un `mock.module` oublié suivrait le processus `bun test` entier et
-    // contaminerait silencieusement d'autres fichiers.
+  it("la description réelle est bien celle du catalogue — et ce fichier ne mocke plus RIEN", async () => {
+    // Ex-« la description réelle est RESTAURÉE » : il n'y a plus de `mock.module` à restaurer dans ce
+    // fichier, donc plus de fuite possible vers les autres fichiers du même processus `bun test`.
+    // Les deux assertions restent : la description d'un rect à rayon numérique, et l'ellipse en pixels.
     const module = await import("@/lib/studio/shapes");
     expect(module.shapeCssFor(sceneWith(24).layers[0] as never)).toEqual({ borderRadius: 24 });
     const px = await pixelsOf(sceneWith("50%"));
     expect(px(100, 60)).toBe("fond");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// CHAQUE FORME DU CATALOGUE, EN PIXELS. La table est un `Record<ShapeKind, …>` : une forme ajoutée à
+// `SHAPE_KINDS` sans preuve en pixels ne COMPILE pas — et, comme `bun test` ne typecheck pas, un
+// garde-fou d'exécution compare les clés à `SHAPE_KINDS`.
+//
+// Chaque forme apporte au moins un point DEDANS et un point DEHORS. Le point « dehors » est ce qui
+// distingue réellement une forme d'un rectangle : sans lui, une description qui n'émettrait rien du
+// tout (donc un rectangle plein) passerait chaque assertion « dedans ». Tous les points sont à ≥ 30 px
+// de l'arête la plus proche pour qu'aucun anticrénelage ni artefact JPEG ne puisse les expliquer.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+type PixelProof = { frame: { x: number; y: number; w: number; h: number }; dedans: [number, number][]; dehors: [number, number][] };
+
+const PIXEL_PROOFS: Record<ShapeKind, PixelProof> = {
+  // Plein cadre serait sans « dehors » : un cadre plus petit que le canevas rend le témoin possible.
+  rect: { frame: { x: 0, y: 0, w: 400, h: 200 }, dedans: [[200, 100], [20, 20]], dehors: [[600, 300], [600, 100], [200, 300]] },
+  // Ellipse cx=400 cy=200 rx=400 ry=200 : (100,60) est DEHORS (1,05), (150,80) DEDANS (0,75) — aucune
+  // autre géométrie exprimable ici ne sépare ces deux points.
+  ellipse: { frame: { x: 0, y: 0, w: 800, h: 400 }, dedans: [[150, 80], [400, 200]], dehors: [[100, 60], [5, 5]] },
+  // La LIGNE est un rectangle FIN : son cadre EST son épaisseur (20 px ici), et de part et d'autre il
+  // n'y a rien. C'est ce qui prouve « une ligne a une vraie hauteur » plutôt qu'un trait de 0 px.
+  line: { frame: { x: 0, y: 190, w: 800, h: 20 }, dedans: [[400, 200], [20, 200]], dehors: [[400, 100], [400, 300]] },
+  triangle: { frame: { x: 0, y: 0, w: 800, h: 400 }, dedans: [[400, 200], [700, 380]], dehors: [[40, 40], [760, 40]] },
+  // (400,380) est le CREUX entre les deux branches basses de l'étoile : un simple triangle y peindrait.
+  star: { frame: { x: 0, y: 0, w: 800, h: 400 }, dedans: [[400, 200]], dehors: [[40, 40], [400, 380]] },
+  hexagon: { frame: { x: 0, y: 0, w: 800, h: 400 }, dedans: [[400, 200], [400, 20]], dehors: [[40, 40], [760, 360]] },
+  // (400,60) est au-dessus du fût et à gauche de la pointe : ni l'un ni l'autre ne le couvre.
+  arrow: { frame: { x: 0, y: 0, w: 800, h: 400 }, dedans: [[400, 200], [600, 200]], dehors: [[400, 60], [400, 340]] },
+  // (208,320) est DANS la queue de la bulle, (40,380) et (700,380) sont à côté d'elle : c'est la queue
+  // qui distingue une bulle d'un rectangle, donc elle a ses propres points.
+  bubble: { frame: { x: 0, y: 0, w: 800, h: 400 }, dedans: [[400, 200], [208, 320]], dehors: [[700, 380], [40, 380]] },
+};
+
+describe("renderScene() — chaque forme du catalogue, prouvée en pixels", () => {
+  it("la table de preuves couvre EXACTEMENT les formes du schéma", () => {
+    expect(Object.keys(PIXEL_PROOFS).sort()).toEqual([...SHAPE_KINDS].sort());
+  });
+
+  for (const kind of SHAPE_KINDS) {
+    it(`« ${kind} » : chaque point dedans est peint, chaque point dehors ne l'est pas`, async () => {
+      const proof = PIXEL_PROOFS[kind];
+      // Anti-vacuité par forme : une ligne de table sans point ne prouverait rien.
+      expect(proof.dedans.length).toBeGreaterThan(0);
+      expect(proof.dehors.length).toBeGreaterThan(0);
+      const px = await pixelsOf(sceneOf(kind, { frame: proof.frame }));
+      for (const [x, y] of proof.dedans) expect(`${kind} (${x},${y}) ${px(x, y)}`).toBe(`${kind} (${x},${y}) remplissage`);
+      for (const [x, y] of proof.dehors) expect(`${kind} (${x},${y}) ${px(x, y)}`).toBe(`${kind} (${x},${y}) fond`);
+    });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// LA ROTATION D'UNE FORME DÉCOUPÉE EST INERTE — EN PIXELS (arbitrage A, dette 2 du piège).
+//
+// Pourquoi en pixels et pas seulement en CSS : sur un cadre NON CARRÉ, laisser passer la `transform`
+// ne « ne fait rien », ça ABÎME l'export. Satori tourne le REMPLISSAGE mais pas le masque (réserve 2)
+// — un remplissage 800×400 pivoté de 90° devient 400×800 et ne couvre plus que la bande centrale du
+// masque, alors que le navigateur, lui, tourne la découpe entière. C'est très exactement le désaccord
+// éditeur/export de §0. La sonde ne pouvait pas le voir : elle mesurait un cadre CARRÉ, où un
+// remplissage pivoté de 90° se superpose à lui-même.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("renderScene() — la rotation est inerte sur une forme découpée, et vivante sur les autres", () => {
+  async function bytesOf(scene: Scene): Promise<Buffer> {
+    return Buffer.from((await renderScene({ scene, values: {} })).bytes);
+  }
+
+  it("triangle : pivoté de 90°, l'export est identique OCTET POUR OCTET au non pivoté", async () => {
+    const pivote = await bytesOf(sceneOf("triangle", { rotation: 90 }));
+    const droit = await bytesOf(sceneOf("triangle"));
+    expect(pivote.equals(droit)).toBe(true);
+    // Et le résultat est bien le triangle attendu, pas une image vide : sans ces deux points,
+    // « identiques » serait aussi vrai de deux images entièrement bleues.
+    const px = await sampler(pivote);
+    expect(px(700, 380)).toBe("remplissage");
+    expect(px(40, 40)).toBe("fond");
+  });
+
+  it("TÉMOIN : sur un rect, la rotation N'EST PAS inerte — les octets diffèrent", async () => {
+    // Sans ce témoin, le test précédent passerait aussi si `frameStyle` avait cessé d'émettre toute
+    // rotation pour tout le monde (ce qui casserait rect, ellipse, texte et image en silence).
+    const pivote = await bytesOf(sceneOf("rect", { frame: { x: 200, y: 100, w: 400, h: 200 }, rotation: 20 }));
+    const droit = await bytesOf(sceneOf("rect", { frame: { x: 200, y: 100, w: 400, h: 200 } }));
+    expect(pivote.equals(droit)).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// LES EXTRÊMES — `minSize` (hooks/use-layer-drag.ts : 1 px) et un rapport d'aspect violent.
+// Une découpe percentuelle sur un cadre de 1 px est le cas où resvg pourrait lever, ou rendre une
+// image tronquée. Rien de tel : la scène se rend, aux dimensions demandées, forme par forme.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("renderScene() — chaque forme survit à minSize et à un aspect très non uniforme", () => {
+  const EXTREMES = [
+    { x: 0, y: 0, w: 1, h: 1 },
+    { x: 0, y: 0, w: 1, h: 400 },
+    { x: 0, y: 0, w: 800, h: 1 },
+    { x: 0, y: 0, w: 799, h: 3 },
+  ] as const;
+
+  it("les huit formes, aux quatre cadres extrêmes, dans UNE scène — aucune exception, image complète", async () => {
+    // Toutes les formes dans la MÊME scène (32 calques) : une seule passe de rendu, et la moindre
+    // exception de satori/resvg sur une découpe dégénérée fait échouer ce test.
+    const layers: ShapeLayer[] = [];
+    for (const kind of SHAPE_KINDS) {
+      for (const [i, frame] of EXTREMES.entries()) {
+        layers.push({
+          id: `${kind}-${i}`, name: kind, visible: true, locked: false,
+          frame: { ...frame }, type: "shape", shape: kind, fill: FILL, radius: 12,
+        } as ShapeLayer);
+      }
+    }
+    expect(layers).toHaveLength(SHAPE_KINDS.length * EXTREMES.length);
+    const out = await renderScene({
+      scene: { schemaVersion: 1, canvas: { width: 800, height: 400, background: BG }, layers },
+      values: {},
+    });
+    expect(out.width).toBe(800);
+    expect(out.height).toBe(400);
+    expect(out.degraded).toBe(false);
+    // Et l'image contient bien quelque chose de peint : une barre de 800×1 en (0,0) suffit à colorer
+    // (400,0). Sans cette assertion, un rendu entièrement bleu passerait pour un succès.
+    const px = await sampler(out.bytes);
+    expect(px(400, 0)).toBe("remplissage");
+  });
+
+  it("une forme découpée réduite à 1 px de large reste dans son cadre — rien ne déborde", async () => {
+    // La contre-épreuve du test précédent : un `clip-path` percentuel sur un cadre de 1 px pourrait,
+    // s'il était résolu contre une autre boîte, peindre AILLEURS. On vérifie donc qu'à côté du calque,
+    // c'est bien le fond.
+    const px = await pixelsOf(sceneOf("triangle", { frame: { x: 0, y: 0, w: 1, h: 400 } }));
+    expect(px(400, 200)).toBe("fond");
+    expect(px(20, 200)).toBe("fond");
   });
 });

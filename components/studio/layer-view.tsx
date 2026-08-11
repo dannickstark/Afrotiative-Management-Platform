@@ -3,7 +3,7 @@
 import type { CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
-import { shapeCssFor } from "@/lib/studio/shapes";
+import { layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -35,13 +35,21 @@ export interface LayerViewProps {
 }
 
 function frameStyle(frame: Frame, rotation: number, layer: Layer): CSSProperties {
+  // U3 Tâche 3 (arbitrage A) : une forme DÉCOUPÉE ne tourne pas — et c'est le NAVIGATEUR qui doit
+  // renoncer, pas seulement satori. Le navigateur, lui, tournerait très bien la découpe : c'est
+  // précisément le problème. Satori ne tourne que le remplissage (réserve 2 de la sonde), donc toute
+  // scène portant déjà une rotation sur un triangle s'afficherait ici autrement que dans le PNG livré
+  // — le §0 du plan U3. L'éditeur ne simule donc pas une rotation que l'export ne sait pas faire.
+  // `rotation` est la valeur PEINTE (elle peut venir d'un aperçu de geste, canvas.tsx), d'où le filtre
+  // sur la prop plutôt qu'un appel à `layerRotation(layer)` qui ignorerait l'aperçu.
+  const applied = layerSupportsRotation(layer) ? rotation : 0;
   return {
     position: "absolute",
     left: frame.x,
     top: frame.y,
     width: frame.w,
     height: frame.h,
-    transform: rotation ? `rotate(${rotation}deg)` : undefined,
+    transform: applied ? `rotate(${applied}deg)` : undefined,
     opacity: layer.opacity,
     boxSizing: "border-box",
   };
