@@ -351,7 +351,10 @@ export function computeRotationDeg(
   //
   // UN REPLI DU DELTA A ÉTÉ ÉCRIT PUIS RETIRÉ, parce qu'il était DÉMONTRABLEMENT MORT : le retirer
   // laissait la suite entière verte. Replier le delta le décale de ±360° exactement, et `wrapDeg` est
-  // invariant par ±360° — les deux chemins rendent donc toujours le même nombre. Deux mécanismes là
+  // invariant par ±360° au flottant près — les deux chemins rendent donc le même angle. (« Au
+  // flottant près » et non « au bit près » : mesuré sur 3 000 187 essais, 348 037 divergences de bits,
+  // toutes ≤ 2,8e-14 sauf six qui réétiquettent exactement 180 en −179,99999999999997 — les DEUX
+  // formes étant canoniques, la conclusion tient.) Deux mécanismes là
   // où un seul travaille, c'est le second qui pourrit d'abord. (Constaté par mutation, pas par
   // relecture : c'est la méthode qui a trouvé tous les défauts réels de ce sous-projet.)
   const deltaRad = a1 - a0;
@@ -410,11 +413,18 @@ export interface DragPreview {
    * les gestes d'avant ce correctif reste comparable à l'octet près (plusieurs tests le comparent
    * entier avec `toEqual`), exactement comme `guides`.
    *
-   * C'EST LE MÊME OBJET QUE CELUI QUI SERA COMMITTÉ : `end()` dispatche `setFrames(frames)` tel quel.
-   * L'aperçu ne peut donc pas être en désaccord avec le commit — le seam que ce programme n'arrête pas
-   * de retrouver. L'alternative (n'afficher en aperçu que le calque tiré, et committer le groupe) a été
-   * écartée pour cette seule raison : elle aurait montré à l'utilisateur un geste différent de celui
-   * qu'il obtient. */
+   * UNE SEULE FONCTION PRODUIT CE LOT, `computeGesture`, et `end()` dispatche `setFrames` avec ce
+   * qu'elle rend : il n'existe donc aucun second site de calcul qui puisse dériver de celui-ci —
+   * le seam que ce programme n'arrête pas de retrouver. L'alternative (n'afficher en aperçu que le
+   * calque tiré, et committer le groupe) a été écartée pour cette raison : elle aurait montré à
+   * l'utilisateur un geste différent de celui qu'il obtient.
+   *
+   * PRÉCISION, parce que ce commentaire a d'abord dit « c'est le MÊME OBJET que celui qui sera
+   * committé » et que c'est littéralement faux (revue de la vague de correctifs U0+U2, nit) : `end()`
+   * RE-CALCULE au point du `pointerup`, donc les cadres committés diffèrent des derniers cadres
+   * aperçus si le pointeur a bougé entre le dernier `pointermove` et le relâchement. C'est le
+   * comportement voulu — le commit doit suivre le pointeur FINAL, pas l'avant-dernier. La propriété
+   * porteuse est l'unicité de la fonction, pas l'identité de l'objet. */
   frames?: FrameChange[];
   /** Tâche 5 (U2, spec §5) — les guides d'accrochage allumés par CE pas de geste, en coordonnées du
    * gabarit. Ils voyagent sur le canal d'aperçu DÉJÀ existant (`onPreviewChange`), exigence explicite

@@ -130,7 +130,8 @@ const DISTRIBUTE_BUTTONS: Record<DistributeAxis, { label: string; Icon: LucideIc
 };
 
 export function AlignRow({ scene, selectedIds, dispatch, className }: AlignRowProps) {
-  // Les participants, calculés par le module (sélectionnés ∧ non verrouillés) — jamais re-filtrés ici.
+  // Les participants, calculés par le module (sélectionnés ∧ non verrouillés ∧ non masqués — voir la
+  // décision 4 d'align.ts, corrigée par l'Important 2 de la revue finale) — jamais re-filtrés ici.
   const participants = alignParticipants(scene.layers, selectedIds);
   const canAlign = participants.length >= 1;
   // Répartir demande trois PARTICIPANTS, pas trois sélectionnés : avec deux cadres il n'existe aucun

@@ -1170,8 +1170,9 @@ describe("computeRotationDeg — forme canonique (protection Important 3)", () =
   });
 
   it("un delta déjà dans (−π, π] traverse BIT POUR BIT comme avant le correctif", () => {
-    // Le repli est conditionnel exprès : sans cela il réécrirait aussi les deltas sains au bit près,
-    // et toutes les valeurs assertées par les tests existants auraient bougé.
+    // La canonisation ne touche QUE ce qui sortait de la plage : un delta déjà dans (−π, π] traverse
+    // sans être réécrit, donc aucune valeur assertée par les tests antérieurs n'a bougé. (Un repli du
+    // DELTA avait aussi été écrit ici, puis retiré comme code mort — voir le commentaire de la source.)
     const start = at(0);
     for (const deg of [1, 17.3, 45, 89.99, 90, 137.77, 179.9]) {
       const a0 = Math.atan2(start.y - center.y, start.x - center.x);

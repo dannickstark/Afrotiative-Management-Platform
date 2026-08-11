@@ -165,8 +165,14 @@ describe("the harness itself", () => {
     // (b) et aucune entrée MORTE dans la liste : chacune est bel et bien installée. Sans cette moitié,
     //     la liste pourrait grossir de clés fantômes que le teardown « restaurerait » à vide.
     expect([...DOM_GLOBAL_KEYS].filter((k) => !touchées.has(k)).sort()).toEqual([]);
-    // (c) garde anti-vacuité : l'observation a bien vu quelque chose (une mesure qui ne mesure rien
-    //     satisferait (a) et (b) d'un coup).
-    expect(touchées.size).toBeGreaterThanOrEqual(DOM_GLOBAL_KEYS.length);
+    // Une troisième ligne se trouvait ici, `touchées.size >= DOM_GLOBAL_KEYS.length`, présentée comme
+    // une garde ANTI-VACUITÉ (« une observation qui ne mesure rien satisferait (a) et (b) d'un coup »).
+    // Elle était elle-même VACUANTE : (b) exige que CHAQUE clé de la liste soit dans `touchées`, ce
+    // qui implique déjà la borne sur le cardinal. Vérifié en forçant `touchées` à l'ensemble vide —
+    // c'est (b) qui tombe, et (c) n'est jamais atteinte. Retirée plutôt que gardée : elle ne coûtait
+    // pas de couverture, elle affirmait une protection qu'elle ne pouvait pas donner, ce qui est
+    // exactement le défaut que le commit qui l'a écrite prétendait supprimer (revue de la vague de
+    // correctifs U0+U2, Mineur 1). L'anti-vacuité RÉELLE de ce bloc, ce sont les mutations M19
+    // (un global installé hors liste) et M20 (une entrée morte dans la liste), toutes deux rouges.
   });
 });
