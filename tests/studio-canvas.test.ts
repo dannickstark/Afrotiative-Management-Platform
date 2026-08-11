@@ -330,11 +330,32 @@ describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.ts
   // Preuve directe et suffisante en HTML sérialisé : l'ORDRE DE PEINTURE == l'ordre du DOM pour deux
   // éléments `position` par défaut/`z-index: auto` qui se chevauchent — un nœud "grid" qui apparaît
   // AVANT "studio-canvas" dans le HTML peint donc AVANT lui, et se fait recouvrir.
+  //
+  // Correctif revue finale (Minor, second passage) — Close 2 : l'assertion d'ordre ci-dessous verrouille
+  // bien le RÉORDONNANCEMENT (le correctif de ce fichier), mais PAS sa PRÉCONDITION — un futur
+  // `z-index` (même `0`) posé sur la racine de <Canvas> promouvrait cet élément dans SON PROPRE
+  // contexte d'empilement et le ferait à nouveau peindre au-dessus de la grille, quel que soit
+  // l'ordre du DOM, alors que ce test resterait VERT (l'ordre du DOM, seul, n'a pas changé). La
+  // seconde assertion pin cette précondition directement : la balise ouvrante de "studio-canvas" ne
+  // porte NI `z-index` en style inline (c'est ainsi que canvas.tsx pose ses styles, jamais via une
+  // classe) NI aucune classe Tailwind `z-*`, pour rester robuste même si ce choix changeait. Pas de
+  // DOM/navigateur nécessaire : une inspection directe de la balise sérialisée suffit — z-index/
+  // z-* sont des propriétés STATIQUEMENT visibles dans le HTML, jamais dérivées d'un calcul de
+  // layout qu'un rendu serveur ne pourrait pas reproduire.
   it("CRITIQUE : la grille peint APRÈS le vrai Canvas (ordre de peinture), jamais en dessous d'un artboard opaque", () => {
     const html = renderComposed({ ...DEFAULT_PREFS, grid: true });
     expect(html).toContain('data-testid="grid"');
     expect(html).toContain('data-testid="studio-canvas"');
     expect(html.indexOf('data-testid="grid"')).toBeGreaterThan(html.indexOf('data-testid="studio-canvas"'));
+
+    // La PRÉCONDITION dont dépend l'ordre de peinture ci-dessus : sans stacking context propre sur
+    // la racine de Canvas, l'ordre du DOM EST l'ordre de peinture. Un `z-index` (même faible) sur cet
+    // élément romprait cette garantie tout en laissant l'assertion d'ordre ci-dessus verte.
+    const canvasTag = openTag(html, 'data-testid="studio-canvas"');
+    expect(canvasTag).not.toMatch(/z-index/);
+    const classAttr = /\sclass="([^"]*)"/.exec(canvasTag);
+    const classes = classAttr ? classAttr[1].split(/\s+/) : [];
+    expect(classes.some((c) => /^z-/.test(c))).toBe(false);
   });
 });
 

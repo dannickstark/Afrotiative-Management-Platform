@@ -30,7 +30,7 @@ import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
 import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions";
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
-import { nextOpenPanel, toggleCollapse, type RailCategory } from "@/lib/studio/editor-prefs";
+import { nextOpenPanel, setOpenPanel, toggleCollapse, type RailCategory } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
 import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
@@ -187,20 +187,26 @@ function EditorShellInner({
     hasLayers: initialScene.layers.length > 0,
   });
 
+  // Correctif revue finale (Minor, second passage) — Close 1 : `selectRailCategory` et
+  // `collapsePanel` passaient auparavant par un simple `{ ...p, openPanel: next }` littéral, jamais
+  // par `setOpenPanel` (lib/studio/editor-prefs.ts) — donc `lastOpenPanel` restait périmé après une
+  // fermeture au RAIL ou au CHEVRON, et ⌘/ pouvait restaurer un panneau qui n'était plus celui
+  // réellement ouvert juste avant. Les deux passent maintenant par `setOpenPanel`, LE seul point
+  // d'écriture de `openPanel`, pour que `lastOpenPanel` reste à jour quel que soit le geste qui
+  // ferme.
   function selectRailCategory(category: RailCategory) {
-    setPrefs((p) => ({ ...p, openPanel: nextOpenPanel(p.openPanel, category) }));
+    setPrefs((p) => setOpenPanel(p, nextOpenPanel(p.openPanel, category)));
   }
 
   function collapsePanel(next: RailCategory | null) {
-    setPrefs((p) => ({ ...p, openPanel: next }));
+    setPrefs((p) => setOpenPanel(p, next));
   }
 
   // Bascule le panneau accosté au clavier (⌘/) — voir COLLAPSE_PANEL_KEY ci-dessus pour le choix
-  // documenté. Correctif revue finale — Important 1 : `toggleCollapse` (lib/studio/editor-prefs.ts)
-  // est un VRAI aller-retour — replie en mémorisant quel panneau était ouvert, et réaffiche ce même
-  // panneau la fois suivante quand rien n'est ouvert — remplaçant l'ancien
-  // `nextOpenPanel(p.openPanel, p.openPanel)` sous garde, qui valait toujours `null` et ne pouvait
-  // donc jamais rouvrir quoi que ce soit une fois replié.
+  // documenté. `toggleCollapse` (lib/studio/editor-prefs.ts) est un VRAI aller-retour — replie en
+  // mémorisant quel panneau était ouvert (via `setOpenPanel`, désormais partagé avec les deux
+  // fonctions ci-dessus), et réaffiche le DERNIER panneau réellement fermé — par n'importe quel
+  // geste — la fois suivante quand rien n'est ouvert.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== COLLAPSE_PANEL_KEY || (!e.metaKey && !e.ctrlKey)) return;
