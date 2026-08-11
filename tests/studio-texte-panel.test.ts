@@ -74,7 +74,7 @@ describe("TextePanel — Styles rendus à leur taille RÉELLE (spec §3), pas un
     const inserted = state.scene.layers[0] as TextLayer;
     expect(inserted.type).toBe("text");
     expect(inserted.content).not.toMatch(/\{\{/); // non lié : aucun jeton dans le contenu
-    expect(state.selectedId).toBe(inserted.id);
+    expect(state.selectedIds).toEqual([inserted.id]);
   });
 });
 

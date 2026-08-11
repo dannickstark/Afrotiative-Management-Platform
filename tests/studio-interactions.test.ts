@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import React from "react";
 import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harness";
-import { editorReducer, initEditorState, type EditorAction } from "@/lib/studio/editor-state";
+import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
@@ -505,7 +505,7 @@ describe("Poignées de redimensionnement — Maj/Alt à travers de VRAIS événe
     const dispatch = (a: EditorAction) => { actions.push(a); };
 
     const { container, unmount } = await mount(
-      React.createElement(CanvasC, { scene, selectedId: "l1", dispatch, scale: 1 }),
+      React.createElement(CanvasC, { scene, selectedIds: ["l1"], dispatch, scale: 1 }),
     );
 
     const handle = container.querySelector('[data-handle="se"]') as HTMLElement;
@@ -542,7 +542,7 @@ describe("Poignées de redimensionnement — Maj/Alt à travers de VRAIS événe
     const dispatch = (a: EditorAction) => { actions.push(a); };
 
     const { container, unmount } = await mount(
-      React.createElement(CanvasC, { scene, selectedId: "l1", dispatch, scale: 1 }),
+      React.createElement(CanvasC, { scene, selectedIds: ["l1"], dispatch, scale: 1 }),
     );
 
     const handle = container.querySelector('[data-handle="e"]') as HTMLElement;
@@ -565,6 +565,210 @@ describe("Poignées de redimensionnement — Maj/Alt à travers de VRAIS événe
     // Même valeurs que le test createGestureEngine équivalent (tests/studio-drag.test.ts) : la poignée
     // tirée suit le curseur, le bord opposé bouge en miroir — w = 200 + 2×40 = 280, x recentré à 60.
     expect(actions[0]).toEqual({ type: "resizeLayer", id: "l1", frame: { x: 60, y: 100, w: 280, h: 150 } });
+
+    unmount();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam 7 — Sélection MULTIPLE au canevas (Tâche 3, U2, spec §3), à travers de VRAIS événements
+// pointeur DOM. Tout ce que tests/studio-editor-state.test.ts prouve du réducteur reste vrai sans
+// dire un mot du CÂBLAGE : une mutation qui perdrait `e.shiftKey` dans canvas.tsx, ou qui
+// oublierait le `stopPropagation()` protégeant le Maj-clic du gestionnaire « clic dans le vide »
+// posé sur la racine, laisserait TOUTE la suite du réducteur au vert. Les tests ci-dessous pilotent
+// donc le VRAI `Canvas` avec le VRAI réducteur derrière lui.
+//
+// ── Pourquoi Maj-clic et non ⌘/Ctrl-clic, et pourquoi ça ne heurte pas le Maj de la Tâche 2 ──
+// Maj est déjà pris SUR LE CANEVAS par la Tâche 2 : Maj-glisser sur une POIGNÉE de
+// redimensionnement verrouille le ratio. Les deux cibles sont pourtant disjointes dans l'arbre —
+// les poignées vivent dans `[data-testid="handles-overlay"]`, un FRÈRE des nœuds de calque, jamais
+// un descendant — et `bind()` (hooks/use-layer-drag.ts) appelle `e.stopPropagation()` sur son
+// pointerdown. Un Maj-glisser parti d'une poignée ne traverse donc JAMAIS le gestionnaire du corps
+// d'un calque. Le dernier test de ce bloc le vérifie directement plutôt que de s'en tenir à ce
+// raisonnement. ⌘/Ctrl-clic a été écarté : ⌘ porte déjà ⌘/ (replier le panneau, editor-shell.tsx) et
+// macOS synthétise Ctrl-clic en clic DROIT, ce qui en ferait un geste inatteignable sur la moitié
+// du parc.
+function sceneWithTwoShapes(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 800, height: 600, background: "#000000" },
+    layers: [
+      {
+        id: "a", name: "Calque A", visible: true, locked: false,
+        frame: { x: 10, y: 10, w: 100, h: 100 },
+        type: "shape", shape: "rect", fill: "#AAAAAA",
+      },
+      {
+        id: "b", name: "Calque B", visible: true, locked: false,
+        frame: { x: 200, y: 200, w: 120, h: 80 },
+        type: "shape", shape: "rect", fill: "#BBBBBB",
+      },
+    ],
+  };
+}
+
+/** Monte le VRAI `Canvas` derrière un VRAI `editorReducer`. `Canvas` est contrôlé (scene et
+ * selectedIds en props), donc observer une sélection qui CHANGE demande un réducteur au-dessus.
+ * `box.state` est réassigné dans le corps du rendu — pas un état React — pour que chaque assertion
+ * lise le dernier état RÉELLEMENT rendu, et `box.actions` enregistre au passage tout ce que le
+ * composant dispatche (c'est ce qui permet d'affirmer qu'AUCUN moveLayer n'a eu lieu). */
+async function mountCanvasWithReducer(scene: Scene, initialSelection: string[]) {
+  const initial: EditorState = { ...initEditorState(scene), selectedIds: initialSelection };
+  const box: { state: EditorState; actions: EditorAction[] } = { state: initial, actions: [] };
+
+  function Host() {
+    const [state, rawDispatch] = React.useReducer(editorReducer, initial);
+    box.state = state;
+    return React.createElement(CanvasC, {
+      scene: state.scene,
+      selectedIds: state.selectedIds,
+      dispatch: (a: EditorAction) => { box.actions.push(a); rawDispatch(a); },
+      scale: 1,
+    });
+  }
+
+  const { container, unmount } = await mount(React.createElement(Host));
+  return { box, container, unmount };
+}
+
+function layerEl(container: HTMLElement, id: string): HTMLElement {
+  const el = container.querySelector(`[data-layer-id="${id}"]`) as HTMLElement | null;
+  if (!el) throw new Error(`nœud du calque « ${id} » absent du DOM monté`);
+  return el;
+}
+
+describe("Canvas — sélection multiple par Maj-clic, à travers de VRAIS événements pointeur DOM (Tâche 3, U2)", () => {
+  it("Maj-clic sur un calque non sélectionné l'AJOUTE à la sélection, et le DOM marque les deux", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithTwoShapes(), ["a"]);
+
+    await pointer(layerEl(container, "b"), "pointerdown", { clientX: 250, clientY: 250, shiftKey: true, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+    // Honnêteté sur la PORTÉE de cette assertion (mesurée par mutation, voir task-3-report.md) : elle
+    // ne prouve PAS à elle seule le `stopPropagation()` du chemin Maj de canvas.tsx. Deux gardes
+    // INDÉPENDAMMENT suffisantes protègent ce chemin du gestionnaire « clic dans le vide » posé sur la
+    // racine — cet arrêt de propagation, ET la garde `e.shiftKey` de la racine elle-même — donc
+    // retirer l'une des deux laisse ce test vert. Chacune est épinglée par un test DIFFÉRENT : la
+    // garde de la racine par « Maj + clic dans le vide » plus bas, l'arrêt de propagation par ce
+    // test-ci UNE FOIS cette garde retirée (mutation vérifiée). C'est ce que veut dire « défense en
+    // profondeur » ici, et c'est délibéré : un futur changement de l'un ne casse pas le geste.
+    expect(layerEl(container, "a").getAttribute("data-selected")).toBe("true");
+    expect(layerEl(container, "b").getAttribute("data-selected")).toBe("true");
+
+    unmount();
+  });
+
+  it("Maj-clic sur un calque DÉJÀ sélectionné le RETIRE, en laissant les autres", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithTwoShapes(), ["a", "b"]);
+
+    await pointer(layerEl(container, "b"), "pointerdown", { clientX: 250, clientY: 250, shiftKey: true, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a"]);
+    expect(layerEl(container, "a").getAttribute("data-selected")).toBe("true");
+    expect(layerEl(container, "b").getAttribute("data-selected")).toBeNull();
+
+    unmount();
+  });
+
+  it("Maj-clic n'arme AUCUN geste de déplacement — un glisser Maj sur un corps de calque ne bouge rien", async () => {
+    const scene = sceneWithTwoShapes();
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, ["a"]);
+    const b = layerEl(container, "b");
+
+    await pointer(b, "pointerdown", { clientX: 250, clientY: 250, shiftKey: true, button: 0 });
+    await pointer(b, "pointermove", { clientX: 400, clientY: 400, shiftKey: true });
+    await pointer(b, "pointerup", { clientX: 400, clientY: 400, shiftKey: true });
+
+    // La bascule a bien eu lieu…
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+    // …et RIEN d'autre : aucun moveLayer n'a été dispatché, et le cadre est intact malgré les 150px
+    // de glisser. Le choix documenté (canvas.tsx) : sur le CORPS d'un calque, Maj fait du pointerdown
+    // une bascule de sélection PURE, jamais le début d'un déplacement — sinon Maj-cliquer pour
+    // ajouter un calque le déplacerait au moindre tremblement de main.
+    expect(box.actions.some((a) => a.type === "moveLayer")).toBe(false);
+    expect(box.state.scene.layers.find((l) => l.id === "b")!.frame)
+      .toEqual(scene.layers[1].frame);
+
+    unmount();
+  });
+
+  it("un clic SIMPLE (sans Maj) REMPLACE la sélection au lieu de l'étendre", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithTwoShapes(), ["a", "b"]);
+
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a"]);
+    expect(layerEl(container, "b").getAttribute("data-selected")).toBeNull();
+
+    unmount();
+  });
+
+  it("un clic sur le canevas VIDE efface la sélection entière", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithTwoShapes(), ["a", "b"]);
+    const root = container.querySelector('[data-testid="studio-canvas"]') as HTMLElement;
+    expect(root).not.toBeNull();
+
+    await pointer(root, "pointerdown", { clientX: 700, clientY: 500, button: 0 });
+
+    expect(box.state.selectedIds).toEqual([]);
+    expect(layerEl(container, "a").getAttribute("data-selected")).toBeNull();
+    expect(layerEl(container, "b").getAttribute("data-selected")).toBeNull();
+
+    unmount();
+  });
+
+  it("Maj + clic dans le vide n'efface PAS la sélection — Maj est le mode « ajouter/retirer », pas « détruire »", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithTwoShapes(), ["a", "b"]);
+    const root = container.querySelector('[data-testid="studio-canvas"]') as HTMLElement;
+
+    await pointer(root, "pointerdown", { clientX: 700, clientY: 500, shiftKey: true, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    unmount();
+  });
+
+  it("cliquer un calque VERROUILLÉ efface la sélection — le clic le traverse, il ne le protège pas", async () => {
+    // Conséquence assumée du gestionnaire « clic dans le vide » (voir canvas.tsx) : un calque locked
+    // ne porte AUCUN gestionnaire de pointeur, donc son pointerdown remonte jusqu'à la racine. Avant
+    // la Tâche 3 il ne se passait rien du tout ; ce test fixe le nouveau comportement au lieu de le
+    // laisser être un effet de bord non documenté. (jsdom ne fait pas de test de survol, donc c'est
+    // bien l'absence de gestionnaire — le même mécanisme qu'en navigateur, où `pointer-events: none`
+    // empêche en plus le nœud d'être la cible — qui fait remonter l'événement ici.)
+    const scene = sceneWithTwoShapes();
+    scene.layers = [{ ...scene.layers[0], locked: true }, scene.layers[1]];
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, ["b"]);
+
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual([]);
+    // …et le calque verrouillé n'est PAS devenu sélectionné au passage.
+    expect(box.actions.some((a) => a.type === "select" && a.ids.includes("a"))).toBe(false);
+
+    unmount();
+  });
+
+  it("Maj-GLISSER sur une POIGNÉE verrouille le ratio (Tâche 2) et ne touche PAS la sélection (Tâche 3)", async () => {
+    // LE test de non-collision entre les deux usages de Maj sur le canevas. Ce qui le rendrait
+    // ROUGE : poser la bascule de sélection sur un ancêtre commun aux poignées et aux calques, ou
+    // laisser le gestionnaire « clic dans le vide » de la racine s'exécuter après un pointerdown sur
+    // une poignée.
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithShapeLayer(), ["l1"]);
+    const handle = container.querySelector('[data-handle="se"]') as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    await pointer(handle, "pointerdown", { clientX: 0, clientY: 0, button: 0 });
+    await pointer(handle, "pointermove", { clientX: 60, clientY: -8, shiftKey: true });
+    await pointer(handle, "pointerup", { clientX: 60, clientY: -8, shiftKey: true });
+
+    // La sélection est RIGOUREUSEMENT inchangée — ni vidée, ni basculée vers une sélection vide.
+    expect(box.state.selectedIds).toEqual(["l1"]);
+    expect(box.actions.some((a) => a.type === "select" || a.type === "toggleSelection")).toBe(false);
+    // Et le geste de la Tâche 2 a bel et bien fait son travail par ce même chemin DOM.
+    const resize = box.actions.find((a) => a.type === "resizeLayer");
+    if (!resize || resize.type !== "resizeLayer") throw new Error("attendu resizeLayer");
+    expect(resize.frame.w / resize.frame.h).toBeCloseTo(200 / 150, 6);
+    expect(resize.frame.w).not.toBeCloseTo(260, 0);
 
     unmount();
   });

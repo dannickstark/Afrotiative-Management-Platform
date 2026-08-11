@@ -13,10 +13,10 @@ import { FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
 // sérialisés — react-dom sérialise bel et bien `style={{...}}` en `style="prop:val;..."` côté
 // serveur, y compris pour des propriétés « unitless » comme lineClamp (vérifié empiriquement).
 
-function render(scene: Scene, selectedId: string | null = null) {
+function render(scene: Scene, selectedIds: string[] = []) {
   const noop = () => {};
   return renderToStaticMarkup(
-    React.createElement(Canvas, { scene, selectedId, dispatch: noop, scale: 1 }),
+    React.createElement(Canvas, { scene, selectedIds, dispatch: noop, scale: 1 }),
   );
 }
 
@@ -125,9 +125,36 @@ describe("Canvas — style de texte via textStyleFor", () => {
 
 describe("Canvas — sélection et verrouillage", () => {
   it("marque le calque sélectionné et lui seul", () => {
-    const html = render(makeScene(), "title");
+    const html = render(makeScene(), ["title"]);
     expect(layerNode(html, "title")).toContain('data-selected="true"');
     expect(layerNode(html, "bg")).not.toContain('data-selected="true"');
+  });
+
+  // ── Tâche 3 (U2, spec §3) — sélection MULTIPLE ────────────────────────────
+  it("marque TOUS les calques d'une sélection multiple, et eux seuls", () => {
+    const html = render(makeScene(), ["bg", "title"]);
+    expect(layerNode(html, "bg")).toContain('data-selected="true"');
+    expect(layerNode(html, "title")).toContain('data-selected="true"');
+    // `qr1` est le troisième calque VISIBLE de makeScene() et n'est PAS sélectionné : sans lui, un
+    // composant qui marquerait TOUT passerait les deux lignes ci-dessus.
+    expect(layerNode(html, "qr1")).not.toContain('data-selected="true"');
+  });
+
+  it("les poignées n'apparaissent QUE pour une sélection simple — jamais pour une sélection multiple", () => {
+    // Poignées + rotation manipulent UN cadre : les afficher sur une sélection multiple laisserait
+    // croire qu'elles agissent sur l'ensemble. Ce qui rendrait ce test ROUGE : dériver le calque à
+    // outiller de `selectedIds[0]` au lieu de `singleSelectedId(selectedIds)`.
+    expect(render(makeScene(), ["title"])).toContain('data-testid="handles-overlay"');
+    expect(render(makeScene(), ["bg", "title"])).not.toContain('data-testid="handles-overlay"');
+    expect(render(makeScene(), [])).not.toContain('data-testid="handles-overlay"');
+  });
+
+  it("le contour de sélection, lui, reste bien présent sur chaque calque d'une sélection multiple", () => {
+    // Corollaire du test précédent : « pas de poignées » ne doit PAS vouloir dire « sélection
+    // invisible » — les deux calques gardent leur contour bleu.
+    const html = render(makeScene(), ["bg", "title"]);
+    expect(layerNode(html, "bg")).toContain("outline:2px solid #2563eb");
+    expect(layerNode(html, "title")).toContain("outline:2px solid #2563eb");
   });
 
   it("un calque verrouillé est marqué visuellement ET non-interactif (pointer-events: none)", () => {
@@ -199,7 +226,7 @@ describe("Canvas — poignées et contour de sélection gardent une taille ÉCRA
   function renderSelected(scale: number) {
     const scene = makeScene();
     return renderToStaticMarkup(
-      React.createElement(Canvas, { scene, selectedId: "title", dispatch: () => {}, scale }),
+      React.createElement(Canvas, { scene, selectedIds: ["title"], dispatch: () => {}, scale }),
     );
   }
 
@@ -300,7 +327,7 @@ function renderComposed(prefs: EditorPrefs = DEFAULT_PREFS) {
     React.createElement(
       CanvasChrome,
       { format: "ig_square", zoom: 1, prefs },
-      React.createElement(Canvas, { scene, selectedId: null, dispatch: () => {}, scale: 1 }),
+      React.createElement(Canvas, { scene, selectedIds: [], dispatch: () => {}, scale: 1 }),
     ),
   );
 }
@@ -362,8 +389,8 @@ describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.ts
 describe("CanvasChrome — pastilles flottantes, règles et grille optionnelles (Tâche 7, spec §7)", () => {
   // renderCanvasChrome — scaffolding de test LOCAL (comme `render()` plus haut dans ce fichier) :
   // `format`/`zoom` ont des valeurs par défaut ici pour que les tests qui ne les font pas varier
-  // (ex. la présence des règles) restent courts, exactement comme `render(scene, selectedId)` plus
-  // haut par défaut `selectedId` à `null`.
+  // (ex. la présence des règles) restent courts, exactement comme `render(scene, selectedIds)` plus
+  // haut par défaut `selectedIds` à `[]`.
   function renderCanvasChrome(opts: { format?: FormatKey; zoom?: number; prefs: EditorPrefs }) {
     return renderToStaticMarkup(
       React.createElement(

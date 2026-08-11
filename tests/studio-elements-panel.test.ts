@@ -125,7 +125,7 @@ describe("insertShapeTile — ce qu'un clic déclenche, composé avec le VRAI r�
     expect(state.scene.layers).toHaveLength(1);
     const added = state.scene.layers[0];
     expect(added.type).toBe("shape");
-    expect(state.selectedId).toBe(added.id);
+    expect(state.selectedIds).toEqual([added.id]);
 
     // ET, du MÊME appel, la tuile a été signalée comme récemment utilisée.
     expect(recorded).toEqual(["rect"]);

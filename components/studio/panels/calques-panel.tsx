@@ -11,10 +11,11 @@ import type { Scene } from "@/lib/studio/scene";
 // qu'un échafaudage : les calques ne sont plus leur propre colonne, ils vivent désormais ICI.
 export interface CalquesPanelProps {
   scene: Scene;
-  selectedId: string | null;
+  /** Tâche 3 (U2) : passe-plat vers LayerPanel, désormais la sélection complète. */
+  selectedIds: string[];
   dispatch: Dispatch<EditorAction>;
 }
 
-export function CalquesPanel({ scene, selectedId, dispatch }: CalquesPanelProps) {
-  return <LayerPanel scene={scene} selectedId={selectedId} dispatch={dispatch} />;
+export function CalquesPanel({ scene, selectedIds, dispatch }: CalquesPanelProps) {
+  return <LayerPanel scene={scene} selectedIds={selectedIds} dispatch={dispatch} />;
 }

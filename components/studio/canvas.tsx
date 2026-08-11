@@ -3,7 +3,9 @@
 import { useRef } from "react";
 import type { Dispatch, CSSProperties, KeyboardEvent, PointerEvent } from "react";
 import type { Layer, Scene } from "@/lib/studio/scene";
-import { type EditorAction, select, deleteLayer, moveLayer } from "@/lib/studio/editor-state";
+import {
+  type EditorAction, select, toggleSelection, clearSelection, singleSelectedId, deleteLayer, moveLayer,
+} from "@/lib/studio/editor-state";
 import { useLayerDrag, HANDLES, nudgeDelta, type HandleId } from "@/hooks/use-layer-drag";
 import { LayerView } from "./layer-view";
 
@@ -15,7 +17,10 @@ import { LayerView } from "./layer-view";
 // manipulées (frames, deltas de glisser) restent en pixels du gabarit, jamais en pixels écran.
 export interface CanvasProps {
   scene: Scene;
-  selectedId: string | null;
+  /** Tâche 3 (U2, spec §3) — la sélection COMPLÈTE, dans l'ordre où l'utilisateur l'a construite.
+   * Chaque calque de cet ensemble reçoit son contour de sélection ; les POIGNÉES, elles, n'apparaissent
+   * que pour une sélection simple (voir `soleSelectedId` dans le corps du composant). */
+  selectedIds: string[];
   dispatch: Dispatch<EditorAction>;
   scale: number;
   /** Sources déjà résolues, par id de calque — assets/QR téléchargés par l'appelant (bibliothèque,
@@ -50,11 +55,40 @@ const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
   se: { bottom: 0, right: 0 }, sw: { bottom: 0, left: 0 },
 };
 
-export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasProps) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Les deux usages de Maj SUR LE CANEVAS, et pourquoi ils ne se heurtent pas (Tâche 3, U2)
+//
+// Maj était déjà pris ici par la Tâche 2 : Maj-glisser sur une POIGNÉE de redimensionnement
+// verrouille le ratio (hooks/use-layer-drag.ts, `lockAspectRatio`). La Tâche 3 lui ajoute Maj-clic
+// sur le CORPS d'un calque pour ajouter/retirer de la sélection. Trois raisons pour lesquelles les
+// deux coexistent sans ambiguïté — vérifiées par un test dédié dans tests/studio-interactions.test.ts
+// (« Maj-GLISSER sur une POIGNÉE … ne touche PAS la sélection ») plutôt que laissées au raisonnement :
+//
+//  1. Les CIBLES sont disjointes dans l'arbre. Les poignées vivent dans `handles-overlay`, un FRÈRE
+//     des nœuds de calque, jamais un descendant : un pointerdown sur une poignée ne traverse
+//     JAMAIS le gestionnaire du corps d'un calque.
+//  2. `bind()` (use-layer-drag.ts) appelle `e.stopPropagation()` sur le pointerdown d'une poignée —
+//     l'événement n'atteint donc pas non plus le gestionnaire « clic dans le vide » de la racine.
+//  3. Sur le corps d'un calque, Maj fait du pointerdown une bascule de sélection PURE : aucun geste
+//     de déplacement n'est armé (voir le gestionnaire plus bas). Sans cela, Maj-cliquer pour ajouter
+//     un calque le déplacerait au moindre tremblement de main.
+//
+// ⌘/Ctrl-clic a été écarté comme alternative : ⌘ porte déjà ⌘/ (replier le panneau accosté,
+// editor-shell.tsx) et macOS synthétise Ctrl-clic en clic DROIT, ce qui rendrait le geste
+// inatteignable pour la moitié du parc.
+export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const { preview, getMoveHandler, getResizeHandler, getRotateHandler } = useLayerDrag(dispatch, scale);
 
-  const selectedLayer = scene.layers.find((l) => l.id === selectedId && l.visible) ?? null;
+  // Le calque à OUTILLER (poignées, rotation, clavier) : celui d'une sélection SIMPLE, jamais le
+  // premier d'une sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une
+  // sélection multiple laisserait croire qu'elles agissent sur l'ensemble. Les opérations par LOT sur
+  // une sélection multiple (aligner/répartir, et le déplacement clavier groupé) attendent l'action
+  // « un lot = une entrée d'historique » de la Tâche 4 : les dispatcher une par calque ici
+  // empilerait N entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une
+  // entrée » posé par U1.
+  const soleSelectedId = singleSelectedId(selectedIds);
+  const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
 
   function frameFor(layer: Layer) {
     return preview?.layerId === layer.id && preview.frame ? preview.frame : layer.frame;
@@ -99,6 +133,25 @@ export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasPro
       ref={rootRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      // « Cliquer le canevas vide efface la sélection » (Tâche 3, spec §3). Posé ICI, sur la racine,
+      // et atteint UNIQUEMENT par les pointerdown qui n'ont été absorbés par rien : le corps d'un
+      // calque comme une poignée passent tous par `bind()` (use-layer-drag.ts), qui appelle
+      // `e.stopPropagation()`, et le chemin Maj du corps d'un calque le fait explicitement lui aussi.
+      // Deux gardes :
+      //  - `e.button !== 0` : même garde que `bind()`, pour qu'un clic droit (menu contextuel) ne
+      //    détruise pas la sélection alors qu'il n'arme aucun geste non plus.
+      //  - `e.shiftKey` : Maj est le mode « ajouter/retirer », jamais « détruire » — Maj-cliquer à
+      //    côté d'un calque en cours d'ajout ne doit pas anéantir la sélection en construction.
+      //
+      // CONSÉQUENCE ASSUMÉE sur les calques VERROUILLÉS : un calque locked ne porte aucun
+      // gestionnaire et rend `pointer-events: none` (layer-view.tsx), donc cliquer DESSUS atteint ce
+      // gestionnaire-ci et efface la sélection — là où, avant la Tâche 3, il ne se passait rien. C'est
+      // le comportement des outils de référence (un objet verrouillé est traversé par le clic, pas un
+      // trou qui protège la sélection) et il est épinglé par un test plus bas.
+      onPointerDown={(e) => {
+        if (e.button !== 0 || e.shiftKey) return;
+        if (selectedIds.length > 0) dispatch(clearSelection());
+      }}
       data-testid="studio-canvas"
       style={{
         position: "relative",
@@ -136,12 +189,28 @@ export function Canvas({ scene, selectedId, dispatch, scale, images }: CanvasPro
               layer={layer}
               frame={frameFor(layer)}
               rotation={rotationFor(layer)}
-              selected={layer.id === selectedId}
+              selected={selectedIds.includes(layer.id)}
               image={images?.get(layer.id)}
               scale={scale}
               onPointerDown={(e) => {
-                dispatch(select(layer.id));
                 rootRef.current?.focus();
+                if (e.shiftKey) {
+                  // Bascule de sélection PURE (voir le commentaire en tête de composant, point 3).
+                  // `stopPropagation` empêche l'événement de remonter jusqu'au gestionnaire « clic
+                  // dans le vide » de la racine, qui tournerait juste après la bascule et ressortirait
+                  // la sélection VIDE — un Maj-clic qui efface tout au lieu d'ajouter. REDONDANT avec
+                  // la garde `e.shiftKey` de ce gestionnaire-là : les deux sont indépendamment
+                  // suffisantes (vérifié par mutation, voir task-3-report.md), et c'est voulu — si une
+                  // tâche future décidait que Maj-clic dans le vide efface bien la sélection, elle
+                  // retirerait cette garde-là et le geste d'ici resterait correct. Ne PAS supprimer
+                  // l'un en se disant que l'autre couvre : la suite reste verte sur le coup, et le
+                  // filet disparaît.
+                  e.stopPropagation();
+                  e.preventDefault();
+                  if (e.button === 0) dispatch(toggleSelection(layer.id));
+                  return;
+                }
+                dispatch(select(layer.id));
                 getMoveHandler(layer)(e);
               }}
             />

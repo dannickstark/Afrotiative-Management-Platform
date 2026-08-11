@@ -59,14 +59,24 @@ const qrLayer: Layer = {
   type: "qr", slot: "article.url", fg: "#000000", bg: "#FFFFFF", margin: 4,
 };
 
+// Tâche 3 (U2) : le composant reçoit désormais `selectedIds: string[]`. Ce scaffolding garde son
+// paramètre `selectedId: string | null` — le cas d'UNE seule sélection, celui que la trentaine
+// d'appels ci-dessous exerce — et le traduit ici. `renderMulti` ci-dessous couvre l'autre cas.
 function render(
   layers: Layer[], selectedId: string | null, context: Parameters<typeof PropertyPanel>[0]["context"],
+  assets: AssetRow[] = [], sectionsOpen: Record<string, boolean> = DEFAULT_PREFS.sectionsOpen,
+) {
+  return renderMulti(layers, selectedId === null ? [] : [selectedId], context, assets, sectionsOpen);
+}
+
+function renderMulti(
+  layers: Layer[], selectedIds: string[], context: Parameters<typeof PropertyPanel>[0]["context"],
   assets: AssetRow[] = [], sectionsOpen: Record<string, boolean> = DEFAULT_PREFS.sectionsOpen,
 ) {
   const noop = () => {};
   return renderToStaticMarkup(
     React.createElement(PropertyPanel, {
-      scene: scene(layers), selectedId, context, dispatch: noop, assets,
+      scene: scene(layers), selectedIds, context, dispatch: noop, assets,
       sectionsOpen, onSectionsOpenChange: noop,
     }),
   );
@@ -111,6 +121,43 @@ describe("PropertyPanel — état vide", () => {
   it("invite aussi à sélectionner un calque si l'id sélectionné n'existe plus dans la scène", () => {
     const html = render([textLayer], "inexistant", "social_post");
     expect(html).toContain('data-testid="property-panel-empty"');
+  });
+});
+
+// ── Tâche 3 (U2, spec §3) — « les sections par type UNIQUEMENT pour une sélection simple, et un
+// message honnête en français pour une sélection multiple » ─────────────────────────────────────
+describe("PropertyPanel — sélection multiple", () => {
+  it("n'affiche AUCUNE section par type, ni la bande de géométrie, pour deux calques sélectionnés", () => {
+    const html = renderMulti([textLayer, imageLayer], ["t", "i"], "social_post");
+    expect(html).toContain('data-testid="property-panel-multi"');
+    // Les trois surfaces mono-calque doivent TOUTES être absentes : `property-sections` (les
+    // sections par type), la bande de géométrie (elle édite UN cadre) et l'état vide (une sélection
+    // multiple n'est pas « rien de sélectionné »).
+    expect(html).not.toContain('data-testid="property-sections"');
+    expect(html).not.toContain('data-testid="geometry-strip"');
+    expect(html).not.toContain('data-testid="property-panel-empty"');
+    // Et aucun champ propre au type texte ne fuit (le calque "t" est le PREMIER de selectedIds : un
+    // composant resté sur `selectedIds[0]` afficherait bien ses champs et échouerait ici).
+    expect(html).not.toContain("Ajustement auto");
+  });
+
+  it("dit combien de calques sont sélectionnés, en français", () => {
+    const two = renderMulti([textLayer, imageLayer], ["t", "i"], "social_post");
+    expect(two).toContain("2 calques sélectionnés");
+
+    // Trois : le compte vient bien de la sélection, ce n'est pas une phrase figée.
+    const three = renderMulti([textLayer, imageLayer, qrLayer], ["t", "i", "q"], "social_post");
+    expect(three).toContain("3 calques sélectionnés");
+    expect(three).not.toContain("2 calques sélectionnés");
+  });
+
+  it("revenir à UNE seule sélection rend de nouveau les sections par type", () => {
+    // La contre-épreuve du premier test : sans elle, un composant qui n'afficherait JAMAIS de
+    // sections passerait tout le describe ci-dessus.
+    const html = renderMulti([textLayer, imageLayer], ["t"], "social_post");
+    expect(html).toContain('data-testid="property-sections"');
+    expect(html).not.toContain('data-testid="property-panel-multi"');
+    expect(html).toContain("Ajustement auto");
   });
 });
 
@@ -317,7 +364,7 @@ describe("PropertyPanel — sections repliables, mémorisées par type de calque
     const calls: unknown[] = [];
     renderToStaticMarkup(
       React.createElement(PropertyPanel, {
-        scene: scene([textLayer]), selectedId: "t", context: "social_post", assets: [],
+        scene: scene([textLayer]), selectedIds: ["t"], context: "social_post", assets: [],
         dispatch: (a: unknown) => { calls.push(a); },
         sectionsOpen: { "text.ombre": false },
         onSectionsOpenChange: () => {},
