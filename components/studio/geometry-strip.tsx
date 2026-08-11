@@ -111,7 +111,13 @@ export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: Ge
       {/* `tourne &&` (U3 Tâche 3) : sur une forme découpée portant un `rotation` résiduel — scène
           écrite avant cette tâche, import, ou conversion depuis un rectangle pivoté — cette note
           serait fausse deux fois (le calque n'est pas pivoté à l'écran, et l'accrochage n'est pas
-          désactivé). C'est la note ci-dessus qui s'affiche alors. */}
+          désactivé). C'est la note ci-dessus qui s'affiche alors.
+          LA SECONDE MOITIÉ EST DÉSORMAIS VRAIE, ET TESTÉE (revue de la Tâche 3, Important 1) : quand
+          elle a été écrite, elle ne l'était pas — `begin()` (hooks/use-layer-drag.ts) lisait encore
+          `layer.rotation` brut, et `snapResize` renonce dès que `rotationDeg !== 0`
+          (lib/studio/snap.ts). Le geste lit maintenant `layerRotation(layer)`, la rotation PEINTE, et
+          tests/studio-property-panel.test.ts (« la PRÉMISSE du masquage est vraie ») relie cette note
+          au comportement réel du moteur de geste, dans les deux sens. */}
       {tourne && (layer.rotation ?? 0) !== 0 && (
         <p className="text-[11px] text-muted-foreground" data-testid="snap-rotation-note">
           Calque pivoté : l&rsquo;accrochage est désactivé pendant un redimensionnement ; pendant un

@@ -13,6 +13,9 @@ import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
 // SHAPE_KINDS pour shape-gallery (une garde de complétude qui compare deux copies manuscrites peut
 // dériver sans que rien ne le remarque, revue U1 Tâche 4, Important 1).
 import { ALIGN_MODES } from "@/lib/studio/align";
+// Revue de la Tâche 3 (Important 1) : le VRAI moteur de geste, pour vérifier la PRÉMISSE d'une note de
+// ce panneau au lieu de la croire — voir « la PRÉMISSE du masquage est vraie » plus bas.
+import { createGestureEngine, type DragPreview } from "@/hooks/use-layer-drag";
 
 // Même convention que tests/studio-layer-panel.test.ts : pas de DOM sous `bun test`, donc un rendu
 // STRUCTUREL (react-dom/server) plutôt qu'une simulation de clic/frappe — la logique de mutation
@@ -566,6 +569,53 @@ describe("PropertyPanel — la rotation d'une forme découpée (dette 2)", () =>
     expect(render([shapeOf("triangle", { rotation: 30 })], "s1", "recap_card")).not.toContain('data-testid="snap-rotation-note"');
     // TÉMOIN : la même rotation sur un rectangle affiche bien la note (elle n'a pas disparu partout).
     expect(render([shapeOf("rect", { rotation: 30 })], "s1", "recap_card")).toContain('data-testid="snap-rotation-note"');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE DE LA TÂCHE 3, Important 1 — LA PRÉMISSE DU MASQUAGE CI-DESSUS, VÉRIFIÉE.
+  //
+  // geometry-strip.tsx justifie le `tourne &&` du test précédent par : « cette note serait fausse deux
+  // fois (le calque n'est pas pivoté à l'écran, ET l'accrochage n'est pas désactivé) ». La seconde
+  // moitié était FAUSSE quand elle a été écrite : `begin()` (hooks/use-layer-drag.ts) lisait encore
+  // `layer.rotation` brut, et `snapResize` renonce dès que `rotationDeg !== 0` (lib/studio/snap.ts).
+  // La note avait donc été retirée SUR UNE PRÉMISSE FAUSSE, et aucun test ne reliait l'affirmation de
+  // l'interface au comportement réel du geste.
+  //
+  // Ce test est ce lien, dans les DEUX SENS — la note absente ⟺ l'accrochage marche, la note présente
+  // ⟺ l'accrochage est coupé — sur le MÊME calque que le test ci-dessus et avec le VRAI moteur de
+  // geste. MUTATION QUI LE FAIT ROUGIR : `startRotation: layer.rotation ?? 0` dans `begin()`.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("la PRÉMISSE du masquage est vraie : l'accrochage marche VRAIMENT sur cette forme (revue, Important 1)", () => {
+    // Bord voisin à x=304 : le bord est brut d'un glisser de +6 vaut 306, donc à 2 px de la ligne.
+    const bord: Layer = { ...shapeLayerSolid, id: "v", frame: { x: 304, y: 90, w: 60, h: 180 } } as Layer;
+
+    function guidesAuRedimensionnement(kind: string): number {
+      const calque = shapeOf(kind, { rotation: 30, frame: { x: 100, y: 100, w: 200, h: 150 } });
+      let aperçu: DragPreview | null = null;
+      const engine = createGestureEngine({
+        dispatch: () => {}, getScale: () => 1,
+        onPreviewChange: (p) => { aperçu = p; },
+        getSnapContext: () => ({ layers: [calque, bord], canvas: { width: 800, height: 600 } }),
+      });
+      engine.beginResize(calque, "e", { x: 0, y: 0 });
+      engine.move({ x: 6, y: 0 });
+      // L'aperçu doit exister : sans cette exigence, un aperçu MORT rendrait 0 guide et se lirait
+      // comme « accrochage coupé » (le court-circuit relevé en revue finale U0+U2).
+      if (aperçu === null) throw new Error("aucun aperçu émis — le moteur de geste n'a rien produit");
+      return (aperçu as DragPreview).guides?.length ?? 0;
+    }
+
+    // TRIANGLE : rotation inerte -> pas de note, ET l'accrochage fonctionne.
+    const triangle = render([shapeOf("triangle", { rotation: 30 })], "s1", "recap_card");
+    expect(triangle).not.toContain('data-testid="snap-rotation-note"');
+    expect(guidesAuRedimensionnement("triangle")).toBe(1);
+
+    // RECTANGLE : rotation PEINTE -> note affichée, ET l'accrochage est bien coupé. Les deux moitiés
+    // de la biconditionnelle, sans quoi « pas de note » et « accrochage actif » pourraient être vrais
+    // partout pour de mauvaises raisons.
+    const rect = render([shapeOf("rect", { rotation: 30 })], "s1", "recap_card");
+    expect(rect).toContain('data-testid="snap-rotation-note"');
+    expect(guidesAuRedimensionnement("rect")).toBe(0);
   });
 });
 

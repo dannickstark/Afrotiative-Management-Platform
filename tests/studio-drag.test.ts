@@ -1539,6 +1539,147 @@ describe("createGestureEngine — REDIMENSIONNEMENT accroché (Tâche 5)", () =>
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3, REVUE — Important 1 : LA MATHÉMATIQUE DU GESTE LIT LA ROTATION *PEINTE*.
+//
+// La Tâche 3 a appris aux deux chemins de PEINTURE à supprimer la rotation d'une forme découpée
+// (lib/studio/shapes.ts#layerRotation, prouvé en CSS et en pixels). `begin()` lisait pourtant encore
+// `layer.rotation ?? 0`. Le calque était donc peint DROIT et manipulé comme s'il était PENCHÉ — un
+// désaccord de plus dans la famille de §0, cette fois entre le pixel et le geste.
+//
+// ATTEIGNABLE EN DEUX CLICS, et c'est la Tâche 3 qui a ouvert la route : pivoter un rectangle de 30°,
+// puis choisir « Triangle » dans le nouveau sélecteur de forme (property-panel.tsx). Le triangle se
+// peint droit, le champ Rotation se grise en affichant 30 — et le résidu restait actif dans le geste.
+//
+// MUTATION QUI FAIT ROUGIR LES TROIS TESTS CI-DESSOUS : remettre `startRotation: layer.rotation ?? 0`
+// dans `begin()` (hooks/use-layer-drag.ts). Aucun test ne couvrait cela avant cette revue.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("createGestureEngine — une forme DÉCOUPÉE se manipule selon la rotation PEINTE (revue, Important 1)", () => {
+  const CADRE: Frame = { x: 200, y: 100, w: 400, h: 200 };
+  const RÉSIDU = 30;
+  const DELTA: Point = { x: 40, y: 30 };
+  // Le cadre que le geste DOIT produire : celui d'un calque droit, parce que le calque EST peint droit.
+  const DROIT: Frame = { x: 200, y: 100, w: 440, h: 230 };
+  // Le cadre BIAISÉ que produisait la lecture du champ brut — dérivé par la fonction pure elle-même,
+  // pas recopié à la main : si `computeResizedFrame` changeait un jour, ce témoin suivrait.
+  const BIAISÉ = computeResizedFrame(CADRE, "se", DELTA, { rotationDeg: RÉSIDU });
+
+  it("le témoin de la valeur biaisée est bien ce que le défaut produisait (et il diffère du cadre droit)", () => {
+    // Anti-vacuité des deux tests suivants : si BIAISÉ valait DROIT, ils passeraient quoi qu'il arrive.
+    expect(BIAISÉ).not.toEqual(DROIT);
+    expect(BIAISÉ.x).toBeCloseTo(195.17949192431118, 9);
+    expect(BIAISÉ.y).toBeCloseTo(112.00961894323339, 9);
+    expect(BIAISÉ.w).toBeCloseTo(449.6410161513775, 9);
+    expect(BIAISÉ.h).toBeCloseTo(205.98076211353316, 9);
+    // CE QUE L'UTILISATEUR VOIT, dit précisément. La poignée « se » ANCRE le coin nord-ouest : sur un
+    // calque peint droit, (200,100) ne doit pas bouger d'un pixel. Il bouge — vers la GAUCHE alors que
+    // le geste va à droite, et vers le BAS —, et la hauteur ne prend que 6 px pour un tirage de 30.
+    expect(BIAISÉ.x).toBeLessThan(CADRE.x);
+    expect(BIAISÉ.y).toBeGreaterThan(CADRE.y);
+    expect(BIAISÉ.h).toBeLessThan(DROIT.h - 20);
+  });
+
+  it("REDIMENSIONNEMENT : le résidu de rotation ne biaise plus le geste", () => {
+    const triangle = makeLayer({ frame: CADRE, shape: "triangle", rotation: RÉSIDU });
+    const { dispatch, actions, getState } = makeHarness(triangle);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginResize(triangle, "se", { x: 0, y: 0 });
+    engine.end(DELTA);
+
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: DROIT }]);
+    expect(getState().scene.layers[0].frame).toEqual(DROIT);
+  });
+
+  it("TÉMOIN : sur un RECTANGLE, la même rotation biaise toujours le geste — elle est peinte, elle compte", () => {
+    // Sans ce témoin, le test précédent passerait aussi si `rotationDeg` avait cessé d'être transmis
+    // pour TOUT LE MONDE (ce qui rouvrirait le défaut de la Tâche 1 de U2 pour texte/image/rect).
+    const rect = makeLayer({ frame: CADRE, shape: "rect", rotation: RÉSIDU });
+    const { dispatch, actions } = makeHarness(rect);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginResize(rect, "se", { x: 0, y: 0 });
+    engine.end(DELTA);
+
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: BIAISÉ }]);
+  });
+
+  it("ACCROCHAGE : il fonctionne sur une forme découpée portant un résidu — et le cadre COMMITTÉ est accroché", () => {
+    // `snapResize` renonce dès que `rotationDeg !== 0` (lib/studio/snap.ts:631) : tant que `begin()`
+    // lisait le champ brut, l'accrochage était SILENCIEUSEMENT désactivé sur ces formes. Même
+    // géométrie que le bloc « REDIMENSIONNEMENT accroché » ci-dessus : bord est brut 306, ligne à 304.
+    const triangle = makeLayer({ shape: "triangle", rotation: RÉSIDU });
+    const bord: Layer = {
+      id: "sb", name: "Bord", visible: true, locked: false,
+      frame: { x: 304, y: 90, w: 60, h: 180 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    } as Layer;
+    const { dispatch, actions } = makeHarnessWith([triangle, bord]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([triangle, bord]),
+    });
+
+    engine.beginResize(triangle, "e", { x: 0, y: 0 });
+    engine.move({ x: 6, y: 0 });
+    // L'aperçu doit EXISTER avant qu'on lise ses guides (leçon du court-circuit relevé en revue finale
+    // U0+U2 : `preview?.guides` seul lit `undefined` sur un aperçu mort et passe pour « accroché »).
+    const aperçu = previewBox.current;
+    expect(aperçu).not.toBeNull();
+    expect(aperçu!.frame).toEqual({ x: 100, y: 100, w: 204, h: 150 });
+    expect(aperçu!.guides).toHaveLength(1);
+    expect(aperçu!.guides![0].at).toBe(304);
+
+    engine.end({ x: 6, y: 0 });
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 100, y: 100, w: 204, h: 150 } }]);
+  });
+
+  it("TÉMOIN : le MÊME geste sur un rectangle pivoté n'accroche pas — la rotation peinte désactive bien l'accroche", () => {
+    const rect = makeLayer({ shape: "rect", rotation: RÉSIDU });
+    const bord: Layer = {
+      id: "sb", name: "Bord", visible: true, locked: false,
+      frame: { x: 304, y: 90, w: 60, h: 180 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    } as Layer;
+    const { dispatch } = makeHarnessWith([rect, bord]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([rect, bord]),
+    });
+
+    engine.beginResize(rect, "e", { x: 0, y: 0 });
+    engine.move({ x: 6, y: 0 });
+    const aperçu = previewBox.current;
+    expect(aperçu).not.toBeNull();
+    expect(aperçu!.frame).toEqual(computeResizedFrame(rect.frame, "e", { x: 6, y: 0 }, { rotationDeg: RÉSIDU }));
+    expect(aperçu!.guides).toBeUndefined();
+  });
+
+  it("ROTATION : le geste part de l'angle PEINT (0), pas du résidu stocké", () => {
+    // Conséquence assumée du correctif, dite plutôt que laissée implicite. Le canevas ne rend AUCUNE
+    // poignée de rotation sur une forme découpée (canvas.tsx:320) et le champ « Rotation (°) » y est
+    // grisé : ce chemin n'est donc atteignable que par l'API. Mais s'il l'est, l'angle produit doit
+    // décrire ce que l'utilisateur VOIT — un triangle droit tiré d'un quart de tour donne 90, pas 120.
+    const triangle = makeLayer({ frame: { x: 0, y: 0, w: 200, h: 200 }, shape: "triangle", rotation: RÉSIDU });
+    const { dispatch, actions } = makeHarness(triangle);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginRotate(triangle, { x: 100, y: 0 }, { x: 100, y: 100 }); // pointeur plein nord
+    engine.end({ x: 200, y: 100 });                                     // pointeur plein est : +90°
+    expect(actions).toEqual([{ type: "rotateLayer", id: "l1", deg: 90 }]);
+
+    // TÉMOIN : sur un rectangle, le MÊME geste cumule bien le résidu (30 + 90 = 120).
+    const rect = makeLayer({ frame: { x: 0, y: 0, w: 200, h: 200 }, shape: "rect", rotation: RÉSIDU });
+    const h2 = makeHarness(rect);
+    const e2 = createGestureEngine({ dispatch: h2.dispatch, getScale: () => 1, onPreviewChange: () => {} });
+    e2.beginRotate(rect, { x: 100, y: 0 }, { x: 100, y: 100 });
+    e2.end({ x: 200, y: 100 });
+    expect(h2.actions).toEqual([{ type: "rotateLayer", id: "l1", deg: 120 }]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GLISSER DE GROUPE (revue finale U0+U2, Important 1).
 //
 // Avant ce correctif, tirer un calque d'une sélection multiple la RÉDUISAIT à ce seul calque et ne

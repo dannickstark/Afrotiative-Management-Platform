@@ -8,6 +8,9 @@ import {
   type EditorAction, type Point,
 } from "@/lib/studio/editor-state";
 import { sameFrame, type FrameChange } from "@/lib/studio/align";
+// U3 Tâche 3 (revue, Important 1) : la rotation RÉELLEMENT peinte d'un calque — le même verdict que
+// consultent les deux chemins de rendu. Module PUR (types seuls côté schéma), donc importable ici.
+import { layerRotation } from "@/lib/studio/shapes";
 import {
   snapCandidates, snapMove, snapResize,
   type SnapGuide, type SnapSubject,
@@ -564,7 +567,25 @@ export function createGestureEngine({
     if (layer.locked) return;
     active = {
       kind, layerId: layer.id, handle: extra?.handle, center: extra?.center,
-      startFrame: layer.frame, startRotation: layer.rotation ?? 0, startPointer: pointer,
+      // `layerRotation(layer)` et NON `layer.rotation ?? 0` (revue U3 Tâche 3, Important 1). La
+      // Tâche 3 a appris aux DEUX chemins de PEINTURE à supprimer la rotation d'une forme découpée
+      // (lib/studio/shapes.ts#layerRotation) ; la MATHÉMATIQUE DU GESTE, elle, lisait encore le champ
+      // brut. Un triangle portant un `rotation` résiduel — scène antérieure, import, IA, ou un
+      // rectangle pivoté converti en triangle depuis le sélecteur de forme, deux clics — est peint
+      // DROIT et se comportait pourtant comme un calque penché :
+      //   • le REDIMENSIONNEMENT partait de travers. Mesuré sur {200,100,400,200}, poignée « se »,
+      //     delta (+40,+30) : 30° donnait {195.18,112.01,449.64,205.98} là où le calque peint exige
+      //     {200,100,440,230} — l'utilisateur tire vers le bas-droite et la forme monte à gauche en
+      //     RAPETISSANT de hauteur.
+      //   • l'ACCROCHAGE était désactivé en silence (`snapResize`, lib/studio/snap.ts:631, renonce dès
+      //     que `rotationDeg !== 0`), et geometry-strip.tsx justifiait justement le masquage de
+      //     `snap-rotation-note` par l'inverse — la note était retirée ET sa prémisse fausse.
+      // Une seule lecture de la rotation pour la peinture ET pour le geste : celle de la description.
+      // Conséquence sur la ROTATION elle-même (kind === "rotate") : le geste part de l'angle PEINT
+      // (0 pour une forme découpée), pas du résidu stocké — cohérent avec ce que l'utilisateur voit.
+      // Le canevas ne montre de toute façon aucune poignée de rotation sur ces formes (canvas.tsx:320)
+      // et le champ « Rotation (°) » y est grisé, donc ce chemin n'est atteignable que par l'API.
+      startFrame: layer.frame, startRotation: layerRotation(layer), startPointer: pointer,
       participants: extra?.participants,
     };
   }
