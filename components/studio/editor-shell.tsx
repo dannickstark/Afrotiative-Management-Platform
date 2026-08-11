@@ -20,6 +20,8 @@ import { ElementsPanel } from "./panels/elements-panel";
 import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { PreviewPane } from "./preview-pane";
+import { ModeSwitch } from "./mode-switch";
+import { RenderMode } from "./render-mode";
 import { editorReducer, initEditorState, undo, redo } from "@/lib/studio/editor-state";
 import { createAutosaveController, type AutosaveState } from "@/lib/studio/autosave";
 import { shouldShowUnpublishedBadge } from "@/lib/studio/scene-diff";
@@ -29,6 +31,7 @@ import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
 import { nextOpenPanel, type RailCategory } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
+import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
 import type { TemplateVersionRow, PreviewArticleOption, TemplateRow, CategoryOption } from "@/lib/queries/studio";
@@ -175,6 +178,24 @@ function EditorShellInner({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [setPrefs]);
+
+  // ── Modes Montage ⇄ Rendu réel (Tâche 5, U1 spec §5) ──────────────────────
+  // `mode` ne pilote qu'un rendu CONDITIONNEL plus bas (jamais une `key` React) : basculer ne
+  // démonte ni ne réinitialise `state`/`dispatch` (le réducteur de l'éditeur, ci-dessus) — c'est ce
+  // qui garantit gratuitement que la sélection de calque courante (state.selectedId) survit à
+  // l'aller-retour, sans le moindre code dédié. `view` (lib/studio/studio-mode.ts#PreservedView)
+  // porte ce que le mode Montage ne porte PAS encore lui-même : le format promu dans la case large
+  // de Rendu réel, son zoom et son défilement — voir components/studio/render-mode.tsx pour le
+  // détail de cette réutilisation du champ `selectedId`. `preserveView` est l'identité par contrat
+  // (voir sa documentation) ; l'appeler ICI, au point de bascule, documente explicitement où passer
+  // une éventuelle transformation future plutôt que de copier silencieusement `view` d'un mode à
+  // l'autre sans qu'aucun symbole ne porte cette garantie.
+  const [mode, setMode] = useState<StudioMode>("montage");
+  const [view, setView] = useState<PreservedView>({ selectedId: null, zoom: "fit", scrollX: 0, scrollY: 0 });
+  function changeMode(next: StudioMode) {
+    setMode(next);
+    setView((v) => preserveView(v));
+  }
 
   // ── Autosauvegarde (spec §3) ─────────────────────────────────────────────
   const [autosaveState, setAutosaveState] = useState<AutosaveState>({ status: "idle", message: null, dirty: false });
@@ -342,77 +363,95 @@ function EditorShellInner({
         </div>
       )}
 
-      {/* Rail + panneau accosté + canevas + colonne propriétés (Tâche 1, spec §2/§3). La colonne
-          propriétés (PropertyPanel + PreviewPane empilés) n'est PAS touchée par cette tâche — Tâche 5
-          transformera l'aperçu en mode ; il reste ici, à l'identique, pour que ce shell reste
-          livrable seul. Seule la colonne de calques dédiée disparaît : son contenu déménage dans
-          CalquesPanel, ouvert via le rail. */}
-      <div className="flex flex-1 gap-3 overflow-hidden">
-        <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
+      {/* Rail + panneau accosté + canevas + colonne propriétés (Tâche 1, spec §2/§3) EN Montage ;
+          RenderMode (Tâche 5, spec §5) prend TOUT cet espace en Rendu réel — aucun des quatre
+          (Rail/PanelHost/Canvas/colonne propriétés) n'est rendu dans ce second mode, voir
+          components/studio/render-mode.tsx pour la preuve testée (tests/studio-render-mode.test.ts).
+          ModeSwitch (le contrôle segmenté flottant) est un FRÈRE du contenu propre au mode, PAS un
+          enfant de l'une ou l'autre branche — spec §5 : « centré au-dessus du canevas, présent dans
+          les DEUX états » — positionné en absolu sur ce conteneur `relative`, `pt-11` lui réservant
+          de la place plutôt que de chevaucher le haut du rail/canevas/case large. */}
+      <div className="relative flex flex-1 gap-3 overflow-hidden pt-11">
+        <ModeSwitch
+          mode={mode} onChange={changeMode}
+          className="absolute left-1/2 top-0 z-10 -translate-x-1/2"
+        />
 
-        {prefs.openPanel && (
-          <PanelHost
-            open={prefs.openPanel}
-            onOpenChange={(next) => setPrefs((p) => ({ ...p, openPanel: next }))}
-          >
-            {prefs.openPanel === "calques" && (
-              <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
+        {mode === "montage" ? (
+          <>
+            <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
+
+            {prefs.openPanel && (
+              <PanelHost
+                open={prefs.openPanel}
+                onOpenChange={(next) => setPrefs((p) => ({ ...p, openPanel: next }))}
+              >
+                {prefs.openPanel === "calques" && (
+                  <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
+                )}
+                {/* Modèles / Images / Marque (Tâche 2, U1 spec §3) : chaque panneau HÉBERGE une surface
+                    existante (templates-table.tsx, asset-picker.tsx) plutôt que d'en reconstruire une
+                    copie — voir le rapport de la Tâche 2. Texte (Tâche 3, spec §4) et Éléments (Tâche 4,
+                    spec §3) insèrent désormais un calque via `dispatch` — voir
+                    components/studio/panels/texte-panel.tsx et panels/elements-panel.tsx pour le
+                    cheminement complet clic -> calque lié. */}
+                {prefs.openPanel === "modeles" && (
+                  <ModelesPanel templates={templates} categories={categories} />
+                )}
+                {prefs.openPanel === "elements" && (
+                  <ElementsPanel
+                    context={template.context}
+                    canvas={{ width: template.width, height: template.height }}
+                    recentShapes={prefs.recentShapes}
+                    dispatch={dispatch}
+                    onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
+                  />
+                )}
+                {prefs.openPanel === "texte" && (
+                  <TextePanel
+                    context={template.context}
+                    canvas={{ width: template.width, height: template.height }}
+                    dispatch={dispatch}
+                  />
+                )}
+                {prefs.openPanel === "images" && (
+                  <ImagesPanel context={template.context} assets={assets} />
+                )}
+                {prefs.openPanel === "marque" && (
+                  <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
+                )}
+              </PanelHost>
             )}
-            {/* Modèles / Images / Marque (Tâche 2, U1 spec §3) : chaque panneau HÉBERGE une surface
-                existante (templates-table.tsx, asset-picker.tsx) plutôt que d'en reconstruire une
-                copie — voir le rapport de la Tâche 2. Texte (Tâche 3, spec §4) et Éléments (Tâche 4,
-                spec §3) insèrent désormais un calque via `dispatch` — voir
-                components/studio/panels/texte-panel.tsx et panels/elements-panel.tsx pour le
-                cheminement complet clic -> calque lié. */}
-            {prefs.openPanel === "modeles" && (
-              <ModelesPanel templates={templates} categories={categories} />
-            )}
-            {prefs.openPanel === "elements" && (
-              <ElementsPanel
-                context={template.context}
-                canvas={{ width: template.width, height: template.height }}
-                recentShapes={prefs.recentShapes}
-                dispatch={dispatch}
-                onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
-              />
-            )}
-            {prefs.openPanel === "texte" && (
-              <TextePanel
-                context={template.context}
-                canvas={{ width: template.width, height: template.height }}
-                dispatch={dispatch}
-              />
-            )}
-            {prefs.openPanel === "images" && (
-              <ImagesPanel context={template.context} assets={assets} />
-            )}
-            {prefs.openPanel === "marque" && (
-              <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
-            )}
-          </PanelHost>
+
+            <div
+              ref={canvasWrapRef}
+              className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/20 p-4"
+            >
+              <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
+            </div>
+
+            <div className="flex w-[300px] shrink-0 flex-col gap-3 overflow-auto">
+              <div className="rounded-lg border">
+                <PropertyPanel
+                  scene={state.scene} selectedId={state.selectedId} context={template.context}
+                  dispatch={dispatch} assets={assets}
+                />
+              </div>
+              <div className="rounded-lg border p-2">
+                <PreviewPane
+                  templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles}
+                  disabled={!storageConfigured}
+                />
+              </div>
+            </div>
+          </>
+        ) : (
+          <RenderMode
+            templateId={template.id} context={template.context} scene={state.scene} format={template.format}
+            articles={previewArticles} disabled={!storageConfigured}
+            view={view} onViewChange={setView}
+          />
         )}
-
-        <div
-          ref={canvasWrapRef}
-          className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/20 p-4"
-        >
-          <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
-        </div>
-
-        <div className="flex w-[300px] shrink-0 flex-col gap-3 overflow-auto">
-          <div className="rounded-lg border">
-            <PropertyPanel
-              scene={state.scene} selectedId={state.selectedId} context={template.context}
-              dispatch={dispatch} assets={assets}
-            />
-          </div>
-          <div className="rounded-lg border p-2">
-            <PreviewPane
-              templateId={template.id} context={template.context} scene={state.scene} articles={previewArticles}
-              disabled={!storageConfigured}
-            />
-          </div>
-        </div>
       </div>
     </div>
   );

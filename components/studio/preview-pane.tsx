@@ -28,7 +28,11 @@ import type { PreviewArticleOption } from "@/lib/queries/studio";
 // aucune dépendance de timing envers l'autosauvegarde : previewTemplateCore revalide (parseScene) et
 // rend CETTE scène-là, sans jamais l'écrire (lib/studio/preview-core.ts) — donc pas de course.
 const PREVIEW_DEBOUNCE_MS = 800;
-const ARTICLE_SELECTABLE_CONTEXTS: TemplateContext[] = ["article_image", "social_post"];
+// Exporté (Tâche 5, U1 spec §5) : components/studio/render-mode.tsx réutilise EXACTEMENT cette même
+// liste pour sa légende de provenance plutôt que de la recopier — une constante dupliquée pourrait
+// diverger silencieusement du sélecteur réel de ce panneau (ex. si un contexte manuel gagnait un
+// jour un article associé sans que la copie ne soit mise à jour).
+export const ARTICLE_SELECTABLE_CONTEXTS: TemplateContext[] = ["article_image", "social_post"];
 const SAMPLE_OPTION = "__sample__";
 
 export interface PreviewPaneProps {
@@ -43,6 +47,15 @@ export interface PreviewPaneProps {
   // inerte plutôt que « certaines actions marchent, d'autres pas » — spec §8, « Le studio s'affiche
   // en lecture seule »), pas une nécessité technique de previewTemplateCore lui-même.
   disabled?: boolean;
+  // Tâche 5 (U1, spec §5) : ADDITIF, optionnel — n'affecte AUCUN appelant existant (editor-shell.tsx
+  // colonne propriétés) qui ne le fournit pas. `state.degraded` était déjà calculé ici (badge
+  // « Rendu dégradé » ci-dessous) mais restait entièrement PRIVÉ à ce composant ; components/studio/
+  // render-mode.tsx a besoin de connaître ce résultat pour composer sa PROPRE légende, plus explicite
+  // (« une police est repliée… », spec §5 : « le drapeau `degraded` du moteur… invisible dans l'UI »),
+  // sans dupliquer runPreview() ni previewTemplate — donc sans écrire un second chemin de rendu.
+  // Appelé avec `null` au DÉBUT de chaque requête (résultat encore inconnu/périmé), jamais laissé sur
+  // un résultat obsolète pendant qu'un nouveau rendu est en cours.
+  onResult?: (result: { degraded: boolean } | null) => void;
 }
 
 type PreviewState =
@@ -51,7 +64,7 @@ type PreviewState =
   | { status: "ready"; dataUri: string; degraded: boolean }
   | { status: "error"; message: string };
 
-export function PreviewPane({ templateId, context, scene, articles, disabled }: PreviewPaneProps) {
+export function PreviewPane({ templateId, context, scene, articles, disabled, onResult }: PreviewPaneProps) {
   const [articleId, setArticleId] = useState<string | null>(null);
   const [state, setState] = useState<PreviewState>({ status: "idle" });
   // Protège contre une réponse PÉRIMÉE (une requête plus récente — *Actualiser*, ou un nouveau
@@ -62,6 +75,7 @@ export function PreviewPane({ templateId, context, scene, articles, disabled }: 
   async function runPreview() {
     const id = ++requestIdRef.current;
     setState({ status: "loading" });
+    onResult?.(null);
     try {
       // `scene` est TOUJOURS la scène courante de l'éditeur (props, capturée par la fermeture de ce
       // rendu) — jamais le brouillon en base, qui peut être en retard de ~1500 ms (délai d'autosave)
@@ -71,9 +85,11 @@ export function PreviewPane({ templateId, context, scene, articles, disabled }: 
       const res = await previewTemplate({ templateId, scene, articleId: articleId ?? undefined });
       if (id !== requestIdRef.current) return;
       setState(res.ok ? { status: "ready", dataUri: res.dataUri, degraded: res.degraded } : { status: "error", message: res.message });
+      onResult?.(res.ok ? { degraded: res.degraded } : null);
     } catch (e) {
       if (id !== requestIdRef.current) return;
       setState({ status: "error", message: e instanceof Error ? e.message : "Aperçu impossible." });
+      onResult?.(null);
     }
   }
 
