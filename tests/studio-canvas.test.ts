@@ -263,6 +263,57 @@ describe("Canvas — l'artboard reste visuellement distinct de son entourage mê
   });
 });
 
+// Extrait la balise OUVRANTE (attributs seuls, jamais les descendants) du nœud dont `marker` est un
+// attribut — même stratégie de repérage que styleAttr()/layerNode() plus haut, mais bornée à `>` au
+// lieu de chercher un second `data-testid=`, pour ne capturer QUE les attributs de CETTE balise (pas
+// son sous-arbre). Nécessaire ici car `overflow-hidden` (Tailwind) vit dans `class="…"`, jamais dans
+// `style="…"` — styleAttr() ne l'aurait donc JAMAIS trouvé, quel que soit le vrai contenu de la
+// classe : une assertion basée sur styleAttr() pour "overflow-hidden" serait passée pour de mauvaises
+// raisons (trivialement, faute de jamais regarder le bon attribut), pas parce que le rognage était
+// absent.
+function openTag(html: string, marker: string): string {
+  const idx = html.indexOf(marker);
+  if (idx === -1) throw new Error(`marqueur introuvable dans le HTML rendu : ${marker}`);
+  const start = html.lastIndexOf("<", idx);
+  const end = html.indexOf(">", idx);
+  if (start === -1 || end === -1) throw new Error(`balise ouvrante introuvable pour : ${marker}`);
+  return html.slice(start, end + 1);
+}
+
+describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.tsx (revue Tâche 7) : le box-shadow de l'artboard ne doit pas être rogné par son propre enrobage", () => {
+  // Revue : les deux tests de box-shadow ci-dessus rendent <Canvas> SEUL, jamais enrobé de
+  // <CanvasChrome> — exactement la composition que editor-shell.tsx utilise réellement
+  // (`<CanvasChrome format={template.format} zoom={scale}>…<Canvas … scale={scale} /></CanvasChrome>`,
+  // MÊME valeur pour `zoom` et `scale`). Cette suite reproduit CETTE composition, avec `zoom === scale`
+  // et un format dont les dimensions égalent celles de `scene.canvas` (`ig_square`, 1080×1080, comme
+  // `makeScene()` — non, `makeScene()` fait 800×600 : le format n'a PAS besoin de correspondre pixel
+  // pour pixel à la scène pour que le bogue existe, puisque c'est la boîte de CanvasChrome
+  // (`preset.width*zoom`) et la boîte de Canvas (`scene.canvas.width*scale`) qui doivent coïncider —
+  // ici les deux valent 1080*1 = 1080 côté CanvasChrome ; pour que le test soit fidèle à la vraie
+  // composition, on donne à la scène les MÊMES dimensions que le format `ig_square` (1080×1080)).
+  function renderComposed(prefs: EditorPrefs = DEFAULT_PREFS) {
+    const scene = makeScene();
+    scene.canvas = { ...scene.canvas, width: 1080, height: 1080 };
+    return renderToStaticMarkup(
+      React.createElement(
+        CanvasChrome,
+        { format: "ig_square", zoom: 1, prefs },
+        React.createElement(Canvas, { scene, selectedId: null, dispatch: () => {}, scale: 1 }),
+      ),
+    );
+  }
+
+  it('l\'enrobage "artboard" (canvas-chrome.tsx) ne porte PAS sa propre classe overflow-hidden — un overflow:hidden ICI rognerait le box-shadow de "studio-canvas" qu\'il enrobe, pixel-identique à cette taille (zoom === scale, mêmes dimensions)', () => {
+    const html = renderComposed();
+    expect(openTag(html, 'data-testid="artboard"')).not.toMatch(/\boverflow-hidden\b/);
+  });
+
+  it("le box-shadow reste bien présent dans cette composition réelle (sanity — ne garantit PAS seul qu'il n'est pas rogné, voir le test précédent)", () => {
+    const html = renderComposed();
+    expect(styleAttr(html, 'data-testid="studio-canvas"')).toContain("box-shadow");
+  });
+});
+
 describe("CanvasChrome — pastilles flottantes, règles et grille optionnelles (Tâche 7, spec §7)", () => {
   // renderCanvasChrome — scaffolding de test LOCAL (comme `render()` plus haut dans ce fichier) :
   // `format`/`zoom` ont des valeurs par défaut ici pour que les tests qui ne les font pas varier

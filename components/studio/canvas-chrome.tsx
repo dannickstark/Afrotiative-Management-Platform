@@ -178,9 +178,25 @@ export function CanvasChrome({
           </div>
         )}
 
+        {/* PAS de `overflow-hidden` ICI (revue Tâche 7, Critique) : ce conteneur est pixel-IDENTIQUE
+            à celui de <Canvas> lui-même (canvas.tsx : `scene.canvas.width * scale`, ici
+            `preset.width * zoom` — même valeur en composition réelle, editor-shell.tsx passant
+            `zoom={scale}`), enrobé sans marge. Un overflow:hidden POSÉ ICI rognerait donc le
+            box-shadow que canvas.tsx pose sur son PROPRE conteneur (« l'artboard visuellement
+            distinct de son entourage », spec §7) : le box-shadow d'un élément peint HORS de sa
+            boîte n'est jamais rogné par le overflow:hidden de CE MÊME élément (canvas.tsx:107
+            reste nécessaire — il rogne les CALQUES qui déborderaient, pas sa propre ombre), mais
+            un ANCÊTRE avec overflow:hidden ET une boîte de taille égale ou inférieure le rogne
+            bel et bien : exactement ce que ce conteneur faisait avant ce correctif. Il ne protège
+            par ailleurs RIEN d'autre ici : le motif de grille (backgroundImage/backgroundSize,
+            juste dessous) ne peint jamais hors de son PROPRE `inset-0`, et tout ce que <Canvas>
+            pourrait laisser déborder (poignées de sélection, etc.) est déjà rogné par son propre
+            conteneur racine. Verrouillé par tests/studio-canvas.test.ts (« composition RÉELLE »),
+            qui rend <CanvasChrome> enrobant un VRAI <Canvas> plutôt qu'un espace réservé — les
+            deux tests isolés plus haut dans ce fichier ne l'auraient jamais détecté. */}
         <div
           data-testid="artboard"
-          className="relative overflow-hidden"
+          className="relative"
           style={{ width: boxWidth, height: boxHeight }}
         >
           {prefs.grid && (
