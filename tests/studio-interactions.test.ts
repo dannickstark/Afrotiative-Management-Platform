@@ -728,13 +728,20 @@ describe("Canvas — sélection multiple par Maj-clic, à travers de VRAIS évé
     unmount();
   });
 
-  it("cliquer un calque VERROUILLÉ efface la sélection — le clic le traverse, il ne le protège pas", async () => {
+  it("cliquer un calque VERROUILLÉ ne le sélectionne pas — le clic le traverse ; ici rien de sélectionnable dessous, donc la sélection s'efface", async () => {
     // Conséquence assumée du gestionnaire « clic dans le vide » (voir canvas.tsx) : un calque locked
     // ne porte AUCUN gestionnaire de pointeur, donc son pointerdown remonte jusqu'à la racine. Avant
     // la Tâche 3 il ne se passait rien du tout ; ce test fixe le nouveau comportement au lieu de le
     // laisser être un effet de bord non documenté. (jsdom ne fait pas de test de survol, donc c'est
     // bien l'absence de gestionnaire — le même mécanisme qu'en navigateur, où `pointer-events: none`
     // empêche en plus le nœud d'être la cible — qui fait remonter l'événement ici.)
+    //
+    // PORTÉE EXACTE (revue Tâche 3, Mineur 3) : l'effacement n'est PAS universel. Il découle du fait
+    // que ce cas précis n'a rien de sélectionnable SOUS le calque verrouillé. En navigateur, avec un
+    // calque déverrouillé en dessous, `pointer-events: none` fait de CE calque-là la cible et le clic
+    // le sélectionne au lieu d'effacer — comportement également correct, et non couvert ici (jsdom ne
+    // fait aucun test de survol, donc ce fichier ne PEUT pas l'exprimer). Le titre disait « efface la
+    // sélection » sans réserve : un universel que seul ce cas de figure vérifie.
     const scene = sceneWithTwoShapes();
     scene.layers = [{ ...scene.layers[0], locked: true }, scene.layers[1]];
     const { box, container, unmount } = await mountCanvasWithReducer(scene, ["b"]);
