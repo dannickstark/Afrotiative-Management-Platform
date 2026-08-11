@@ -165,3 +165,137 @@ Fix it coherently: either the children become real radios, or the container stop
 **Type consistency:** `SHAPE_KINDS` is the single list, already consumed by `z.enum` and the gallery guard; Task 2 extends the same guard to both render paths rather than introducing a second list.
 
 **The risk this plan carries:** Task 2 is a pure refactor with no user-visible result, and there is a standing temptation to fold it into Task 3. Don't. The two render paths have been silently independent since V1, and merging the refactor with the feature would hide which of the two caused any divergence — which is precisely the failure §0 exists to prevent.
+
+---
+
+## Résultat de la sonde clipPath — 2026-08-11 (Tâche 1)
+
+**La réserve de la feuille de route est levée : `clipPath` + `polygon()` FONCTIONNE dans le pipeline réel de ce projet (satori 0.29.0 → @resvg/resvg-js 2.6.2 → sharp 0.35.3).** Établi par pixels de sortie, pas par documentation, pas par navigateur. Preuves : `tests/studio-render-clippath.test.ts` (23 tests, 71 assertions).
+
+**Trois réserves sévères l'accompagnent.** Elles sont plus importantes que le « oui » lui-même : chacune produit une image FAUSSE sans lever d'erreur.
+
+### Ce qui a réellement été mesuré, et ce qui ne pouvait pas l'être
+
+`ShapeLayer` (`lib/studio/scene.ts`) n'a aujourd'hui **aucun champ capable de porter un `clipPath`**, et `shapeNode()` (`lib/studio/element.ts`) n'en émet aucun. Le chemin de production **ne peut donc pas exprimer un polygone** avant la Tâche 2 : `renderScene()` n'était pas pilotable de bout en bout pour ce mécanisme, et la Tâche 1 avait interdiction de modifier un fichier de production.
+
+La sonde reconstruit donc les étapes 5 de `renderScene()` à l'identique, et **le prouve** : sur une scène que le schéma sait exprimer, `probe(sceneToElement(scene, new Map()))` et `renderScene(scene)` produisent des **octets strictement identiques** (2667 octets, JPEG q86 mozjpeg). Ce témoin de fidélité rougit dès qu'un seul paramètre de la réplique dérive (vérifié : `quality: 86 → 85` ⇒ 2577 ≠ 2667). Ce qui est mesuré est donc le moteur de production, à l'arbre de nœuds près.
+
+Les mécanismes **exprimables aujourd'hui** (rotation, `radius` numérique) sont, eux, mesurés à travers `renderScene()` directement. Aucun réseau, aucune base, aucune police d'asset : un rendu de forme n'a besoin que de la police de repli embarquée.
+
+Couleurs témoins : remplissage `#FF0000`, fond `#0000FF`, bordure `#00FF00`. Le JPEG de production les restitue à ±1.
+
+### Mécanisme 1 — `clipPath: polygon(…)` : **FONCTIONNE, avec trois réserves**
+
+Triangle `polygon(50% 0,100% 100%,0 100%)` plein canevas 400×400 :
+
+| point | avec `clipPath` | TÉMOIN sans `clipPath` |
+|---|---|---|
+| (20,20) — 5 % du coin haut-gauche, exclu | `rgba(0,0,254,255)` **fond** | `rgba(254,0,0,255)` remplissage |
+| (380,20) — coin haut-droit, exclu | `rgba(0,0,254,255)` **fond** | `rgba(254,0,0,255)` remplissage |
+| (200,200) — centre | `rgba(254,0,0,255)` remplissage | `rgba(254,0,0,255)` remplissage |
+| (60,390) — bas-gauche, inclus | `rgba(254,0,0,255)` remplissage | — |
+
+Une étoile à 10 sommets se découpe aussi (creux entre branches à (200,380) = fond), et un remplissage en **dégradé** (`backgroundImage`, l'autre chemin de `shapeNode`) se découpe comme un aplat.
+
+#### RÉSERVE 1 — la géométrie percentuelle dépend de l'ESPACEMENT de la chaîne
+
+`satori/src/parser/shape.ts`, `parsePolygon` :
+
+```
+points.split(',').map((v) => v.split(' ').map((k, i) =>
+  lengthToNumber(k, …, i === 0 ? width : height, …)))
+```
+
+Un **espace après une virgule** fabrique un premier jeton vide dans le point suivant : l'abscisse glisse à l'indice 1 et se résout alors contre la **hauteur** du cadre au lieu de sa **largeur**.
+
+Sur un cadre **carré**, l'erreur est invisible (largeur == hauteur) — c'est exactement pourquoi elle peut traverser une revue. Sur 800×400 :
+
+| chaîne | `<polygon points=…>` émis | (700,380), DANS le triangle voulu |
+|---|---|---|
+| `polygon(50% 0, 100% 100%, 0 100%)` (avec espaces — **la chaîne littérale du plan**) | `400 0, 400 400, 0 400` | `rgba(0,0,254,255)` **fond — moitié droite perdue** |
+| `polygon(50% 0,100% 100%,0 100%)` (compacte) | `400 0,800 400,0 400` | `rgba(254,0,0,255)` remplissage |
+| `polygon(400px 0px, 800px 400px, 0px 400px)` (unités absolues) | — | `rgba(254,0,0,255)` remplissage |
+
+Aucune erreur n'est levée. **Conséquence pour la Tâche 2 :** la chaîne de `clipPath` doit être **générée** par `lib/studio/shapes.ts`, jamais recopiée à la main, et générée **sans espace après les virgules**. Un test doit rendre chaque forme du catalogue sur un cadre **non carré** — sur un carré, ce défaut est indétectable.
+
+#### RÉSERVE 2 — `transform` ne fait PAS tourner le découpage
+
+`satori/src/builder/rect.ts` : lorsque `style.transform` est présent, le rectangle de remplissage reçoit `clip-path: undefined` et l'ensemble est enveloppé dans `<g clip-path="url(#satori_cp-…)">`. Le groupe vit dans le repère du **parent** : le remplissage tourne, le masque non.
+
+| | (200,30) sommet NON pivoté | (380,200) sommet ATTENDU après 90° |
+|---|---|---|
+| triangle découpé + `rotate(90deg)` | `rgba(254,0,0,255)` remplissage | `rgba(0,0,254,255)` fond |
+| triangle découpé, sans rotation | `rgba(254,0,0,255)` remplissage | `rgba(0,0,254,255)` fond |
+
+**Identiques : la rotation n'a aucun effet visible sur une forme découpée.** Ce n'est pas « satori ignore `transform` » — témoin : un carré 200×200 non découpé pivoté de 45° perd bien son ancien coin (115,115) = `rgba(0,0,254,255)` et gagne la pointe (200,80) = `rgba(254,0,2,255)`.
+
+**Contournement mesuré :** faire tourner les **coordonnées** du polygone. `polygon(400px 200px,0px 400px,0px 0px)` (le triangle tourné de 90° à la main) donne (380,200) = `rgba(254,0,0,255)` et (200,30) = `rgba(0,0,254,255)` — le sommet est bien passé à droite.
+
+**Conséquence pour la Tâche 3** (« Every shape survives a rotation ») : la propriété ne peut PAS être tenue par `layer.rotation` seule pour les formes découpées. Deux options, à trancher : (a) `shapes.ts` applique la rotation aux sommets du polygone et n'émet pas de `transform` ; (b) les formes polygonales n'acceptent pas la rotation, et l'interface le dit. **Une troisième option — laisser `layer.rotation` en place et ne rien faire — livrerait un contrôle de rotation qui ne fait rien sur la moitié du catalogue**, exactement le défaut que la Tâche 4 est chargée d'éviter ailleurs (`snap-rotation-note`, `safe-areas-none`).
+
+#### RÉSERVE 3 — la bordure ÉCHAPPE au découpage
+
+`rect.ts` dessine la bordure avec `clip-path: url(#rectClipId)` — le masque de **bordure**, jamais `currentClipPath`. Triangle découpé + bordure 20 px verte :
+
+| point | résultat |
+|---|---|
+| (8,8) coin haut-gauche, **exclu par le polygone** | `rgba(0,255,1,255)` **bordure peinte quand même** |
+| (200,8) milieu du bord haut | `rgba(0,255,1,255)` bordure |
+| (60,40) intérieur exclu par le polygone, hors du trait | `rgba(0,0,254,255)` fond |
+| (200,200) centre | `rgba(254,0,0,255)` remplissage |
+| TÉMOIN sans bordure : (8,8) | `rgba(0,0,254,255)` fond |
+
+Le contour reste **rectangulaire** alors que le remplissage est triangulaire. Seul le trait échappe (l'intérieur exclu reste du fond). **Conséquence :** `border` sur une forme polygonale produit une image incohérente. La Tâche 3 ou 4 doit soit masquer le contrôle de bordure pour ces formes, soit dessiner le contour comme un second polygone — pas laisser `shapeNode` émettre `border*` tel quel.
+
+#### Composition avec `borderRadius` : intersection propre, sans surprise
+
+Triangle rectangle `polygon(0 0,100% 100%,0 100%)` et `borderRadius: 150`, 400×400. P1 (30,370) est dans le triangle et hors du rectangle arrondi ; P2 (350,60) l'inverse ; P3 (100,300) dans les deux.
+
+| | P1 (30,370) | P2 (350,60) | P3 (100,300) |
+|---|---|---|---|
+| `clipPath` seul | `rgba(254,0,0,255)` | `rgba(0,0,254,255)` | `rgba(254,0,0,255)` |
+| `borderRadius` seul | `rgba(0,0,254,255)` | `rgba(254,0,0,255)` | `rgba(254,0,0,255)` |
+| les deux | `rgba(0,0,254,255)` | `rgba(0,0,254,255)` | `rgba(254,0,0,255)` |
+
+C'est bien l'**intersection** : aucun des deux n'écrase l'autre. Utile à la Tâche 4 (« Radius on a clipped polygon ») — la réponse est « le rayon s'applique, et il ronge le polygone » ; s'il ne doit rien faire, il faut l'empêcher explicitement.
+
+### Mécanisme 2 — `borderRadius: "50%"` (ellipse) : **FONCTIONNE**
+
+Cadre 800×400, ellipse cx=400 cy=200 rx=400 ry=200. (100,60) est **hors** de l'ellipse ((300/400)² + (140/200)² = 1,05) ; (150,80) est **dedans** (0,75). Aucune autre géométrie ne sépare ces deux points.
+
+| point | `borderRadius: "50%"` | TÉMOIN sans rayon |
+|---|---|---|
+| (100,60) hors ellipse | `rgba(0,1,254,255)` **fond** | `rgba(254,0,0,255)` remplissage |
+| (150,80) dans l'ellipse | `rgba(254,0,0,255)` remplissage | `rgba(254,0,0,255)` remplissage |
+| (5,5) coin | `rgba(0,0,254,255)` fond | `rgba(254,0,0,255)` remplissage |
+
+**RÉSERVE :** le champ `radius` de `ShapeLayer` est un `z.number()` — donc des pixels. Mesuré **à travers `renderScene()`** sur 800×400 avec `radius: 200` (le plus grand rayon utile) : (100,60) = remplissage et (400,5) = remplissage — c'est un **stade** (deux demi-cercles + un rectangle), **pas une ellipse**. La Tâche 3 doit faire porter la chaîne `"50%"` par le modèle ; un nombre ne suffit pas. C'est aussi une contrainte pour la Tâche 4 (`borderRadius: "8px 24px 8px 24px"` est une chaîne, pas un nombre : la migration du champ `radius` sert les deux tâches).
+
+### Mécanisme 3 — nœud `<svg>` en ligne : **FONCTIONNE**
+
+satori accepte un sous-arbre `<svg>` et le sérialise en `data:image/svg+xml` porté par un `<image>` — le **même chemin, déjà éprouvé dans ce dépôt**, que le QR code de `render.ts`. Le `<polygon>` n'apparaît donc pas tel quel dans le SVG de sortie ; seuls les pixels le confirment. Triangle `<polygon points="200,0 400,400 0,400">` en 400×400 : (20,20) = `rgba(0,0,254,255)` fond, (380,20) = `rgba(0,0,254,255)` fond, (200,200) = `rgba(254,0,0,255)` remplissage, (60,390) = `rgba(254,0,0,255)` remplissage.
+
+**Repli disponible si `clipPath` posait problème** — mais il n'en pose pas ; et il a un coût que `clipPath` n'a pas : le second chemin de rendu (`components/studio/layer-view.tsx`, navigateur) devrait alors dupliquer la géométrie SVG au lieu de partager une simple chaîne CSS, ce qui va contre le §0 de ce plan.
+
+### Mécanisme 4 — `div` pivoté (ligne / diagonale) : **FONCTIONNE, de bout en bout**
+
+Mesuré à travers `renderScene()` — `layer.rotation` est exprimable par le schéma actuel. Calque `frame {x:50, y:196, w:300, h:8}`, `rotation: 45`, 400×400 : (140,140) et (260,260) = `rgba(254,0,0,255)` remplissage (sur la diagonale) ; (140,260) et (260,140) = `rgba(0,0,254,255)` fond. TÉMOIN sans rotation : (140,140) et (260,260) = fond, (200,200) = remplissage (la barre horizontale).
+
+Une **ligne** peut donc être un rectangle fin pivoté. Attention à la réserve 2 : ce mécanisme fonctionne **parce qu'il n'y a pas de `clipPath`**. Une ligne implémentée par polygone découpé ne pourrait pas tourner.
+
+### Ce que la sonde n'a PAS établi
+
+- Le chemin **éditeur** (`layer-view.tsx`, navigateur) n'a pas été mesuré — hors périmètre, et le §0 rappelle que c'est une implémentation indépendante. Les réserves 1 à 3 sont des défauts de **satori**, donc probablement **absents** du navigateur : les deux chemins divergeront exactement là où le §0 prévient qu'ils divergent en silence.
+- `box-shadow` sur une forme découpée n'a pas été testé (Tâche 4).
+- Aucun rendu en **WebP** ni sur canevas transparent : la sonde utilise l'encodage JPEG par défaut de `renderScene`.
+
+### La mutation, puisqu'elle est la garde
+
+Quatre mutations exécutées, chacune fait rougir exactement ce qu'elle doit :
+
+| mutation | résultat |
+|---|---|
+| `TRIANGLE = "polygon(…)"` → `"none"` | **6 tests rouges** (mécanisme 1, réserves 2 et 3) |
+| `probe()` : `quality: 86` → `85` | **1 test rouge** — le témoin de fidélité (2577 ≠ 2667) |
+| réserve 1 : chaîne à espaces → chaîne compacte | **1 test rouge** — l'assertion porte bien sur les espaces |
+| témoin « la rotation fonctionne » : `rotate(45deg)` → rien | **1 test rouge** |
