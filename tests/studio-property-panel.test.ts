@@ -1,7 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Scene, Layer } from "@/lib/studio/scene";
+import { SHAPE_KINDS, type Scene, type Layer, type ShapeLayer } from "@/lib/studio/scene";
+import { descriptorFor, shapeLabel, SHAPE_OPTIONS } from "@/lib/studio/shapes";
 import type { AssetRow } from "@/lib/queries/assets";
 import { PropertyPanel, radiusPatch } from "@/components/studio/property-panel";
 // Tâche 6 (U1, spec §6) — même précédent que studio-marque-panel.test.ts / studio-texte-panel.test.ts
@@ -445,6 +446,52 @@ describe("PropertyPanel — le rayon d'une forme (dette 1)", () => {
   // Le HTML sérialisé ne permet aucun clic (pas de DOM sous `bun test`) : on teste donc la fonction
   // PURE que le champ appelle, exactement comme elements-panel.tsx#insertShapeTile — c'est elle qui
   // décide s'il faut écrire, et quoi.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // U3 Tâche 3 — LE RAYON EST IGNORÉ, PAS MAL APPLIQUÉ, LÀ OÙ IL N'A PAS DE SENS.
+  //
+  // `descriptorFor(kind).radiusApplies` (lib/studio/shapes.ts) porte la décision ; l'interface la
+  // SUIT, plutôt que d'offrir un contrôle sans effet. Pour une ellipse, laisser passer le rayon la
+  // transformerait en stade ; pour une forme découpée, `borderRadius` arrondirait les coins du CADRE
+  // et pas les sommets du polygone (« aucun effet » pour une étoile, « rabote la base » pour un
+  // triangle). Les deux camps sont vérifiés, sans quoi la boucle serait à moitié vacante.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("le champ n'existe QUE pour les formes où le rayon veut dire quelque chose, avec une note ailleurs", () => {
+    const avec = SHAPE_KINDS.filter((k) => descriptorFor(k).radiusApplies);
+    const sans = SHAPE_KINDS.filter((k) => !descriptorFor(k).radiusApplies);
+    expect(avec.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(sans.length).toBeGreaterThan(0);
+
+    for (const kind of avec) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      expect(`${kind} champ : ${html.includes('data-field="radius"')}`).toBe(`${kind} champ : true`);
+      expect(`${kind} note : ${html.includes('data-testid="shape-radius-ignored"')}`).toBe(`${kind} note : false`);
+    }
+    for (const kind of sans) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      expect(`${kind} champ : ${html.includes('data-field="radius"')}`).toBe(`${kind} champ : false`);
+      expect(`${kind} note : ${html.includes('data-testid="shape-radius-ignored"')}`).toBe(`${kind} note : true`);
+    }
+  });
+
+  it("la note dit POURQUOI, en français, et nomme la forme concernée", () => {
+    // Une note qui dirait seulement « indisponible » serait un cul-de-sac : le précédent de U2
+    // (`safe-areas-none`, `snap-rotation-note`) est d'expliquer la raison.
+    const html = render([{ ...shapeLayerSolid, shape: "star" } as Layer], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-radius-ignored"[^>]*>([\s\S]*?)<\/p>/.exec(html)![1];
+    expect(note).toContain("Étoile");
+    expect(note.length).toBeGreaterThan(40);
+    expect(note).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
+  });
+
+  it("un rayon déjà stocké survit à une forme qui l'ignore — il n'est pas effacé du calque", () => {
+    // Convertir un rectangle arrondi en étoile puis revenir doit rendre le rayon intact : le panneau
+    // n'écrit RIEN quand il masque le champ (il n'y a pas de patch « radius: undefined » caché).
+    const layer = { ...shapeLayerSolid, shape: "star", radius: 24 } as Layer;
+    const html = render([layer], "s1", "recap_card");
+    expect(html).toContain('data-testid="shape-radius-ignored"');
+    if (layer.type === "shape") expect(layer.radius).toBe(24);
+  });
+
   it("radiusPatch : une saisie refusée n'écrase RIEN (aucun patch), une saisie valide écrit", () => {
     expect(radiusPatch("banane", "50%")).toBeNull();   // le « 50% » stocké survit
     expect(radiusPatch("50%", "50%")).toBeNull();      // inchangé -> aucune entrée d'historique
@@ -453,6 +500,106 @@ describe("PropertyPanel — le rayon d'une forme (dette 1)", () => {
     expect(radiusPatch("", 12)).toEqual({ radius: undefined });
     expect(radiusPatch("0", 12)).toEqual({ radius: undefined });
     expect(radiusPatch("", undefined)).toBeNull();     // rien -> rien : aucun patch
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — DETTE 2 du piège, moitié INTERFACE : le contrôle de rotation d'une forme découpée est
+// GRISÉ, avec une note française. L'autre moitié (la `transform` supprimée dans LES DEUX chemins de
+// rendu) est prouvée par tests/studio-shapes.test.ts (CSS) et tests/studio-shape-render.test.ts
+// (pixels, octet pour octet) — les deux sont nécessaires : griser seul laisserait toute scène portant
+// déjà une rotation s'afficher différemment dans l'éditeur et dans l'export.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — la rotation d'une forme découpée (dette 2)", () => {
+  function shapeOf(kind: string, extra: Partial<ShapeLayer> = {}): Layer {
+    return { ...shapeLayerSolid, shape: kind, ...extra } as Layer;
+  }
+  // La balise du champ de rotation, pour lire `disabled` en tant qu'ATTRIBUT — jamais en sous-chaîne :
+  // la classe des `<input>` de ce dépôt contient `disabled:opacity-50`, donc un `toContain("disabled")`
+  // passerait toujours et un `not.toContain("disabled")` échouerait toujours (le piège relevé deux
+  // fois en revue de U1/U2).
+  function rotationTag(html: string): string {
+    return openingTag(html, "data-field", "rotation");
+  }
+
+  it("le champ de rotation est DÉSACTIVÉ pour une forme découpée, et actif pour les autres", () => {
+    const clipped = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(clipped.length).toBeGreaterThan(0); // anti-vacuité
+    expect(libres.length).toBeGreaterThan(0);
+
+    for (const kind of clipped) {
+      const tag = rotationTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} désactivé : ${/\sdisabled(?:=|>|\s|\/)/.test(tag)}`).toBe(`${kind} désactivé : true`);
+    }
+    for (const kind of libres) {
+      const tag = rotationTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} désactivé : ${/\sdisabled(?:=|>|\s|\/)/.test(tag)}`).toBe(`${kind} désactivé : false`);
+    }
+  });
+
+  it("les autres types de calque gardent un champ de rotation actif", () => {
+    // La limite est PAR FORME, pas globale (arbitrage A) : un texte, une image ou un QR tournent.
+    for (const [layer, id, ctx] of [
+      [textLayer, "t", "social_post"], [imageLayer, "i", "article_image"], [qrLayer, "q", "social_post"],
+    ] as [Layer, string, Parameters<typeof PropertyPanel>[0]["context"]][]) {
+      const tag = rotationTag(render([layer], id, ctx));
+      expect(`${layer.type} désactivé : ${/\sdisabled(?:=|>|\s|\/)/.test(tag)}`).toBe(`${layer.type} désactivé : false`);
+    }
+  });
+
+  it("une note française dit POURQUOI, et n'apparaît QUE là", () => {
+    const html = render([shapeOf("triangle")], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-rotation-none"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(note).not.toBeNull();
+    expect(note![1]).toContain("Triangle");
+    expect(note![1].length).toBeGreaterThan(40);
+    // Contrôle POSITIF dans le test négatif : sans lui, une note jamais rendue passerait la ligne
+    // suivante.
+    expect(render([shapeOf("rect")], "s1", "recap_card")).not.toContain('data-testid="shape-rotation-none"');
+  });
+
+  it("la note « calque pivoté » de l'accrochage ne s'affiche PLUS pour une rotation devenue inerte", () => {
+    // `snap-rotation-note` (U2 Tâche 5) annonce « Calque pivoté : l'accrochage est désactivé… ». Sur une
+    // forme découpée portant un `rotation` résiduel, ce serait faux deux fois : le calque n'est pas
+    // pivoté à l'écran, et l'accrochage n'a aucune raison d'être désactivé.
+    expect(render([shapeOf("triangle", { rotation: 30 })], "s1", "recap_card")).not.toContain('data-testid="snap-rotation-note"');
+    // TÉMOIN : la même rotation sur un rectangle affiche bien la note (elle n'a pas disparu partout).
+    expect(render([shapeOf("rect", { rotation: 30 })], "s1", "recap_card")).toContain('data-testid="snap-rotation-note"');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — CHANGER LA FORME D'UN CALQUE depuis le panneau.
+// shape-gallery.ts promettait déjà, en commentaire, qu'« un designer peut ensuite modifier sa forme
+// depuis le panneau de propriétés » : avec huit formes, l'absence de ce contrôle rendait cette phrase
+// fausse et obligeait à supprimer/réinsérer un calque pour changer d'avis.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — le sélecteur de forme", () => {
+  // PORTÉE DE CETTE PREUVE, dite plutôt que sous-entendue : le contenu déroulant d'un `Select` Base UI
+  // n'est pas monté tant qu'il est fermé (même `keepMounted={false}` que le `Collapsible.Panel`
+  // documenté en tête de ce fichier), donc le HTML sérialisé ne contient QUE l'option courante — pas
+  // les huit. La liste complète est donc épinglée sur SA SOURCE (`SHAPE_OPTIONS`, lib/studio/shapes.ts,
+  // le tableau que le composant passe littéralement au sélecteur), et le HTML sert à prouver l'autre
+  // moitié : que la forme COURANTE s'affiche sous son libellé français.
+  it("la source des options EST le catalogue de formes, dans l'ordre du schéma, sans doublon", () => {
+    expect(SHAPE_OPTIONS.map((o) => o.value)).toEqual([...SHAPE_KINDS]);
+    expect(SHAPE_OPTIONS.map((o) => o.label)).toEqual(SHAPE_KINDS.map((k) => shapeLabel(k)));
+    expect(new Set(SHAPE_OPTIONS.map((o) => o.label)).size).toBe(SHAPE_OPTIONS.length);
+  });
+
+  it("le sélecteur affiche la forme courante sous son libellé FRANÇAIS, jamais sa clé technique", () => {
+    // Mutation qui rougit : retirer le mappeur `<SelectValue>{(v) => …}</SelectValue>` de SelectField —
+    // Base UI afficherait alors la valeur brute (« star »), le piège déjà corrigé une fois dans ce
+    // panneau et une fois dans preview-pane.tsx.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      expect(`${kind} : ${html.includes(shapeLabel(kind))}`).toBe(`${kind} : true`);
+      // Et le libellé de la forme est bien celui du sélecteur, pas seulement le nom du calque :
+      // `shapeLayerSolid` s'appelle « Fond », donc aucun libellé de forme ne peut venir de là.
+      const trigger = openingTag(html, "role", "combobox");
+      expect(trigger).toBeTruthy();
+    }
   });
 });
 

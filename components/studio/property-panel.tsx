@@ -16,6 +16,10 @@ import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient
 // — il n'atteint ni `@/db` ni aucun code serveur, contrainte vérifiée par tests/studio-no-r2.test.ts
 // et par le traçage d'imports de valeur du rapport de tâche.
 import { formatRadius, parseRadiusInput } from "@/lib/studio/scene";
+// U3 Tâche 3 : LA description d'une forme — celle que les deux chemins de rendu consultent. Ce panneau
+// lui demande sa liste d'options et ses deux verdicts (le rayon a-t-il un sens ? la forme est-elle
+// découpée ?) au lieu d'en tenir une seconde version.
+import { descriptorFor, SHAPE_OPTIONS } from "@/lib/studio/shapes";
 import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
@@ -240,10 +244,14 @@ function SwitchField({ label, checked, onCommit }: { label: string; checked: boo
 }
 
 function SelectField({
-  label, value, options, onCommit, placeholder,
+  label, value, options, onCommit, placeholder, optionDataAttr,
 }: {
   label: string; value: string; options: { value: string; label: string }[]; onCommit: (v: string) => void;
   placeholder?: string;
+  /** U3 Tâche 3 : pose `<attr>="<valeur d'option>"` sur chaque option, pour qu'un test puisse COMPTER
+   * les options rendues au lieu de se contenter de chercher leurs libellés dans tout le HTML (un
+   * sélecteur qui rendrait deux fois la même option passerait une simple recherche de sous-chaîne). */
+  optionDataAttr?: string;
 }) {
   return (
     <FieldRow label={label}>
@@ -260,7 +268,11 @@ function SelectField({
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value} {...(optionDataAttr ? { [optionDataAttr]: o.value } : {})}>
+              {o.label}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
     </FieldRow>
@@ -629,6 +641,9 @@ function ShapeFields({
 }) {
   const isGradient = typeof layer.fill !== "string";
   const sides = layer.border?.sides ?? SIDES;
+  // LA description de la forme — la même que consultent les deux chemins de rendu. Ce panneau ne
+  // décide rien lui-même sur la géométrie (U3 §0) : il demande, et affiche en conséquence.
+  const descriptor = descriptorFor(layer.shape);
   return (
     <>
       <TypeSection title="Remplissage" sectionId="remplissage" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
@@ -655,7 +670,36 @@ function ShapeFields({
       </TypeSection>
 
       <TypeSection title="Forme" sectionId="forme" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
-        <RadiusField value={layer.radius} onCommit={patch} />
+        {/* U3 Tâche 3 — CHANGER de forme sans supprimer/réinsérer le calque. shape-gallery.ts
+            promettait déjà cette possibilité en commentaire (« un designer peut ensuite modifier sa
+            forme … depuis le panneau de propriétés ») ; avec huit formes, l'absence de contrôle rendait
+            la phrase fausse. Les options sont dérivées de SHAPE_KINDS (le schéma lui-même) et
+            libellées par la DESCRIPTION de chaque forme — jamais une liste recopiée qui pourrait
+            dériver, comme SHAPE_TILES le faisait avant la Tâche 2. */}
+        <SelectField
+          label="Forme"
+          value={layer.shape}
+          options={SHAPE_OPTIONS.map((o) => ({ value: o.value as string, label: o.label }))}
+          optionDataAttr="data-shape-option"
+          onCommit={(v) => patch({ shape: v })}
+        />
+        {/* Le rayon N'EST OFFERT que là où il veut dire quelque chose (lib/studio/shapes.ts,
+            `radiusApplies`) : sur une ellipse il la transformerait en stade, sur une forme découpée il
+            arrondirait les coins du CADRE et pas les sommets du polygone — « aucun effet » pour une
+            étoile, « rabote la base » pour un triangle. Le brief demande qu'il soit IGNORÉ, pas mal
+            appliqué : le champ disparaît donc derrière une note qui dit pourquoi, et RIEN n'est écrit
+            (un rayon déjà stocké survit intact et réapparaît si la forme redevient un rectangle). */}
+        {descriptor.radiusApplies ? (
+          <RadiusField value={layer.radius} onCommit={patch} />
+        ) : (
+          <p className="text-[11px] text-muted-foreground" data-testid="shape-radius-ignored">
+            Le rayon des coins ne s&rsquo;applique pas à la forme «&nbsp;{descriptor.label}&nbsp;» :
+            {descriptor.clipped
+              ? " un découpage arrondirait les coins du cadre, pas les sommets de la forme."
+              : " sa géométrie EST un arrondi (« border-radius: 50% »), qu'un rayon en pixels remplacerait par un stade."}
+            {" "}Il reste conservé tel quel si vous revenez à un rectangle.
+          </p>
+        )}
       </TypeSection>
 
       <TypeSection title="Bordure" sectionId="bordure" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
