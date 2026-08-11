@@ -18,6 +18,27 @@ export const HANDLES: HandleId[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
 const MIN_SIZE = 1;
 
+// Rotation 2D par la formule standard R(θ)·v (cos/sin déjà calculés pour un θ donné). Un SEUL point
+// d'implémentation pour le sens de rotation : appeler `rotateVec(v, cos, sin)` pour tourner de +θ,
+// ou `rotateVec(v, cos, -sin)` pour tourner de -θ (cos(-θ) = cos θ, sin(-θ) = -sin θ) — plutôt que
+// deux formules à signes opposés recopiées à la main aux deux endroits où computeResizedFrame en a
+// besoin, ce qui rendait un risque d'inversion de signe indétectable à la relecture (revue Tâche 1).
+function rotateVec(v: Point, cos: number, sin: number): Point {
+  return { x: v.x * cos - v.y * sin, y: v.x * sin + v.y * cos };
+}
+
+export interface ResizeOptions {
+  /** Taille minimale d'un côté, en pixels gabarit — défaut MIN_SIZE (1px). */
+  minSize?: number;
+  /** Rotation ACTUELLE du calque, en degrés — défaut 0. Voir le commentaire de computeResizedFrame
+   * : nécessaire dès que le calque est tourné, sinon la poignée pointe dans la mauvaise direction
+   * à l'écran (Tâche 1, U2). Un objet plutôt qu'un 4e/5e paramètre positionnel : la Tâche 2 (U2)
+   * ajoute encore Maj (ratio verrouillé, accroche de rotation à 15°) et Alt (redimensionner depuis
+   * le centre) au-dessus de ceci, et forcer chaque appelant à épeler `MIN_SIZE` pour atteindre le
+   * champ suivant ne passait déjà plus l'échelle (revue Tâche 1, Mineur 1). */
+  rotationDeg?: number;
+}
+
 // `delta` est déjà en pixels GABARIT (converti par toCanvasCoords avant d'arriver ici), mais dans
 // le repère ÉCRAN/canevas — PAS dans le repère LOCAL du calque. Les poignées sont rendues à
 // l'intérieur d'un conteneur `transform: rotate(rotationDeg)` (canvas.tsx:151-161), donc dès que
@@ -49,8 +70,7 @@ export function computeResizedFrame(
   start: Frame,
   handle: HandleId,
   delta: Point,
-  minSize = MIN_SIZE,
-  rotationDeg = 0,
+  { minSize = MIN_SIZE, rotationDeg = 0 }: ResizeOptions = {},
 ): Frame {
   const hasN = handle.includes("n");
   const hasS = handle.includes("s");
@@ -61,9 +81,7 @@ export function computeResizedFrame(
   const cos = Math.cos(rad);
   const sin = Math.sin(rad);
   // R(-rotationDeg) appliqué à `delta` — voir étape 1 ci-dessus.
-  const local: Point = rotationDeg === 0
-    ? delta
-    : { x: delta.x * cos + delta.y * sin, y: -delta.x * sin + delta.y * cos };
+  const local: Point = rotationDeg === 0 ? delta : rotateVec(delta, cos, -sin);
 
   let { x, y, w, h } = start;
   if (hasE) w = start.w + local.x;
@@ -88,10 +106,7 @@ export function computeResizedFrame(
   const oldCenter: Point = { x: start.x + start.w / 2, y: start.y + start.h / 2 };
   const localCenter: Point = { x: x + w / 2, y: y + h / 2 };
   const localShift: Point = { x: localCenter.x - oldCenter.x, y: localCenter.y - oldCenter.y };
-  const screenShift: Point = {
-    x: localShift.x * cos - localShift.y * sin,
-    y: localShift.x * sin + localShift.y * cos,
-  };
+  const screenShift: Point = rotateVec(localShift, cos, sin); // R(+rotationDeg) — voir étape 2 ci-dessus.
   return {
     x: oldCenter.x + screenShift.x - w / 2,
     y: oldCenter.y + screenShift.y - h / 2,
@@ -201,7 +216,7 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
     }
     if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      return { layerId: a.layerId, frame: computeResizedFrame(a.startFrame, a.handle!, d, MIN_SIZE, a.startRotation) };
+      return { layerId: a.layerId, frame: computeResizedFrame(a.startFrame, a.handle!, d, { rotationDeg: a.startRotation }) };
     }
     // rotate — pas de conversion d'échelle : l'angle est invariant (voir computeRotationDeg).
     const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation);
@@ -224,7 +239,7 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
       if (d.x !== 0 || d.y !== 0) dispatch(moveLayer(a.layerId, d.x, d.y));
     } else if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d, MIN_SIZE, a.startRotation)));
+      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d, { rotationDeg: a.startRotation })));
     } else {
       const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation);
       dispatch(rotateLayer(a.layerId, rotation));

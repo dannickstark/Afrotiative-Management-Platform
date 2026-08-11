@@ -6,6 +6,7 @@ import {
   computeRotationDeg,
   nudgeDelta,
   createGestureEngine,
+  HANDLES,
   type DragPreview,
 } from "@/hooks/use-layer-drag";
 
@@ -49,7 +50,7 @@ describe("computeResizedFrame — clamp de taille minimale", () => {
   const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
 
   it("un glisser positif énorme sur la poignée 'se' respecte un minimum de 1px, x/y inchangés", () => {
-    const frame = computeResizedFrame(start, "se", { x: -5000, y: -5000 }, 1);
+    const frame = computeResizedFrame(start, "se", { x: -5000, y: -5000 }, { minSize: 1 });
     expect(frame.w).toBe(1);
     expect(frame.h).toBe(1);
     expect(frame.x).toBe(100);
@@ -57,7 +58,7 @@ describe("computeResizedFrame — clamp de taille minimale", () => {
   });
 
   it("la poignée 'nw' clampée à 1px garde le coin OPPOSÉ (bas-droit) fixe", () => {
-    const frame = computeResizedFrame(start, "nw", { x: 5000, y: 5000 }, 1);
+    const frame = computeResizedFrame(start, "nw", { x: 5000, y: 5000 }, { minSize: 1 });
     expect(frame.w).toBe(1);
     expect(frame.h).toBe(1);
     // Coin bas-droit d'origine : (300, 250). Doit rester identique après clamp.
@@ -66,12 +67,12 @@ describe("computeResizedFrame — clamp de taille minimale", () => {
   });
 
   it("un redimensionnement normal (sans dépasser le minimum) applique le delta tel quel", () => {
-    const frame = computeResizedFrame(start, "se", { x: 20, y: -10 }, 1);
+    const frame = computeResizedFrame(start, "se", { x: 20, y: -10 }, { minSize: 1 });
     expect(frame).toEqual({ x: 100, y: 100, w: 220, h: 140 });
   });
 
   it("la poignée 'e' seule ne touche jamais x/y, même clampée", () => {
-    const frame = computeResizedFrame(start, "e", { x: -5000, y: 0 }, 1);
+    const frame = computeResizedFrame(start, "e", { x: -5000, y: 0 }, { minSize: 1 });
     expect(frame.x).toBe(start.x);
     expect(frame.y).toBe(start.y);
     expect(frame.w).toBe(1);
@@ -133,7 +134,7 @@ describe("computeResizedFrame — Tâche 1 : reproduction de la dérive de rotat
   // retournait bien { x:100, y:100, w:200, h:150 } — identique à `start` — pour cet appel.
   it("glisser la poignée 'e' d'un delta écran (0,+d) à 90° élargit le calque de d", () => {
     const d = 40;
-    const frame = computeResizedFrame(start, "e", { x: 0, y: d }, 1, 90);
+    const frame = computeResizedFrame(start, "e", { x: 0, y: d }, { rotationDeg: 90 });
     expect(frame.w).toBeCloseTo(start.w + d, 9);
     expect(frame.h).toBeCloseTo(start.h, 9);
   });
@@ -147,14 +148,14 @@ describe("computeResizedFrame — rotation 0 : identique octet pour octet à ava
   // sert lui aussi de garde) doit produire EXACTEMENT le même résultat qu'avant l'ajout du 5e
   // paramètre — computeResizedFrame emprunte d'ailleurs un retour anticipé dédié à ce cas précis.
   it("rotationDeg=0 explicite est identique à l'omettre, et identique au comportement d'avant", () => {
-    const omis = computeResizedFrame(start, "se", { x: 20, y: -10 }, 1);
-    const explicite = computeResizedFrame(start, "se", { x: 20, y: -10 }, 1, 0);
+    const omis = computeResizedFrame(start, "se", { x: 20, y: -10 }, { minSize: 1 });
+    const explicite = computeResizedFrame(start, "se", { x: 20, y: -10 }, { rotationDeg: 0 });
     expect(explicite).toEqual(omis);
     expect(explicite).toEqual({ x: 100, y: 100, w: 220, h: 140 });
   });
 
   it("rotationDeg=0 sur la poignée 'nw' clampée garde le coin opposé fixe, comme avant", () => {
-    const frame = computeResizedFrame(start, "nw", { x: 5000, y: 5000 }, 1, 0);
+    const frame = computeResizedFrame(start, "nw", { x: 5000, y: 5000 }, { rotationDeg: 0 });
     expect(frame.w).toBe(1);
     expect(frame.h).toBe(1);
     expect(frame.x + frame.w).toBe(start.x + start.w);
@@ -169,22 +170,52 @@ describe("computeResizedFrame — à 90/180/270°, un glisser mono-axe ne change
   // Le delta écran qui correspond, à chaque angle, à un delta LOCAL pur (+d, 0) : R(rotationDeg)
   // appliqué à (d, 0). Élargir "e" ne doit alors changer QUE w — jamais h — quel que soit l'angle.
   it("poignée 'e' à 90° (delta écran (0,+d)) : w += d, h inchangé", () => {
-    const frame = computeResizedFrame(start, "e", { x: 0, y: d }, 1, 90);
+    const frame = computeResizedFrame(start, "e", { x: 0, y: d }, { rotationDeg: 90 });
     expect(frame.w).toBeCloseTo(start.w + d, 9);
     expect(frame.h).toBeCloseTo(start.h, 9);
   });
 
   it("poignée 'e' à 180° (delta écran (-d,0)) : w += d, h inchangé", () => {
-    const frame = computeResizedFrame(start, "e", { x: -d, y: 0 }, 1, 180);
+    const frame = computeResizedFrame(start, "e", { x: -d, y: 0 }, { rotationDeg: 180 });
     expect(frame.w).toBeCloseTo(start.w + d, 9);
     expect(frame.h).toBeCloseTo(start.h, 9);
   });
 
   it("poignée 'e' à 270° (delta écran (0,-d)) : w += d, h inchangé", () => {
-    const frame = computeResizedFrame(start, "e", { x: 0, y: -d }, 1, 270);
+    const frame = computeResizedFrame(start, "e", { x: 0, y: -d }, { rotationDeg: 270 });
     expect(frame.w).toBeCloseTo(start.w + d, 9);
     expect(frame.h).toBeCloseTo(start.h, 9);
   });
+});
+
+// Revue Tâche 1, Mineur 3 : la propriété "un glisser mono-axe ne change que la dimension visée" a
+// été vérifiée ci-dessus seulement pour la poignée 'e' — la relecture a balayé les 8 poignées × 16
+// angles × 11 deltas et n'a trouvé aucun écart, donc l'étendre aux 8 poignées ici est une boucle,
+// pas une nouvelle logique. w/h à N'IMPORTE QUEL angle multiple de 90° ne dépend QUE du delta LOCAL
+// — computeResizedFrame à rotation 0 EST déjà la définition de référence de "ce que porte chaque
+// poignée" (testée par ailleurs, bloc "clamp de taille minimale"). Le delta écran qui correspond à
+// ce même delta local à un angle donné est simplement ce delta local tourné de +angle (`rotateVector`
+// ci-dessus) : si le correctif est correct, repasser par l'écran puis revenir au local via
+// `rotationDeg` doit redonner EXACTEMENT le même w/h que la référence à rotation 0, pour LES 8
+// poignées (y compris les poignées d'angle, qui portent w ET h simultanément).
+describe("computeResizedFrame — à 90/180/270°, les 8 poignées reproduisent le w/h de référence à 0°", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+  // Delta LOCAL non nul sur les deux axes, pour que les poignées d'angle (qui portent w ET h) soient
+  // couvertes aussi bien que les poignées à un seul côté.
+  const localDelta: Point = { x: 40, y: -25 };
+  const reference = new Map(HANDLES.map((h) => [h, computeResizedFrame(start, h, localDelta)]));
+
+  for (const rotation of [90, 180, 270]) {
+    for (const handle of HANDLES) {
+      it(`poignée '${handle}' à ${rotation}° : w/h identiques à la référence à rotation 0`, () => {
+        const screenDelta = rotateVector(localDelta, rotation);
+        const frame = computeResizedFrame(start, handle, screenDelta, { rotationDeg: rotation });
+        const ref = reference.get(handle)!;
+        expect(frame.w).toBeCloseTo(ref.w, 6);
+        expect(frame.h).toBeCloseTo(ref.h, 6);
+      });
+    }
+  }
 });
 
 describe("computeResizedFrame — le bord opposé reste fixe à l'écran (poignée à un seul côté)", () => {
@@ -196,7 +227,7 @@ describe("computeResizedFrame — le bord opposé reste fixe à l'écran (poign�
 
     const localDx = 30;
     const screenDelta = rotateVector({ x: localDx, y: 0 }, rotation);
-    const frame = computeResizedFrame(start, "e", screenDelta, 1, rotation);
+    const frame = computeResizedFrame(start, "e", screenDelta, { rotationDeg: rotation });
     const newWestScreen = rotatePointAround(centerOf(frame), edgeMidpointOf(frame, "w"), rotation);
 
     expect(frame.w).toBeCloseTo(start.w + localDx, 9);
@@ -209,7 +240,7 @@ describe("computeResizedFrame — le bord opposé reste fixe à l'écran (poign�
 
     const localDy = -20; // "n" réduit h de local.y : delta négatif -> h grandit.
     const screenDelta = rotateVector({ x: 0, y: localDy }, rotation);
-    const frame = computeResizedFrame(start, "n", screenDelta, 1, rotation);
+    const frame = computeResizedFrame(start, "n", screenDelta, { rotationDeg: rotation });
     const newSouthScreen = rotatePointAround(centerOf(frame), edgeMidpointOf(frame, "s"), rotation);
 
     expect(frame.h).toBeCloseTo(start.h - localDy, 9);
@@ -231,7 +262,7 @@ describe("computeResizedFrame — minSize clampe toujours, et garde le bon coin 
     const oldSeScreen = rotatePointAround(centerOf(start), cornerOf(start, "se"), rotation);
 
     const screenDelta = rotateVector({ x: 5000, y: 5000 }, rotation);
-    const frame = computeResizedFrame(start, "nw", screenDelta, 1, rotation);
+    const frame = computeResizedFrame(start, "nw", screenDelta, { rotationDeg: rotation });
     const newSeScreen = rotatePointAround(centerOf(frame), cornerOf(frame, "se"), rotation);
 
     expect(frame.w).toBeCloseTo(1, 9);
@@ -253,7 +284,7 @@ describe("computeResizedFrame — poignée d'angle à 37° : les coins tournés 
     const oldNwScreen = rotatePointAround(centerOf(start), cornerOf(start, "nw"), rotation);
     const oldSeScreen = rotatePointAround(centerOf(start), cornerOf(start, "se"), rotation);
 
-    const frame = computeResizedFrame(start, "se", screenDelta, 1, rotation);
+    const frame = computeResizedFrame(start, "se", screenDelta, { rotationDeg: rotation });
 
     const newNwScreen = rotatePointAround(centerOf(frame), cornerOf(frame, "nw"), rotation);
     const newSeScreen = rotatePointAround(centerOf(frame), cornerOf(frame, "se"), rotation);
@@ -417,5 +448,36 @@ describe("createGestureEngine — redimensionnement respecte le minimum via un v
     const frame = getState().scene.layers[0].frame;
     expect(frame.w).toBe(1);
     expect(frame.h).toBe(1);
+  });
+});
+
+// Revue Tâche 1, Important : tous les tests `computeResizedFrame` ci-dessus appellent la fonction
+// PURE directement, avec une rotation choisie exprès pour chaque cas — aucun ne passe par
+// `createGestureEngine`, où `hooks/use-layer-drag.ts` transmet RÉELLEMENT `a.startRotation` à
+// l'appel (les deux seuls sites d'appel du fichier). Et comme tous les tests `createGestureEngine`
+// ci-dessus utilisent `makeLayer()` SANS rotation, et qu'à rotation 0 le résultat est identique que
+// le 5e paramètre soit fourni ou non, retirer `{ rotationDeg: a.startRotation }` de ces deux appels
+// repasserait toute la suite au vert sans qu'aucun test ne le remarque — précisément parce que
+// Tâche 2 modifie ces deux lignes pour y greffer Maj/Alt. Ce test ferme cette lacune : il exerce le
+// VRAI chemin bout en bout (beginResize -> end -> dispatch), sur un calque réellement tourné.
+describe("createGestureEngine — la rotation du calque atteint bien le dispatch (protection Tâche 1)", () => {
+  it("beginResize+end sur un calque à 90° dispatch la frame corrigée par la rotation, pas la frame naïve", () => {
+    const layer = makeLayer({ frame: { x: 100, y: 100, w: 200, h: 150 }, rotation: 90 });
+    const { dispatch, actions, getState } = makeHarness(layer);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginResize(layer, "e", { x: 0, y: 0 });
+    engine.end({ x: 0, y: 40 }); // delta écran (0,+40) — le scénario de reproduction de la Tâche 1.
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toEqual({
+      type: "resizeLayer",
+      id: "l1",
+      // Valeur dérivée à la main dans task-1-report.md et confirmée indépendamment par la revue :
+      // w += 40 (élargie, pas 200 inchangé comme le rendrait la frame "naïve" d'avant correctif),
+      // x/y compensés pour garder le bord ouest ancré à l'écran plutôt qu'en repère local.
+      frame: { x: 80, y: 120, w: 240, h: 150 },
+    });
+    expect(getState().scene.layers[0].frame).toEqual({ x: 80, y: 120, w: 240, h: 150 });
   });
 });
