@@ -137,10 +137,23 @@ export function CanvasChrome({
   const zoomPct = Math.round(zoom * 100);
   const boxWidth = preset.width * zoom;
   const boxHeight = preset.height * zoom;
-  // Tâche 6 (U2) : vide quand la préférence est éteinte, ET vide pour un format dont aucune zone sûre
-  // n'a pu être établie (lib/studio/safe-areas.ts) — dans les deux cas, RIEN n'est rendu plus bas,
-  // jamais un conteneur vide ni une bande de hauteur nulle.
-  const safeBands = prefs.safeAreas ? safeAreaBandsFor(format) : [];
+  // Tâche 6 (U2) : les bandes ÉTABLIES pour ce format, indépendamment de la préférence — c'est ce que
+  // l'infobulle et la note doivent refléter (le format, pas l'état du bouton).
+  const formatBands = safeAreaBandsFor(format);
+  // Vide quand la préférence est éteinte, ET vide pour un format dont aucune zone sûre n'a pu être
+  // établie (lib/studio/safe-areas.ts) — dans les deux cas, RIEN n'est rendu plus bas, jamais un
+  // conteneur vide ni une bande de hauteur nulle.
+  const safeBands = prefs.safeAreas ? formatBands : [];
+  // Revue de la Tâche 6, point 2 : la réserve « ce sont les bornes PUBLICITAIRES » ne vivait que dans le
+  // commentaire de lib/studio/safe-areas.ts, alors que l'utilisateur voit 49 % de la hauteur (55 % de la
+  // surface) recouverts. Elle est mise À PORTÉE ici, et elle dépend du FORMAT, jamais de l'état du
+  // bouton : la réserve doit être lisible AVANT d'activer les zones sûres, pas seulement après. Rien
+  // n'est inventé — l'infobulle ne fait que dire ce que la source citée dit, et l'écart d'ordre de
+  // grandeur avec l'organique n'est PAS chiffré ici faute de source de première partie pour l'organique.
+  const safeAreasTitle =
+    formatBands.length === 0
+      ? "Zones sûres — aucune donnée publiée pour ce format"
+      : "Zones sûres — bornes publicitaires Meta : le bas (35 %) réserve le bouton d’appel à l’action, absent d’une story organique ; c’est donc une marge volontairement conservatrice";
 
   return (
     <div className="relative flex h-full w-full items-center justify-center" data-testid="canvas-chrome">
@@ -197,7 +210,7 @@ export function CanvasChrome({
           data-action="toggle-safe-areas"
           aria-label="Afficher les zones sûres"
           aria-pressed={prefs.safeAreas}
-          title="Zones sûres"
+          title={safeAreasTitle}
           className="pointer-events-auto"
           onClick={onToggleSafeAreas}
         >
@@ -307,11 +320,46 @@ export function CanvasChrome({
               de peinture ne prouverait rien. */}
           {safeBands.length > 0 && (
             <div data-testid="safe-areas" className="pointer-events-none absolute inset-0" aria-hidden>
+              {/* `key={band.edge}` : une arête est unique par format, et cette unicité est ÉPINGLÉE par
+                  un test (tests/studio-canvas.test.ts, « les arêtes d'un format sont UNIQUES ») plutôt
+                  que laissée au type — deux entrées sur la même arête verraient React n'en rendre
+                  qu'une, sans le moindre avertissement en production. Revue de la Tâche 6, nit 2 :
+                  ce fichier-là invite explicitement à ajouter des entrées, donc la contrainte devait
+                  cesser d'être implicite. */}
               {safeBands.map((band) => (
                 <div key={band.edge} data-safe-band={band.edge} style={safeBandStyle(band, boxWidth, boxHeight)}>
                   <span style={safeLabelStyle(band.edge)}>{band.label}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Revue de la Tâche 6, point 1 — LA CONFIANCE MAL PLACÉE. Sur un format PORTRAIT sans zone
+              sûre établie (`ig_portrait`), `safeAreaDefaultFor` renvoie `true` par orientation : le
+              bouton se rend donc ENFONCÉ au-dessus d'un artboard où rien n'est dessiné. Ce que
+              l'utilisateur en déduit n'est pas « aucune donnée disponible » mais « les zones sûres sont
+              actives, donc ma maquette les respecte » — strictement pire que de ne rien faire.
+              UNE NOTE, PAS UN CONTRÔLE DÉSACTIVÉ, et la raison est structurelle : `prefs.safeAreas` est
+              GLOBALE à l'utilisateur (lib/studio/editor-prefs.ts), pas par format. Griser le bouton sur
+              un gabarit ferait passer un réglage global pour un réglage propre au format et laisserait
+              le `true` déjà persisté orphelin — le bouton mentirait dans l'autre sens. Même précédent
+              de ton et de placement que geometry-strip.tsx#snap-rotation-note (Tâches 4 et 5) : discret,
+              et UNIQUEMENT dans le cas concerné. N'énonce que l'absence que safe-areas.ts documente
+              déjà — aucun chiffre inventé. Dernier enfant de l'artboard, mêmes contraintes que les
+              bandes (peint APRÈS le Canvas opaque, sans quoi il serait invisible ; `pointer-events-none`,
+              sans quoi il volerait les clics de la surface qu'il recouvre). */}
+          {prefs.safeAreas && formatBands.length === 0 && (
+            <div
+              data-testid="safe-areas-none"
+              className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2"
+              aria-hidden
+            >
+              <span
+                className="rounded bg-black/55 px-2 py-1 text-[10px] font-medium"
+                style={{ color: "rgba(245,158,11,0.95)" }}
+              >
+                Zones sûres : aucune donnée publiée pour ce format.
+              </span>
             </div>
           )}
         </div>

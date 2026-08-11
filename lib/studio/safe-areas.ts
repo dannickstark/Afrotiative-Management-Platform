@@ -42,10 +42,19 @@
 //     pour un visuel organique. Nous la gardons telle quelle parce que c'est le seul chiffre que l'on
 //     puisse montrer : Meta ne publie pas d'équivalent pour l'organique. La desserrer est un geste
 //     légitime — mais il faudra une source, pas une intuition.
-//  2. Une version antérieure, encore très citée, donnait « 14 % (250 px) en haut et 20 % (340 px) en
-//     bas » sur une toile 1080×1920 ; ces pixels ne valent d'ailleurs pas exactement 14 %/20 % de 1920
-//     (13,0 % et 17,7 %) — la propre documentation de Meta était approximative. Nous suivons les
-//     POURCENTAGES actuellement publiés, pas les pixels périmés.
+//  2. Des chiffres en PIXELS circulent très largement — « 14 % (250 px) en haut, 20 % (340 px) en bas »
+//     sur une toile 1080×1920. Ils viennent de TIERS (guides d'agences, vérificateurs de zones sûres),
+//     et c'est tout ce que l'on peut en dire : AUCUNE page de première partie appariant ces
+//     pourcentages à ces pixels n'a pu être trouvée ni ouverte. Ce fichier n'affirme donc RIEN sur ce
+//     que la documentation de Meta a pu dire par le passé — le faire serait précisément la faute que la
+//     RÈGLE ABSOLUE ci-dessus interdit (correctif de la revue de la Tâche 6, point 3 : la version
+//     précédente de ce paragraphe présentait ces chiffres comme « une version antérieure » de Meta et
+//     qualifiait sa documentation d'approximative, deux affirmations sans URL citable). Deux constats
+//     vérifiables par simple arithmétique, à titre d'ordre de grandeur : 250/1920 = 13,02 % et
+//     340/1920 = 17,71 %, donc ces pixels ne valent pas les pourcentages auxquels les tiers les
+//     apparient d'habitude ; et ces mêmes tiers rattachent les 340 px du bas à la pile du bouton
+//     d'action, pas à un pourcentage publié. Nous suivons les POURCENTAGES cités plus haut, lus sur une
+//     page que le lecteur peut ouvrir.
 //  3. Le préréglage s'appelle « Story (Instagram / WhatsApp) ». Le chiffre ci-dessus est établi pour
 //     Instagram/Facebook. Nous n'avons trouvé AUCUNE zone de sécurité publiée pour le statut WhatsApp ;
 //     l'appliquer là aussi est un RAISONNEMENT (même toile 9:16 plein écran, même famille
@@ -62,8 +71,10 @@
 //    sécurité, et c'est cohérent avec ce que fait l'application : dans le fil, le nom du compte est
 //    AU-DESSUS de l'image et les actions EN DESSOUS — rien ne recouvre le visuel. Le seul recouvrement
 //    documentable pour du 4:5 est le RECADRAGE de la grille de profil, qui n'est pas un habillage et
-//    qui a par ailleurs changé au moins deux fois (grille carrée, puis 4:5) : en faire une bande
-//    figée serait inventer une stabilité qui n'existe pas. `ig_portrait` reste donc SANS bandes, et
+//    qui a DÉJÀ changé une fois de façon documentée (grille carrée → grille 4:5) : en faire une bande
+//    figée serait inventer une stabilité qui n'existe pas. (Formulation resserrée après la revue de la
+//    Tâche 6, nit 1 : ce texte disait « au moins deux fois » alors que la parenthèse n'en nommait
+//    qu'une — la borne haute n'était pas soutenue par ce qu'elle citait.) `ig_portrait` reste donc SANS bandes, et
 //    c'est signalé comme défaut de brief dans le rapport de la tâche plutôt que comblé par un chiffre
 //    plausible.
 //  · `ig_square`, `wa_square` (1080×1080) : publications de fil, même raison que ci-dessus.
@@ -95,7 +106,13 @@ export interface SafeAreaBand {
 const TABLE: Partial<Record<FormatKey, readonly SafeAreaBand[]>> = {
   story: [
     { edge: "top", fraction: 0.14, label: "Haut — profil" },
-    { edge: "bottom", fraction: 0.35, label: "Bas — action" },
+    // « (pub) » — revue de la Tâche 6, point 2. Sans marqueur, l'utilisateur voit une bande « Bas —
+    // action » de 672 px sans rien qui dise LAQUELLE des deux bornes il regarde : celle-ci réserve le
+    // bouton d'appel à l'action PUBLICITAIRE, absent d'une story organique (sur-réservation d'un
+    // facteur ≈2,7 par rapport aux ~250 px d'obstruction organique relayés par des tiers). Le détail
+    // complet vit dans l'infobulle du bouton « Zones sûres » (components/studio/canvas-chrome.tsx) ;
+    // ici il faut tenir en une étiquette courte.
+    { edge: "bottom", fraction: 0.35, label: "Bas — action (pub)" },
     { edge: "left", fraction: 0.06, label: "Gauche" },
     { edge: "right", fraction: 0.06, label: "Droite" },
   ],

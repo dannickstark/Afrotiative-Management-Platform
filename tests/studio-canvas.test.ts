@@ -542,7 +542,12 @@ describe("safeAreaBandsFor — table de faits plateforme, vérifiable entrée pa
     const labels = safeAreaBandsFor("story").map((b) => b.label);
     // Pin EXACT plutôt qu'un simple `length > 0` : « une étiquette non vide » est satisfait par la
     // chaîne "x", ce qui ne prouverait rien de l'exigence « étiquette française courte ».
-    expect(labels.sort()).toEqual(["Bas — action", "Droite", "Gauche", "Haut — profil"]);
+    // « (pub) » sur la bande du bas : revue de la Tâche 6, point 2 — le 35 % est la borne
+    // PUBLICITAIRE (elle réserve le bouton d'appel à l'action, absent d'une story organique, soit une
+    // sur-réservation d'un facteur ≈2,7 mesuré par la revue). L'utilisateur voyait une bande « Bas —
+    // action » sans rien qui indique laquelle des deux bornes il regarde ; le détail complet vit dans
+    // l'infobulle du bouton (test dédié plus bas), le marqueur court vit ici.
+    expect(labels.sort()).toEqual(["Bas — action (pub)", "Droite", "Gauche", "Haut — profil"]);
     for (const l of labels) {
       expect(l.length).toBeLessThanOrEqual(24);
       expect(l).not.toContain("'");
@@ -592,6 +597,22 @@ describe("safeAreaBandsFor — table de faits plateforme, vérifiable entrée pa
     first.push({ edge: "top", fraction: 0.99, label: "sabotage" });
     expect(safeAreaBandsFor("story").length).toBe(before);
     expect(safeAreaBandsFor("story").some((b) => b.label === "sabotage")).toBe(false);
+  });
+
+  // Revue de la Tâche 6, nit 2 : canvas-chrome.tsx indexe les bandes par `key={band.edge}`, ce qui
+  // INTERDIT silencieusement deux bandes sur la même arête (React ne rendrait que la dernière, sans
+  // avertissement en production). Rien dans le type ne l'empêchait, et le fichier invite explicitement
+  // de futurs contributeurs à ajouter des entrées : la contrainte est donc épinglée ICI plutôt que
+  // laissée à la mémoire du prochain lecteur.
+  it("les arêtes d'un format sont UNIQUES — deux bandes sur la même arête seraient silencieusement perdues par la clé de rendu", () => {
+    let checked = 0;
+    for (const key of FORMAT_KEYS) {
+      const bands = safeAreaBandsFor(key);
+      if (bands.length === 0) continue;
+      checked += 1;
+      expect(new Set(bands.map((b) => b.edge)).size).toBe(bands.length);
+    }
+    expect(checked).toBeGreaterThan(0); // garde anti-vacuité : la boucle a bel et bien tourné
   });
 
   it("implication À SENS UNIQUE : tout format outillé a safeAreaDefaultFor === true — mais PAS la réciproque (ig_portrait)", () => {
@@ -738,5 +759,76 @@ describe("CanvasChrome ∘ Canvas — les BANDES de zones sûres, en composition
     const subtree = html.slice(html.indexOf('data-testid="safe-areas"'));
     expect(subtree).not.toContain("pointer-events-auto");
     expect(subtree).not.toContain("pointer-events:auto");
+  });
+});
+
+// Revue de la Tâche 6, points 1 et 2 — LA CONFIANCE MAL PLACÉE, plutôt que le simple manque de retour.
+// Sur `ig_portrait`, `safeAreaDefaultFor` renvoie `true` par ORIENTATION : le bouton se rend donc
+// enfoncé (`aria-pressed="true"`, `variant="secondary"`) au-dessus d'un artboard où RIEN n'est dessiné.
+// Ce que l'utilisateur en déduit n'est pas « aucune donnée disponible » mais « les zones sûres sont
+// actives, donc ma maquette les respecte » — strictement pire que de ne rien faire du tout (le cas de
+// la Tâche 5, où la fonctionnalité mourait en silence sans rien affirmer).
+//
+// La correction est une NOTE, pas un contrôle désactivé, et la raison est structurelle : la préférence
+// est GLOBALE à l'utilisateur (lib/studio/editor-prefs.ts), pas par format. La désactiver sur un
+// gabarit ferait passer un réglage global pour un réglage propre au format, et laisserait le `true`
+// déjà persisté orphelin — le bouton mentirait dans l'autre sens.
+describe("CanvasChrome — un format SANS zones sûres établies le DIT, au lieu de laisser le bouton enfoncé affirmer le contraire (revue Tâche 6)", () => {
+  const ON: EditorPrefs = { ...DEFAULT_PREFS, safeAreas: true };
+  const OFF: EditorPrefs = { ...DEFAULT_PREFS, safeAreas: false };
+  const NOTE = "Zones sûres : aucune donnée publiée pour ce format.";
+
+  it("la note apparaît pour un format sans bandes, dans l'artboard, décorative — et le bouton reste bien enfoncé (la préférence globale n'est PAS niée)", () => {
+    const html = renderComposed(ON, "ig_portrait");
+    expect(html).toContain('data-testid="safe-areas-none"');
+    expect(html).toContain(NOTE);
+    // Décorative, comme les bandes : elle recouvre une partie de l'artboard.
+    expect(openTag(html, 'data-testid="safe-areas-none"')).toMatch(/\bpointer-events-none\b/);
+    // DANS l'artboard (même exigence de contenance que les bandes : posée à côté, elle se placerait
+    // contre le cadre qui réserve les règles, décalé de RULER_SIZE) et hors du sous-arbre de <Canvas>.
+    expect(subtreeOf(html, 'data-testid="artboard"')).toContain('data-testid="safe-areas-none"');
+    expect(subtreeOf(html, 'data-testid="studio-canvas"')).not.toContain('data-testid="safe-areas-none"');
+    // Elle peint APRÈS le Canvas opaque — même leçon que les bandes, sinon elle serait invisible.
+    expect(html.indexOf('data-testid="safe-areas-none"')).toBeGreaterThan(html.indexOf('data-testid="studio-canvas"'));
+    // Et le bouton n'est NI désactivé NI relâché : la préférence globale reste vraie et modifiable.
+    const button = openTag(html, 'data-action="toggle-safe-areas"');
+    expect(button).toContain('aria-pressed="true"');
+    // L'ATTRIBUT `disabled`, pas la sous-chaîne (leçon de la Tâche 1, re-rencontrée ici) : la classe du
+    // bouton contient `disabled:pointer-events-none` et `disabled:opacity-50`, donc un
+    // `not.toContain("disabled")` échouait pour une raison qui n'avait rien à voir avec l'état du
+    // contrôle. On exige donc un `disabled` suivi de `=`, `>` ou d'une espace — jamais de `:`.
+    expect(button).not.toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
+  it("elle n'apparaît NI quand la préférence est éteinte, NI pour un format qui a de vraies bandes", () => {
+    // Contrôle POSITIF dans le test négatif (leçon n°1 du brief) : sans lui, une note jamais rendue
+    // passerait les deux assertions suivantes.
+    expect(renderComposed(ON, "ig_portrait")).toContain('data-testid="safe-areas-none"');
+
+    expect(renderComposed(OFF, "ig_portrait")).not.toContain('data-testid="safe-areas-none"');
+    expect(renderComposed(OFF, "ig_portrait")).not.toContain(NOTE);
+    // `story` a des bandes : la note serait redondante et fausse (les données existent).
+    expect(renderComposed(ON, "story")).not.toContain('data-testid="safe-areas-none"');
+    expect(renderComposed(ON, "story")).not.toContain(NOTE);
+  });
+
+  // Point 2 de la revue : la réserve « ces pourcentages sont ceux des PLACEMENTS PUBLICITAIRES » ne
+  // vivait que dans le commentaire du module, alors que l'utilisateur voit 49 % de la hauteur (55 % de
+  // la surface) recouverts sans rien qui indique de quelle borne il s'agit. L'infobulle du bouton la
+  // porte désormais, et elle est FONCTION DU FORMAT — donc jamais une phrase générique.
+  it("l'infobulle du bouton porte la réserve « borne publicitaire » quand des bandes existent, et l'absence de donnée quand il n'y en a pas", () => {
+    const withBands = openTag(renderComposed(ON, "story"), 'data-action="toggle-safe-areas"');
+    expect(withBands).toContain("publicitaires");
+    expect(withBands).toContain("conservatrice");
+    expect(withBands).not.toContain("aucune donnée");
+
+    const withoutBands = openTag(renderComposed(ON, "ig_portrait"), 'data-action="toggle-safe-areas"');
+    expect(withoutBands).toContain("aucune donnée");
+    expect(withoutBands).not.toContain("publicitaires");
+
+    // L'infobulle ne dépend PAS de la préférence — seulement du format : un bouton relâché doit
+    // expliquer la même chose, sinon la réserve disparaîtrait exactement quand l'utilisateur hésite à
+    // activer les zones sûres.
+    expect(openTag(renderComposed(OFF, "story"), 'data-action="toggle-safe-areas"')).toContain("publicitaires");
   });
 });
