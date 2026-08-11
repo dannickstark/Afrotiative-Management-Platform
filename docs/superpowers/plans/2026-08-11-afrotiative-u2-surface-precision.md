@@ -218,6 +218,22 @@ The reducer needs one action applying a batch of frame changes as **a single und
 
 **Candidates:** sibling edges (left/right/top/bottom) and centres; the artboard's edges, centre and **thirds**; and **equal spacing** — when the moving layer sits between two siblings, snap to make the gaps equal.
 
+> **Amendment, 2026-08-11 — PLAN DEFECT #11, mine: "visible, unlocked siblings" was wrong about
+> `unlocked`.** A snap reference is **read-only** — snapping to a layer changes only the layer being
+> dragged. The exclusion of locked layers was copied from Task 4, where it is correct for a different
+> reason: there, locked layers are *participants of an operation* and would have to move. That reasoning
+> does not transfer, and excluding them here has a real cost, not a cosmetic one: **locking a background
+> frame so you stop nudging it is the standard way to build a template, and this made locking destroy
+> your ability to align to it.** The tool punished the correct workflow. Corrected: locked layers **are**
+> snap references.
+>
+> **The `visible` half of the filter stays, and for a reason worth stating**: a hidden layer has no
+> on-screen line, so a guide naming it would assert something the user cannot see — the same principle as
+> the delivered decision 7 (a snap that cannot be realised does not light a guide).
+>
+> Recorded as a plan defect rather than allowed to diverge silently, because the plan text above names
+> "unlocked" explicitly and an implementation quietly contradicting it is worse than either choice.
+
 **Properties:** with no candidate within threshold the frame is returned unchanged and no guide fires; a candidate just inside the threshold snaps exactly and reports one guide; two competing candidates resolve deterministically (state the rule); the threshold is in screen pixels, so the same drag at zoom 0.3 and 1.0 snaps at the same on-screen distance — this is the property most likely to be got wrong, so test it explicitly; snapping never resizes during a move, and never moves during a resize.
 
 Guides render as thin lines with the existing preview overlay, and disappear on gesture end.
