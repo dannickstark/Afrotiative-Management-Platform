@@ -17,13 +17,21 @@
 //     gabarit ; le seuil est le SEUL endroit où l'échelle intervient. Un `scale` non fini, nul ou
 //     négatif désactive l'accrochage au lieu de produire un seuil infini ou négatif.
 //
-//  2. LES CANDIDATS SONT LES CALQUES VISIBLES ET DÉVERROUILLÉS, sauf celui qu'on manipule
-//     (`snapCandidates`). Le calque en cours de geste doit s'exclure LUI-MÊME : ses propres bords
-//     sont à distance 0 de lui-même, ils gagneraient à chaque pas et le calque serait littéralement
-//     impossible à déplacer. Le filtre « visible ∧ déverrouillé » est celui que le plan demande ; il
-//     est plus strict que celui de la Tâche 4 (qui n'exclut que les verrouillés, et seulement de
-//     l'opération) — voir le rapport de tâche, où l'exclusion des verrouillés est signalée comme
-//     défendable mais discutable : un calque verrouillé reste une référence visuelle légitime.
+//  2. LES CANDIDATS SONT LES CALQUES VISIBLES, VERROUILLÉS COMPRIS, sauf celui qu'on manipule
+//     (`snapCandidates`). Deux moitiés, chacune avec sa raison, et chacune épinglée par un test sur la
+//     MÊME fixture (seul l'état du calque change) :
+//       • LE CALQUE EN COURS DE GESTE S'EXCLUT LUI-MÊME : ses propres bords sont à distance 0 de
+//         lui-même, ils gagneraient à chaque pas et le calque serait littéralement impossible à déplacer.
+//       • UN CALQUE VERROUILLÉ **EST** UNE RÉFÉRENCE (défaut de plan #11 ; le plan disait « unlocked »
+//         et a été amendé). Une référence d'accrochage est en LECTURE SEULE : s'accrocher à un calque ne
+//         modifie que celui qu'on tire. L'exclusion avait été recopiée de la Tâche 4, où elle est juste
+//         pour une raison qui NE TRANSPOSE PAS — là, les calques verrouillés sont des PARTICIPANTS d'une
+//         opération et devraient bouger. Son coût ici était réel : verrouiller un cadre de fond pour
+//         cesser de le pousser par accident est la façon normale de construire un gabarit, et
+//         l'exclusion faisait que verrouiller détruisait la possibilité de s'aligner dessus — l'outil
+//         punissait le bon geste.
+//       • UN CALQUE MASQUÉ N'EN EST PAS UNE : il n'a aucune ligne à l'écran, donc un guide qui le nomme
+//         affirmerait quelque chose d'invisible — exactement le principe de la décision 7.
 //
 //  3. L'ACCROCHAGE EST AVEUGLE À LA ROTATION, comme l'alignement de la Tâche 4 (sa décision 1) : les
 //     bords manipulés sont ceux du cadre NON PIVOTÉ (`layer.frame`), jamais la boîte englobante à
@@ -31,6 +39,16 @@
 //       • DÉPLACEMENT : accrochage normal quelle que soit la rotation. Une translation COMMUTE avec la
 //         rotation, donc accrocher le cadre non pivoté déplace le calque affiché d'exactement la même
 //         quantité — rien ne dérive à l'écran, et la Tâche 1 n'est pas touchée.
+//         EXCEPTION EXPLICITE À LA DÉCISION 7, à ne pas laisser découvrir : sur un calque tourné, le
+//         guide ainsi allumé marque le CADRE NON PIVOTÉ, pas le contour visible. Mesuré : un calque
+//         200×150 accroché à `x = 100` a, à 45°, son point visible le plus à gauche à **93,18** — le
+//         guide manque donc le contour de 6,82 px et traverse la forme. C'est inhérent à
+//         l'aveuglement à la rotation hérité de la Tâche 4 (le cadre EST ce qui s'aligne, ici comme
+//         dans la bande de géométrie), et ce n'est donc PAS corrigeable sans abandonner ce choix — mais
+//         la décision 7 dit « un guide est une affirmation visuelle, il ne doit pas s'afficher quand
+//         c'est faux », et cette affirmation-là est plus faible que les autres. L'interface le DIT
+//         (components/studio/geometry-strip.tsx, note `snap-rotation-note`) plutôt que de laisser
+//         l'utilisateur conclure que le guide est cassé.
 //       • REDIMENSIONNEMENT : AUCUN accrochage dès que `rotationDeg !== 0` (retour anticipé explicite).
 //         Ce n'est pas de la paresse, c'est que « accrocher le bord est » n'a alors plus de référent :
 //         à 180°, `computeResizedFrame({100,100,200,150}, "e", {x:6,y:0}, {rotationDeg:180})` rend
@@ -62,18 +80,25 @@
 //     Tâche 2 exprès pour cette tâche), consommée par l'APPELANT et passée ici en paramètre `axes`.
 //     Ce module ne redérive JAMAIS la table poignée -> axes : deux copies dériveraient au premier
 //     changement de l'une (c'est la note 1 du brief). Seuls les bords PORTÉS par la poignée
-//     accrochent ; le bord ANCRÉ ne bouge pas, il ne peut donc pas accrocher — c'est la moitié
-//     « l'accrochage ne DÉPLACE jamais pendant un redimensionnement » de la propriété du plan.
+//     accrochent ; le bord opposé ne peut pas accrocher, puisque ce n'est pas lui que le geste tire.
+//     PORTÉE EXACTE de « il ne bouge pas », qui n'est vraie que HORS Alt (revue Tâche 5, Mineur 4a) :
+//     sur un geste sans modificateur ou sous Maj, le bord opposé est ANCRÉ et ressort bit-identique —
+//     c'est la moitié « l'accrochage ne DÉPLACE jamais pendant un redimensionnement » de la propriété
+//     du plan, et elle est épinglée telle quelle. Sous Alt (`fromCenter`) il n'existe AUCUN bord ancré :
+//     accrocher le bord est de `s` déplace le bord ouest de `−s`, par construction du modificateur, et
+//     ce qui reste fixe est le CENTRE (épinglé aussi). L'accroche n'ajoute donc jamais de translation
+//     qui lui soit propre — elle laisse intact ce que le geste tient fixe, quel qu'il soit.
 //     L'autre moitié — « l'accrochage ne REDIMENSIONNE jamais pendant un déplacement » — est vraie
 //     par construction : `snapMove` ne touche que x et y, jamais w ni h.
 //
 //  6. LE COUPLAGE DES AXES EST DÉTECTÉ, PAS DÉCLARÉ. Pour savoir si les deux axes peuvent accrocher
-//     indépendamment (poignée d'angle nue) ou si un seul le peut (Maj), ce module SONDE la fonction
-//     de redimensionnement : il pousse le delta de 1px sur x et regarde si le bord y bouge. Écrire
-//     `modifiers.shift && axes.isCorner` ici serait une deuxième copie de la condition
-//     `lockAspectRatio && isCorner` de `computeResizedFrame` — exactement le genre de doublon que la
-//     note 1 du brief interdit. La détection reste vraie si une tâche future ajoute un modificateur
-//     qui couple les axes autrement.
+//     indépendamment (poignée d'angle nue) ou si un seul le peut (Maj), ce module SONDE la fonction de
+//     redimensionnement : il pousse le delta de 1px sur CHAQUE axe et regarde si le bord de L'AUTRE
+//     bouge — les DEUX sens, parce qu'un couplage unidirectionnel y -> x échapperait à un seul sondage
+//     (revue Tâche 5, Mineur 2). Écrire `modifiers.shift && axes.isCorner` ici serait une deuxième copie
+//     de la condition `lockAspectRatio && isCorner` de `computeResizedFrame` — exactement le genre de
+//     doublon que la note 1 du brief interdit. La détection reste donc vraie de la fonction que
+//     l'appelant fournit, y compris d'un futur modificateur qui couplerait les axes autrement.
 //
 //  7. UNE ACCROCHE IRRÉALISABLE NE S'ALLUME PAS. Après avoir ajusté le delta, le module RE-SONDE et
 //     vérifie que le bord visé atterrit bien sur la ligne (à 1e-6 px près). Sinon — clamp de taille
@@ -167,14 +192,15 @@ export interface SnapSubject {
 }
 
 /**
- * Les calques qui peuvent servir de référence (décision 2) : visibles, déverrouillés, et JAMAIS celui
- * qu'on manipule. Générique pour que l'appelant récupère ses `Layer` complets sans transtypage.
+ * Les calques qui peuvent servir de référence (décision 2) : VISIBLES — verrouillés compris — et jamais
+ * celui qu'on manipule. Générique pour que l'appelant récupère ses `Layer` complets sans transtypage.
  *
- * `visible` et `locked` omis valent respectivement « visible » et « déverrouillé » : un littéral de
- * test n'a pas à les épeler, alors qu'un `Layer` de scène les porte toujours.
+ * `visible` omis vaut « visible » : un littéral de test n'a pas à l'épeler, alors qu'un `Layer` de
+ * scène le porte toujours. `locked` n'est PAS lu ici (voir la décision 2 en tête de module), mais reste
+ * dans `SnapSubject` : `Layer` le porte, et le retirer du type forcerait les appelants à filtrer eux-mêmes.
  */
 export function snapCandidates<T extends SnapSubject>(layers: readonly T[], movingId: string): T[] {
-  return layers.filter((l) => l.id !== movingId && l.visible !== false && !l.locked);
+  return layers.filter((l) => l.id !== movingId && l.visible !== false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -610,13 +636,22 @@ export function snapResize({
   }
   if (picks.length === 0) return { delta, guides: [] };
 
-  // Étape 4 — couplage DÉTECTÉ (décision 6).
+  // Étape 4 — couplage DÉTECTÉ (décision 6), DANS LES DEUX SENS. Sonder x et regarder le bord y ne
+  // suffit pas : un couplage unidirectionnel y -> x passerait inaperçu, les deux axes accrocheraient
+  // « indépendamment », et le guide du premier axe deviendrait FAUX dès que le second déplace son bord
+  // (revue Tâche 5, Mineur 2 — la première version n'avait que le premier sondage). Aucun modificateur
+  // actuel ne se comporte ainsi, mais `probe` est fourni par l'appelant : la détection doit être vraie
+  // de la fonction qu'on lui donne, pas des seules fonctions d'aujourd'hui.
   let coupled = false;
   if (edges.length === 2) {
     const [ex, ey] = edges;
-    const pushedX = probe(nudge(delta, ex.axis, PROBE_STEP));
-    const crossMove = Math.abs(edgeOf(pushedX, ey.axis, ey.trailing) - edgeOf(raw, ey.axis, ey.trailing));
-    coupled = crossMove > FLAT_SLOPE;
+    const crossFromX = Math.abs(
+      edgeOf(probe(nudge(delta, ex.axis, PROBE_STEP)), ey.axis, ey.trailing) - edgeOf(raw, ey.axis, ey.trailing),
+    );
+    const crossFromY = Math.abs(
+      edgeOf(probe(nudge(delta, ey.axis, PROBE_STEP)), ex.axis, ex.trailing) - edgeOf(raw, ex.axis, ex.trailing),
+    );
+    coupled = crossFromX > FLAT_SLOPE || crossFromY > FLAT_SLOPE;
   }
 
   // Axes couplés -> UN SEUL candidat, choisi par le même ordre total que le déplacement. La comparaison

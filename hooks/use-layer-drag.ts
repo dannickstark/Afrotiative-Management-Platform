@@ -394,8 +394,9 @@ function resizeOptionsFor(a: ActiveGesture, modifiers: GestureModifiers): Resize
 
 /** Ce que l'accrochage a besoin de savoir de la scène, lu en LIVE à chaque pas de geste (comme
  * `getScale`) : les calques candidats et les dimensions du plan de travail. Le moteur en retire
- * lui-même le calque manipulé, les masqués et les verrouillés via `snapCandidates` — l'appelant passe
- * donc `scene.layers` tel quel, sans copie de la règle de filtrage (Tâche 5). */
+ * lui-même le calque manipulé et les calques masqués via `snapCandidates` (un calque VERROUILLÉ reste
+ * une référence : voir la décision 2 de lib/studio/snap.ts) — l'appelant passe donc `scene.layers` tel
+ * quel, sans copie de la règle de filtrage (Tâche 5). */
 export interface SnapEngineContext {
   layers: readonly SnapSubject[];
   canvas: { width: number; height: number };

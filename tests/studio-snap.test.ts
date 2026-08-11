@@ -51,8 +51,18 @@ describe("snapCandidates — qui peut servir de référence", () => {
     sub("verrouillé", frame(300, 300, 10, 10), { locked: true }),
   ];
 
-  it("exclut le calque EN COURS de geste, les masqués et les verrouillés", () => {
-    expect(snapCandidates(layers, "moi").map((l) => l.id)).toEqual(["visible"]);
+  it("exclut le calque EN COURS de geste et les MASQUÉS, mais garde les VERROUILLÉS", () => {
+    // Défaut de plan #11 (plan amendé le 2026-08-11) : « visible, unlocked siblings » se trompait sur
+    // `unlocked`. Une référence d'accrochage est en LECTURE SEULE — s'accrocher à un calque ne modifie
+    // que celui qu'on tire. L'exclusion venait de la Tâche 4, où elle est juste pour une autre raison
+    // (là, les calques verrouillés sont des PARTICIPANTS d'une opération et devraient bouger). Le coût
+    // de l'exclusion était réel : verrouiller un cadre de fond pour cesser de le pousser par accident
+    // est la façon normale de construire un gabarit, et cela détruisait la possibilité de s'aligner
+    // dessus — l'outil punissait le bon geste.
+    //
+    // La moitié `visible` RESTE : un calque masqué n'a aucune ligne à l'écran, donc un guide qui le
+    // nomme affirmerait quelque chose d'invisible — c'est le principe de la décision 7 elle-même.
+    expect(snapCandidates(layers, "moi").map((l) => l.id)).toEqual(["visible", "verrouillé"]);
   });
 
   it("le calque en cours de geste s'exclut LUI-MÊME — sinon ses propres bords l'immobiliseraient", () => {
@@ -137,6 +147,21 @@ describe("snapMove — le négatif du plan, appairé avec son positif", () => {
     const out = snapMove({ frame: proche, candidates: masqué, canvas: CANVAS, scale: 1 });
     expect(out.frame).toBe(proche);
     expect(out.guides).toEqual([]);
+  });
+
+  it("un calque VERROUILLÉ, LUI, est une référence — et le guide le nomme (défaut de plan #11)", () => {
+    // Même géométrie que le test précédent, verrou au lieu du masque : l'accroche a lieu et le guide
+    // nomme le calque. Les deux tests mis côte à côte épinglent les DEUX moitiés du filtre, avec la
+    // même fixture, donc un futur remaniement qui rétablirait l'exclusion des verrouillés (ou qui
+    // laisserait passer les masqués) est rouge immédiatement.
+    const proche = frame(104, 250, 50, 40);
+    const verrouillé = snapCandidates([sub("a", a.frame, { locked: true })], "moi");
+    expect(verrouillé.map((l) => l.id)).toEqual(["a"]);
+    const out = snapMove({ frame: proche, candidates: verrouillé, canvas: CANVAS, scale: 1 });
+    expect(out.frame.x).toBe(100);
+    expect(out.guides).toEqual([{
+      axis: "x", at: 100, from: 100, to: 290, kind: "layer-edge", targetIds: ["a"],
+    } satisfies SnapGuide]);
   });
 });
 
@@ -772,6 +797,7 @@ describe("snapResize — la fonction de choix est CONTINUE : les sauts restent b
     let sauts = 0;
     let identitéRompue = 0;
     let ratioRompu = 0;
+    let guideMenteur = 0;
     let plateau = 0;
     for (let dx = 40; dx <= 58; dx += pas) {
       const delta = { x: dx, y: 0 };
@@ -783,6 +809,12 @@ describe("snapResize — la fonction de choix est CONTINUE : les sauts restent b
       const brut = computeResizedFrame(start, "se", delta, maj);
       if (out.guides.length === 0 && (f.w !== brut.w || f.h !== brut.h)) identitéRompue++;
       if (Math.abs(f.w / f.h - 1000 / 10) > 1e-9) ratioRompu++;
+      // HONNÊTETÉ du guide, sur les 18 000 pas : la ligne annoncée est bien celle du bord correspondant
+      // du cadre RENDU — jamais un guide qui montre une accroche que le cadre n'a pas réalisée.
+      for (const g of out.guides) {
+        const bord = g.axis === "x" ? f.x + f.w : f.y + f.h;
+        if (Math.abs(bord - g.at) > 1e-6) guideMenteur++;
+      }
       if (out.guides.length > 0 && Math.abs(f.x + f.w - 1150) < 1e-6) plateau++;
       if (précédentW !== null && précédentH !== null) {
         const saut = Math.max(Math.abs(f.w - précédentW), Math.abs(f.h - précédentH));
@@ -794,8 +826,52 @@ describe("snapResize — la fonction de choix est CONTINUE : les sauts restent b
     }
     expect(identitéRompue).toBe(0);
     expect(ratioRompu).toBe(0); // Maj n'est JAMAIS plié, accroche ou pas
+    expect(guideMenteur).toBe(0);
     expect(sautMax).toBeLessThanOrEqual(2 * seuil + pas);
     expect(sauts).toBeGreaterThan(0); // il s'est vraiment passé une accroche…
     expect(plateau).toBeGreaterThan(1000); // …et c'est bien le grand axe qui accroche, sur tout un plateau
+  });
+});
+
+describe("snapResize — le couplage est détecté dans LES DEUX SENS (revue Tâche 5, Mineur 2)", () => {
+  it("un couplage y -> x seulement est bien détecté : UN guide, et aucun guide mensonger", () => {
+    // La détection de couplage sonde la fonction de redimensionnement au lieu de redéclarer
+    // `lockAspectRatio && isCorner` (décision 6). La revue a relevé que la première version poussait le
+    // delta sur x et regardait le bord y : un couplage UNIDIRECTIONNEL y -> x passait donc inaperçu.
+    // Aucun modificateur actuel ne fait ça — mais `snapResize` accepte un `probe` QUELCONQUE, donc la
+    // propriété se teste directement, sans attendre un futur modificateur.
+    //
+    // Sonde synthétique, affine, couplée dans un seul sens :
+    //   w = 200 + dx + 2·dy   (dy déplace le bord DROIT)      h = 150 + dy
+    //   -> pousser x ne bouge PAS le bord bas ; pousser y déplace le bord droit de 2×.
+    // Cadre brut (delta nul) : {100, 100, 200, 150}, bord droit 300, bord bas 250.
+    // Lignes : x = 304 (à 4 du bord droit), y = 253 (à 3 du bord bas).
+    //
+    // COUPLÉ (correct) : un seul candidat, le plus proche -> y. dy = 3 -> w = 206, h = 153,
+    //   bord bas 253 (sur sa ligne), bord droit 306. UN guide, sur y.
+    // NON DÉTECTÉ (le défaut) : les deux axes seraient traités indépendamment -> x accroche d'abord
+    //   (bord droit 304), puis y (dy = 3) fait glisser le bord droit à 310 — et le guide x, déjà allumé
+    //   sur 304, devient FAUX. C'est ce mensonge que la dernière assertion interdit.
+    const probe = (d: Point): Frame => ({ x: 100, y: 100, w: 200 + d.x + 2 * d.y, h: 150 + d.y });
+    const lx = sub("lx", frame(304, 500, 40, 40)); // ligne x 304
+    const ly = sub("ly", frame(600, 253, 40, 40)); // ligne y 253
+    const out = snapResize({
+      probe, delta: { x: 0, y: 0 }, axes: handleAxes("se"),
+      candidates: [lx, ly], canvas: CANVAS, scale: 1,
+    });
+    const f = probe(out.delta);
+
+    expect(out.guides).toHaveLength(1);
+    expect(out.guides[0].axis).toBe("y");
+    expect(out.guides[0].at).toBe(253);
+    expect(f.y + f.h).toBeCloseTo(253, 9);
+    expect(f.w).toBeCloseTo(206, 9);
+    // Propriété d'HONNÊTETÉ, valable pour tout guide de redimensionnement : la ligne annoncée est
+    // vraiment celle du bord correspondant du cadre RENDU.
+    for (const g of out.guides) {
+      const bord = g.axis === "x" ? f.x + f.w : f.y + f.h;
+      expect(Math.abs(bord - g.at)).toBeLessThan(1e-6);
+    }
+    expect(out.guides.some((g) => g.at === 304)).toBe(false);
   });
 });

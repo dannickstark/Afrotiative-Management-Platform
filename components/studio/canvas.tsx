@@ -85,8 +85,9 @@ const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
 export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Tâche 5 (U2, spec §5) — le contexte d'accrochage : la scène ENTIÈRE plus les dimensions du plan de
-  // travail. Le moteur en retire lui-même le calque manipulé, les masqués et les verrouillés
-  // (`snapCandidates`, lib/studio/snap.ts) : refiltrer ici serait une deuxième copie de cette règle.
+  // travail. Le moteur en retire lui-même le calque manipulé et les calques masqués (`snapCandidates`,
+  // lib/studio/snap.ts, décision 2 — un calque VERROUILLÉ reste, lui, une référence légitime) :
+  // refiltrer ici serait une deuxième copie de cette règle.
   const { preview, getMoveHandler, getResizeHandler, getRotateHandler } = useLayerDrag(dispatch, scale, {
     layers: scene.layers,
     canvas: scene.canvas,

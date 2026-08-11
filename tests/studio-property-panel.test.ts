@@ -266,6 +266,22 @@ describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
     const straight = render([imageLayer], "i", "article_image");
     expect(straight).not.toContain('data-testid="align-rotation-note"');
   });
+
+  // ── Tâche 5 (U2) : la même discipline pour la LIMITE D'ACCROCHAGE d'un calque pivoté ────────────
+  it("prévient qu'un calque PIVOTÉ s'accroche différemment — et seulement s'il l'est vraiment", () => {
+    // La revue de la Tâche 5 a tranché : la limite ne doit pas mourir en silence (la Tâche 4 avait
+    // établi le précédent avec sa note de rotation ci-dessus). Deux moitiés à dire honnêtement, et le
+    // test exige les deux dans le texte rendu : l'accrochage est DÉSACTIVÉ pendant un
+    // redimensionnement, et pendant un DÉPLACEMENT les guides marquent le cadre non pivoté, pas le
+    // contour visible à l'écran.
+    const rotated = render([textLayer], "t", "social_post"); // rotation: 5
+    expect(rotated).toContain('data-testid="snap-rotation-note"');
+    expect(rotated).toContain("redimensionnement");
+    expect(rotated).toContain("contour visible");
+    // Contre-épreuve : sans rotation, aucune note — sinon un avertissement permanent que personne ne lit.
+    const straight = render([imageLayer], "i", "article_image");
+    expect(straight).not.toContain('data-testid="snap-rotation-note"');
+  });
 });
 
 describe("PropertyPanel — calque texte", () => {

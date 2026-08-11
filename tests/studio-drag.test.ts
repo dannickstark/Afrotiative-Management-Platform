@@ -1329,30 +1329,28 @@ describe("createGestureEngine — REDIMENSIONNEMENT accroché (Tâche 5)", () =>
     expect(h3.actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 100, y: 100, w: 204, h: 150 } }]);
   });
 
-  it("un calque VERROUILLÉ ou MASQUÉ ne sert pas de référence à travers le moteur", () => {
+  it("à travers le moteur : un calque VERROUILLÉ sert de référence, un calque MASQUÉ non", () => {
+    // Défaut de plan #11 : les deux calques ci-dessous ont EXACTEMENT le même cadre, seul leur état
+    // diffère. Le guide résultant les distingue donc à lui seul : s'il nomme « sv », le verrou n'exclut
+    // plus (correct) ; s'il nomme aussi « sm », le masque n'exclut plus (incorrect) ; s'il ne nomme
+    // personne et se rabat sur le centre du plan de travail (qui tombe aussi sur 400), c'est l'ancien
+    // comportement où le verrou excluait.
     const layer = makeLayer();
     const verrouillé = { ...VOISIN, id: "sv", locked: true } as Layer;
     const masqué = { ...VOISIN, id: "sm", visible: false } as Layer;
     const { dispatch, actions } = makeHarnessWith([layer, verrouillé, masqué]);
+    const preview = { current: null as DragPreview | null };
     const engine = createGestureEngine({
-      dispatch, getScale: () => 1, onPreviewChange: () => {},
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { preview.current = p; },
       getSnapContext: () => snapContextFrom([layer, verrouillé, masqué]),
     });
 
     engine.beginMove(layer, { x: 0, y: 0 });
-    engine.end({ x: 294, y: 0 });
-    // La ligne 400 du plan de travail (son CENTRE) reste, elle, un candidat légitime — l'accroche a donc
-    // bien lieu, mais le guide vient du PLAN DE TRAVAIL et ne nomme aucun calque.
-    expect(actions).toEqual([{ type: "setFrames", changes: [{ id: "l1", frame: { x: 400, y: 100, w: 200, h: 150 } }] }]);
-    const preview = { current: null as DragPreview | null };
-    const e2 = createGestureEngine({
-      dispatch: () => {}, getScale: () => 1, onPreviewChange: (p) => { preview.current = p; },
-      getSnapContext: () => snapContextFrom([layer, verrouillé, masqué]),
-    });
-    e2.beginMove(layer, { x: 0, y: 0 });
-    e2.move({ x: 294, y: 0 });
+    engine.move({ x: 294, y: 0 });
     expect(preview.current?.guides).toEqual([
-      { axis: "x", at: 400, from: 0, to: 600, kind: "artboard-center", targetIds: [] },
+      { axis: "x", at: 400, from: 100, to: 400, kind: "layer-edge", targetIds: ["sv"] },
     ]);
+    engine.end({ x: 294, y: 0 });
+    expect(actions).toEqual([{ type: "setFrames", changes: [{ id: "l1", frame: { x: 400, y: 100, w: 200, h: 150 } }] }]);
   });
 });

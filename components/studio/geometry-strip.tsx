@@ -67,6 +67,26 @@ export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: Ge
           onCommit={(v) => patch({ opacity: Math.min(1, Math.max(0, v)) })}
         />
       </div>
+      {/* Tâche 5 (U2, spec §5) — la LIMITE D'ACCROCHAGE d'un calque pivoté, dite plutôt que laissée à
+          découvrir (verdict de la revue de la Tâche 5 : « la fonctionnalité meurt en silence », et la
+          Tâche 4 avait établi le précédent juste en dessous avec sa note de rotation). Mêmes règles de
+          ton et de placement que cette note-là : un `<p>` discret, dans la bande de géométrie, et
+          UNIQUEMENT quand le calque est RÉELLEMENT pivoté — un avertissement permanent ne serait plus lu.
+          Placé ICI plutôt que dans `AlignRow` parce que c'est le calque MANIPULÉ qui est concerné : la
+          bande n'est rendue que pour une sélection SIMPLE, c'est-à-dire exactement le cas où le calque
+          porte ses poignées et peut donc être redimensionné.
+          Les DEUX moitiés sont dites, sans arrondir l'angle : l'accrochage est désactivé pendant un
+          redimensionnement (lib/studio/snap.ts, décision 3 — « accrocher le bord est » n'a plus de
+          référent dès que le calque tourne), et pendant un DÉPLACEMENT il fonctionne mais les guides
+          marquent le cadre non pivoté, pas le contour visible (mesuré : 6,82 px d'écart à 45° sur un
+          calque 200×150). */}
+      {(layer.rotation ?? 0) !== 0 && (
+        <p className="text-[11px] text-muted-foreground" data-testid="snap-rotation-note">
+          Calque pivoté : l&rsquo;accrochage est désactivé pendant un redimensionnement ; pendant un
+          déplacement, les guides marquent le cadre non pivoté (X, Y, largeur, hauteur), pas le
+          contour visible à l&rsquo;écran.
+        </p>
+      )}
       <AlignRow scene={scene} selectedIds={selectedIds} dispatch={dispatch} />
     </div>
   );
