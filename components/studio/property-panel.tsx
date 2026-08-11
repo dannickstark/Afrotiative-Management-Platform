@@ -12,9 +12,19 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
 // Import de VALEUR (U3 Tâche 3) : la grammaire du rayon vit dans le schéma, et ce panneau la DEMANDE
-// plutôt que d'en écrire une seconde qui pourrait dériver. scene.ts est un module de schéma pur (zod)
-// — il n'atteint ni `@/db` ni aucun code serveur, contrainte vérifiée par tests/studio-no-r2.test.ts
-// et par le traçage d'imports de valeur du rapport de tâche.
+// plutôt que d'en écrire une seconde qui pourrait dériver. scene.ts est un module de schéma pur : ses
+// deux SEULS imports sont `zod` et sa locale française, donc il n'atteint ni `@/db` ni aucun code
+// serveur — vérifiable en deux lignes en tête du fichier.
+//
+// CETTE LIGNE CITAIT tests/studio-no-r2.test.ts (revue de la Tâche 3, Medium 2). C'ÉTAIT FAUX : ce
+// fichier teste les messages français de repli quand R2 n'est pas configuré, et ne dit RIEN des
+// imports de valeur d'un composant client. AUCUN test de ce dépôt ne garde cette frontière : elle est
+// tenue par la RELECTURE et par un traçage d'imports fait à la main à chaque tâche qui y touche (U2 a
+// mesuré 31 chemins « client -> @/db » repo-wide, 7 dans le studio, 0 violation réelle ; la revue de
+// cette tâche a retracé les cinq fichiers `"use client"` du studio et retrouvé 0 chemin). Le dire est
+// utile ; le faire dire à un test qui ne le fait pas est pire que de ne rien citer — une fausse
+// citation se relit comme une garantie. `bun run build` n'en est pas une non plus (contrainte
+// explicite du plan U3).
 import { formatRadius, parseRadiusInput } from "@/lib/studio/scene";
 // U3 Tâche 3 : LA description d'une forme — celle que les deux chemins de rendu consultent. Ce panneau
 // lui demande sa liste d'options et ses deux verdicts (le rayon a-t-il un sens ? la forme est-elle
