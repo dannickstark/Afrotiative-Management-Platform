@@ -187,6 +187,27 @@ export async function pressKey(init: KeyboardEventInit): Promise<void> {
   });
 }
 
+/** Dispatche un VRAI événement pointeur (pointerdown/pointermove/pointerup/pointercancel) qui bubble
+ * depuis `el`, enveloppé dans `act`. jsdom 30 ne construit pas `PointerEvent` de façon fiable (l'API
+ * Pointer Events n'y est pas implémentée) — on utilise donc `MouseEvent` avec le NOM de type
+ * "pointer*" : `addEventListener("pointerdown", ...)` (React comme le `addEventListener` natif posé
+ * par `hooks/use-layer-drag.ts`'s `bind()`) déclenche sur le nom du type, pas sur la classe réelle de
+ * l'objet événement, et `MouseEventInit` porte déjà `clientX`/`clientY`/`shiftKey`/`altKey`/`button` —
+ * tout ce que `bind()` lit (revue Tâche 2, Important 4 : le câblage DOM de Maj/Alt n'avait aucun test
+ * qui passe par de VRAIS événements pointeur, seulement par la machine à geste pure appelée
+ * directement). `target.setPointerCapture` n'existe pas sur les éléments jsdom : l'appel `?.()` dans
+ * `bind()` le contourne déjà sans notre aide. */
+export async function pointer(
+  el: Element,
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  init: MouseEventInit = {},
+): Promise<void> {
+  await act(async () => {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, view: window, ...init });
+    el.dispatchEvent(event);
+  });
+}
+
 /** Laisse les effets/mises à jour d'état en attente se stabiliser sans dispatcher d'événement —
  * utile après une mise à jour déclenchée par une promesse résolue dans un effet plutôt que par une
  * interaction utilisateur directe. */

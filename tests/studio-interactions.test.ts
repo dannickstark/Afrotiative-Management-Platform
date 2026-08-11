@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import React from "react";
-import { installDom, mount, click, pressKey, flush } from "./dom-harness";
+import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harness";
 import { editorReducer, initEditorState, type EditorAction } from "@/lib/studio/editor-state";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
@@ -143,6 +143,7 @@ let teardownExtraGlobals: () => void;
 let ImagesPanelC: typeof import("@/components/studio/panels/images-panel").ImagesPanel;
 let TextePanelC: typeof import("@/components/studio/panels/texte-panel").TextePanel;
 let EditorShellC: typeof import("@/components/studio/editor-shell").EditorShell;
+let CanvasC: typeof import("@/components/studio/canvas").Canvas;
 
 // `mock.module()` replaces a module in bun's process-wide registry — it does NOT scope to this
 // file. Captured here so `afterAll` can put the REAL module back before any file scheduled after
@@ -167,6 +168,7 @@ beforeAll(async () => {
   ({ ImagesPanel: ImagesPanelC } = await import("@/components/studio/panels/images-panel"));
   ({ TextePanel: TextePanelC } = await import("@/components/studio/panels/texte-panel"));
   ({ EditorShell: EditorShellC } = await import("@/components/studio/editor-shell"));
+  ({ Canvas: CanvasC } = await import("@/components/studio/canvas"));
 });
 
 afterAll(() => {
@@ -470,5 +472,100 @@ describe("EditorShell — l'effet d'échelle dépend RÉELLEMENT de `prefs.ruler
       if (originalHeight) Object.defineProperty(proto, "clientHeight", originalHeight);
       else delete proto.clientHeight;
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam 6 — Poignées de redimensionnement : Maj/Alt à travers de VRAIS événements pointeur DOM
+// (revue Tâche 2, Important 4). Tout ce qui précède dans tests/studio-drag.test.ts exerce
+// `createGestureEngine` DIRECTEMENT — `engine.move(pointer, { shift: true })` — ce qui prouve que la
+// machine à geste PURE compose bien Maj/Alt avec la rotation, mais ne prouve PAS que `hooks/use-
+// layer-drag.ts`'s `bind()` lit RÉELLEMENT `ev.shiftKey`/`ev.altKey` sur un VRAI `PointerEvent` DOM et
+// les relaie à cette même machine : une mutation qui supprimerait `shift: ev.shiftKey` (ou
+// `alt: ev.altKey`) à la source laisserait TOUTE la suite `studio-drag` au vert, puisqu'aucun de ces
+// tests ne passe par le DOM. Les deux tests ci-dessous pilotent le VRAI composant `Canvas`, un VRAI
+// `[data-handle]`, et de VRAIS `pointerdown`/`pointermove` (via `tests/dom-harness.ts`'s `pointer()`)
+// jusqu'au réducteur — la même discipline que les cinq coutures ci-dessus.
+function sceneWithShapeLayer(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 800, height: 600, background: "#000000" },
+    layers: [{
+      id: "l1", name: "Calque", visible: true, locked: false,
+      frame: { x: 100, y: 100, w: 200, h: 150 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    }],
+  };
+}
+
+describe("Poignées de redimensionnement — Maj/Alt à travers de VRAIS événements pointeur DOM (protection Tâche 2, Important 4)", () => {
+  it("pointerdown sur [data-handle='se'] puis pointermove avec shiftKey verrouille le ratio jusqu'au réducteur", async () => {
+    const scene = sceneWithShapeLayer();
+    const actions: EditorAction[] = [];
+    const dispatch = (a: EditorAction) => { actions.push(a); };
+
+    const { container, unmount } = await mount(
+      React.createElement(CanvasC, { scene, selectedId: "l1", dispatch, scale: 1 }),
+    );
+
+    const handle = container.querySelector('[data-handle="se"]') as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    await pointer(handle, "pointerdown", { clientX: 0, clientY: 0 });
+    await pointer(handle, "pointermove", { clientX: 60, clientY: -8, shiftKey: true });
+
+    // Aperçu EN COURS de geste (avant pointerup) : couvre le site `handleMove` de `bind()`, pas
+    // seulement `handleUp` — les deux relaient `shiftKey` séparément à la source.
+    const overlay = container.querySelector('[data-testid="handles-overlay"]') as HTMLElement;
+    expect(overlay).not.toBeNull();
+    const previewW = parseFloat(overlay.style.width);
+    const previewH = parseFloat(overlay.style.height);
+    expect(previewW / previewH).toBeCloseTo(200 / 150, 6);
+    expect(previewW).not.toBeCloseTo(260, 0); // sans Maj, ce même geste donnerait w=260, hors ratio
+
+    await pointer(handle, "pointerup", { clientX: 60, clientY: -8, shiftKey: true });
+
+    expect(actions).toHaveLength(1);
+    const action = actions[0];
+    if (action.type !== "resizeLayer") throw new Error("attendu resizeLayer");
+    expect(action.frame.w / action.frame.h).toBeCloseTo(200 / 150, 6);
+    // Preuve que Maj a RÉELLEMENT changé le résultat par ce chemin DOM (pas une coïncidence) : sans
+    // Maj, ce même geste donnerait w=260 (200+60), hors ratio.
+    expect(action.frame.w).not.toBeCloseTo(260, 0);
+
+    unmount();
+  });
+
+  it("pointerdown sur [data-handle='e'] puis pointermove avec altKey garde le centre fixe jusqu'au réducteur", async () => {
+    const scene = sceneWithShapeLayer();
+    const actions: EditorAction[] = [];
+    const dispatch = (a: EditorAction) => { actions.push(a); };
+
+    const { container, unmount } = await mount(
+      React.createElement(CanvasC, { scene, selectedId: "l1", dispatch, scale: 1 }),
+    );
+
+    const handle = container.querySelector('[data-handle="e"]') as HTMLElement;
+    expect(handle).not.toBeNull();
+
+    await pointer(handle, "pointerdown", { clientX: 0, clientY: 0 });
+    await pointer(handle, "pointermove", { clientX: 40, clientY: 0, altKey: true });
+
+    // Aperçu EN COURS de geste (avant pointerup) : couvre le site `handleMove` de `bind()` — sans
+    // Alt, ce même geste donnerait left=100 (bord ouest inchangé) ; avec Alt, left doit avoir reculé
+    // à 60 (centre recentré).
+    const overlay = container.querySelector('[data-testid="handles-overlay"]') as HTMLElement;
+    expect(overlay).not.toBeNull();
+    expect(parseFloat(overlay.style.left)).toBeCloseTo(60, 6);
+    expect(parseFloat(overlay.style.width)).toBeCloseTo(280, 6);
+
+    await pointer(handle, "pointerup", { clientX: 40, clientY: 0, altKey: true });
+
+    expect(actions).toHaveLength(1);
+    // Même valeurs que le test createGestureEngine équivalent (tests/studio-drag.test.ts) : la poignée
+    // tirée suit le curseur, le bord opposé bouge en miroir — w = 200 + 2×40 = 280, x recentré à 60.
+    expect(actions[0]).toEqual({ type: "resizeLayer", id: "l1", frame: { x: 60, y: 100, w: 280, h: 150 } });
+
+    unmount();
   });
 });

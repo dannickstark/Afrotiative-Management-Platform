@@ -521,10 +521,12 @@ describe("computeResizedFrame — Maj : verrouille le ratio w/h, coins seulement
   }
 });
 
-// Décision documentée (voir task-2-report.md) : sur une poignée de BORD, Maj n'a AUCUN effet — comme
-// dans la plupart des outils de conception, où le ratio n'a de sens que "depuis un coin". On le
-// vérifie ici par égalité STRICTE (toEqual, pas juste "même ratio") : le chemin de calcul doit être
-// EXACTEMENT le même, pas seulement produire un résultat qui ressemble.
+// Décision documentée (voir task-2-report.md pour la discussion complète, y compris la réserve de la
+// revue sur cette justification) : sur une poignée de BORD, Maj n'a AUCUN effet — un glisser sur un
+// seul axe n'a pas de "ratio à préserver" au sens géométrique (il faudrait choisir arbitrairement
+// dans quel sens et de combien faire bouger l'axe non tiré), pas une affirmation sur le comportement
+// d'un outil précis. On le vérifie ici par égalité STRICTE (toEqual, pas juste "même ratio") : le
+// chemin de calcul doit être EXACTEMENT le même, pas seulement produire un résultat qui ressemble.
 describe("computeResizedFrame — Maj sur poignée de BORD : aucun effet (choix documenté)", () => {
   const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
   const sides: HandleId[] = ["n", "s", "e", "w"];
@@ -559,18 +561,22 @@ describe("computeResizedFrame — Maj composé avec une rotation à 37° : ratio
 describe("computeResizedFrame — Alt : redimensionne depuis le centre, qui reste fixe (rotation 0)", () => {
   const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
 
-  // Les deux bords ('w' non tiré et 'e' tiré) bougent chacun de 20 (la moitié du delta de 40) en
-  // sens opposé : le centre (200,175) ne bouge pas, et la poignée tirée n'avance que de la moitié du
-  // delta demandé — exactement le choix de conception énoncé dans le commentaire source de `fromCenter`.
-  it("poignée 'e' : les deux bords bougent symétriquement, le centre est inchangé", () => {
+  // Décision (revue Tâche 2, Important 2) : la poignée TIRÉE ('e') reste SOUS LE CURSEUR, exactement
+  // comme un glisser normal (delta 40 -> le bord est avance de 40, de 300 à 340) — le bord OPPOSÉ
+  // ('w', non tiré) se déplace en MIROIR (de 100 à 60, soit -40 aussi) pour garder le centre (200,175)
+  // fixe. La taille totale change donc de 80 (2×40), pas de 40 — voir le commentaire source de
+  // `fromCenter` pour l'algèbre complète et pourquoi la première version (poignée à mi-vitesse) a été
+  // corrigée : rien ne demandait de répéter cette propriété à mi-vitesse, et les outils de référence
+  // (Figma, Sketch, Illustrator, Photoshop) gardent tous la poignée sous le curseur.
+  it("poignée 'e' : le bord opposé bouge en miroir, le centre est inchangé, la poignée tirée suit le curseur", () => {
     const frame = computeResizedFrame(start, "e", { x: 40, y: 0 }, { fromCenter: true });
-    expect(frame).toEqual({ x: 80, y: 100, w: 240, h: 150 });
+    expect(frame).toEqual({ x: 60, y: 100, w: 280, h: 150 });
     expect(centerOf(frame)).toEqual(centerOf(start));
   });
 
   it("poignée 'se' (coin) : le centre est inchangé", () => {
     const frame = computeResizedFrame(start, "se", { x: 40, y: -20 }, { fromCenter: true });
-    expect(frame).toEqual({ x: 80, y: 110, w: 240, h: 130 });
+    expect(frame).toEqual({ x: 60, y: 120, w: 280, h: 110 });
     expect(centerOf(frame)).toEqual(centerOf(start));
   });
 });
@@ -582,7 +588,7 @@ describe("computeResizedFrame — Alt : redimensionne depuis le centre, qui rest
 // On le fait quand même passer par `rotatePointAround` (un point tourné autour de lui-même est une
 // identité mathématique) pour rester dans le même moule que les autres preuves écran de ce fichier,
 // plutôt que de comparer les deux frames "à la main" sans jamais invoquer une rotation.
-describe("computeResizedFrame — Alt à 37° : le centre reste fixe à l'écran, le coin tiré n'avance que de la moitié du delta écran", () => {
+describe("computeResizedFrame — Alt à 37° : le centre reste fixe à l'écran, le coin tiré suit le curseur EXACTEMENT (comme un glisser normal)", () => {
   const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
   const rotation = 37;
   const screenDelta: Point = { x: 24, y: -10 };
@@ -595,13 +601,18 @@ describe("computeResizedFrame — Alt à 37° : le centre reste fixe à l'écran
     expect(newCenterScreen.y).toBeCloseTo(oldCenterScreen.y, 6);
   });
 
-  it("le coin tiré ('se') n'avance à l'écran que de la MOITIÉ du delta écran demandé", () => {
+  // Depuis la correction de l'Important 2 (revue), Alt ne fait plus avancer la poignée tirée à
+  // mi-vitesse : elle suit le curseur EXACTEMENT, la même garantie de manipulation directe que le
+  // glisser normal (voir le test "poignée d'angle à 37°" plus haut, sans Alt, qui établit cette même
+  // propriété pour le chemin non modifié) — Alt n'ajoute qu'un déplacement en MIROIR du bord opposé,
+  // que le test "le centre ne bouge pas" ci-dessus vérifie séparément.
+  it("le coin tiré ('se') avance à l'écran EXACTEMENT du delta écran demandé — pas la moitié", () => {
     const oldSeScreen = rotatePointAround(centerOf(start), cornerOf(start, "se"), rotation);
     const frame = computeResizedFrame(start, "se", screenDelta, { rotationDeg: rotation, fromCenter: true });
     const newSeScreen = rotatePointAround(centerOf(frame), cornerOf(frame, "se"), rotation);
 
-    expect(newSeScreen.x - oldSeScreen.x).toBeCloseTo(screenDelta.x / 2, 6);
-    expect(newSeScreen.y - oldSeScreen.y).toBeCloseTo(screenDelta.y / 2, 6);
+    expect(newSeScreen.x - oldSeScreen.x).toBeCloseTo(screenDelta.x, 6);
+    expect(newSeScreen.y - oldSeScreen.y).toBeCloseTo(screenDelta.y, 6);
   });
 });
 
@@ -725,10 +736,24 @@ describe("createGestureEngine — Maj/Alt atteignent bien l'aperçu ET le dispat
 
     engine.beginResize(layer, "se", { x: 0, y: 0 });
     engine.move({ x: 60, y: -8 }, { shift: true });
-    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 100, y: 100, w: 260, h: 195 } });
+    const previewFrame = previewBox.current!.frame!;
+    // Valeurs NON codées en dur (revue Tâche 2, Critique 1 : la projection continue qui a remplacé le
+    // choix discret d'axe dominant ne produit plus les mêmes chiffres que l'ancienne branche pour ce
+    // delta précis — le ratio et l'ancrage restent la propriété à vérifier, pas un nombre magique).
+    expect(previewFrame.w / previewFrame.h).toBeCloseTo(200 / 150, 9);
+    expect(previewFrame.x).toBe(100); // 'se' n'ancre jamais x/y côté ouest/nord
+    expect(previewFrame.y).toBe(100);
+    // Preuve que Maj a RÉELLEMENT changé le résultat (sans Maj, ce même geste donnerait w=260, hors
+    // ratio) — une mutation qui supprimerait `shift: ev.shiftKey`/`lockAspectRatio` à la source
+    // laisserait ce test au vert si on ne vérifiait QUE le ratio d'un côté.
+    expect(previewFrame.w).not.toBeCloseTo(260, 0);
 
     engine.end({ x: 60, y: -8 }, { shift: true });
-    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 100, y: 100, w: 260, h: 195 } }]);
+    expect(actions).toHaveLength(1);
+    const action = actions[0];
+    if (action.type !== "resizeLayer") throw new Error("attendu resizeLayer");
+    expect(action.frame.w / action.frame.h).toBeCloseTo(200 / 150, 9);
+    expect(action.frame).toEqual(previewFrame); // même geste, même résultat en aperçu et au commit
   });
 
   it("Alt tenu pendant un redimensionnement garde le centre fixe, en aperçu ET au commit", () => {
@@ -741,10 +766,12 @@ describe("createGestureEngine — Maj/Alt atteignent bien l'aperçu ET le dispat
 
     engine.beginResize(layer, "e", { x: 0, y: 0 });
     engine.move({ x: 40, y: 0 }, { alt: true });
-    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 80, y: 100, w: 240, h: 150 } });
+    // La poignée tirée ('e') suit le curseur, le bord opposé ('w') bouge en miroir (revue Tâche 2,
+    // Important 2) : w = start.w + 2×40 = 280, x recentré à 200 − 140 = 60.
+    expect(previewBox.current).toEqual({ layerId: "l1", frame: { x: 60, y: 100, w: 280, h: 150 } });
 
     engine.end({ x: 40, y: 0 }, { alt: true });
-    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 80, y: 100, w: 240, h: 150 } }]);
+    expect(actions).toEqual([{ type: "resizeLayer", id: "l1", frame: { x: 60, y: 100, w: 280, h: 150 } }]);
   });
 
   it("Maj tenu pendant une rotation accroche à un multiple de 15, en aperçu ET au commit", () => {
@@ -796,5 +823,136 @@ describe("createGestureEngine — Maj/Alt atteignent bien l'aperçu ET le dispat
     const action = actions[0];
     if (action.type !== "resizeLayer") throw new Error("attendu resizeLayer");
     expect(action.frame.w / action.frame.h).toBeCloseTo(200 / 150, 6);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Revue conjointe Tâche 1 (durcissement) + Tâche 2 : quatre points fermés ci-dessous — Critique 1
+// (continuité de Maj), Important 3 (bit-identité à delta fractionnaire), et deux correctifs "cheap"
+// (le clamp tient compte du ratio, `-0` normalisé). Voir task-2-report.md pour le compte rendu complet.
+
+// Critique 1 — la première version de Maj comparait |local.x| à |local.y| pour choisir un « axe
+// dominant » : DEUX calculs indépendants de part et d'autre de la frontière |local.x| = |local.y|, qui
+// ne coïncident qu'exactement À la frontière — d'où un saut mesuré jusqu'à 198px sur un balayage à
+// 0,05°. La projection continue (voir le commentaire source) élimine la branche : une seule formule
+// linéaire en local.x/local.y, donc continue par construction.
+describe("computeResizedFrame — Maj : continuité autour de la diagonale (protection Critique 1)", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+
+  // Reproduction EXACTE de l'exemple mesuré par la revue : deux deltas à 0,002 d'écart total, de part
+  // et d'autre de |local.x| = |local.y| (ici à local.x=60), qui sautaient de 20px avec l'ancien choix
+  // discret (260×195 -> 280.001×210.001).
+  it("delta (60, 59.999) et (60, 60.001) — à peine 0,002 d'écart — ne produisent plus un saut de 20px", () => {
+    const before = computeResizedFrame(start, "se", { x: 60, y: 59.999 }, { lockAspectRatio: true });
+    const after = computeResizedFrame(start, "se", { x: 60, y: 60.001 }, { lockAspectRatio: true });
+    expect(Math.abs(after.w - before.w)).toBeLessThan(0.01);
+    expect(Math.abs(after.h - before.h)).toBeLessThan(0.01);
+  });
+
+  // Propriété générale demandée par la revue : deux deltas 0,001 d'écart (perpendiculairement à la
+  // diagonale, pour être sûr de la traverser) ne doivent jamais produire des frames distantes de plus
+  // de ~0,01px — testé à intervalles de 3° autour d'un cercle complet, ce qui traverse exactement les
+  // quatre lignes de saut possibles (45°, 135°, 225°, 315°, toutes multiples de 3) et sert aussi de
+  // garde générale de continuité partout ailleurs sur le cercle.
+  it("deux deltas 0,001 d'écart ne produisent jamais des frames distantes de plus de 0,01px, à N'IMPORTE QUEL angle", () => {
+    const eps = 0.0005; // 0,001 d'écart total entre d1 et d2, perpendiculairement à la diagonale
+    const radius = 60;
+    for (let deg = 0; deg < 360; deg += 3) {
+      const rad = (deg * Math.PI) / 180;
+      const base: Point = { x: radius * Math.cos(rad), y: radius * Math.sin(rad) };
+      const d1: Point = { x: base.x - eps, y: base.y + eps };
+      const d2: Point = { x: base.x + eps, y: base.y - eps };
+      const f1 = computeResizedFrame(start, "se", d1, { lockAspectRatio: true });
+      const f2 = computeResizedFrame(start, "se", d2, { lockAspectRatio: true });
+      expect(Math.abs(f2.w - f1.w)).toBeLessThan(0.01);
+      expect(Math.abs(f2.h - f1.h)).toBeLessThan(0.01);
+    }
+  });
+
+  // Même propriété sur une poignée dont les DEUX signes sont inversés ('nw' : hasW ET hasN), pour
+  // couvrir la branche `-local.x`/`-local.y` de la projection, pas seulement `+local.x`/`+local.y`.
+  it("même propriété sur la poignée 'nw' (signes inversés)", () => {
+    const eps = 0.0005;
+    const radius = 60;
+    for (let deg = 0; deg < 360; deg += 9) {
+      const rad = (deg * Math.PI) / 180;
+      const base: Point = { x: radius * Math.cos(rad), y: radius * Math.sin(rad) };
+      const d1: Point = { x: base.x - eps, y: base.y + eps };
+      const d2: Point = { x: base.x + eps, y: base.y - eps };
+      const f1 = computeResizedFrame(start, "nw", d1, { lockAspectRatio: true });
+      const f2 = computeResizedFrame(start, "nw", d2, { lockAspectRatio: true });
+      expect(Math.abs(f2.w - f1.w)).toBeLessThan(0.01);
+      expect(Math.abs(f2.h - f1.h)).toBeLessThan(0.01);
+    }
+  });
+});
+
+// Important 3 — la forme d'ancrage dérivée (`x = start.x + (start.w - w)`) avait été appliquée sur le
+// chemin PAR DÉFAUT (sans Maj, sans clamp) pour toute la Tâche 2, alors qu'elle ne reproduit PAS bit à
+// bit `x = start.x + local.x` pour un delta fractionnaire non représentable exactement en binaire —
+// `screenDelta` divise par une échelle fractionnaire (hooks/use-layer-drag.ts), donc ce delta est le
+// cas NORMAL, pas un cas limite. La revue a mesuré 1017/9984 cas différents (jusqu'à 5.7e-14px) à
+// rotation 0 pour ce seul défaut.
+describe("computeResizedFrame — rotation 0, delta FRACTIONNAIRE : identique OCTET PRÈS (protection Important 3)", () => {
+  const start: Frame = { x: 100, y: 100, w: 200, h: 150 };
+
+  it("poignée 'n', delta={0.1,0.3}, sans Maj, sans clamp : y = start.y + local.y EXACTEMENT (toBe, pas toBeCloseTo)", () => {
+    const delta: Point = { x: 0.1, y: 0.3 };
+    const frame = computeResizedFrame(start, "n", delta);
+    expect(frame.y).toBe(start.y + delta.y);
+    expect(frame.h).toBe(start.h - delta.y);
+    expect(frame.x).toBe(start.x);
+    expect(frame.w).toBe(start.w);
+  });
+
+  it("poignée 'w', delta={0.7,0.2}, sans Maj, sans clamp : x = start.x + local.x EXACTEMENT", () => {
+    const delta: Point = { x: 0.7, y: 0.2 };
+    const frame = computeResizedFrame(start, "w", delta);
+    expect(frame.x).toBe(start.x + delta.x);
+    expect(frame.w).toBe(start.w - delta.x);
+  });
+});
+
+// Cheap 1 — clamp ratio-aware : sans lui, un diviseur très fin (ratio 100:1) perd son ratio de 99%
+// dès que le glisser approche du minimum, exactement le cas que le rapport de Tâche 2 avait flagué
+// comme un « edge case » non testé plutôt que traité — la revue a jugé que ça méritait mieux.
+describe("computeResizedFrame — Maj + clamp minimal : le plancher respecte lui aussi le ratio verrouillé", () => {
+  it("calque 1000×10 (ratio 100), glissé loin en dessous du minimum : w/h clampent ensemble à minSize*ratio / minSize", () => {
+    const start: Frame = { x: 0, y: 0, w: 1000, h: 10 };
+    const frame = computeResizedFrame(start, "se", { x: -2000, y: -2000 }, { lockAspectRatio: true });
+    expect(frame.h).toBeCloseTo(1, 9); // minSize
+    expect(frame.w).toBeCloseTo(100, 9); // minSize * ratio(100)
+    expect(frame.w / frame.h).toBeCloseTo(100, 9); // le ratio de départ tient MÊME au plancher
+  });
+});
+
+// Cheap 2 — garde `start.h > 0` : le clamp ratio-aware divise par `start.h` (`ratio = start.w /
+// start.h`) ; sans la garde, un calque de départ à hauteur nulle ferait fuiter Infinity/NaN dans le
+// frame retourné dès que le clamp intervient sur l'axe Y dominant.
+describe("computeResizedFrame — Maj avec start.h === 0 : ni NaN ni Infinity ne fuient (garde ratio)", () => {
+  it("poignée 'se', axe Y dominant (le cas qui divisait par ratio=Infinity avant la garde) reste fini", () => {
+    const start: Frame = { x: 0, y: 0, w: 100, h: 0 };
+    const frame = computeResizedFrame(start, "se", { x: 2, y: 20 }, { lockAspectRatio: true });
+    expect(Number.isFinite(frame.x)).toBe(true);
+    expect(Number.isFinite(frame.y)).toBe(true);
+    expect(Number.isFinite(frame.w)).toBe(true);
+    expect(Number.isFinite(frame.h)).toBe(true);
+  });
+});
+
+// Cheap 3 — `Math.round` renvoie `-0` (pas `0`) pour tout argument dans [-0.5, -0), donc un angle brut
+// dans (−7.5°, 0] accrochait sur "-0°" avant la normalisation `snapped === 0 ? 0 : snapped`.
+describe("computeRotationDeg — Maj : l'accroche ne renvoie jamais -0 (protection cheap)", () => {
+  it("angle brut à -3° (dans (-7.5,0]) : le résultat accroché est +0, jamais -0", () => {
+    const center = { x: 0, y: 0 };
+    const start = { x: 100, y: 0 };
+    const angleDeg = -3;
+    const current = {
+      x: 100 * Math.cos((angleDeg * Math.PI) / 180),
+      y: 100 * Math.sin((angleDeg * Math.PI) / 180),
+    };
+    const result = computeRotationDeg(center, start, current, 0, { snap: true });
+    expect(result).toBe(0);
+    expect(Object.is(result, -0)).toBe(false);
   });
 });

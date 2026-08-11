@@ -16,6 +16,29 @@ import {
 export type HandleId = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 export const HANDLES: HandleId[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
 
+export interface HandleAxes {
+  hasN: boolean;
+  hasS: boolean;
+  hasE: boolean;
+  hasW: boolean;
+  isCorner: boolean;
+}
+
+// Table poignée -> axes portés, extraite en fonction PURE et EXPORTÉE (revue Tâche 2 : la Tâche 5,
+// accroche/guides, doit savoir pour une poignée en cours de glisser quels bords du calque BOUGENT et
+// lequel est ANCRÉ — immobile en repère local, donc un candidat d'accroche légitime — sans redériver
+// ces mêmes ternaires une seconde fois et risquer de diverger de computeResizedFrame au premier
+// changement de l'un des deux). Le bord ANCRÉ sur un axe est l'OPPOSÉ du bord PORTÉ : une poignée qui
+// porte "e" ancre "w" (et vice versa) ; une poignée qui ne porte ni l'un ni l'autre (n/s seule) ne
+// touche pas cet axe du tout.
+export function handleAxes(handle: HandleId): HandleAxes {
+  const hasN = handle.includes("n");
+  const hasS = handle.includes("s");
+  const hasE = handle.includes("e");
+  const hasW = handle.includes("w");
+  return { hasN, hasS, hasE, hasW, isCorner: (hasN || hasS) && (hasE || hasW) };
+}
+
 const MIN_SIZE = 1;
 
 // Rotation 2D par la formule standard R(θ)·v (cos/sin déjà calculés pour un θ donné). Un SEUL point
@@ -91,11 +114,7 @@ export function computeResizedFrame(
     fromCenter = false,
   }: ResizeOptions = {},
 ): Frame {
-  const hasN = handle.includes("n");
-  const hasS = handle.includes("s");
-  const hasE = handle.includes("e");
-  const hasW = handle.includes("w");
-  const isCorner = (hasN || hasS) && (hasE || hasW);
+  const { hasN, hasS, hasE, hasW, isCorner } = handleAxes(handle);
 
   const rad = (rotationDeg * Math.PI) / 180;
   const cos = Math.cos(rad);
@@ -103,57 +122,103 @@ export function computeResizedFrame(
   // R(-rotationDeg) appliqué à `delta` — voir étape 1 ci-dessus.
   const local: Point = rotationDeg === 0 ? delta : rotateVec(delta, cos, -sin);
 
-  // w/h bruts à partir du delta LOCAL — même formule qu'avant la Tâche 2, indépendante des deux
-  // modificateurs ci-dessous (ils n'interviennent qu'APRÈS, jamais en modifiant `local` lui-même).
-  let w = hasE ? start.w + local.x : hasW ? start.w - local.x : start.w;
-  let h = hasS ? start.h + local.y : hasN ? start.h - local.y : start.h;
+  // w/h/x/y NAÏFS — BIT-IDENTIQUES à la Tâche 1 (donc à avant la Tâche 2) : ce bloc ne change JAMAIS,
+  // quels que soient les modificateurs ci-dessous. `x`/`y` n'y sont fixés QUE pour la poignée qui
+  // porte cet axe (hasW/hasN), via `local.x`/`local.y` DIRECTEMENT — jamais via une forme dérivée de
+  // `w`/`h` — car `start.w − (start.w − local.x)` n'est PAS garanti reproduire `local.x` bit à bit
+  // pour un delta fractionnaire non représentable exactement en binaire (revue Tâche 2, Important 3 :
+  // la forme dérivée, utilisée partout dans une version antérieure, différait de l'ordre de 1e-14px
+  // sur 1017/9984 cas — `screenDelta` divise par une échelle fractionnaire, donc un delta non
+  // représentable est le cas NORMAL, pas un cas limite). La forme dérivée n'est réintroduite plus bas
+  // QUE là où Maj ou le clamp ont RÉELLEMENT changé `w`/`h` — jamais sur ce chemin par défaut.
+  let { x, y, w, h } = start;
+  if (hasE) w = start.w + local.x;
+  if (hasW) { w = start.w - local.x; x = start.x + local.x; }
+  if (hasS) h = start.h + local.y;
+  if (hasN) { h = start.h - local.y; y = start.y + local.y; }
 
   // Maj — ratio verrouillé, COINS SEULEMENT (`isCorner` ; voir le commentaire de `lockAspectRatio`
-  // dans ResizeOptions pour le choix documenté sur les poignées de bord, où cette branche est
-  // simplement ignorée). L'axe dominant est celui dont le déplacement LOCAL est le plus grand en
-  // valeur absolue : |Δw| = |local.x| et |Δh| = |local.y| TOUJOURS, quel que soit hasE/hasW ou
-  // hasN/hasS (w = start.w ± local.x dans les deux cas, donc |w − start.w| = |local.x|) — c'est
-  // cette invariance qui rend la comparaison directe entre local.x et local.y suffisante, sans avoir
-  // à distinguer quelle poignée précise est active. L'autre dimension est alors dérivée du ratio de
-  // départ (ratio > 0 toujours en pratique, donc le sens agrandir/rétrécir de l'axe dominant se
-  // reporte automatiquement sur l'axe dérivé).
+  // dans ResizeOptions pour le choix documenté sur les poignées de bord). PROJECTION CONTINUE du
+  // delta local sur la diagonale (start.w, start.h) — pas un choix discret d'« axe dominant » : `t`
+  // est le scalaire tel que faire évoluer w ET h par le MÊME facteur (1+t) reproduit la composante du
+  // delta le long de cette diagonale (la composante perpendiculaire, elle, romprait le ratio et est
+  // donc ignorée). w = start.w·(1+t) et h = start.h·(1+t) donnent w/h = start.w/start.h EXACTEMENT,
+  // par construction, pour toute valeur de `t` — donc CONTINU en local.x/local.y, sans branche.
+  //
+  // Une comparaison DISCRÈTE (« |local.x| ≥ |local.y| ? l'axe X domine : l'axe Y domine », utilisée
+  // dans une version antérieure de ce correctif) produit un SAUT à la frontière |local.x| = |local.y|,
+  // car chaque côté de la frontière dérive l'AUTRE dimension d'un axe différent — deux calculs
+  // indépendants qui ne coïncident qu'exactement À la frontière (jusqu'à 198px d'écart mesurés à un
+  // pas de 0,05° sur un balayage circulaire, revue Tâche 2, Critique 1). La projection continue n'a
+  // pas ce problème : une seule formule, linéaire en local.x/local.y — voir tests/studio-drag.test.ts,
+  // describe "continuité".
+  let aspectLocked = false;
   if (lockAspectRatio && isCorner) {
-    const ratio = start.w / start.h;
-    if (Math.abs(local.x) >= Math.abs(local.y)) {
-      h = w / ratio;
-    } else {
-      w = h * ratio;
+    const d2 = start.w * start.w + start.h * start.h;
+    if (d2 > 0) {
+      const t = ((hasE ? local.x : -local.x) * start.w + (hasS ? local.y : -local.y) * start.h) / d2;
+      w = start.w * (1 + t);
+      h = start.h * (1 + t);
+      aspectLocked = true;
     }
   }
 
-  if (w < minSize) w = minSize;
-  if (h < minSize) h = minSize;
+  // Alt — redimensionne depuis le CENTRE. Choix (revue Tâche 2, Important 2 — la première version de
+  // ce modificateur faisait avancer la poignée tirée à MI-VITESSE du curseur ; la revue a établi que
+  // Figma/Sketch/Illustrator/Photoshop gardent tous la poignée SOUS LE CURSEUR, comme un glisser
+  // normal, et a tranché pour aligner sur cet usage majoritaire plutôt que sur une propriété que rien
+  // ne demandait) : la poignée TIRÉE reste donc SOUS LE CURSEUR, exactement comme un glisser normal
+  // (la propriété de manipulation directe déjà établie par la Tâche 1 pour le chemin sans
+  // modificateur) ; le bord OPPOSÉ se déplace en MIROIR pour garder le centre fixe. Doubler l'écart à
+  // `start` avant de dériver x/y plus
+  // bas est ce qui produit ce résultat : si w0/h0 est le w/h « un seul bord bouge » déjà calculé
+  // ci-dessus (delta local direct, éventuellement ajusté par Maj juste au-dessus), alors w = start.w +
+  // 2·(w0 − start.w) place le bord tiré à start + (w0−start.w) — IDENTIQUE au glisser normal — et le
+  // bord opposé à start − (w0−start.w) (miroir) ; la taille totale change donc de 2·(w0−start.w), pas
+  // de (w0−start.w). Ceci compose avec Maj sans code séparé : w0/h0 (verrouillés ou non) valent tous
+  // deux `start.*·(1+t)` pour un même `t`, donc `start.* + 2·(start.*·(1+t) − start.*)` se simplifie en
+  // `start.*·(1+2t)` pour les DEUX dimensions — le ratio reste donc préservé après doublement.
+  if (fromCenter) {
+    w = 2 * w - start.w;
+    h = 2 * h - start.h;
+  }
 
-  // x/y : Alt ancre le CENTRE local plutôt que le bord/coin opposé à la poignée tirée (le
-  // comportement par défaut ci-dessous, dans la branche `else`, inchangé depuis la Tâche 1). Comme
-  // cette formule replace TOUJOURS le centre local exactement là où il était (`localCenter.x = x +
-  // w/2 = centerX − w/2 + w/2 = centerX`, quel que soit `w`), l'étape 2 plus bas — qui ne fait que
-  // tourner le DÉPLACEMENT du centre local pour obtenir son équivalent écran — reçoit un déplacement
-  // nul et laisse donc le centre inchangé À L'ÉCRAN AUSSI, à N'IMPORTE QUEL rotationDeg, sans qu'Alt
-  // ait besoin d'un traitement particulier pour la rotation. C'est la preuve, pas une coïncidence :
-  // voir tests/studio-drag.test.ts, describe "Alt à 37°..." pour la vérification indépendante.
-  let x: number;
-  let y: number;
+  // Clamp — tient compte du ratio verrouillé quand Maj a RÉELLEMENT changé w/h (sinon un calque très
+  // fin type 1000×10 partirait hors-ratio dès que le glisser atteint le clamp — revue Tâche 2,
+  // "cheap"). `minW`/`minH` sont dérivés pour que `minW / minH === start.w / start.h` : quand l'un des
+  // deux clampe, w/h valent alors `start.w·(1+t)`/`start.h·(1+t)` pour un même `t`, donc les DEUX
+  // atteignent leur plancher respectif AU MÊME `t` — jamais un seul des deux, jamais un ratio brisé au
+  // plancher. `start.h > 0` évite une division par zéro (`ratio` NaN/Infinity) pour un calque de
+  // départ dégénéré (hauteur nulle) ; la projection ci-dessus, elle, n'en a pas besoin — elle ne
+  // divise jamais par `start.h` directement, seulement par `d2` (déjà gardé par `d2 > 0`).
+  let clamped = false;
+  if (aspectLocked && start.h > 0) {
+    const ratio = start.w / start.h;
+    const minW = Math.max(minSize, minSize * ratio);
+    const minH = Math.max(minSize, minSize / ratio);
+    if (w < minW) { w = minW; clamped = true; }
+    if (h < minH) { h = minH; clamped = true; }
+  } else {
+    if (w < minSize) { w = minSize; clamped = true; }
+    if (h < minSize) { h = minSize; clamped = true; }
+  }
+
+  // x/y : Alt ancre le CENTRE local (voir plus haut pour la preuve que cela suffit à garder le centre
+  // fixe À L'ÉCRAN aussi, à n'importe quel angle : la formule replace TOUJOURS le centre local
+  // exactement là où il était — `x + w/2 = centerX − w/2 + w/2 = centerX`, quel que soit `w` —, donc
+  // l'étape 2 plus bas, qui ne fait que tourner le DÉPLACEMENT du centre local, reçoit un déplacement
+  // nul). Sinon, l'ancrage par défaut de la Tâche 1 s'applique — mais dérivé du w/h FINAL UNIQUEMENT
+  // si Maj ou le clamp ont RÉELLEMENT changé `w`/`h` (`aspectLocked || clamped`) ; sur le chemin par
+  // défaut (aucun modificateur, pas de clamp), x/y restent les valeurs NAÏVES posées tout en haut,
+  // bit-identiques à la Tâche 1 (voir ce commentaire plus haut pour pourquoi cette distinction existe).
   if (fromCenter) {
     const centerX = start.x + start.w / 2;
     const centerY = start.y + start.h / 2;
     x = centerX - w / 2;
     y = centerY - h / 2;
-  } else {
-    // Ancrage par défaut (Tâche 1, inchangé) : la poignée ancre le ou les côtés qu'elle NE porte
-    // PAS. Formule EXACTEMENT équivalente à l'ancienne écriture en deux temps (assignation initiale
-    // + réécriture identique dans la branche de clamp), puisque `local.x = start.w − w` tant que `w`
-    // n'est pas clampé, et que le clamp réécrivait déjà `x` avec cette même formule en substituant
-    // `minSize` à `w` — dériver `x`/`y` du `w`/`h` FINAL (post-clamp, post-Maj) est donc rigoureusement
-    // la même valeur dans tous les cas déjà couverts par la Tâche 1, et c'est ce qui permet à Maj de
-    // composer avec le clamp sans code séparé.
-    x = hasW ? start.x + (start.w - w) : start.x;
-    y = hasN ? start.y + (start.h - h) : start.y;
+  } else if (aspectLocked || clamped) {
+    if (hasW) x = start.x + (start.w - w);
+    if (hasN) y = start.y + (start.h - h);
   }
 
   if (rotationDeg === 0) return { x, y, w, h };
@@ -200,7 +265,13 @@ export function computeRotationDeg(
   // (héritée d'un geste précédent sans Maj) atterrit malgré tout sur un multiple net de 15° dès que
   // Maj est tenu, ce qui correspond à l'attente « rendre cette rotation propre » plutôt qu'à
   // « ajouter un incrément propre à une valeur de départ qui peut être n'importe quoi ».
-  return Math.round(raw / ROTATION_SNAP_DEG) * ROTATION_SNAP_DEG;
+  const snapped = Math.round(raw / ROTATION_SNAP_DEG) * ROTATION_SNAP_DEG;
+  // `Math.round(x)` renvoie `-0` (pas `0`) pour tout `x` dans [-0.5, -0) — un angle brut dans
+  // (−7.5, 0] accrocherait donc sur "-0°" plutôt que "0°" sans cette normalisation (revue Tâche 2,
+  // cheap). `-0 === 0` en JS donc sans conséquence numérique, mais `-0` peut fuiter tel quel dans un
+  // affichage ou une sérialisation JSON (`"-0°"`) — `snapped === 0` est vrai pour les DEUX zéros, donc
+  // ce test normalise l'un vers l'autre sans jamais toucher une valeur non nulle.
+  return snapped === 0 ? 0 : snapped;
 }
 
 const NUDGE_STEP = 1;
@@ -250,6 +321,19 @@ interface ActiveGesture {
   startRotation: number;
   startPointer: Point;
   center?: Point;
+}
+
+// Hoisté (revue Tâche 2, cheap) : `computePreview()` et `end()` construisaient chacun le MÊME objet
+// littéral — la duplication est exactement ce qui a motivé le test de câblage de la Tâche 1 (`la
+// rotation du calque atteint bien le dispatch ») : deux sites qui doivent rester synchronisés à la
+// main finissent par diverger. Une seule fonction, un seul endroit où `rotationDeg`/`lockAspectRatio`/
+// `fromCenter` peuvent être oubliés — donc un seul endroit à vérifier.
+function resizeOptionsFor(a: ActiveGesture, modifiers: GestureModifiers): ResizeOptions {
+  return {
+    rotationDeg: a.startRotation,
+    lockAspectRatio: modifiers.shift,
+    fromCenter: modifiers.alt,
+  };
 }
 
 export interface GestureEngineOptions {
@@ -304,14 +388,7 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
     }
     if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      return {
-        layerId: a.layerId,
-        frame: computeResizedFrame(a.startFrame, a.handle!, d, {
-          rotationDeg: a.startRotation,
-          lockAspectRatio: modifiers.shift,
-          fromCenter: modifiers.alt,
-        }),
-      };
+      return { layerId: a.layerId, frame: computeResizedFrame(a.startFrame, a.handle!, d, resizeOptionsFor(a, modifiers)) };
     }
     // rotate — pas de conversion d'échelle : l'angle est invariant (voir computeRotationDeg).
     const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation, { snap: modifiers.shift });
@@ -334,11 +411,7 @@ export function createGestureEngine({ dispatch, getScale, onPreviewChange }: Ges
       if (d.x !== 0 || d.y !== 0) dispatch(moveLayer(a.layerId, d.x, d.y));
     } else if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
-      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d, {
-        rotationDeg: a.startRotation,
-        lockAspectRatio: modifiers.shift,
-        fromCenter: modifiers.alt,
-      })));
+      dispatch(resizeLayer(a.layerId, computeResizedFrame(a.startFrame, a.handle!, d, resizeOptionsFor(a, modifiers))));
     } else {
       const rotation = computeRotationDeg(a.center!, a.startPointer, pointer, a.startRotation, { snap: modifiers.shift });
       dispatch(rotateLayer(a.layerId, rotation));
