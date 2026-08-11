@@ -332,3 +332,45 @@ describe("migration de `radius` — une chaîne traverse les deux chemins", () =
     expect((back.layers[0] as ShapeLayer).radius).toBe("50%");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// Deux gardes ajoutées après la revue de la Tâche 2. La seconde est un PIÈGE DÉLIBÉRÉ.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("garde — les libellés sont UNIQUES", () => {
+  it("deux formes ne peuvent pas porter le même libellé français", () => {
+    // Revue Tâche 2, Mineur 1 : la NON-VACUITÉ du libellé était affirmée, son UNICITÉ non. Or
+    // `shape-gallery.ts` pose `name: tile.label` sur le calque inséré : deux libellés identiques
+    // donneraient deux tuiles indiscernables dans la galerie ET deux calques indiscernables dans le
+    // panneau des calques. Vacant à une seule forme, vivant dès que la Tâche 3 en livre sept.
+    const labels = SHAPE_KINDS.map((k) => shapeLabel(k));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe("PIÈGE POUR LA TÂCHE 3 — à lire quand ce test casse", () => {
+  it("le nombre de formes n'a pas changé sans que les deux dettes ci-dessous soient réglées", () => {
+    // CE TEST EST CONÇU POUR ÉCHOUER dès que `SHAPE_KINDS` grandit. Ce n'est pas un bug : c'est le
+    // seul mécanisme qui force à traiter deux dettes que la Tâche 2 ne POUVAIT pas régler (avec
+    // « rect » seul, les deux branches sont du code mort qu'aucune mutation ne peut faire rougir).
+    // La revue a été explicite : « rien n'oblige la Tâche 3, il n'y a qu'un commentaire ».
+    //
+    // AVANT de mettre ce nombre à jour, régler les DEUX :
+    //
+    //  1. `components/studio/property-panel.tsx` — le champ NUMÉRIQUE « Rayon des coins » affiche 0
+    //     pour un rayon en CHAÎNE (« 50% ») et l'ÉCRASE à la première édition. Inatteignable tant
+    //     qu'aucune forme n'utilise de pourcentage ; vivant à l'instant où l'ellipse est livrée.
+    //
+    //  2. `supportsRotation(kind)` doit faire DEUX choses, pas une : griser le contrôle de rotation
+    //     AVEC une note en français, ET supprimer la `transform` de rotation pour les formes
+    //     découpées DANS LES DEUX CHEMINS DE RENDU. Dans le navigateur `transform` tourne bel et bien
+    //     la découpe ; dans satori NON (sonde Tâche 1, réserve 2). Ne griser que le contrôle laisse
+    //     toute scène portant DÉJÀ une rotation sur une forme découpée s'afficher différemment dans
+    //     l'éditeur et dans l'export — soit exactement le §0 de ce sous-projet, réintroduit par son
+    //     propre correctif.
+    //
+    //  3. Accessoirement : la première description RÉELLEMENT découpée rend `stubShapeCss`
+    //     supprimable dans tests/studio-shape-render.test.ts, et la preuve en pixels cesse alors de
+    //     passer par une substitution (revue Tâche 2, arbitrage 1).
+    expect(SHAPE_KINDS.length).toBe(1);
+  });
+});
