@@ -4,6 +4,7 @@ import { editorReducer, initEditorState, type EditorAction, type Point } from "@
 import {
   computeResizedFrame,
   computeRotationDeg,
+  wrapDeg,
   nudgeDelta,
   createGestureEngine,
   HANDLES,
@@ -1006,6 +1007,133 @@ describe("computeRotationDeg — Maj : l'accroche ne renvoie jamais -0 (protecti
     const result = computeRotationDeg(center, start, current, 0, { snap: true });
     expect(result).toBe(0);
     expect(Object.is(result, -0)).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FORME CANONIQUE de `computeRotationDeg` (revue finale U0+U2, Important 3) — et la correction d'une
+// affirmation du rapport de revue, qui présentait ceci comme un défaut de CONTINUITÉ, « 359,9995° de
+// saut pour un mouvement de pointeur de 0,0005° ». Ce chiffre est une différence NUMÉRIQUE NAÏVE de
+// part et d'autre de la frontière canonique : 180 et −179,9995 sont à 5e-4 l'un de l'autre EN TANT QUE
+// ROTATIONS. Le premier des tests ci-dessous mesure les DEUX distances sur le même balayage pour que
+// la distinction soit établie par le fichier plutôt que par un commentaire — la continuité angulaire
+// tenait AVANT le correctif et tient encore, alors que la forme canonique, elle, était bel et bien
+// violée par un geste ordinaire.
+describe("computeRotationDeg — forme canonique (protection Important 3)", () => {
+  const center = { x: 0, y: 0 };
+  const R = 100;
+  const at = (deg: number) => ({
+    x: R * Math.cos((deg * Math.PI) / 180),
+    y: R * Math.sin((deg * Math.PI) / 180),
+  });
+  /** Distance ANGULAIRE entre deux rotations, dans [0, 180] : la seule mesure de « proximité » qui
+   *  ait un sens pour des angles, puisque 180 et −180 décrivent la même orientation. */
+  const angDist = (a: number, b: number) => Math.abs((((b - a) + 540) % 360) - 180);
+
+  it("un pas de pointeur de 0,0005° ne change la rotation que de 0,0005° — mesuré ANGULAIREMENT, pas numériquement", () => {
+    const start = at(0);
+    const step = 0.0005;
+    let worstAng = 0;
+    let worstNaive = 0;
+    for (let deg = -359.9; deg <= 359.9; deg += step) {
+      const a = computeRotationDeg(center, start, at(deg), 0);
+      const b = computeRotationDeg(center, start, at(deg + step), 0);
+      worstAng = Math.max(worstAng, angDist(a, b));
+      worstNaive = Math.max(worstNaive, Math.abs(b - a));
+    }
+    // La propriété qui compte, et qui tenait déjà avant le correctif : la rotation suit le pointeur.
+    expect(worstAng).toBeLessThan(0.001);
+    // Et la mesure naïve reste GRANDE, par construction de la plage canonique semi-ouverte : le
+    // balayage franchit forcément la frontière où +180 devient −179,9995. Asserter que ce nombre est
+    // petit serait exiger une plage sans frontière, ce qui n'existe pas — et c'est précisément
+    // l'assertion que le rapport de revue impliquait. On l'épingle donc à sa vraie valeur, pour que
+    // personne ne « corrige » plus tard une frontière qui n'est pas un défaut.
+    expect(worstNaive).toBeGreaterThan(300);
+  });
+
+  it("LE DÉFAUT RÉEL : un geste court de 20° depuis 170° rendait −340°, pas +20°", () => {
+    // Le pointeur part de l'angle 170° et arrive à −170° : c'est un mouvement de 20° dans le sens
+    // court, le geste le plus banal du monde. `atan2` renvoyant −170 et non +190, `a1 - a0` valait
+    // −340. Deux nombres pour la MÊME orientation, mais un seul est canonique — et c'est le nombre,
+    // pas l'orientation, qui est stocké, affiché, et testé par `rotationDeg !== 0` ailleurs.
+    const r = computeRotationDeg(center, at(170), at(-170), 0);
+    expect(r).toBeCloseTo(20, 9); // 19,999999999999982 — l'aller-retour cos/sin, pas la fonction
+    // L'affirmation de fond, elle, est exacte et non approchée : le résultat est dans la plage
+    // canonique, donc ne peut plus être l'ancien −340.
+    expect(r).toBeGreaterThan(-180);
+    expect(r).toBeLessThanOrEqual(180);
+    // La démonstration que l'ancien résultat décrivait bien la même orientation — donc que le bogue
+    // était invisible à l'œil, donc invisible aux 104 tests de glisser existants.
+    expect(angDist(-340, 20)).toBeLessThan(1e-9);
+  });
+
+  it("le résultat est TOUJOURS dans la plage canonique (−180, 180], à tout angle et toute rotation de départ", () => {
+    const start = at(0);
+    let outOfRange = 0;
+    let sawPositive180 = false;
+    for (const startDeg of [-180, -179, -90, 0, 37, 90, 172.5, 179, 180]) {
+      for (let deg = -359; deg <= 359; deg += 0.25) {
+        for (const snap of [false, true]) {
+          const r = computeRotationDeg(center, start, at(deg), startDeg, { snap });
+          if (!(r > -180 && r <= 180)) outOfRange += 1;
+          if (r === 180) sawPositive180 = true;
+        }
+      }
+    }
+    expect(outOfRange).toBe(0);
+    // La borne haute est ATTEINTE : la plage est bien semi-ouverte du bon côté, et −180 remonte
+    // à +180 plutôt que l'inverse. Sans cette assertion, un code renvoyant tout dans (−180, 179]
+    // passerait aussi.
+    expect(sawPositive180).toBe(true);
+  });
+
+  it("Maj ne réintroduit PAS une valeur non canonique : un brut dans (−180, −172,5] arrondirait à −180", () => {
+    // L'accroche opère sur l'angle RÉSULTANT, donc elle pouvait rendre −180 — la même rotation que
+    // +180, mais une valeur différente — sur une plage de 7,5° de large, juste après que le repli du
+    // delta l'ait éliminée. Cas concret : départ 0, geste de −176° -> brut −176 -> accroché −180.
+    const r = computeRotationDeg(center, at(0), at(-176), 0, { snap: true });
+    expect(r).toBe(180);
+    expect(r % 15).toBe(0);
+  });
+
+  it("un calque à −180° tourné encore de −180° ne devient PAS −360° (le cas qui cassait l'accroche)", () => {
+    // C'est la conséquence NON cosmétique : à −360 le calque a l'air droit, mais le champ Rotation
+    // affiche « -360 », `snap-rotation-note` annonce « Calque pivoté », et la garde
+    // `rotationDeg !== 0` de snapResize désactive silencieusement l'accrochage au redimensionnement.
+    const r = computeRotationDeg(center, at(0), at(180), -180);
+    expect(r).not.toBe(-360);
+    expect(r).toBe(0);
+    expect(Object.is(r, -0)).toBe(false);
+  });
+
+  it("wrapDeg : la forme canonique est exacte aux bornes, et laisse passer le non-fini", () => {
+    expect(wrapDeg(0)).toBe(0);
+    expect(wrapDeg(180)).toBe(180);
+    expect(wrapDeg(-180)).toBe(180);
+    expect(wrapDeg(360)).toBe(0);
+    expect(wrapDeg(-360)).toBe(0);
+    expect(Object.is(wrapDeg(-360), -0)).toBe(false);
+    expect(wrapDeg(450)).toBe(90);
+    expect(wrapDeg(-450)).toBe(-90);
+    expect(wrapDeg(270)).toBe(-90);
+    expect(wrapDeg(37)).toBe(37);
+    // Le clamp d'entrée n'est pas le travail de cette fonction : un non-fini traverse tel quel
+    // plutôt que de devenir NaN par l'arithmétique du modulo.
+    expect(Number.isNaN(wrapDeg(NaN))).toBe(true);
+    expect(wrapDeg(Infinity)).toBe(Infinity);
+  });
+
+  it("un delta déjà dans (−π, π] traverse BIT POUR BIT comme avant le correctif", () => {
+    // Le repli est conditionnel exprès : sans cela il réécrirait aussi les deltas sains au bit près,
+    // et toutes les valeurs assertées par les tests existants auraient bougé.
+    const start = at(0);
+    for (const deg of [1, 17.3, 45, 89.99, 90, 137.77, 179.9]) {
+      const a0 = Math.atan2(start.y - center.y, start.x - center.x);
+      const p = at(deg);
+      const a1 = Math.atan2(p.y - center.y, p.x - center.x);
+      const naive = 0 + (a1 - a0) * (180 / Math.PI);
+      expect(computeRotationDeg(center, start, p, 0)).toBe(naive);
+    }
   });
 });
 

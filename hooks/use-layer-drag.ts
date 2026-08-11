@@ -295,6 +295,29 @@ export interface RotationOptions {
 
 const ROTATION_SNAP_DEG = 15;
 
+/**
+ * Replie un angle en degrés dans la plage CANONIQUE (−180, 180]. Deux valeurs séparées de 360° sont
+ * la même rotation ; sans forme canonique, `-360` et `0` décrivent le même calque à l'écran mais se
+ * comportent différemment partout où le code teste `rotationDeg !== 0` — la garde de `snapResize`
+ * notamment (revue finale U0+U2, Important 3).
+ *
+ * `-180` remonte à `+180` (et non l'inverse) pour que la plage soit bien semi-ouverte à gauche, et
+ * `-0` est normalisé en `0` : `-0 === 0` en JS, mais `-0` fuite tel quel dans un affichage ou une
+ * sérialisation JSON (`"-0°"`). Un angle non fini traverse inchangé plutôt que de devenir `NaN` par
+ * l'arithmétique du modulo — le clamp d'entrée n'est pas le travail de cette fonction.
+ *
+ * Exporté pour que la lecture d'une scène héritée puisse canoniser une rotation déjà hors plage
+ * (rien ne borne `rotation` dans `scene.ts`, et les gestes antérieurs à ce correctif ont pu en
+ * stocker).
+ */
+export function wrapDeg(deg: number): number {
+  if (!Number.isFinite(deg)) return deg;
+  let d = deg % 360;
+  if (d > 180) d -= 360;
+  else if (d <= -180) d += 360;
+  return d === 0 ? 0 : d;
+}
+
 // L'angle est invariant par mise à l'échelle uniforme (atan2(dy/k, dx/k) === atan2(dy, dx) pour
 // k > 0) : center/start/current peuvent donc être fournis dans N'IMPORTE QUEL espace cohérent
 // (écran ou gabarit), du moment que les trois le sont dans le MÊME — pas besoin de conversion
@@ -308,19 +331,52 @@ export function computeRotationDeg(
 ): number {
   const a0 = Math.atan2(start.y - center.y, start.x - center.x);
   const a1 = Math.atan2(current.y - center.y, current.x - center.x);
-  const raw = startDeg + (a1 - a0) * (180 / Math.PI);
+  // FORME CANONIQUE (revue finale U0+U2, Important 3).
+  //
+  // `atan2` a une coupure de branche à ±π, donc `a1 - a0` peut valoir jusqu'à ±2π pour un geste
+  // ORDINAIRE : partir de l'angle 170° et tirer 20° dans le sens court amène le pointeur à −170°, et
+  // `a1 - a0` vaut alors −340° au lieu de +20° — deux nombres différents pour la MÊME orientation.
+  // C'est le NOMBRE, pas l'orientation, qui est stocké, affiché et testé par `rotationDeg !== 0`
+  // ailleurs : d'où la canonisation du résultat, juste en dessous.
+  //
+  // CE QUE CE CORRECTIF N'EST PAS, et le rapport de revue le présentait ainsi : ce n'est PAS un
+  // correctif de CONTINUITÉ. Le « saut de 359,9995° pour un mouvement de pointeur de 0,0005° » qui y
+  // est cité est une différence NUMÉRIQUE NAÏVE de part et d'autre de la frontière canonique, là où
+  // 180 et −179,9995 sont à 5e-4 l'un de l'autre EN TANT QUE ROTATIONS. Mesuré sur le même balayage,
+  // avant comme après le correctif : pire pas ANGULAIRE = 5,0e-4, soit exactement le pas du pointeur.
+  // La fonction était déjà continue au sens qui compte, et le reste. Voir tests/studio-drag.test.ts,
+  // describe « forme canonique », qui mesure les DEUX distances côte à côte pour que la distinction
+  // ne se reperde pas — et qui épingle la mesure naïve à sa vraie valeur, pour que personne ne
+  // « corrige » plus tard une frontière qui n'est pas un défaut.
+  //
+  // UN REPLI DU DELTA A ÉTÉ ÉCRIT PUIS RETIRÉ, parce qu'il était DÉMONTRABLEMENT MORT : le retirer
+  // laissait la suite entière verte. Replier le delta le décale de ±360° exactement, et `wrapDeg` est
+  // invariant par ±360° — les deux chemins rendent donc toujours le même nombre. Deux mécanismes là
+  // où un seul travaille, c'est le second qui pourrit d'abord. (Constaté par mutation, pas par
+  // relecture : c'est la méthode qui a trouvé tous les défauts réels de ce sous-projet.)
+  const deltaRad = a1 - a0;
+  // Le résultat est CANONIQUE dans (−180, 180]. Sans cela, `startDeg = −180` plus un delta de −180
+  // donne −360 : le calque a l'air DROIT alors que le champ Rotation affiche « -360 », que
+  // `snap-rotation-note` annonce « Calque pivoté », et surtout que la garde `rotationDeg !== 0` de
+  // `snapResize` DÉSACTIVE SILENCIEUSEMENT l'accrochage au redimensionnement (vérifié de bout en
+  // bout : 1 guide devient 0 sur le même calque et le même candidat). Deux valeurs séparées de 360°
+  // sont la MÊME rotation ; les canoniser tue cette classe de bogues à la racine plutôt qu'au cas
+  // par cas. `wrapDeg` est exporté pour que la lecture d'une scène héritée puisse en faire autant.
+  const raw = wrapDeg(startDeg + deltaRad * (180 / Math.PI));
   if (!snap) return raw;
   // Accroche l'angle RÉSULTANT, pas le delta de geste : un calque déjà à une rotation quelconque
   // (héritée d'un geste précédent sans Maj) atterrit malgré tout sur un multiple net de 15° dès que
   // Maj est tenu, ce qui correspond à l'attente « rendre cette rotation propre » plutôt qu'à
   // « ajouter un incrément propre à une valeur de départ qui peut être n'importe quoi ».
   const snapped = Math.round(raw / ROTATION_SNAP_DEG) * ROTATION_SNAP_DEG;
-  // `Math.round(x)` renvoie `-0` (pas `0`) pour tout `x` dans [-0.5, -0) — un angle brut dans
-  // (−7.5, 0] accrocherait donc sur "-0°" plutôt que "0°" sans cette normalisation (revue Tâche 2,
-  // cheap). `-0 === 0` en JS donc sans conséquence numérique, mais `-0` peut fuiter tel quel dans un
-  // affichage ou une sérialisation JSON (`"-0°"`) — `snapped === 0` est vrai pour les DEUX zéros, donc
-  // ce test normalise l'un vers l'autre sans jamais toucher une valeur non nulle.
-  return snapped === 0 ? 0 : snapped;
+  // Deux normalisations, toutes deux déléguées à `wrapDeg` :
+  //   - `Math.round(x)` renvoie `-0` (pas `0`) pour tout `x` dans [-0.5, -0), donc un angle brut dans
+  //     (−7.5, 0] accrocherait sur "-0°" plutôt que "0°" (revue Tâche 2, cheap). `-0 === 0` en JS,
+  //     sans conséquence numérique, mais `-0` fuite tel quel dans un affichage ou un JSON (`"-0°"`).
+  //   - l'ACCROCHE ELLE-MÊME peut sortir de la plage canonique : un `raw` dans (−180, −172,5] arrondit
+  //     à −180, qui décrit la même rotation que +180. Sans ce repli, Maj pouvait donc RÉINTRODUIRE la
+  //     valeur non canonique que le repli du delta vient d'éliminer, sur une plage de 7,5° large.
+  return wrapDeg(snapped);
 }
 
 const NUDGE_STEP = 1;
