@@ -311,6 +311,40 @@ describe("distributeFrames — horizontal", () => {
     for (const g of gapsAlong(out, "horizontal")) expect(g).toBeCloseTo(-85, EPS);
   });
 
+  it("cadre du MILIEU plus large que l'étendue positionnelle : l'écart négatif sort du plan de travail, et c'est assumé", () => {
+    // Revue Tâche 4, Mineur 3 : la seule forme d'ordonnancement que le fichier ne visitait pas.
+    // `span` se mesure du bord gauche du PREMIER au bord droit du DERNIER (align.ts), donc un cadre
+    // central plus large que cette étendue force un écart très négatif — ici étendue = 30, somme des
+    // largeurs = 1020, écart = (30 − 1020)/2 = −495, et B part à 0 + 10 − 495 = −485.
+    // Des coordonnées hors plan de travail sont LÉGALES (scene.ts ne borne ni x ni y, et le glisser
+    // ne les borne pas non plus) : ce test fixe le comportement documenté au lieu de le laisser être
+    // une découverte. Il passerait au rouge si quelqu'un ajoutait un bornage silencieux.
+    const wideMiddle: Frame[] = [
+      { x: 0, y: 0, w: 10, h: 10 },
+      { x: 5, y: 0, w: 1000, h: 10 },
+      { x: 20, y: 0, w: 10, h: 10 },
+    ];
+    const out = distributeFrames(wideMiddle, "horizontal");
+    expect(out.map((f) => f.x)).toEqual([0, -485, 20]);
+
+    // CE QUE CE CAS RÉVÈLE, et qui vaut plus que la coordonnée négative : l'écart devient si négatif
+    // que B se retrouve à GAUCHE de A. L'ORDRE POSITIONNEL S'INVERSE. Or l'écart égal est attribué
+    // dans l'ordre de RÉPARTITION (celui du tri d'entrée) ; « écarts égaux » n'est donc observable en
+    // re-mesurant par position que TANT QUE la répartition préserve l'ordre. Ici elle ne le préserve
+    // pas, et les deux mesures divergent — ce n'est pas un bug de calcul, c'est la portée exacte de la
+    // garantie. `gapsAlong` re-trie par position (voir sa définition) : il mesure donc l'autre chose.
+    expect(gapsAlong(out, "horizontal")).toEqual([-515, 10]); // par POSITION : inégaux
+    const inDistributionOrder = [
+      out[1].x - (out[0].x + out[0].w), // A -> B, l'ordre du tri d'entrée
+      out[2].x - (out[1].x + out[1].w), // B -> C
+    ];
+    for (const g of inDistributionOrder) expect(g).toBeCloseTo(-495, EPS); // par RÉPARTITION : égaux
+
+    // Les extrêmes restent épinglés à leur bord d'origine, garantie qui survit même à l'inversion.
+    expect(out[0].x).toBe(0);
+    expect(out[2].x).toBe(20);
+  });
+
   it("deux cadres au MÊME x : le tri est total et déterministe (le plus étroit d'abord), pas dépendant du tableau", () => {
     // A={100,w:80} B={100,w:20} C={400,w:50} — même bord gauche pour A et B.
     // Ordre de pose : B (w=20) puis A (w=80) puis C. étendue = 450-100 = 350 · somme = 150
@@ -448,6 +482,25 @@ describe("planAlign", () => {
     ];
     const changes = planAlign(layers, ["a", "b", "c"], "left", canvas);
     expect(changes).toEqual([{ id: "c", frame: { x: 10, y: 0, w: 100, h: 10 } }]);
+  });
+
+  it("AVEUGLE À LA ROTATION : un calque tourné s'aligne par son CADRE, jamais par son emprise visuelle", () => {
+    // Revue Tâche 4, Mineur 2 : la cécité à la rotation n'était affirmée que par l'en-tête d'align.ts et
+    // par la note d'interface — RIEN ne serait passé au rouge si quelqu'un apprenait la rotation à
+    // `boundingBox`. Ce test la fixe comme COMPORTEMENT, avec deux résultats franchement différents.
+    //
+    // r = {x:100, w:200, h:20} tourné de 90° autour de son centre (200,10) : son emprise VISUELLE
+    // devient 20×200 centrée au même point, donc son bord gauche à l'écran est 190, pas 100.
+    // a = {x:150, w:100} n'est pas tourné.
+    //   • aveugle (attendu) : boîte des participants = min(100,150) = 100 -> a passe à 100, r ne bouge pas.
+    //   • consciente de la rotation : boîte = min(190,150) = 150 -> a ne bouge pas et r reculerait à 60.
+    // `AlignSubject` n'a pas de champ `rotation` : le champ superflu est délibéré, pour que le test
+    // reste rouge même après l'ajout du champ (c'est ce jour-là qu'il doit protester).
+    const rotated = { id: "r", frame: { x: 100, y: 0, w: 200, h: 20 }, locked: false, rotation: 90 };
+    const layers: AlignSubject[] = [rotated, sub("a", { x: 150, y: 0, w: 100, h: 10 })];
+    expect(planAlign(layers, ["r", "a"], "left", canvas)).toEqual([
+      { id: "a", frame: { x: 100, y: 0, w: 100, h: 10 } },
+    ]);
   });
 
   it("ne renvoie AUCUN changement pour un calque non sélectionné", () => {

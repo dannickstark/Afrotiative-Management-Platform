@@ -17,6 +17,7 @@ import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
+import { alignParticipants } from "@/lib/studio/align";
 import { FieldRow, NumberField, useCommitBuffer, type Patch } from "./property-fields";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
@@ -684,8 +685,15 @@ export function PropertyPanel({
           className="flex flex-1 items-center justify-center p-4 text-center text-xs text-muted-foreground"
           data-testid="property-panel-multi"
         >
+          {/* La seconde moitié de la phrase dépend des PARTICIPANTS, pas de `selectedIds` : avec une
+              sélection entièrement verrouillée (sélectionner trois calques puis les verrouiller — le
+              verrou ne vide pas la sélection), toute la rangée est désactivée, et promettre qu'elle
+              « les aligne toutes » serait faux (revue Tâche 4, Mineur 4). */}
           {selectedIds.length} calques sélectionnés — les propriétés d&rsquo;un calque ne s&rsquo;affichent
-          que pour une sélection unique, mais la rangée ci-dessus les aligne et les répartit toutes.
+          que pour une sélection unique
+          {alignParticipants(scene.layers, selectedIds).length > 1
+            ? ", mais la rangée ci-dessus les aligne et les répartit."
+            : " — et la rangée ci-dessus est inactive, car aligner demande au moins deux calques déverrouillés."}
         </div>
       </div>
     );

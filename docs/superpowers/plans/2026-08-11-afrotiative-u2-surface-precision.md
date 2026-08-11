@@ -159,6 +159,18 @@ Keep the existing static-markup tests passing; add interaction tests via the U0 
 > `PropertyPanel` also renders above the multi-selection message. Both placements are pinned by tests,
 > and U1's existing "no geometry-strip for a multi selection" assertion stays true and unmodified.
 >
+> **"Distribute produces equal gaps within epsilon" needed qualifying, found by writing the missing
+> test.** The property holds in the **distribution order** — the input's positional sort — and is
+> observable by re-measuring positions only *while distribution preserves that order*. It can fail to:
+> when the frames' widths sum far exceeds the span, the equal gap goes so negative that a frame is placed
+> to the **left of its predecessor** and the positional order inverts. Concretely `A{x:0,w:10}
+> B{x:5,w:1000} C{x:20,w:10}` distributes to `x = 0, −485, 20`; gaps in distribution order are −495 and
+> −495, while gaps re-measured by position are **−515 and 10**. The outer frames stay pinned either way.
+> This is the exact scope of the guarantee, not a calculation error, and both measurements are now
+> asserted side by side so the distinction cannot be lost. The overlapping-frames case already in the
+> suite keeps its order, which is why it sees equal gaps under both measurements and why the limit was
+> invisible until this input class was tested.
+>
 > **Also under-specified here, and resolved:** "locked layers are excluded and the rest still align" did
 > not say excluded *from what*. Locked layers are now excluded from the **bounding box** as well as from
 > the moved set — a layer you cannot move must not decide where the others land — and it is the
