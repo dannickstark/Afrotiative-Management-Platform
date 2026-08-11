@@ -3,7 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene, Layer } from "@/lib/studio/scene";
 import type { AssetRow } from "@/lib/queries/assets";
-import { PropertyPanel } from "@/components/studio/property-panel";
+import { PropertyPanel, radiusPatch } from "@/components/studio/property-panel";
 // Tâche 6 (U1, spec §6) — même précédent que studio-marque-panel.test.ts / studio-texte-panel.test.ts
 // / studio-elements-panel.test.ts / studio-mode-switch.test.ts : on affirme contre une valeur
 // IMPORTÉE plutôt qu'une chaîne re-dérivée à la main.
@@ -406,6 +406,53 @@ describe("PropertyPanel — calque forme", () => {
     const html = render([shapeLayerSolid], "s1", "recap_card");
     expect(html).toContain('value="2"'); // épaisseur bordure
     expect(html).toContain('value="#FFFFFF"'); // couleur bordure
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — DETTE 1 du « PIÈGE POUR LA TÂCHE 3 » (tests/studio-shapes.test.ts).
+//
+// Le champ « Rayon des coins » était un champ NUMÉRIQUE : il affichait `0` pour un rayon en CHAÎNE
+// (« 50% », que le schéma accepte depuis la Tâche 2) et l'ÉCRASAIT au premier commit. La valeur est
+// désormais affichée TELLE QU'ELLE EST, et la conversion saisie -> stockée passe par la SEULE
+// grammaire du rayon (lib/studio/scene.ts#parseRadiusInput), testée là-bas.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — le rayon d'une forme (dette 1)", () => {
+  // La balise de CE champ, jamais un `toContain("50%")` qui matcherait n'importe où dans le HTML
+  // (leçon des deux pièges de sous-chaîne relevés en revue de U1/U2).
+  function radiusTag(html: string): string {
+    return openingTag(html, "data-field", "radius");
+  }
+  function shapeWith(radius: number | string | undefined): Layer {
+    return { ...shapeLayerSolid, radius } as Layer;
+  }
+
+  it("un rayon en POURCENTAGE s'affiche « 50% » — jamais « 0 »", () => {
+    const tag = radiusTag(render([shapeWith("50%")], "s1", "recap_card"));
+    expect(tag).toContain('value="50%"');
+    expect(tag).not.toContain('value="0"');
+  });
+
+  it("un rayon en pixels reste affiché tel quel, et l'absence de rayon affiche un champ VIDE", () => {
+    expect(radiusTag(render([shapeWith(4)], "s1", "recap_card"))).toContain('value="4"');
+    expect(radiusTag(render([shapeWith(undefined)], "s1", "recap_card"))).toContain('value=""');
+  });
+
+  it("le champ n'est plus un `<input type=\"number\">` — un nombre ne peut pas porter « 50% »", () => {
+    expect(radiusTag(render([shapeWith("50%")], "s1", "recap_card"))).not.toContain('type="number"');
+  });
+
+  // Le HTML sérialisé ne permet aucun clic (pas de DOM sous `bun test`) : on teste donc la fonction
+  // PURE que le champ appelle, exactement comme elements-panel.tsx#insertShapeTile — c'est elle qui
+  // décide s'il faut écrire, et quoi.
+  it("radiusPatch : une saisie refusée n'écrase RIEN (aucun patch), une saisie valide écrit", () => {
+    expect(radiusPatch("banane", "50%")).toBeNull();   // le « 50% » stocké survit
+    expect(radiusPatch("50%", "50%")).toBeNull();      // inchangé -> aucune entrée d'historique
+    expect(radiusPatch("12", "50%")).toEqual({ radius: 12 });
+    expect(radiusPatch("60%", "50%")).toEqual({ radius: "60%" });
+    expect(radiusPatch("", 12)).toEqual({ radius: undefined });
+    expect(radiusPatch("0", 12)).toEqual({ radius: undefined });
+    expect(radiusPatch("", undefined)).toBeNull();     // rien -> rien : aucun patch
   });
 });
 

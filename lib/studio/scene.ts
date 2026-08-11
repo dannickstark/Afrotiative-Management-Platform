@@ -101,10 +101,62 @@ export type ShapeKind = (typeof SHAPE_KINDS)[number];
 // code que parseScene sait afficher tel quel — un seul message français qui dit les DEUX formes
 // acceptées.
 const RADIUS_LENGTH_RE = /^\d+(?:\.\d+)?(?:px|%)(?: \d+(?:\.\d+)?(?:px|%)){0,3}$/;
+
+/**
+ * LE prédicat du rayon — celui que le schéma applique, exporté pour que l'interface le DEMANDE au
+ * lieu d'en écrire une seconde version (U3 Tâche 3). Une deuxième grammaire du rayon dans un
+ * composant pourrait se desserrer sans que le schéma suive : le panneau écrirait alors une scène que
+ * sa propre relecture refuserait. tests/studio-scene.test.ts vérifie l'équivalence DANS LES DEUX
+ * SENS avec parseScene.
+ */
+export function isCssRadius(value: unknown): boolean {
+  return typeof value === "number"
+    ? Number.isFinite(value) && value >= 0
+    : typeof value === "string" && RADIUS_LENGTH_RE.test(value);
+}
+
 const cssRadius = z.custom<number | string>(
-  (v) => (typeof v === "number" ? Number.isFinite(v) && v >= 0 : typeof v === "string" && RADIUS_LENGTH_RE.test(v)),
+  (v) => isCssRadius(v),
   { message: "Rayon invalide (attendu un nombre de pixels ≥ 0, ou 1 à 4 longueurs en « px » ou « % » séparées par une espace, ex. « 50% »)" },
 );
+
+// Chiffres NUS (« 12 », « 12.5 ») : la forme HISTORIQUE du rayon, un nombre de pixels. Le schéma
+// refuse la CHAÎNE « 12 » (RADIUS_LENGTH_RE exige une unité) — c'est donc en nombre qu'une telle
+// saisie doit être stockée, et non telle quelle.
+const BARE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
+/**
+ * Le texte qu'un champ de rayon AFFICHE pour la valeur stockée (U3 Tâche 3, dette 1 du piège de la
+ * Tâche 2). La valeur est montrée TELLE QU'ELLE EST : l'ancien champ numérique affichait « 0 » pour
+ * un rayon « 50% », et l'écrasait au premier commit.
+ */
+export function formatRadius(radius: number | string | undefined): string {
+  return radius === undefined ? "" : String(radius);
+}
+
+/**
+ * Le rayon à STOCKER pour un texte saisi — ou `null` quand ce texte n'est pas un rayon, auquel cas
+ * l'appelant ne doit RIEN écrire (le champ revient à la valeur stockée). Un repli silencieux sur 0
+ * détruirait un « 50% » à la première frappe malheureuse : c'est exactement le défaut corrigé ici.
+ *
+ *   ""  /  "   "  /  "0"      -> `undefined` : aucun rayon (les deux chemins de rendu n'émettent
+ *                                rien pour 0 comme pour l'absence — voir lib/studio/shapes.ts)
+ *   "12" / "12.5"             -> 12 / 12.5, en PIXELS (forme historique)
+ *   "50%" / "8px 24px"        -> la chaîne, intacte
+ *   tout le reste             -> `null`, refusé
+ */
+export function parseRadiusInput(text: string): number | string | undefined | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return undefined;
+  if (BARE_NUMBER_RE.test(trimmed)) {
+    const n = Number(trimmed);
+    if (!isCssRadius(n)) return null;
+    // `0` et l'absence de rayon sont la MÊME chose pour les deux chemins de rendu (« un rayon de 0
+    // n'arrondit rien, donc il n'émet rien », shapes.ts) — on stocke donc la forme canonique.
+    return n === 0 ? undefined : n;
+  }
+  return isCssRadius(trimmed) ? trimmed : null;
+}
 
 const shapeLayer = z.object({
   ...layerBase,

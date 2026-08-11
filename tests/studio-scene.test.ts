@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { FORMAT_PRESETS } from "@/lib/studio/formats";
-import { parseScene, SceneError, type Scene } from "@/lib/studio/scene";
+import { formatRadius, isCssRadius, parseRadiusInput, parseScene, SceneError, type Scene } from "@/lib/studio/scene";
 
 const valid: Scene = {
   schemaVersion: 1,
@@ -90,6 +90,106 @@ describe("parseScene — le rayon d'un calque forme", () => {
     for (const value of [-1, "banane", "50", "50 %", "8px 24px 8px 24px 8px", "50%;", true, {}]) {
       expect(() => parseScene(sceneWithRadius(value))).toThrow(SceneError);
       expect(() => parseScene(sceneWithRadius(value))).toThrow(/Rayon invalide/);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — LA GRAMMAIRE DU RAYON, ET LES DEUX CONVERSIONS QUE L'INTERFACE DEMANDE.
+//
+// Dette 1 du « PIÈGE POUR LA TÂCHE 3 » (tests/studio-shapes.test.ts) : le champ « Rayon des coins »
+// du panneau de propriétés était NUMÉRIQUE. Il affichait donc `0` pour un rayon en CHAÎNE (« 50% »)
+// et l'ÉCRASAIT au premier commit — inatteignable tant qu'aucune forme n'utilisait de pourcentage,
+// vivant à l'instant où l'ellipse est livrée. Le correctif demande deux conversions (stocké ->
+// affiché, saisi -> stocké) ; elles vivent ICI, à côté de la seule expression régulière qui définit
+// ce qu'est un rayon, plutôt que dans le composant qui en aurait fait une SECONDE grammaire libre de
+// dériver de celle du schéma (le défaut de famille que SHAPE_KINDS existe déjà pour tuer).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("le rayon vu par l'interface — formatRadius / parseRadiusInput", () => {
+  it("affiche la valeur STOCKÉE telle qu'elle est — jamais « 0 » pour une chaîne", () => {
+    expect(formatRadius("50%")).toBe("50%");
+    expect(formatRadius("8px 24px")).toBe("8px 24px");
+    expect(formatRadius(12)).toBe("12");
+    expect(formatRadius(12.5)).toBe("12.5");
+    expect(formatRadius(0)).toBe("0");
+    expect(formatRadius(undefined)).toBe("");
+    // LE défaut, dit en une assertion : l'ancien champ affichait « 0 » ici.
+    expect(formatRadius("50%")).not.toBe("0");
+  });
+
+  it("un texte de chiffres nus reste la forme HISTORIQUE : un nombre de pixels", () => {
+    // Le schéma REFUSE la chaîne « 50 » (voir le test « refuse ce qui n'est ni… » plus haut) : la
+    // saisie doit donc devenir un NOMBRE, pas être stockée telle quelle.
+    expect(parseRadiusInput("12")).toBe(12);
+    expect(parseRadiusInput("12.5")).toBe(12.5);
+    expect(parseRadiusInput(" 60 ")).toBe(60);
+  });
+
+  it("une longueur CSS est conservée TELLE QUELLE", () => {
+    for (const text of ["50%", "0.5%", "8px", "100%", "8px 24px", "8px 24px 8px 24px"]) {
+      expect(parseRadiusInput(text)).toBe(text);
+    }
+  });
+
+  it("« rien » et « 0 » signifient tous deux AUCUN rayon (les deux chemins de rendu n'émettent rien)", () => {
+    expect(parseRadiusInput("")).toBeUndefined();
+    expect(parseRadiusInput("   ")).toBeUndefined();
+    expect(parseRadiusInput("0")).toBeUndefined();
+  });
+
+  it("un texte qui n'est PAS un rayon est REFUSÉ (null) — pas silencieusement converti en 0", () => {
+    // C'est la moitié « ne rien écraser » du correctif : le champ revient à la valeur stockée quand
+    // la saisie est refusée. Un repli sur 0 détruirait un « 50% » à la première frappe malheureuse.
+    for (const text of ["banane", "-1", "50 %", "8px 24px 8px 24px 8px", "50%;", "1e3", "50px%", "%"]) {
+      expect(parseRadiusInput(text)).toBeNull();
+    }
+  });
+
+  it("tout ce que parseRadiusInput ACCEPTE, parseScene l'accepte aussi — la grammaire est UNE", () => {
+    // LE garde-fou anti-dérive : desserrer parseRadiusInput sans desserrer le schéma ferait écrire
+    // par l'interface une scène que sa propre relecture refuserait. Mutation qui rougit : accepter
+    // « 50 » comme chaîne, ou « 8px 24px 8px 24px 8px ».
+    const inputs = ["", "0", "12", "12.5", "0.5%", "50%", "100%", "8px", "8px 24px", "8px 24px 8px 24px"];
+    for (const text of inputs) {
+      const value = parseRadiusInput(text);
+      expect(value).not.toBeNull();
+      const scene = {
+        schemaVersion: 1,
+        canvas: { width: 800, height: 400, background: "#000000" },
+        layers: [{
+          id: "s", name: "Forme", visible: true, locked: false,
+          frame: { x: 0, y: 0, w: 800, h: 400 },
+          type: "shape", shape: "rect", fill: "#FF0000",
+          ...(value === undefined ? {} : { radius: value }),
+        }],
+      };
+      const layer = parseScene(scene).layers[0];
+      if (layer.type !== "shape") throw new Error("calque inattendu");
+      expect(layer.radius).toBe(value as number | string | undefined);
+    }
+  });
+
+  it("isCssRadius EST le prédicat que le schéma applique — pas une seconde copie", () => {
+    // Vérifié des deux côtés : ce que le prédicat accepte, parseScene l'accepte ; ce qu'il refuse,
+    // parseScene le refuse. Sans ces deux sens, exporter le prédicat pourrait le laisser dériver.
+    function schemaAccepts(radius: unknown): boolean {
+      try {
+        parseScene({
+          schemaVersion: 1,
+          canvas: { width: 800, height: 400, background: "#000000" },
+          layers: [{
+            id: "s", name: "Forme", visible: true, locked: false,
+            frame: { x: 0, y: 0, w: 800, h: 400 },
+            type: "shape", shape: "rect", fill: "#FF0000", radius,
+          }],
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    for (const value of [0, 12, 12.5, 2593, "50%", "8px", "8px 24px", -1, "50", "banane", true, {}, null]) {
+      expect(`${JSON.stringify(value)} -> ${isCssRadius(value)}`).toBe(`${JSON.stringify(value)} -> ${schemaAccepts(value)}`);
     }
   });
 });

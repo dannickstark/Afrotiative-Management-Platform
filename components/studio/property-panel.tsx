@@ -11,6 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
+// Import de VALEUR (U3 Tâche 3) : la grammaire du rayon vit dans le schéma, et ce panneau la DEMANDE
+// plutôt que d'en écrire une seconde qui pourrait dériver. scene.ts est un module de schéma pur (zod)
+// — il n'atteint ni `@/db` ni aucun code serveur, contrainte vérifiée par tests/studio-no-r2.test.ts
+// et par le traçage d'imports de valeur du rapport de tâche.
+import { formatRadius, parseRadiusInput } from "@/lib/studio/scene";
 import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
@@ -170,6 +175,61 @@ function ColorField({
 }
 
 // Booléen : pas de tampon — un bascule est un geste unique, pas une frappe à amortir.
+// ─────────────────────────────────────────────────────────────────────────────
+// LE RAYON DES COINS (U3 Tâche 3, dette 1 du « PIÈGE POUR LA TÂCHE 3 »).
+//
+// Avant cette tâche, ce contrôle était un `NumberField` : il affichait `0` pour un rayon en CHAÎNE
+// (« 50% », que le schéma accepte depuis la Tâche 2, arbitrage C) et l'ÉCRASAIT au premier commit.
+// Inatteignable tant que `rect` était la seule forme ; vivant à l'instant où l'ellipse est livrée.
+//
+// `radiusPatch` est EXPORTÉE et pure — même idiome que elements-panel.tsx#insertShapeTile : ce dépôt
+// n'a pas de DOM sous `bun test`, donc la seule façon de tester ce qu'un commit ÉCRIT est d'extraire
+// la décision. Elle renvoie `null` pour « ne rien écrire » : saisie refusée (la valeur stockée
+// survit — c'est la moitié « ne rien écraser » du correctif) ou valeur inchangée (pas d'entrée
+// d'historique pour un aller-retour dans le champ).
+export function radiusPatch(
+  text: string,
+  stored: number | string | undefined,
+): Record<string, unknown> | null {
+  const parsed = parseRadiusInput(text);
+  if (parsed === null) return null;
+  if (parsed === stored) return null;
+  return { radius: parsed };
+}
+
+function RadiusField({ value, onCommit }: { value: number | string | undefined; onCommit: Patch }) {
+  const shown = formatRadius(value);
+  const { local, setLocal, editing, setEditing } = useCommitBuffer(shown);
+  function commit() {
+    setEditing(false);
+    const p = radiusPatch(local, value);
+    // Rien à écrire : on RENORMALISE l'affichage sur la valeur stockée. C'est ce qui fait revenir le
+    // champ à « 50% » après une saisie refusée, au lieu de laisser un texte invalide à l'écran.
+    if (!p) { setLocal(shown); return; }
+    onCommit(p);
+  }
+  return (
+    <FieldRow label="Rayon des coins">
+      <Input
+        value={local}
+        inputMode="text"
+        data-field="radius"
+        placeholder="ex. 12 ou 50%"
+        onFocus={() => setEditing(true)}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "Escape") { setLocal(shown); setEditing(false); e.currentTarget.blur(); }
+        }}
+      />
+      <p className="text-[11px] text-muted-foreground">
+        Un nombre de pixels (« 12 ») ou une longueur CSS (« 50% ») — vide pour aucun arrondi.
+      </p>
+    </FieldRow>
+  );
+}
+
 function SwitchField({ label, checked, onCommit }: { label: string; checked: boolean; onCommit: (v: boolean) => void }) {
   return (
     <div className="flex items-center justify-between gap-2">
@@ -595,12 +655,7 @@ function ShapeFields({
       </TypeSection>
 
       <TypeSection title="Forme" sectionId="forme" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
-        {/* `radius` accepte désormais AUSSI une chaîne CSS (U3 Tâche 2, arbitrage C : un nombre ne
-            peut pas exprimer une ellipse). Ce champ NUMÉRIQUE ne sait montrer que la forme
-            historique — aujourd'hui la seule qu'une interface produise, `rect` étant la seule forme
-            du schéma. LA TÂCHE 3, qui livre l'ellipse, DOIT reprendre ce contrôle : tel quel, il
-            afficherait 0 pour un rayon « 50% » et l'écraserait au premier commit. */}
-        <NumberField label="Rayon des coins" value={typeof layer.radius === "number" ? layer.radius : 0} min={0} onCommit={(v) => patch({ radius: v || undefined })} />
+        <RadiusField value={layer.radius} onCommit={patch} />
       </TypeSection>
 
       <TypeSection title="Bordure" sectionId="bordure" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
