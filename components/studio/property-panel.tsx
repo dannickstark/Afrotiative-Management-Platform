@@ -11,12 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
-import { type EditorAction, setLayerProp } from "@/lib/studio/editor-state";
+import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
-import { GeometryStrip } from "./geometry-strip";
+import { AlignRow, GeometryStrip } from "./geometry-strip";
+import { alignParticipants } from "@/lib/studio/align";
 import { FieldRow, NumberField, useCommitBuffer, type Patch } from "./property-fields";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
@@ -43,7 +44,10 @@ import { FieldRow, NumberField, useCommitBuffer, type Patch } from "./property-f
 //     repliables via `TypeSection`, mémorisées par type de calque (voir sa note).
 export interface PropertyPanelProps {
   scene: Scene;
-  selectedId: string | null;
+  /** Tâche 3 (U2, spec §3) — la sélection COMPLÈTE. Ce panneau n'a de sens que sur UN calque (chaque
+   * champ édite une propriété d'un calque précis), donc il n'en rend les sections que pour une
+   * sélection simple et affiche autrement un message qui dit la vérité — voir `PropertyPanel`. */
+  selectedIds: string[];
   context: TemplateContext;
   dispatch: Dispatch<EditorAction>;
   // Tâche 13 (Lot 3) : la bibliothèque d'assets (Tâche 11), chargée UNE FOIS par le composant
@@ -658,9 +662,42 @@ function QrFields({
 
 // ─────────────────────────────────────────────────────────────────────────────
 export function PropertyPanel({
-  scene, selectedId, context, dispatch, assets = [], sectionsOpen = {}, onSectionsOpenChange = () => {},
+  scene, selectedIds, context, dispatch, assets = [], sectionsOpen = {}, onSectionsOpenChange = () => {},
 }: PropertyPanelProps) {
-  const layer = scene.layers.find((l) => l.id === selectedId) ?? null;
+  // `singleSelectedId` et non `selectedIds[0]` : pour une sélection multiple, il n'y a PAS de calque
+  // à éditer ici, et prendre le premier afficherait ses propriétés comme si elles valaient pour les
+  // trois — voir sa documentation dans lib/studio/editor-state.ts.
+  const layer = scene.layers.find((l) => l.id === singleSelectedId(selectedIds)) ?? null;
+
+  // Sélection MULTIPLE (Tâche 3, U2, spec §3) — avant l'état vide, car une sélection multiple n'est
+  // PAS « rien de sélectionné » et le dire ainsi serait mentir à l'utilisateur. Message honnête : il
+  // annonce le compte réel et pourquoi les sections n'apparaissent pas, plutôt que de laisser croire
+  // à une panne. La bande de géométrie n'est pas rendue non plus (elle édite UN cadre).
+  //
+  // Tâche 4 (U2, spec §4) : la rangée aligner/répartir, elle, a tout son sens ici — c'est même son cas
+  // d'usage principal. Elle est donc rendue AU-DESSUS du message, jamais dans une bande de géométrie
+  // (qui reste réservée à l'édition d'un cadre unique).
+  if (selectedIds.length > 1) {
+    return (
+      <div className="flex h-full flex-col">
+        <AlignRow scene={scene} selectedIds={selectedIds} dispatch={dispatch} className="border-b p-3" />
+        <div
+          className="flex flex-1 items-center justify-center p-4 text-center text-xs text-muted-foreground"
+          data-testid="property-panel-multi"
+        >
+          {/* La seconde moitié de la phrase dépend des PARTICIPANTS, pas de `selectedIds` : avec une
+              sélection entièrement verrouillée (sélectionner trois calques puis les verrouiller — le
+              verrou ne vide pas la sélection), toute la rangée est désactivée, et promettre qu'elle
+              « les aligne toutes » serait faux (revue Tâche 4, Mineur 4). */}
+          {selectedIds.length} calques sélectionnés — les propriétés d&rsquo;un calque ne s&rsquo;affichent
+          que pour une sélection unique
+          {alignParticipants(scene.layers, selectedIds).length > 1
+            ? ", mais la rangée ci-dessus les aligne et les répartit."
+            : " — et la rangée ci-dessus est inactive, car aligner demande au moins deux calques déverrouillés."}
+        </div>
+      </div>
+    );
+  }
 
   if (!layer) {
     return (
@@ -694,7 +731,7 @@ export function PropertyPanel({
     // `data-testid` dans le HTML sérialisé (rien de plus : `renderToStaticMarkup` ne rend aucune boîte
     // ni aucun `overflow` réel, voir le rapport de tâche pour la portée exacte de cette preuve).
     <div className="flex h-full flex-col" data-testid="property-panel" key={layer.id}>
-      <GeometryStrip layer={layer} patch={patch} />
+      <GeometryStrip layer={layer} patch={patch} scene={scene} selectedIds={selectedIds} dispatch={dispatch} />
 
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto p-3" data-testid="property-sections">
         {layer.type === "text" && (

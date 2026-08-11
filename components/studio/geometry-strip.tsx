@@ -1,6 +1,19 @@
 "use client";
 
-import type { Layer } from "@/lib/studio/scene";
+import type { Dispatch } from "react";
+import {
+  AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical,
+  AlignHorizontalDistributeCenter, AlignStartHorizontal, AlignStartVertical,
+  AlignVerticalDistributeCenter, type LucideIcon,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import type { Layer, Scene } from "@/lib/studio/scene";
+import {
+  ALIGN_MODES, DISTRIBUTE_AXES, alignParticipants, planAlign, planDistribute,
+  type AlignMode, type DistributeAxis,
+} from "@/lib/studio/align";
+import { setFrames, type EditorAction } from "@/lib/studio/editor-state";
 import { NumberField, type Patch } from "./property-fields";
 
 // components/studio/geometry-strip.tsx — Tâche 6 (U1, spec §6) : les six champs de cadre (X, Y,
@@ -21,16 +34,18 @@ import { NumberField, type Patch } from "./property-fields";
 export interface GeometryStripProps {
   layer: Layer;
   patch: Patch;
+  // Tâche 4 (U2, spec §4) : la rangée aligner/répartir raisonne sur la SCÈNE (le plan de travail comme
+  // référence, les cadres des autres calques sélectionnés) et dispatche elle-même son lot — elle ne
+  // peut donc pas passer par `patch`, qui ne sait éditer QUE le calque courant.
+  scene: Scene;
+  selectedIds: readonly string[];
+  dispatch: Dispatch<EditorAction>;
 }
 
-// Conçue avec de la place pour ce qui arrive PLUS TARD, sans le construire maintenant (spec §6) :
-//   - U2 ajoutera ici une rangée align/distribute une fois la sélection multiple disponible ;
-//   - U5 ajoutera le widget d'ancrage par côté (chaque côté du calque ancré au côté correspondant du
-//     canevas, avec une valeur en pixels).
-// Les deux rangées ci-dessous (cadre, puis rotation/opacité) laissent structurellement de la place à
-// une troisième sans réagencement — mais aucun nœud DOM n'est réservé pour ces deux fonctionnalités :
-// ce serait construire par anticipation ce que l'énoncé interdit explicitement pour cette tâche.
-export function GeometryStrip({ layer, patch }: GeometryStripProps) {
+// La place que U1 avait laissée ici (spec §6 : « U2 ajoutera ici une rangée align/distribute une fois
+// la sélection multiple disponible ») est désormais occupée par `AlignRow`, en TROISIÈME rangée. Reste
+// à venir, et toujours pas construit par anticipation : U5 y ajoutera le widget d'ancrage par côté.
+export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: GeometryStripProps) {
   return (
     <div className="space-y-2 border-b p-3" data-testid="geometry-strip">
       <div className="grid grid-cols-4 gap-2">
@@ -52,6 +67,135 @@ export function GeometryStrip({ layer, patch }: GeometryStripProps) {
           onCommit={(v) => patch({ opacity: Math.min(1, Math.max(0, v)) })}
         />
       </div>
+      {/* Tâche 5 (U2, spec §5) — la LIMITE D'ACCROCHAGE d'un calque pivoté, dite plutôt que laissée à
+          découvrir (verdict de la revue de la Tâche 5 : « la fonctionnalité meurt en silence », et la
+          Tâche 4 avait établi le précédent juste en dessous avec sa note de rotation). Mêmes règles de
+          ton et de placement que cette note-là : un `<p>` discret, dans la bande de géométrie, et
+          UNIQUEMENT quand le calque est RÉELLEMENT pivoté — un avertissement permanent ne serait plus lu.
+          Placé ICI plutôt que dans `AlignRow` parce que c'est le calque MANIPULÉ qui est concerné : la
+          bande n'est rendue que pour une sélection SIMPLE, c'est-à-dire exactement le cas où le calque
+          porte ses poignées et peut donc être redimensionné.
+          Les DEUX moitiés sont dites, sans arrondir l'angle : l'accrochage est désactivé pendant un
+          redimensionnement (lib/studio/snap.ts, décision 3 — « accrocher le bord est » n'a plus de
+          référent dès que le calque tourne), et pendant un DÉPLACEMENT il fonctionne mais les guides
+          marquent le cadre non pivoté, pas le contour visible (mesuré : 6,82 px d'écart à 45° sur un
+          calque 200×150). */}
+      {(layer.rotation ?? 0) !== 0 && (
+        <p className="text-[11px] text-muted-foreground" data-testid="snap-rotation-note">
+          Calque pivoté : l&rsquo;accrochage est désactivé pendant un redimensionnement ; pendant un
+          déplacement, les guides marquent le cadre non pivoté (X, Y, largeur, hauteur), pas le
+          contour visible à l&rsquo;écran.
+        </p>
+      )}
+      <AlignRow scene={scene} selectedIds={selectedIds} dispatch={dispatch} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 4 (U2, spec §4) — aligner et répartir.
+//
+// Toute la géométrie vit dans lib/studio/align.ts (module PUR, testé avec des littéraux) et tout
+// l'historique dans l'action `setFrames` du réducteur (UN lot = UNE entrée d'annulation). Ce composant
+// ne fait donc que trois choses : compter les PARTICIPANTS pour savoir quels boutons sont actionnables,
+// nommer la référence dans l'infobulle, et dispatcher le lot. Aucun calcul de cadre ici — c'est
+// délibéré : une deuxième implémentation de la boîte englobante côté interface serait une occasion de
+// dériver du module testé.
+//
+// Rendu à DEUX endroits (property-panel.tsx) : en troisième rangée de la bande de géométrie pour une
+// sélection simple, et seule au-dessus du message honnête pour une sélection multiple — le seul
+// contrôle du panneau qui ait un sens à plus d'un calque.
+export interface AlignRowProps {
+  scene: Scene;
+  selectedIds: readonly string[];
+  dispatch: Dispatch<EditorAction>;
+  className?: string;
+}
+
+// `Record<AlignMode, …>` indexé par la liste canonique ALIGN_MODES : ajouter un mode dans
+// lib/studio/align.ts sans lui donner de bouton ici ne COMPILE PAS (même garde de complétude que
+// SHAPE_KINDS pour le panneau Éléments), plutôt que de le laisser inaccessible en silence.
+const ALIGN_BUTTONS: Record<AlignMode, { label: string; Icon: LucideIcon }> = {
+  left: { label: "Aligner à gauche", Icon: AlignStartVertical },
+  hcenter: { label: "Centrer horizontalement", Icon: AlignCenterVertical },
+  right: { label: "Aligner à droite", Icon: AlignEndVertical },
+  top: { label: "Aligner en haut", Icon: AlignStartHorizontal },
+  vmiddle: { label: "Centrer verticalement", Icon: AlignCenterHorizontal },
+  bottom: { label: "Aligner en bas", Icon: AlignEndHorizontal },
+};
+
+const DISTRIBUTE_BUTTONS: Record<DistributeAxis, { label: string; Icon: LucideIcon }> = {
+  horizontal: { label: "Répartir horizontalement (écarts égaux)", Icon: AlignHorizontalDistributeCenter },
+  vertical: { label: "Répartir verticalement (écarts égaux)", Icon: AlignVerticalDistributeCenter },
+};
+
+export function AlignRow({ scene, selectedIds, dispatch, className }: AlignRowProps) {
+  // Les participants, calculés par le module (sélectionnés ∧ non verrouillés ∧ non masqués — voir la
+  // décision 4 d'align.ts, corrigée par l'Important 2 de la revue finale) — jamais re-filtrés ici.
+  const participants = alignParticipants(scene.layers, selectedIds);
+  const canAlign = participants.length >= 1;
+  // Répartir demande trois PARTICIPANTS, pas trois sélectionnés : avec deux cadres il n'existe aucun
+  // écart intérieur à égaliser, et un troisième calque verrouillé ne compte pas.
+  const canDistribute = participants.length >= 3;
+  // La référence de l'alignement, dite à l'utilisateur plutôt que devinée : un seul participant se cale
+  // sur le plan de travail (sinon la rangée serait inerte — s'aligner sur sa propre boîte est un no-op),
+  // plusieurs se calent sur la boîte englobante de la sélection.
+  const reference = participants.length === 1 ? "par rapport au plan de travail" : "par rapport à la sélection";
+  // « say so in the UI's tooltip if it matters » (plan) : la note n'apparaît que si un participant est
+  // RÉELLEMENT pivoté — un avertissement permanent ne serait plus lu par personne.
+  const hasRotated = participants.some((l) => (l.rotation ?? 0) !== 0);
+
+  return (
+    <div className={cn("space-y-1", className)} data-testid="align-row">
+      <div className="flex items-center gap-0.5" role="group" aria-label="Aligner et répartir">
+        {ALIGN_MODES.map((mode) => {
+          const { label, Icon } = ALIGN_BUTTONS[mode];
+          return (
+            <Button
+              key={mode}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              data-action={`align-${mode}`}
+              aria-label={label}
+              title={`${label} — ${reference}`}
+              disabled={!canAlign}
+              onClick={() => dispatch(setFrames(planAlign(scene.layers, selectedIds, mode, scene.canvas)))}
+            >
+              <Icon />
+            </Button>
+          );
+        })}
+        {/* Séparateur : aligner et répartir sont deux gestes différents, pas six variantes du même. */}
+        <span aria-hidden="true" className="mx-0.5 h-5 w-px shrink-0 bg-border" />
+        {DISTRIBUTE_AXES.map((axis) => {
+          const { label, Icon } = DISTRIBUTE_BUTTONS[axis];
+          return (
+            <Button
+              key={axis}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              data-action={`distribute-${axis}`}
+              aria-label={label}
+              title={canDistribute ? label : `${label} — trois calques déverrouillés minimum`}
+              disabled={!canDistribute}
+              onClick={() => dispatch(setFrames(planDistribute(scene.layers, selectedIds, axis)))}
+            >
+              <Icon />
+            </Button>
+          );
+        })}
+      </div>
+      {/* Texte volontairement SANS « ci-dessus » : cette rangée est aussi rendue pour une sélection
+          multiple, où les champs X/Y/largeur/hauteur ne sont PAS affichés (property-panel.tsx) —
+          renvoyer à des champs absents serait faux la moitié du temps. */}
+      {hasRotated && (
+        <p className="text-[11px] text-muted-foreground" data-testid="align-rotation-note">
+          Rotation ignorée : l&rsquo;alignement utilise les cadres non pivotés (X, Y, largeur,
+          hauteur), pas la boîte visible à l&rsquo;écran.
+        </p>
+      )}
     </div>
   );
 }

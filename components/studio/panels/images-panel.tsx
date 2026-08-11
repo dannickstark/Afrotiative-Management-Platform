@@ -40,6 +40,14 @@ import type { RailCategory } from "@/lib/studio/editor-prefs";
 // Correctif revue finale — Important 2 : ce panneau enrobe désormais LUI-MÊME `<PanelHost>`, ce qui
 // lui permet de peupler `primaryAction` (« Importer un fichier ») ET `search` (filtre client-side
 // sur `assets`, déjà reçu en prop — voir `filterAssetsBySearch` ci-dessous, exportée pure).
+// Tâche 3 (U2, spec §3) — ce panneau garde `selectedId: string | null` alors que l'état de l'éditeur
+// porte désormais `selectedIds: string[]`, et c'est délibéré : assigner un asset n'a de sens que sur
+// UN calque image. editor-shell.tsx lui passe `singleSelectedId(state.selectedIds)`
+// (lib/studio/editor-state.ts), donc une sélection multiple arrive ici comme `null` et le sélecteur
+// se désactive exactement comme pour une sélection vide — le comportement honnête, sans code dédié.
+// C'est le cas d'usage pour lequel le plan demandait une aide dérivée « so consumers that only make
+// sense with one layer stay simple ». À ne pas confondre avec `ViewState.selectedId`
+// (lib/studio/studio-mode.ts), qui porte un FORMAT en mode Rendu réel et n'a rien à voir.
 export interface ImagesPanelProps {
   context: TemplateContext;
   assets: AssetRow[];

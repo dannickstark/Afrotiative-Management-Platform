@@ -185,7 +185,7 @@ describe("insertDynamicTextLayer — le clic n'insère JAMAIS un jeton illégal 
     const layer = insertDynamicTextLayer(row, { width: 1200, height: 630 });
     if (layer) dispatch(addLayer("text", layer));
     expect(state.scene.layers).toHaveLength(0);
-    expect(state.selectedId).toBeNull();
+    expect(state.selectedIds).toEqual([]);
   });
 
   it("composé avec le VRAI réducteur : cliquer une ligne disponible insère et sélectionne le calque", () => {
@@ -195,6 +195,6 @@ describe("insertDynamicTextLayer — le clic n'insère JAMAIS un jeton illégal 
     const layer = insertDynamicTextLayer(row, { width: 1200, height: 630 });
     if (layer) dispatch(addLayer("text", layer));
     expect(state.scene.layers).toHaveLength(1);
-    expect(state.selectedId).toBe(state.scene.layers[0].id);
+    expect(state.selectedIds).toEqual([state.scene.layers[0].id]);
   });
 });

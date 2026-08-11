@@ -4,6 +4,10 @@ import {
   editorReducer,
   initEditorState,
   select,
+  selectMany,
+  toggleSelection,
+  clearSelection,
+  singleSelectedId,
   moveLayer,
   resizeLayer,
   rotateLayer,
@@ -13,6 +17,7 @@ import {
   reorderLayer,
   toggleVisible,
   toggleLocked,
+  setFrames,
   undo,
   redo,
   toCanvasCoords,
@@ -70,19 +75,109 @@ function find(state: EditorState, id: string): Layer {
 }
 
 describe("select", () => {
-  it("change selectedId sans toucher à la scène ni à l'historique", () => {
+  it("change selectedIds sans toucher à la scène ni à l'historique", () => {
     const state = makeState();
     const next = editorReducer(state, select("title"));
-    expect(next.selectedId).toBe("title");
+    expect(next.selectedIds).toEqual(["title"]);
     expect(next.scene).toBe(state.scene);
     expect(next.past).toEqual([]);
     expect(next.future).toEqual([]);
   });
 
   it("select(null) désélectionne", () => {
-    const state = { ...makeState(), selectedId: "title" };
+    const state = { ...makeState(), selectedIds: ["title"] };
     const next = editorReducer(state, select(null));
-    expect(next.selectedId).toBeNull();
+    expect(next.selectedIds).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 3 (U2, spec §3) — sélection MULTIPLE. `selectedId: string | null` est devenu
+// `selectedIds: string[]`.
+describe("sélection multiple — aller-retour par le réducteur", () => {
+  // La propriété du plan : « une sélection vide, une sélection simple et une sélection multiple
+  // font chacune un aller-retour par le réducteur ». Ce qui rendrait ce test ROUGE : un réducteur
+  // qui trierait les ids (l'ordre d'insertion est la seule chose que `selectedIds` porte de plus
+  // qu'un `Set`), qui les filtrerait contre la scène, ou qui n'en garderait qu'un.
+  for (const ids of [[], ["title"], ["title", "badge", "qr1"]] as const) {
+    it(`selectMany([${ids.join(", ")}]) ressort à l'identique, dans le MÊME ordre`, () => {
+      const state = makeState();
+      const next = editorReducer(state, selectMany(ids));
+      expect(next.selectedIds).toEqual([...ids]);
+      expect(next.scene).toBe(state.scene);
+      expect(next.past).toEqual([]);
+    });
+  }
+
+  it("l'ordre d'insertion est CONSERVÉ et n'est pas l'ordre de scene.layers", () => {
+    const state = makeState();
+    // scene.layers est [bg, title, badge, qr1, locked1] : cet ordre-là est délibérément l'INVERSE
+    // partiel de la sélection ci-dessous, donc un réducteur qui reprojetterait la sélection sur
+    // l'ordre de peinture donnerait ["title", "badge"] et échouerait ici.
+    const next = editorReducer(state, selectMany(["badge", "title"]));
+    expect(next.selectedIds).toEqual(["badge", "title"]);
+  });
+
+  it("dédoublonne, en gardant la PREMIÈRE occurrence de chaque id", () => {
+    const state = makeState();
+    const next = editorReducer(state, selectMany(["badge", "title", "badge"]));
+    expect(next.selectedIds).toEqual(["badge", "title"]);
+  });
+
+  it("une sélection identique renvoie LA MÊME référence d'état (pas un état neuf équivalent)", () => {
+    const state = { ...makeState(), selectedIds: ["title", "badge"] };
+    expect(editorReducer(state, selectMany(["title", "badge"]))).toBe(state);
+    // …mais un ORDRE différent est une sélection différente : `selectedIds` porte l'ordre.
+    expect(editorReducer(state, selectMany(["badge", "title"]))).not.toBe(state);
+  });
+
+  it("clearSelection() vide la sélection sans toucher la scène", () => {
+    const state = { ...makeState(), selectedIds: ["title", "badge"] };
+    const next = editorReducer(state, clearSelection());
+    expect(next.selectedIds).toEqual([]);
+    expect(next.scene).toBe(state.scene);
+  });
+});
+
+describe("toggleSelection — le geste Maj-clic, au niveau du réducteur", () => {
+  it("ajoute un id ABSENT à la fin, sans déranger les autres", () => {
+    const state = { ...makeState(), selectedIds: ["title", "badge"] };
+    const next = editorReducer(state, toggleSelection("qr1"));
+    expect(next.selectedIds).toEqual(["title", "badge", "qr1"]);
+  });
+
+  it("retire un id PRÉSENT en gardant l'ordre des survivants", () => {
+    const state = { ...makeState(), selectedIds: ["title", "badge", "qr1"] };
+    const next = editorReducer(state, toggleSelection("badge"));
+    expect(next.selectedIds).toEqual(["title", "qr1"]);
+  });
+
+  it("basculer deux fois le même id revient EXACTEMENT à la sélection de départ", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
+    const once = editorReducer(state, toggleSelection("badge"));
+    const twice = editorReducer(once, toggleSelection("badge"));
+    expect(once.selectedIds).toEqual(["title", "badge"]);
+    expect(twice.selectedIds).toEqual(["title"]);
+  });
+
+  it("ne touche ni la scène ni l'historique — sélectionner n'est pas modifier", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
+    const next = editorReducer(state, toggleSelection("badge"));
+    expect(next.scene).toBe(state.scene);
+    expect(next.past).toEqual([]);
+    expect(next.future).toEqual([]);
+  });
+});
+
+describe("singleSelectedId — l'aide dérivée du cas « une seule sélection »", () => {
+  it("renvoie l'id pour une sélection simple, et null pour vide OU multiple", () => {
+    expect(singleSelectedId([])).toBeNull();
+    expect(singleSelectedId(["a"])).toBe("a");
+    // Le cas qui compte : une aide naïve (`ids[0] ?? null`) passerait les deux lignes ci-dessus et
+    // échouerait ICI — c'est exactement la confusion qui ferait afficher les propriétés d'UN calque
+    // alors que l'utilisateur en a sélectionné trois.
+    expect(singleSelectedId(["a", "b"])).toBeNull();
+    expect(singleSelectedId(["a", "b", "c"])).toBeNull();
   });
 });
 
@@ -93,7 +188,9 @@ describe("moveLayer", () => {
     const layer = find(next, "badge");
     expect(layer.frame).toEqual({ x: 55, y: 35, w: 200, h: 60 });
     expect(next.past).toHaveLength(1);
-    expect(next.past[0]).toBe(state.scene);
+    // `past` porte désormais des entrées `{ scene, selectedIds }` (Tâche 3, U2) — la scène empilée
+    // reste vérifiée par RÉFÉRENCE, comme avant : l'historique ne recopie jamais la scène.
+    expect(next.past[0].scene).toBe(state.scene);
     expect(next.future).toEqual([]);
   });
 });
@@ -140,7 +237,7 @@ describe("addLayer", () => {
       expect(next.scene.layers).toHaveLength(state.scene.layers.length + 1);
       const added = next.scene.layers.at(-1)!;
       expect(added.type).toBe(type);
-      expect(next.selectedId).toBe(added.id);
+      expect(next.selectedIds).toEqual([added.id]);
     });
   }
 
@@ -160,7 +257,7 @@ describe("addLayer", () => {
     expect(next.scene.layers).toHaveLength(state.scene.layers.length + 1);
     const added = next.scene.layers.at(-1)!;
     expect(added).toEqual(prefilled);
-    expect(next.selectedId).toBe("dyn-1");
+    expect(next.selectedIds).toEqual(["dyn-1"]);
   });
 
   it("un `layer` fourni mais invalide laisse l'état inchangé, comme n'importe quel autre commit refusé", () => {
@@ -173,17 +270,152 @@ describe("addLayer", () => {
 
 describe("deleteLayer", () => {
   it("supprime un calque non verrouillé et efface la sélection s'il était sélectionné", () => {
-    const state = { ...makeState(), selectedId: "badge" };
+    const state = { ...makeState(), selectedIds: ["badge"] };
     const next = editorReducer(state, deleteLayer("badge"));
     expect(next.scene.layers.find((l) => l.id === "badge")).toBeUndefined();
     expect(next.scene.layers).toHaveLength(state.scene.layers.length - 1);
-    expect(next.selectedId).toBeNull();
+    expect(next.selectedIds).toEqual([]);
   });
 
-  it("laisse selectedId intact si le calque supprimé n'était pas sélectionné", () => {
-    const state = { ...makeState(), selectedId: "title" };
+  it("laisse la sélection intacte si le calque supprimé n'était pas sélectionné", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
     const next = editorReducer(state, deleteLayer("badge"));
-    expect(next.selectedId).toBe("title");
+    expect(next.selectedIds).toEqual(["title"]);
+  });
+
+  // Tâche 3 (U2) — la propriété du plan : « supprimer un calque sélectionné le retire de
+  // selectedIds sans rendre les autres orphelins ». Ce qui rendrait ce test ROUGE : la migration
+  // NAÏVE de l'ancien `selectedId === action.id ? null : …` vers `selectedIds.includes(action.id)
+  // ? [] : …`, qui viderait TOUTE la sélection au lieu du seul id supprimé.
+  it("d'une sélection MULTIPLE, ne retire QUE l'id supprimé — les autres survivent, dans l'ordre", () => {
+    const state = { ...makeState(), selectedIds: ["badge", "title", "qr1"] };
+    const next = editorReducer(state, deleteLayer("badge"));
+    expect(next.selectedIds).toEqual(["title", "qr1"]);
+    expect(next.scene.layers.find((l) => l.id === "badge")).toBeUndefined();
+    // …et les deux survivants existent BIEN encore dans la scène : la sélection ne pointe pas dans
+    // le vide.
+    for (const id of next.selectedIds) {
+      expect(next.scene.layers.some((l) => l.id === id)).toBe(true);
+    }
+  });
+
+  it("une suppression REFUSÉE (calque verrouillé) ne touche pas non plus la sélection", () => {
+    const state = { ...makeState(), selectedIds: ["locked1", "title"] };
+    const next = editorReducer(state, deleteLayer("locked1"));
+    expect(next).toBe(state);
+    expect(next.selectedIds).toEqual(["locked1", "title"]);
+  });
+});
+
+// ── Tâche 4 (U2, spec §4) — le LOT de cadres : « une action appliquant un lot de changements de
+// cadre comme UNE SEULE entrée d'annulation, pas une par calque » ───────────────────────────────
+describe("setFrames — un lot de cadres, UNE entrée d'historique", () => {
+  it("applique plusieurs cadres d'un coup et n'empile QU'UNE entrée d'historique", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "badge", frame: { x: 500, y: 40, w: 200, h: 60 } },
+      { id: "title", frame: { x: 500, y: 400, w: 1040, h: 200 } },
+      { id: "qr1", frame: { x: 500, y: 500, w: 120, h: 120 } },
+    ]));
+
+    expect(find(next, "badge").frame.x).toBe(500);
+    expect(find(next, "title").frame.x).toBe(500);
+    expect(find(next, "qr1").frame.x).toBe(500);
+    // LE cœur de cette action. Trois calques déplacés, UNE entrée : une implémentation qui bouclerait
+    // sur moveLayer/resizeLayer en empilerait TROIS, et l'utilisateur devrait annuler trois fois un
+    // geste unique. C'est aussi la raison pour laquelle la Tâche 3 a laissé Suppr/flèches en sélection
+    // simple (voir canvas.tsx) : elles attendaient cette action.
+    expect(next.past).toHaveLength(1);
+    expect(next.future).toEqual([]);
+  });
+
+  it("UN SEUL undo restaure les TROIS cadres à la fois", () => {
+    const state = makeState();
+    const before = state.scene.layers.map((l) => ({ id: l.id, frame: { ...l.frame } }));
+    const next = editorReducer(state, setFrames([
+      { id: "badge", frame: { x: 1, y: 2, w: 200, h: 60 } },
+      { id: "title", frame: { x: 3, y: 4, w: 1040, h: 200 } },
+      { id: "qr1", frame: { x: 5, y: 6, w: 120, h: 120 } },
+    ]));
+    const afterUndo = editorReducer(next, undo());
+    expect(afterUndo.scene.layers.map((l) => ({ id: l.id, frame: { ...l.frame } }))).toEqual(before);
+    expect(afterUndo.past).toEqual([]);
+    // …et rétablir les remet tous les trois, symétriquement.
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(afterRedo.scene).toEqual(next.scene);
+  });
+
+  it("saute les calques VERROUILLÉS et applique les autres — le lot n'est pas refusé en entier pour autant", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "locked1", frame: { x: 999, y: 999, w: 100, h: 40 } },
+      { id: "badge", frame: { x: 77, y: 40, w: 200, h: 60 } },
+    ]));
+    expect(find(next, "locked1").frame).toEqual({ x: 10, y: 10, w: 100, h: 40 });
+    expect(find(next, "badge").frame.x).toBe(77);
+    expect(next.past).toHaveLength(1);
+  });
+
+  it("saute un id absent de la scène et applique les autres", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "fantôme", frame: { x: 1, y: 1, w: 10, h: 10 } },
+      { id: "badge", frame: { x: 77, y: 40, w: 200, h: 60 } },
+    ]));
+    expect(find(next, "badge").frame.x).toBe(77);
+    expect(next.scene.layers).toHaveLength(state.scene.layers.length);
+    expect(next.past).toHaveLength(1);
+  });
+
+  it("un lot VIDE est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setFrames([]))).toBe(state);
+  });
+
+  it("un lot dont AUCUN cadre ne change réellement est un no-op — pas une entrée d'historique vide", () => {
+    // Le cas normal quand on aligne un ensemble déjà aligné : sans cette garde, chaque clic sur
+    // « Aligner à gauche » d'un ensemble déjà à gauche empilerait une entrée d'annulation fantôme.
+    const state = makeState();
+    const badge = find(state, "badge");
+    const same = editorReducer(state, setFrames([{ id: "badge", frame: { ...badge.frame } }]));
+    expect(same).toBe(state);
+    // Un lot mêlant un cadre identique et un cadre différent, lui, s'applique bien.
+    const mixed = editorReducer(state, setFrames([
+      { id: "badge", frame: { ...badge.frame } },
+      { id: "title", frame: { x: 0, y: 400, w: 1040, h: 200 } },
+    ]));
+    expect(mixed).not.toBe(state);
+    expect(mixed.past).toHaveLength(1);
+    expect(find(mixed, "badge").frame).toEqual(badge.frame);
+    expect(find(mixed, "title").frame.x).toBe(0);
+  });
+
+  it("un lot contenant UN cadre invalide est refusé EN ENTIER — atomicité, pas application partielle", () => {
+    // commit() valide la scène candidate ENTIÈRE (parseScene) : le premier cadre du lot est
+    // parfaitement légal, mais la largeur négative du second invalide la scène, donc RIEN n'entre.
+    const state = makeState();
+    const next = editorReducer(state, setFrames([
+      { id: "badge", frame: { x: 77, y: 40, w: 200, h: 60 } },
+      { id: "title", frame: { x: 0, y: 0, w: -5, h: 200 } },
+    ]));
+    expect(next).toBe(state);
+    expect(find(next, "badge").frame.x).toBe(40);
+  });
+
+  it("ne touche pas la sélection, et l'undo restaure celle qui existait (même contrat que les autres modifications)", () => {
+    const state = { ...makeState(), selectedIds: ["badge", "title"] };
+    const next = editorReducer(state, setFrames([{ id: "badge", frame: { x: 1, y: 1, w: 200, h: 60 } }]));
+    expect(next.selectedIds).toEqual(["badge", "title"]);
+    const afterSelect = editorReducer(next, select("qr1"));
+    expect(editorReducer(afterSelect, undo()).selectedIds).toEqual(["badge", "title"]);
+  });
+
+  it("recopie le cadre fourni au lieu de le référencer — muter l'objet de l'action après coup ne change pas la scène", () => {
+    const state = makeState();
+    const frame = { x: 111, y: 40, w: 200, h: 60 };
+    const next = editorReducer(state, setFrames([{ id: "badge", frame }]));
+    frame.x = -1;
+    expect(find(next, "badge").frame.x).toBe(111);
   });
 });
 
@@ -283,6 +515,60 @@ describe("undo / redo", () => {
     expect(afterRedo.future).toEqual([]);
   });
 
+  // ───────────────────────────────────────────────────────────────────────────
+  // Tâche 3 (U2) — « annuler/rétablir restaure la sélection qui existait ». C'est une propriété
+  // FORTE, pas la reformulation de l'ancien comportement : avant cette tâche, undo/redo REPORTAIT
+  // simplement la sélection courante (`selectedId: state.selectedId`), ce qui rendait la propriété
+  // vraie à vide. Chaque test ci-dessous distingue les deux : la sélection courante au moment de
+  // l'annulation DIFFÈRE de celle qui existait au moment de la modification annulée.
+  describe("annuler/rétablir restaure la sélection QUI EXISTAIT (pas la sélection courante)", () => {
+    it("une sélection changée APRÈS la modification est bien remplacée par celle d'alors", () => {
+      const state = { ...makeState(), selectedIds: ["title"] };
+      const afterMove = editorReducer(state, moveLayer("badge", 10, 0));
+      // L'utilisateur sélectionne autre chose, PUIS annule.
+      const afterSelect = editorReducer(afterMove, selectMany(["badge", "qr1"]));
+      const afterUndo = editorReducer(afterSelect, undo());
+      // Report simple de la sélection courante -> ["badge", "qr1"] et ce test tombe.
+      expect(afterUndo.selectedIds).toEqual(["title"]);
+      // Rétablir ramène symétriquement la sélection d'AVANT l'annulation.
+      const afterRedo = editorReducer(afterUndo, redo());
+      expect(afterRedo.selectedIds).toEqual(["badge", "qr1"]);
+      expect(afterRedo.scene).toEqual(afterMove.scene);
+    });
+
+    it("annuler un addLayer rend la sélection d'AVANT l'ajout — pas un id qui ne serait plus dans la scène", () => {
+      const state = makeState();
+      const afterAdd = editorReducer(state, addLayer("shape"));
+      const addedId = afterAdd.scene.layers.at(-1)!.id;
+      expect(afterAdd.selectedIds).toEqual([addedId]);
+
+      const afterUndo = editorReducer(afterAdd, undo());
+      expect(afterUndo.scene.layers.some((l) => l.id === addedId)).toBe(false);
+      // Le vrai défaut que ceci ferme : reporter la sélection courante laisserait `[addedId]`, une
+      // référence vers un calque qui n'existe PLUS dans la scène restaurée.
+      expect(afterUndo.selectedIds).toEqual([]);
+
+      const afterRedo = editorReducer(afterUndo, redo());
+      expect(afterRedo.selectedIds).toEqual([addedId]);
+    });
+
+    it("annuler la suppression d'un calque sélectionné le remet DANS la sélection", () => {
+      const state = { ...makeState(), selectedIds: ["badge", "title"] };
+      const afterDelete = editorReducer(state, deleteLayer("badge"));
+      expect(afterDelete.selectedIds).toEqual(["title"]);
+
+      const afterUndo = editorReducer(afterDelete, undo());
+      expect(afterUndo.scene.layers.some((l) => l.id === "badge")).toBe(true);
+      expect(afterUndo.selectedIds).toEqual(["badge", "title"]);
+    });
+
+    it("toute sélection, y compris MULTIPLE, traverse une modification sans changer", () => {
+      const state = { ...makeState(), selectedIds: ["title", "badge"] };
+      const next = editorReducer(state, setLayerProp("qr1", { margin: 8 }));
+      expect(next.selectedIds).toEqual(["title", "badge"]);
+    });
+  });
+
   it("undo sur historique vide est un no-op (même référence)", () => {
     const state = makeState();
     expect(editorReducer(state, undo())).toBe(state);
@@ -346,9 +632,16 @@ describe("absence de mutation", () => {
     editorReducer(initial, addLayer("text"));
     editorReducer(initial, deleteLayer("badge"));
     editorReducer(initial, reorderLayer("bg", 3));
+    editorReducer(initial, setFrames([
+      { id: "badge", frame: { x: 1, y: 2, w: 3, h: 4 } },
+      { id: "title", frame: { x: 5, y: 6, w: 7, h: 8 } },
+    ]));
     editorReducer(initial, toggleVisible("badge"));
     editorReducer(initial, toggleLocked("locked1"));
     editorReducer(initial, select("title"));
+    editorReducer(initial, selectMany(["title", "badge"]));
+    editorReducer(initial, toggleSelection("badge"));
+    editorReducer(initial, clearSelection());
     editorReducer(initial, undo());
     editorReducer(initial, redo());
 

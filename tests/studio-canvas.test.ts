@@ -5,7 +5,8 @@ import type { Scene } from "@/lib/studio/scene";
 import { Canvas } from "@/components/studio/canvas";
 import { CanvasChrome, safeAreaDefaultFor } from "@/components/studio/canvas-chrome";
 import { DEFAULT_PREFS, type EditorPrefs } from "@/lib/studio/editor-prefs";
-import { FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
+import { FORMAT_KEYS, FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
+import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
 
 // Pas de DOM dans `bun test` (voir tests/use-persisted-filters.test.ts) : on rend le composant en
 // chaîne HTML via react-dom/server, ce qui ne nécessite ni `document` ni `window`, et on inspecte
@@ -13,10 +14,10 @@ import { FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
 // sérialisés — react-dom sérialise bel et bien `style={{...}}` en `style="prop:val;..."` côté
 // serveur, y compris pour des propriétés « unitless » comme lineClamp (vérifié empiriquement).
 
-function render(scene: Scene, selectedId: string | null = null) {
+function render(scene: Scene, selectedIds: string[] = []) {
   const noop = () => {};
   return renderToStaticMarkup(
-    React.createElement(Canvas, { scene, selectedId, dispatch: noop, scale: 1 }),
+    React.createElement(Canvas, { scene, selectedIds, dispatch: noop, scale: 1 }),
   );
 }
 
@@ -125,9 +126,36 @@ describe("Canvas — style de texte via textStyleFor", () => {
 
 describe("Canvas — sélection et verrouillage", () => {
   it("marque le calque sélectionné et lui seul", () => {
-    const html = render(makeScene(), "title");
+    const html = render(makeScene(), ["title"]);
     expect(layerNode(html, "title")).toContain('data-selected="true"');
     expect(layerNode(html, "bg")).not.toContain('data-selected="true"');
+  });
+
+  // ── Tâche 3 (U2, spec §3) — sélection MULTIPLE ────────────────────────────
+  it("marque TOUS les calques d'une sélection multiple, et eux seuls", () => {
+    const html = render(makeScene(), ["bg", "title"]);
+    expect(layerNode(html, "bg")).toContain('data-selected="true"');
+    expect(layerNode(html, "title")).toContain('data-selected="true"');
+    // `qr1` est le troisième calque VISIBLE de makeScene() et n'est PAS sélectionné : sans lui, un
+    // composant qui marquerait TOUT passerait les deux lignes ci-dessus.
+    expect(layerNode(html, "qr1")).not.toContain('data-selected="true"');
+  });
+
+  it("les poignées n'apparaissent QUE pour une sélection simple — jamais pour une sélection multiple", () => {
+    // Poignées + rotation manipulent UN cadre : les afficher sur une sélection multiple laisserait
+    // croire qu'elles agissent sur l'ensemble. Ce qui rendrait ce test ROUGE : dériver le calque à
+    // outiller de `selectedIds[0]` au lieu de `singleSelectedId(selectedIds)`.
+    expect(render(makeScene(), ["title"])).toContain('data-testid="handles-overlay"');
+    expect(render(makeScene(), ["bg", "title"])).not.toContain('data-testid="handles-overlay"');
+    expect(render(makeScene(), [])).not.toContain('data-testid="handles-overlay"');
+  });
+
+  it("le contour de sélection, lui, reste bien présent sur chaque calque d'une sélection multiple", () => {
+    // Corollaire du test précédent : « pas de poignées » ne doit PAS vouloir dire « sélection
+    // invisible » — les deux calques gardent leur contour bleu.
+    const html = render(makeScene(), ["bg", "title"]);
+    expect(layerNode(html, "bg")).toContain("outline:2px solid #2563eb");
+    expect(layerNode(html, "title")).toContain("outline:2px solid #2563eb");
   });
 
   it("un calque verrouillé est marqué visuellement ET non-interactif (pointer-events: none)", () => {
@@ -199,7 +227,7 @@ describe("Canvas — poignées et contour de sélection gardent une taille ÉCRA
   function renderSelected(scale: number) {
     const scene = makeScene();
     return renderToStaticMarkup(
-      React.createElement(Canvas, { scene, selectedId: "title", dispatch: () => {}, scale }),
+      React.createElement(Canvas, { scene, selectedIds: ["title"], dispatch: () => {}, scale }),
     );
   }
 
@@ -280,6 +308,36 @@ function openTag(html: string, marker: string): string {
   return html.slice(start, end + 1);
 }
 
+// Sous-arbre COMPLET de la <div> dont `marker` est un attribut, borné par SA balise fermante — pas un
+// simple `slice` jusqu'à la fin du document (Tâche 6). Nécessaire parce que « les bandes peignent après
+// le Canvas » (une comparaison d'INDEX) resterait vrai même si les bandes étaient rendues à côté de
+// l'artboard plutôt que DEDANS : elles se dimensionneraient alors (`inset-0`) sur le cadre qui réserve
+// la place des RÈGLES, décalé de RULER_SIZE, et ne recouvriraient plus la surface du canevas. Compte la
+// profondeur sur `<div`/`</div>` uniquement — fiable ici, puisque tous les conteneurs de cet arbre sont
+// des `div` et que les éléments vides (`<img>`) n'ont pas de fermante à compter.
+function subtreeOf(html: string, marker: string): string {
+  const idx = html.indexOf(marker);
+  if (idx === -1) throw new Error(`marqueur introuvable dans le HTML rendu : ${marker}`);
+  const start = html.lastIndexOf("<div", idx);
+  if (start === -1) throw new Error(`le nœud portant ${marker} n'est pas une <div>`);
+  let depth = 0;
+  let i = start;
+  while (i < html.length) {
+    const open = html.indexOf("<div", i);
+    const close = html.indexOf("</div>", i);
+    if (close === -1) throw new Error(`sous-arbre non refermé pour : ${marker}`);
+    if (open !== -1 && open < close) {
+      depth += 1;
+      i = open + 4;
+      continue;
+    }
+    depth -= 1;
+    i = close + 6;
+    if (depth === 0) return html.slice(start, i);
+  }
+  throw new Error(`sous-arbre non refermé pour : ${marker}`);
+}
+
 // Composition RÉELLE, comme editor-shell.tsx (revue Tâche 7, puis revue finale pour la grille) :
 // `<CanvasChrome format={template.format} zoom={scale}>…<Canvas … scale={scale} /></CanvasChrome>`,
 // MÊME valeur pour `zoom` et `scale`. Hissée au niveau du module (elle vivait seulement dans le
@@ -293,14 +351,26 @@ function openTag(html: string, marker: string): string {
 // pixel à la scène pour que les bogues visés existent, puisque c'est la boîte de CanvasChrome
 // (`preset.width*zoom`) et la boîte de Canvas (`scene.canvas.width*scale`) qui doivent coïncider —
 // ici les deux valent 1080*1 = 1080 côté CanvasChrome.
-function renderComposed(prefs: EditorPrefs = DEFAULT_PREFS) {
+//
+// Tâche 6 (U2) : `format` et `zoom` sont devenus des PARAMÈTRES (défauts `ig_square` / 1 — donc les
+// trois appels existants ci-dessous rendent EXACTEMENT le même HTML qu'avant : ig_square fait
+// 1080×1080, la taille de scène auparavant écrite en dur ici). Les bandes de zones sûres ne
+// concernent qu'un format PORTRAIT (`story`), et leur épaisseur est une fraction des dimensions du
+// FORMAT multipliée par le zoom : il faut donc pouvoir faire varier les deux, sur la MÊME composition
+// réelle (vrai <Canvas> enrobé), jamais sur un espace réservé transparent.
+function renderComposed(
+  prefs: EditorPrefs = DEFAULT_PREFS,
+  format: FormatKey = "ig_square",
+  zoom = 1,
+) {
+  const preset = FORMAT_PRESETS[format];
   const scene = makeScene();
-  scene.canvas = { ...scene.canvas, width: 1080, height: 1080 };
+  scene.canvas = { ...scene.canvas, width: preset.width, height: preset.height };
   return renderToStaticMarkup(
     React.createElement(
       CanvasChrome,
-      { format: "ig_square", zoom: 1, prefs },
-      React.createElement(Canvas, { scene, selectedId: null, dispatch: () => {}, scale: 1 }),
+      { format, zoom, prefs },
+      React.createElement(Canvas, { scene, selectedIds: [], dispatch: () => {}, scale: zoom }),
     ),
   );
 }
@@ -362,8 +432,8 @@ describe("CanvasChrome ∘ Canvas — composition RÉELLE, comme editor-shell.ts
 describe("CanvasChrome — pastilles flottantes, règles et grille optionnelles (Tâche 7, spec §7)", () => {
   // renderCanvasChrome — scaffolding de test LOCAL (comme `render()` plus haut dans ce fichier) :
   // `format`/`zoom` ont des valeurs par défaut ici pour que les tests qui ne les font pas varier
-  // (ex. la présence des règles) restent courts, exactement comme `render(scene, selectedId)` plus
-  // haut par défaut `selectedId` à `null`.
+  // (ex. la présence des règles) restent courts, exactement comme `render(scene, selectedIds)` plus
+  // haut par défaut `selectedIds` à `[]`.
   function renderCanvasChrome(opts: { format?: FormatKey; zoom?: number; prefs: EditorPrefs }) {
     return renderToStaticMarkup(
       React.createElement(
@@ -444,5 +514,344 @@ describe("safeAreaDefaultFor — dérivé de l'orientation du format, jamais une
     for (const key of FORMAT_KEYS) {
       expect(safeAreaDefaultFor(key)).toBe(expected[key]);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 6 (U2, spec §7) — LES BANDES de zones sûres. Le TOGGLE et son défaut par format étaient de
+// U1 (voir les deux describe ci-dessus) ; ce qui suit vérifie la TABLE de faits plateforme et son
+// rendu RÉEL au-dessus de l'artboard.
+describe("safeAreaBandsFor — table de faits plateforme, vérifiable entrée par entrée (Tâche 6, U2)", () => {
+  // Les chiffres attendus ici sont recopiés depuis la source citée dans lib/studio/safe-areas.ts
+  // (guide des publicités Meta, gabarit « story » image) et NON depuis la table du module : c'est
+  // délibéré pour CE test-ci, dont le rôle est justement de figer les valeurs publiées — un
+  // changement de la table sans changement de source échoue ici, ce qui est exactement le signal
+  // voulu. Les tests de complétude plus bas, eux, lisent la VRAIE source (FORMAT_KEYS), jamais un
+  // miroir recopié (leçon de la Tâche 4).
+  it("`story` porte les QUATRE bandes publiées par Meta : 14 % en haut, 35 % en bas, 6 % de chaque côté", () => {
+    const bands = safeAreaBandsFor("story");
+    const byEdge = new Map(bands.map((b) => [b.edge, b] as const));
+    expect(bands.length).toBe(4);
+    expect(byEdge.get("top")?.fraction).toBe(0.14);
+    expect(byEdge.get("bottom")?.fraction).toBe(0.35);
+    expect(byEdge.get("left")?.fraction).toBe(0.06);
+    expect(byEdge.get("right")?.fraction).toBe(0.06);
+  });
+
+  it("chaque bande porte une étiquette FRANÇAISE courte et non vide, et aucune apostrophe droite (elle serait échappée en &#x27; dans le HTML rendu)", () => {
+    const labels = safeAreaBandsFor("story").map((b) => b.label);
+    // Pin EXACT plutôt qu'un simple `length > 0` : « une étiquette non vide » est satisfait par la
+    // chaîne "x", ce qui ne prouverait rien de l'exigence « étiquette française courte ».
+    // « (pub) » sur la bande du bas : revue de la Tâche 6, point 2 — le 35 % est la borne
+    // PUBLICITAIRE (elle réserve le bouton d'appel à l'action, absent d'une story organique, soit une
+    // sur-réservation d'un facteur ≈2,7 mesuré par la revue). L'utilisateur voyait une bande « Bas —
+    // action » sans rien qui indique laquelle des deux bornes il regarde ; le détail complet vit dans
+    // l'infobulle du bouton (test dédié plus bas), le marqueur court vit ici.
+    expect(labels.sort()).toEqual(["Bas — action (pub)", "Droite", "Gauche", "Haut — profil"]);
+    for (const l of labels) {
+      expect(l.length).toBeLessThanOrEqual(24);
+      expect(l).not.toContain("'");
+    }
+  });
+
+  it("les deux bandes horizontales laissent une zone utile : haut + bas < 1 pour CHAQUE format outillé", () => {
+    // Ce qui ferait échouer ce test : une entrée dont les fractions haut+bas atteignent ou dépassent
+    // 1, c.-à-d. une table qui recouvrirait tout le gabarit et ne laisserait aucune surface
+    // exploitable. Vaut pour les formats OUTILLÉS uniquement — un format sans bandes n'a rien à
+    // prouver ici (il est couvert par le test de complétude juste en dessous).
+    let checked = 0;
+    for (const key of FORMAT_KEYS) {
+      const bands = safeAreaBandsFor(key);
+      if (bands.length === 0) continue;
+      checked += 1;
+      const sum = bands
+        .filter((b) => b.edge === "top" || b.edge === "bottom")
+        .reduce((acc, b) => acc + b.fraction, 0);
+      expect(sum).toBeGreaterThan(0);
+      expect(sum).toBeLessThan(1);
+    }
+    // Garde anti-vacuité : sans au moins un format outillé, la boucle ci-dessus n'assertait RIEN.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("EXACTEMENT les formats pour lesquels une source publiée existe portent des bandes ; les autres n'en portent AUCUNE", () => {
+    // Lit la VRAIE source des formats (FORMAT_KEYS, lib/studio/formats.ts) et non une liste recopiée :
+    // un neuvième format ajouté à FORMAT_PRESETS fait échouer `FORMAT_KEYS.length` ci-dessous plutôt
+    // que d'hériter silencieusement de « pas de bandes ». `story` est le SEUL format outillé — voir
+    // le commentaire de lib/studio/safe-areas.ts et le rapport de la Tâche 6 : aucune source publiée
+    // n'a pu être établie pour `ig_portrait` (le guide Meta pour le fil Instagram 4:5 ne publie AUCUNE
+    // zone de sécurité), et le brief le demandait explicitement — défaut de brief signalé plutôt que
+    // comblé par un chiffre inventé.
+    expect(FORMAT_KEYS.length).toBe(8);
+    const withBands = FORMAT_KEYS.filter((k) => safeAreaBandsFor(k).length > 0);
+    expect(withBands).toEqual(["story"]);
+    for (const key of FORMAT_KEYS) {
+      if (key === "story") continue;
+      expect(safeAreaBandsFor(key)).toEqual([]);
+    }
+  });
+
+  it("ne rend jamais la table interne mutable : muter le résultat n'altère pas l'appel suivant", () => {
+    const first = safeAreaBandsFor("story") as SafeAreaBand[];
+    const before = first.length;
+    first.push({ edge: "top", fraction: 0.99, label: "sabotage" });
+    expect(safeAreaBandsFor("story").length).toBe(before);
+    expect(safeAreaBandsFor("story").some((b) => b.label === "sabotage")).toBe(false);
+  });
+
+  // Revue de la Tâche 6, nit 2 : canvas-chrome.tsx indexe les bandes par `key={band.edge}`, ce qui
+  // INTERDIT silencieusement deux bandes sur la même arête (React ne rendrait que la dernière, sans
+  // avertissement en production). Rien dans le type ne l'empêchait, et le fichier invite explicitement
+  // de futurs contributeurs à ajouter des entrées : la contrainte est donc épinglée ICI plutôt que
+  // laissée à la mémoire du prochain lecteur.
+  it("les arêtes d'un format sont UNIQUES — deux bandes sur la même arête seraient silencieusement perdues par la clé de rendu", () => {
+    let checked = 0;
+    for (const key of FORMAT_KEYS) {
+      const bands = safeAreaBandsFor(key);
+      if (bands.length === 0) continue;
+      checked += 1;
+      expect(new Set(bands.map((b) => b.edge)).size).toBe(bands.length);
+    }
+    expect(checked).toBeGreaterThan(0); // garde anti-vacuité : la boucle a bel et bien tourné
+  });
+
+  it("implication À SENS UNIQUE : tout format outillé a safeAreaDefaultFor === true — mais PAS la réciproque (ig_portrait)", () => {
+    // La garantie EXACTE, énoncée avec sa condition (leçon des Tâches 4 et 5, où une prose promettait
+    // plus que le code) : « bandes ⇒ défaut ON ». La réciproque est FAUSSE et c'est assumé :
+    // ig_portrait est portrait, donc le toggle y est ON par défaut, alors qu'aucune bande n'y est
+    // définie faute de source. Épinglé ici pour que l'asymétrie soit documentée et non découverte.
+    for (const key of FORMAT_KEYS) {
+      if (safeAreaBandsFor(key).length > 0) expect(safeAreaDefaultFor(key)).toBe(true);
+    }
+    expect(safeAreaDefaultFor("ig_portrait")).toBe(true);
+    expect(safeAreaBandsFor("ig_portrait")).toEqual([]);
+  });
+});
+
+describe("CanvasChrome ∘ Canvas — les BANDES de zones sûres, en composition RÉELLE (Tâche 6, U2, spec §7)", () => {
+  const ON: EditorPrefs = { ...DEFAULT_PREFS, safeAreas: true };
+  const OFF: EditorPrefs = { ...DEFAULT_PREFS, safeAreas: false };
+
+  it("rendues UNIQUEMENT quand la préférence est active", () => {
+    expect(renderComposed(OFF, "story")).not.toContain('data-testid="safe-areas"');
+    expect(renderComposed(OFF, "story")).not.toContain("data-safe-band=");
+    expect(renderComposed(ON, "story")).toContain('data-testid="safe-areas"');
+  });
+
+  // LE pin POSITIF de géométrie, celui sans lequel toutes les propriétés négatives de ce describe
+  // seraient satisfaites par un composant qui ne rend RIEN (leçon n°1 du brief). Valeurs calculées à
+  // la main depuis le préréglage `story` (1080×1920) et les fractions publiées :
+  //   haut   1920 × 0,14 = 268,8   bas 1920 × 0,35 = 672
+  //   côtés  1080 × 0,06 = 64,8
+  // Les quatre produits sont exacts en flottant IEEE-754 (vérifié), donc comparables en chaîne.
+  it("géométrie EXACTE au zoom 1 pour `story` — chaque bande fait la bonne fraction de la bonne dimension", () => {
+    const html = renderComposed(ON, "story", 1);
+
+    const top = styleAttr(html, 'data-safe-band="top"');
+    expect(top).toContain("height:268.8px");
+    expect(top).toContain("width:1080px");
+    expect(top).toContain("top:0");
+
+    const bottom = styleAttr(html, 'data-safe-band="bottom"');
+    expect(bottom).toContain("height:672px");
+    expect(bottom).toContain("width:1080px");
+    expect(bottom).toContain("bottom:0");
+
+    const left = styleAttr(html, 'data-safe-band="left"');
+    expect(left).toContain("width:64.8px");
+    expect(left).toContain("height:1920px");
+    expect(left).toContain("left:0");
+
+    const right = styleAttr(html, 'data-safe-band="right"');
+    expect(right).toContain("width:64.8px");
+    expect(right).toContain("height:1920px");
+    expect(right).toContain("right:0");
+
+    // L'étiquette française est bel et bien RENDUE, pas seulement présente dans la table.
+    expect(html).toContain("Haut — profil");
+    expect(html).toContain("Bas — action");
+  });
+
+  it("les bandes suivent le zoom : à 0,5, chaque épaisseur est exactement la moitié", () => {
+    // Ce qui ferait échouer ce test : une épaisseur en pixels ÉCRAN constants (« 250px » codé en
+    // dur), ou une fraction appliquée aux dimensions de la SCÈNE sans le facteur de zoom — dans les
+    // deux cas les bandes cesseraient de coïncider avec la zone réellement recouverte à l'écran, le
+    // même défaut de compensation que les poignées de la revue du Lot 2.
+    const html = renderComposed(ON, "story", 0.5);
+    expect(styleAttr(html, 'data-safe-band="top"')).toContain("height:134.4px"); // 1920 × 0,14 × 0,5
+    expect(styleAttr(html, 'data-safe-band="top"')).toContain("width:540px"); // 1080 × 0,5
+    expect(styleAttr(html, 'data-safe-band="bottom"')).toContain("height:336px"); // 1920 × 0,35 × 0,5
+    expect(styleAttr(html, 'data-safe-band="left"')).toContain("width:32.4px"); // 1080 × 0,06 × 0,5
+  });
+
+  // MOTIF de bande dégénérée : une longueur NULLE posée par React. `(?<![-\w])` écarte
+  // `border-width:0` / `stroke-width:0`, qui contiennent bien la sous-chaîne « width:0 » sans être une
+  // dimension de bande ; `(?![\d.])` écarte `height:0.5px` et `height:0px` — non, justement : `0px`
+  // matche (le caractère qui suit le zéro est `p`), et c'est voulu, le motif couvre les DEUX
+  // sérialisations possibles pour que le test ne dépende pas de la façon dont React écrit un zéro.
+  const DIMENSION_NULLE = /(?<![-\w])(?:height|width):0(?![\d.])/;
+
+  it("un format SANS bandes n'en rend AUCUNE — ni conteneur, ni bande de dimension nulle — alors que le toggle est ON", () => {
+    // Le contrôle POSITIF vit DANS ce test (leçon n°1 du brief) : sans lui, un composant qui ne
+    // rendrait jamais rien passerait les trois assertions négatives.
+    expect(renderComposed(ON, "story")).toContain("data-safe-band=");
+    // …et le format OUTILLÉ n'a lui non plus aucune bande dégénérée : c'est ce qui fait mordre le motif
+    // sur un vrai rendu de bandes, et pas seulement sur des rendus qui n'en contiennent aucune.
+    expect(renderComposed(ON, "story")).not.toMatch(DIMENSION_NULLE);
+
+    // SECOND contrôle, sur le MOTIF cette fois (revue finale U0+U2). L'assertion d'origine était
+    // `not.toContain("height:0px")`, et elle NE POUVAIT PAS ÉCHOUER : React sérialise `height: 0` en
+    // `height:0`, jamais en `height:0px` (les deux lignes ci-dessous le prouvent plutôt que de
+    // l'affirmer), si bien qu'une vraie bande dégénérée serait passée tout droit. Le motif retenu, lui,
+    // attrape les deux écritures — et on le vérifie ici, pour que l'assertion négative plus bas ne
+    // redevienne pas vacuité au premier changement de sérialisation de React.
+    const zéro = renderToStaticMarkup(React.createElement("div", { style: { height: 0, width: 0 } }));
+    expect(zéro).toContain("height:0");
+    expect(zéro).not.toContain("height:0px"); // <- pourquoi l'ancien motif était mort
+    expect(zéro).toMatch(DIMENSION_NULLE);
+    expect(DIMENSION_NULLE.test('style="border-width:0"')).toBe(false); // et pas de faux positif
+
+    for (const key of ["ig_square", "ig_portrait", "fb_link"] as FormatKey[]) {
+      const html = renderComposed(ON, key);
+      expect(html).not.toContain("data-safe-band=");
+      expect(html).not.toContain('data-testid="safe-areas"');
+      // « Pas d'artefact de dimension nulle » : aucune bande dégénérée n'a été rendue, ni en hauteur
+      // (bandes haut/bas) ni en largeur (bandes gauche/droite).
+      expect(html).not.toMatch(DIMENSION_NULLE);
+    }
+  });
+
+  // CRITIQUE — LE test de cette tâche (leçon de la grille de U1) : « présent dans le balisage » n'est
+  // pas « visible à l'écran ». <Canvas> pose un rectangle plein-cadre opaque pour
+  // `scene.canvas.background` ; des bandes rendues AVANT lui dans l'arbre passeraient DESSOUS et le
+  // toggle « Zones sûres » basculerait `aria-pressed` sans le moindre effet visuel — exactement le
+  // défaut que la grille a livré « fonctionnel ». Preuve suffisante en HTML sérialisé, avec ses trois
+  // PRÉCONDITIONS explicitées plutôt que supposées (leçon n°3 du brief) :
+  //   (a) l'ordre de peinture == l'ordre du DOM pour deux éléments qui se chevauchent et n'ouvrent
+  //       aucun contexte d'empilement → il faut vérifier qu'aucun des deux ne porte de z-index ;
+  //   (b) les bandes doivent être ABSOLUES et `inset-0` DANS l'artboard, dont la boîte coïncide
+  //       pixel pour pixel avec celle de <Canvas> — sinon « au-dessus » ne recouvrirait pas la même
+  //       surface ;
+  //   (c) l'artboard doit être `relative`, sinon `inset-0` se résoudrait contre un autre ancêtre.
+  it("CRITIQUE : les bandes peignent APRÈS le vrai Canvas, donc AU-DESSUS de l'artboard opaque, et couvrent exactement sa boîte", () => {
+    const html = renderComposed(ON, "story");
+
+    const iCanvas = html.indexOf('data-testid="studio-canvas"');
+    const iBands = html.indexOf('data-testid="safe-areas"');
+    expect(iCanvas).toBeGreaterThan(-1);
+    expect(iBands).toBeGreaterThan(-1);
+    expect(iBands).toBeGreaterThan(iCanvas);
+
+    // (a) aucune des deux balises n'ouvre de contexte d'empilement — ni z-index en style inline, ni
+    // classe Tailwind `z-*`. Un `z-index: 0` sur la racine de <Canvas> la ferait repeindre au-dessus
+    // des bandes tout en laissant l'assertion d'ordre ci-dessus verte ; un `-z-10` sur les bandes les
+    // renverrait derrière l'artboard, idem.
+    for (const marker of ['data-testid="studio-canvas"', 'data-testid="safe-areas"']) {
+      const tag = openTag(html, marker);
+      expect(tag).not.toMatch(/z-index/);
+      const classAttr = /\sclass="([^"]*)"/.exec(tag);
+      const classes = classAttr ? classAttr[1].split(/\s+/) : [];
+      expect(classes.some((c) => /^-?z-/.test(c))).toBe(false);
+    }
+
+    // (b) + (c) : bandes `absolute inset-0`, artboard `relative`.
+    const bandsTag = openTag(html, 'data-testid="safe-areas"');
+    expect(bandsTag).toMatch(/\babsolute\b/);
+    expect(bandsTag).toMatch(/\binset-0\b/);
+    expect(openTag(html, 'data-testid="artboard"')).toMatch(/\brelative\b/);
+
+    // (b bis) — et surtout : `inset-0` ne veut « la boîte de l'artboard » que si les bandes sont bien
+    // DANS l'artboard. Sans cette paire d'assertions, des bandes rendues À CÔTÉ de l'artboard (dans le
+    // cadre qui réserve la place des règles, décalé de RULER_SIZE et plus grand de 2×RULER_SIZE)
+    // passeraient TOUT ce qui précède : l'ordre du document et les classes seraient inchangés. Les deux
+    // sens sont épinglés — dans l'artboard, mais FRÈRES de <Canvas>, jamais descendants (auquel cas
+    // elles vivraient dans son conteneur `transform: scale(k)` et leurs dimensions, déjà multipliées par
+    // le zoom, seraient mises à l'échelle une seconde fois).
+    expect(subtreeOf(html, 'data-testid="artboard"')).toContain('data-testid="safe-areas"');
+    expect(subtreeOf(html, 'data-testid="studio-canvas"')).not.toContain('data-testid="safe-areas"');
+  });
+
+  it("les bandes sont décoratives : pointer-events-none, et rien de cliquable dans leur sous-arbre", () => {
+    const html = renderComposed(ON, "story");
+    expect(openTag(html, 'data-testid="safe-areas"')).toMatch(/\bpointer-events-none\b/);
+    // Le sous-arbre des bandes est le DERNIER contenu de l'artboard : tout ce qui suit son marqueur
+    // dans le HTML est soit une bande, soit une balise de fermeture. Aucune réactivation locale
+    // (`pointer-events-auto`, comme en portent les pastilles et les boutons de bascule PLUS HAUT dans
+    // l'arbre) ne doit y apparaître — sinon une bande volerait les clics/glissers du canevas, qu'elle
+    // recouvre entièrement.
+    const subtree = html.slice(html.indexOf('data-testid="safe-areas"'));
+    expect(subtree).not.toContain("pointer-events-auto");
+    expect(subtree).not.toContain("pointer-events:auto");
+  });
+});
+
+// Revue de la Tâche 6, points 1 et 2 — LA CONFIANCE MAL PLACÉE, plutôt que le simple manque de retour.
+// Sur `ig_portrait`, `safeAreaDefaultFor` renvoie `true` par ORIENTATION : le bouton se rend donc
+// enfoncé (`aria-pressed="true"`, `variant="secondary"`) au-dessus d'un artboard où RIEN n'est dessiné.
+// Ce que l'utilisateur en déduit n'est pas « aucune donnée disponible » mais « les zones sûres sont
+// actives, donc ma maquette les respecte » — strictement pire que de ne rien faire du tout (le cas de
+// la Tâche 5, où la fonctionnalité mourait en silence sans rien affirmer).
+//
+// La correction est une NOTE, pas un contrôle désactivé, et la raison est structurelle : la préférence
+// est GLOBALE à l'utilisateur (lib/studio/editor-prefs.ts), pas par format. La désactiver sur un
+// gabarit ferait passer un réglage global pour un réglage propre au format, et laisserait le `true`
+// déjà persisté orphelin — le bouton mentirait dans l'autre sens.
+describe("CanvasChrome — un format SANS zones sûres établies le DIT, au lieu de laisser le bouton enfoncé affirmer le contraire (revue Tâche 6)", () => {
+  const ON: EditorPrefs = { ...DEFAULT_PREFS, safeAreas: true };
+  const OFF: EditorPrefs = { ...DEFAULT_PREFS, safeAreas: false };
+  const NOTE = "Zones sûres : aucune donnée publiée pour ce format.";
+
+  it("la note apparaît pour un format sans bandes, dans l'artboard, décorative — et le bouton reste bien enfoncé (la préférence globale n'est PAS niée)", () => {
+    const html = renderComposed(ON, "ig_portrait");
+    expect(html).toContain('data-testid="safe-areas-none"');
+    expect(html).toContain(NOTE);
+    // Décorative, comme les bandes : elle recouvre une partie de l'artboard.
+    expect(openTag(html, 'data-testid="safe-areas-none"')).toMatch(/\bpointer-events-none\b/);
+    // DANS l'artboard (même exigence de contenance que les bandes : posée à côté, elle se placerait
+    // contre le cadre qui réserve les règles, décalé de RULER_SIZE) et hors du sous-arbre de <Canvas>.
+    expect(subtreeOf(html, 'data-testid="artboard"')).toContain('data-testid="safe-areas-none"');
+    expect(subtreeOf(html, 'data-testid="studio-canvas"')).not.toContain('data-testid="safe-areas-none"');
+    // Elle peint APRÈS le Canvas opaque — même leçon que les bandes, sinon elle serait invisible.
+    expect(html.indexOf('data-testid="safe-areas-none"')).toBeGreaterThan(html.indexOf('data-testid="studio-canvas"'));
+    // Et le bouton n'est NI désactivé NI relâché : la préférence globale reste vraie et modifiable.
+    const button = openTag(html, 'data-action="toggle-safe-areas"');
+    expect(button).toContain('aria-pressed="true"');
+    // L'ATTRIBUT `disabled`, pas la sous-chaîne (leçon de la Tâche 1, re-rencontrée ici) : la classe du
+    // bouton contient `disabled:pointer-events-none` et `disabled:opacity-50`, donc un
+    // `not.toContain("disabled")` échouait pour une raison qui n'avait rien à voir avec l'état du
+    // contrôle. On exige donc un `disabled` suivi de `=`, `>` ou d'une espace — jamais de `:`.
+    expect(button).not.toMatch(/\sdisabled(?:=|>|\s)/);
+  });
+
+  it("elle n'apparaît NI quand la préférence est éteinte, NI pour un format qui a de vraies bandes", () => {
+    // Contrôle POSITIF dans le test négatif (leçon n°1 du brief) : sans lui, une note jamais rendue
+    // passerait les deux assertions suivantes.
+    expect(renderComposed(ON, "ig_portrait")).toContain('data-testid="safe-areas-none"');
+
+    expect(renderComposed(OFF, "ig_portrait")).not.toContain('data-testid="safe-areas-none"');
+    expect(renderComposed(OFF, "ig_portrait")).not.toContain(NOTE);
+    // `story` a des bandes : la note serait redondante et fausse (les données existent).
+    expect(renderComposed(ON, "story")).not.toContain('data-testid="safe-areas-none"');
+    expect(renderComposed(ON, "story")).not.toContain(NOTE);
+  });
+
+  // Point 2 de la revue : la réserve « ces pourcentages sont ceux des PLACEMENTS PUBLICITAIRES » ne
+  // vivait que dans le commentaire du module, alors que l'utilisateur voit 49 % de la hauteur (55 % de
+  // la surface) recouverts sans rien qui indique de quelle borne il s'agit. L'infobulle du bouton la
+  // porte désormais, et elle est FONCTION DU FORMAT — donc jamais une phrase générique.
+  it("l'infobulle du bouton porte la réserve « borne publicitaire » quand des bandes existent, et l'absence de donnée quand il n'y en a pas", () => {
+    const withBands = openTag(renderComposed(ON, "story"), 'data-action="toggle-safe-areas"');
+    expect(withBands).toContain("publicitaires");
+    expect(withBands).toContain("conservatrice");
+    expect(withBands).not.toContain("aucune donnée");
+
+    const withoutBands = openTag(renderComposed(ON, "ig_portrait"), 'data-action="toggle-safe-areas"');
+    expect(withoutBands).toContain("aucune donnée");
+    expect(withoutBands).not.toContain("publicitaires");
+
+    // L'infobulle ne dépend PAS de la préférence — seulement du format : un bouton relâché doit
+    // expliquer la même chose, sinon la réserve disparaîtrait exactement quand l'utilisateur hésite à
+    // activer les zones sûres.
+    expect(openTag(renderComposed(OFF, "story"), 'data-action="toggle-safe-areas"')).toContain("publicitaires");
   });
 });

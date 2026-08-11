@@ -1,9 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Ruler, Grid3x3, ShieldHalf } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
+import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
 import type { EditorPrefs } from "@/lib/studio/editor-prefs";
 
 // components/studio/canvas-chrome.tsx — Tâche 7 (U1, spec §7) : le CHROME autour de l'artboard —
@@ -13,11 +14,13 @@ import type { EditorPrefs } from "@/lib/studio/editor-prefs";
 //   U1 (ICI) : les pastilles, le rendu des règles/grille (décoratif, désactivé par défaut, état
 //   mémorisé par utilisateur via lib/studio/editor-prefs.ts — déjà persistées, Tâche 1), et le
 //   TOGGLE des zones sûres avec sa persistance (même mécanisme).
-//   U2 (PAS ICI) : le magnétisme, les guides intelligents, les BANDES de zones sûres elles-mêmes
-//   (le rectangle visuel marquant la zone protégée), et les modificateurs de geste. Ce fichier expose
-//   `prefs.safeAreas` et `onToggleSafeAreas` pour que U2 n'ait qu'à lire ce booléen et dessiner sa
-//   bande — aucune bande n'est dessinée ICI, volontairement (spec §7 : « safe-area bands » listées
-//   sous U2, pas sous U1).
+//   U2 (PAS ICI) : le magnétisme, les guides intelligents et les modificateurs de geste.
+//
+// MISE À JOUR — Tâche 6 (U2) : les BANDES de zones sûres, elles, sont désormais DESSINÉES ICI (elles
+// étaient annoncées « pas ici » tant que U2 ne les avait pas livrées). Leur table de chiffres, en
+// revanche, vit dans lib/studio/safe-areas.ts — un fait plateforme sourcé entrée par entrée, à lire
+// AVANT d'y toucher. Ce fichier n'en connaît que la forme (arête + fraction + étiquette) et les
+// convertit en pixels écran ; il ne décide d'aucun chiffre.
 //
 // « L'artboard visuellement distinct de son entourage » (spec §7) est la responsabilité de
 // components/studio/canvas.tsx lui-même (son propre conteneur `data-testid="studio-canvas"` porte
@@ -70,6 +73,57 @@ function rulerTicks(lengthNative: number): number[] {
   return ticks;
 }
 
+// ── Bandes de zones sûres (Tâche 6, U2) ──────────────────────────────────────
+// L'ambre : DÉLIBÉRÉMENT différent du bleu de sélection (#2563eb, poignées/contours de canvas.tsx) et
+// du rose des guides d'accrochage (#e11d48, Tâche 5). Une zone sûre n'est ni une sélection ni une
+// relation temporaire : c'est une contrainte permanente du format, et la confondre visuellement avec
+// l'une des deux autres surcouches serait le seul vrai risque de lisibilité de cette tâche.
+const SAFE_TINT = "rgba(245,158,11,0.14)";
+const SAFE_LINE = "1px dashed rgba(245,158,11,0.85)";
+
+// Les bandes vivent dans l'artboard de CE fichier (pixels ÉCRAN, conteneur JAMAIS mis à l'échelle),
+// pas dans le conteneur `transform: scale(k)` de canvas.tsx : `boxWidth`/`boxHeight` intègrent déjà le
+// zoom, donc AUCUNE compensation `/ scale` n'est nécessaire ici (contrairement aux poignées et aux
+// guides, qui vivent, eux, DANS le conteneur mis à l'échelle — voir canvas.tsx).
+//
+// Les bandes se CHEVAUCHENT dans les coins (une bande de côté couvre toute la hauteur, y compris sous
+// les bandes haut/bas) : voulu. Chaque bande vaut alors exactement `fraction × dimension`, une
+// géométrie que le lecteur peut vérifier arête par arête contre la source citée dans safe-areas.ts,
+// là où des bandes mutuellement rognées mélangeraient les quatre chiffres.
+function safeBandStyle(band: SafeAreaBand, boxWidth: number, boxHeight: number): CSSProperties {
+  const base: CSSProperties = { position: "absolute", background: SAFE_TINT, overflow: "hidden" };
+  if (band.edge === "top") {
+    return { ...base, top: 0, left: 0, width: boxWidth, height: boxHeight * band.fraction, borderBottom: SAFE_LINE };
+  }
+  if (band.edge === "bottom") {
+    return { ...base, bottom: 0, left: 0, width: boxWidth, height: boxHeight * band.fraction, borderTop: SAFE_LINE };
+  }
+  if (band.edge === "left") {
+    return { ...base, left: 0, top: 0, height: boxHeight, width: boxWidth * band.fraction, borderRight: SAFE_LINE };
+  }
+  return { ...base, right: 0, top: 0, height: boxHeight, width: boxWidth * band.fraction, borderLeft: SAFE_LINE };
+}
+
+// L'étiquette est en pixels ÉCRAN constants (9px), collée à l'arête INTÉRIEURE de sa bande. Les bandes
+// de côté ne font que 6 % de la largeur (≈65px à l'échelle 1, ≈20px pour `story` ajusté à la fenêtre) :
+// leur étiquette est donc écrite VERTICALEMENT (`vertical-rl`), seule façon qu'un mot y tienne sans
+// inventer un seuil arbitraire de « bande assez large pour un texte horizontal ».
+function safeLabelStyle(edge: SafeAreaBand["edge"]): CSSProperties {
+  const base: CSSProperties = {
+    position: "absolute",
+    fontSize: 9,
+    lineHeight: 1,
+    fontWeight: 500,
+    whiteSpace: "nowrap",
+    color: "rgba(245,158,11,0.95)",
+    textShadow: "0 1px 2px rgba(0,0,0,0.55)",
+  };
+  if (edge === "top") return { ...base, left: 4, bottom: 3 };
+  if (edge === "bottom") return { ...base, left: 4, top: 3 };
+  if (edge === "left") return { ...base, left: 3, top: 4, writingMode: "vertical-rl" };
+  return { ...base, right: 3, top: 4, writingMode: "vertical-rl" };
+}
+
 export function CanvasChrome({
   format,
   zoom,
@@ -83,6 +137,23 @@ export function CanvasChrome({
   const zoomPct = Math.round(zoom * 100);
   const boxWidth = preset.width * zoom;
   const boxHeight = preset.height * zoom;
+  // Tâche 6 (U2) : les bandes ÉTABLIES pour ce format, indépendamment de la préférence — c'est ce que
+  // l'infobulle et la note doivent refléter (le format, pas l'état du bouton).
+  const formatBands = safeAreaBandsFor(format);
+  // Vide quand la préférence est éteinte, ET vide pour un format dont aucune zone sûre n'a pu être
+  // établie (lib/studio/safe-areas.ts) — dans les deux cas, RIEN n'est rendu plus bas, jamais un
+  // conteneur vide ni une bande de hauteur nulle.
+  const safeBands = prefs.safeAreas ? formatBands : [];
+  // Revue de la Tâche 6, point 2 : la réserve « ce sont les bornes PUBLICITAIRES » ne vivait que dans le
+  // commentaire de lib/studio/safe-areas.ts, alors que l'utilisateur voit 49 % de la hauteur (55 % de la
+  // surface) recouverts. Elle est mise À PORTÉE ici, et elle dépend du FORMAT, jamais de l'état du
+  // bouton : la réserve doit être lisible AVANT d'activer les zones sûres, pas seulement après. Rien
+  // n'est inventé — l'infobulle ne fait que dire ce que la source citée dit, et l'écart d'ordre de
+  // grandeur avec l'organique n'est PAS chiffré ici faute de source de première partie pour l'organique.
+  const safeAreasTitle =
+    formatBands.length === 0
+      ? "Zones sûres — aucune donnée publiée pour ce format"
+      : "Zones sûres — bornes publicitaires Meta : le bas (35 %) réserve le bouton d’appel à l’action, absent d’une story organique ; c’est donc une marge volontairement conservatrice";
 
   return (
     <div className="relative flex h-full w-full items-center justify-center" data-testid="canvas-chrome">
@@ -139,7 +210,7 @@ export function CanvasChrome({
           data-action="toggle-safe-areas"
           aria-label="Afficher les zones sûres"
           aria-pressed={prefs.safeAreas}
-          title="Zones sûres"
+          title={safeAreasTitle}
           className="pointer-events-auto"
           onClick={onToggleSafeAreas}
         >
@@ -226,6 +297,70 @@ export function CanvasChrome({
                 backgroundSize: `${RULER_STEP * zoom}px ${RULER_STEP * zoom}px`,
               }}
             />
+          )}
+
+          {/* Bandes de zones sûres (Tâche 6, U2, spec §7). MÊME leçon que la grille juste au-dessus, et
+              c'est LA raison d'être du test de composition de cette tâche : rendues AVANT {children},
+              elles passeraient sous le rectangle plein-cadre opaque que <Canvas> peint pour
+              `scene.canvas.background`, et le bouton « Zones sûres » basculerait `aria-pressed` sans le
+              moindre effet visuel — exactement ce que la grille de U1 a livré « fonctionnel ». Elles sont
+              donc DERNIÈRES dans l'arbre, sans z-index (l'ordre du DOM EST l'ordre de peinture entre
+              éléments `z-index: auto` qui se chevauchent, et n'introduire aucun contexte d'empilement
+              garde cette garantie vraie). Après la grille, aussi : une contrainte de format doit rester
+              lisible par-dessus une aide au placement.
+
+              `pointer-events-none` sur le CONTENEUR : les bandes recouvrent jusqu'à 55 % de l'artboard
+              (`story`), donc sans cela elles voleraient clics et glissers du canevas. Aucun descendant ne
+              réactive `pointer-events` — verrouillé par test, puisque c'est le genre de détail qu'une
+              future étiquette « cliquable » réintroduirait sans y penser.
+
+              `inset-0` DANS l'artboard `relative`, dont la boîte est pixel-identique à celle de <Canvas>
+              (`preset.width * zoom` vs `scene.canvas.width * scale`, avec `zoom === scale` en composition
+              réelle) : « au-dessus » recouvre donc bien la MÊME surface, condition sans laquelle l'ordre
+              de peinture ne prouverait rien. */}
+          {safeBands.length > 0 && (
+            <div data-testid="safe-areas" className="pointer-events-none absolute inset-0" aria-hidden>
+              {/* `key={band.edge}` : une arête est unique par format, et cette unicité est ÉPINGLÉE par
+                  un test (tests/studio-canvas.test.ts, « les arêtes d'un format sont UNIQUES ») plutôt
+                  que laissée au type — deux entrées sur la même arête verraient React n'en rendre
+                  qu'une, sans le moindre avertissement en production. Revue de la Tâche 6, nit 2 :
+                  ce fichier-là invite explicitement à ajouter des entrées, donc la contrainte devait
+                  cesser d'être implicite. */}
+              {safeBands.map((band) => (
+                <div key={band.edge} data-safe-band={band.edge} style={safeBandStyle(band, boxWidth, boxHeight)}>
+                  <span style={safeLabelStyle(band.edge)}>{band.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Revue de la Tâche 6, point 1 — LA CONFIANCE MAL PLACÉE. Sur un format PORTRAIT sans zone
+              sûre établie (`ig_portrait`), `safeAreaDefaultFor` renvoie `true` par orientation : le
+              bouton se rend donc ENFONCÉ au-dessus d'un artboard où rien n'est dessiné. Ce que
+              l'utilisateur en déduit n'est pas « aucune donnée disponible » mais « les zones sûres sont
+              actives, donc ma maquette les respecte » — strictement pire que de ne rien faire.
+              UNE NOTE, PAS UN CONTRÔLE DÉSACTIVÉ, et la raison est structurelle : `prefs.safeAreas` est
+              GLOBALE à l'utilisateur (lib/studio/editor-prefs.ts), pas par format. Griser le bouton sur
+              un gabarit ferait passer un réglage global pour un réglage propre au format et laisserait
+              le `true` déjà persisté orphelin — le bouton mentirait dans l'autre sens. Même précédent
+              de ton et de placement que geometry-strip.tsx#snap-rotation-note (Tâches 4 et 5) : discret,
+              et UNIQUEMENT dans le cas concerné. N'énonce que l'absence que safe-areas.ts documente
+              déjà — aucun chiffre inventé. Dernier enfant de l'artboard, mêmes contraintes que les
+              bandes (peint APRÈS le Canvas opaque, sans quoi il serait invisible ; `pointer-events-none`,
+              sans quoi il volerait les clics de la surface qu'il recouvre). */}
+          {prefs.safeAreas && formatBands.length === 0 && (
+            <div
+              data-testid="safe-areas-none"
+              className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2"
+              aria-hidden
+            >
+              <span
+                className="rounded bg-black/55 px-2 py-1 text-[10px] font-medium"
+                style={{ color: "rgba(245,158,11,0.95)" }}
+              >
+                Zones sûres : aucune donnée publiée pour ce format.
+              </span>
+            </div>
           )}
         </div>
       </div>

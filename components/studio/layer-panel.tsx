@@ -11,7 +11,9 @@ import {
 
 export interface LayerPanelProps {
   scene: Scene;
-  selectedId: string | null;
+  /** Tâche 3 (U2, spec §3) — la sélection COMPLÈTE : CHAQUE ligne dont l'id y figure est mise en
+   * évidence (`aria-selected`), pas seulement la première. */
+  selectedIds: string[];
   dispatch: Dispatch<EditorAction>;
 }
 
@@ -82,7 +84,7 @@ function RenameField({ layer, dispatch }: { layer: Layer; dispatch: Dispatch<Edi
   );
 }
 
-export function LayerPanel({ scene, selectedId, dispatch }: LayerPanelProps) {
+export function LayerPanel({ scene, selectedIds, dispatch }: LayerPanelProps) {
   const entries = layersTopFirst(scene.layers).map((layer) => ({
     layer,
     index: scene.layers.findIndex((l) => l.id === layer.id),
@@ -124,7 +126,7 @@ export function LayerPanel({ scene, selectedId, dispatch }: LayerPanelProps) {
               key={layer.id}
               data-layer-row-id={layer.id}
               className="flex items-center gap-1 rounded-lg border border-transparent px-1.5 py-1 aria-selected:border-border aria-selected:bg-muted"
-              aria-selected={layer.id === selectedId}
+              aria-selected={selectedIds.includes(layer.id)}
               draggable
               onDragStart={(e) => e.dataTransfer.setData("text/layer-id", layer.id)}
               onDragOver={(e) => e.preventDefault()}

@@ -194,7 +194,7 @@ describe("PropertyPanel — les sélecteurs d'assets sont bien montés pour le c
   it("un calque image en source \"bibliothèque\" monte le sélecteur d'images, avec la vignette de l'asset choisi", () => {
     const html = render(
       React.createElement(PropertyPanel, {
-        scene: scene([imageLayer]), selectedId: "i", context: "social_post", dispatch: () => {}, assets: ASSETS,
+        scene: scene([imageLayer]), selectedIds: ["i"], context: "social_post", dispatch: () => {}, assets: ASSETS,
       }),
     );
     expect(html).toContain('data-action="asset-picker-image"');
@@ -206,7 +206,7 @@ describe("PropertyPanel — les sélecteurs d'assets sont bien montés pour le c
   it("un calque texte monte le sélecteur de polices, avec la famille de la police choisie", () => {
     const html = render(
       React.createElement(PropertyPanel, {
-        scene: scene([textLayer]), selectedId: "t", context: "social_post", dispatch: () => {}, assets: ASSETS,
+        scene: scene([textLayer]), selectedIds: ["t"], context: "social_post", dispatch: () => {}, assets: ASSETS,
       }),
     );
     expect(html).toContain('data-action="asset-picker-font"');
@@ -216,7 +216,7 @@ describe("PropertyPanel — les sélecteurs d'assets sont bien montés pour le c
   it("sans bibliothèque fournie (assets omis), le panneau rend quand même — la police intégrée reste proposée", () => {
     const html = render(
       React.createElement(PropertyPanel, {
-        scene: scene([textLayer]), selectedId: "t", context: "social_post", dispatch: () => {},
+        scene: scene([textLayer]), selectedIds: ["t"], context: "social_post", dispatch: () => {},
       }),
     );
     expect(html).toContain('data-action="asset-picker-font"');

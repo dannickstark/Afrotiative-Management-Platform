@@ -23,7 +23,7 @@ import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { ModeSwitch } from "./mode-switch";
 import { RenderMode } from "./render-mode";
-import { editorReducer, initEditorState, undo, redo } from "@/lib/studio/editor-state";
+import { editorReducer, initEditorState, singleSelectedId, undo, redo } from "@/lib/studio/editor-state";
 import { createAutosaveController, type AutosaveState } from "@/lib/studio/autosave";
 import { shouldShowUnpublishedBadge } from "@/lib/studio/scene-diff";
 import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
@@ -220,7 +220,7 @@ function EditorShellInner({
   // ── Modes Montage ⇄ Rendu réel (Tâche 5, U1 spec §5) ──────────────────────
   // `mode` ne pilote qu'un rendu CONDITIONNEL plus bas (jamais une `key` React) : basculer ne
   // démonte ni ne réinitialise `state`/`dispatch` (le réducteur de l'éditeur, ci-dessus) — c'est ce
-  // qui garantit gratuitement que la sélection de calque courante (state.selectedId) survit à
+  // qui garantit gratuitement que la sélection de calques courante (state.selectedIds) survit à
   // l'aller-retour, sans le moindre code dédié. `view` (lib/studio/studio-mode.ts#PreservedView)
   // porte ce que le mode Montage ne porte PAS encore lui-même : le format promu dans la case large
   // de Rendu réel, son zoom et son défilement — voir components/studio/render-mode.tsx pour le
@@ -432,7 +432,7 @@ function EditorShellInner({
                 de simples `children` enrobés ICI, inchangé. */}
             {prefs.openPanel === "calques" && (
               <PanelHost open="calques" onOpenChange={collapsePanel}>
-                <CalquesPanel scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} />
+                <CalquesPanel scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} />
               </PanelHost>
             )}
             {prefs.openPanel === "modeles" && (
@@ -462,7 +462,10 @@ function EditorShellInner({
                 context={template.context}
                 assets={assets}
                 scene={state.scene}
-                selectedId={state.selectedId}
+                // Tâche 3 (U2) : ce panneau assigne un asset à UN calque image — une sélection
+                // multiple lui arrive donc comme `null` et désactive son sélecteur, voir la note en
+                // tête de images-panel.tsx.
+                selectedId={singleSelectedId(state.selectedIds)}
                 dispatch={dispatch}
                 onOpenChange={collapsePanel}
               />
@@ -491,7 +494,7 @@ function EditorShellInner({
                 onToggleGrid={() => setPrefs((p) => ({ ...p, grid: !p.grid }))}
                 onToggleSafeAreas={() => setPrefs((p) => ({ ...p, safeAreas: !p.safeAreas }))}
               >
-                <Canvas scene={state.scene} selectedId={state.selectedId} dispatch={dispatch} scale={scale} />
+                <Canvas scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} scale={scale} />
               </CanvasChrome>
             </div>
 
@@ -507,7 +510,7 @@ function EditorShellInner({
                 (`property-sections`, property-panel.tsx) : rien ici n'a besoin de défiler. */}
             <div className="h-full w-[300px] shrink-0 overflow-hidden rounded-lg border">
               <PropertyPanel
-                scene={state.scene} selectedId={state.selectedId} context={template.context}
+                scene={state.scene} selectedIds={state.selectedIds} context={template.context}
                 dispatch={dispatch} assets={assets}
                 sectionsOpen={prefs.sectionsOpen}
                 onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}

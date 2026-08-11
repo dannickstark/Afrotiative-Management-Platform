@@ -10,7 +10,9 @@
 // scène invalide, même de façon transitoire.
 //
 // Verrouillage (`layer.locked`). Ignoré par moveLayer / resizeLayer / rotateLayer / deleteLayer —
-// les quatre actions qui altèrent la position, la taille, l'angle ou l'existence d'un calque.
+// les quatre actions qui altèrent la position, la taille, l'angle ou l'existence d'un calque — et
+// par setFrames (Tâche 4, U2), qui saute LIGNE À LIGNE les calques verrouillés de son lot au lieu de
+// refuser le lot entier : aligner une sélection dont un calque est verrouillé aligne bien les autres.
 // setLayerProp, toggleVisible et reorderLayer NE sont PAS bloqués par le verrou : un calque
 // verrouillé protège contre une manipulation accidentelle à la souris sur le canevas (spec §2 :
 // « un calque locked ne répond ni au clic ni au glisser »), pas contre une édition explicite via
@@ -22,28 +24,84 @@
 // lorsqu'il déborde) ; `future` est vidé à chaque nouvelle modification (le motif undo/redo
 // classique) et ne peut structurellement jamais dépasser MAX_HISTORY lui-même, puisqu'il ne se
 // remplit qu'en dépilant `past`, déjà plafonné.
+//
+// Sélection (Tâche 3, U2, spec §3). `selectedId: string | null` est devenu `selectedIds: string[]`.
+// Trois décisions, chacune vérifiée par tests/studio-editor-state.test.ts :
+//
+//  1. UN TABLEAU, PAS UN `Set` : `selectedIds` porte l'ORDRE d'insertion (l'ordre dans lequel
+//     l'utilisateur a Maj-cliqué), que la Tâche 4 (aligner/répartir) exploitera pour désigner une
+//     référence d'alignement. Le réducteur DÉDOUBLONNE (jamais deux fois le même id) mais ne trie
+//     jamais et ne reprojette jamais la sélection sur l'ordre de peinture de `scene.layers`.
+//
+//  2. LA SÉLECTION N'EST PAS VALIDÉE CONTRE LA SCÈNE. Un id absent de `scene.layers` est accepté tel
+//     quel : tous les lecteurs font déjà un `.find()` qui rend `null` (voir property-panel.tsx, dont
+//     un test couvre explicitement « l'id sélectionné n'existe plus »). Filtrer ici transformerait
+//     `select` en action dépendante de la scène, sans fermer aucun défaut réel.
+//
+//  3. L'HISTORIQUE PORTE LA SÉLECTION (`HistoryEntry`, ci-dessous), et c'est un CHANGEMENT de
+//     comportement, pas une simple migration de type. Avant cette tâche, undo/redo reportait la
+//     sélection COURANTE (`selectedId: state.selectedId`) : annuler un ajout de calque laissait donc
+//     `selectedId` pointer sur un calque qui venait de disparaître de la scène restaurée. Le plan U2
+//     demande « annuler/rétablir restaure la sélection qui existait » — ce qui n'a de sens que si
+//     chaque entrée d'historique se souvient de la sélection d'alors. C'est ce que fait `commit()`.
+//     `select`/`toggleSelection` continuent de NE PAS s'empiler : changer de sélection n'est pas une
+//     modification annulable, seulement une modification de la scène l'est.
 import { parseScene, SceneError, type Scene, type Layer, type Frame } from "./scene";
+// Tâche 4 (U2) : `FrameChange` et `sameFrame` viennent du module d'alignement — une FEUILLE pure
+// (aucun import de valeur, voir son en-tête), donc l'importer ici n'ajoute rien au graphe d'exécution
+// des composants client. Les réutiliser plutôt que de redéclarer une paire {id, frame} et une
+// comparaison de cadres évite d'avoir deux définitions à garder d'accord.
+import { sameFrame, type FrameChange } from "./align";
 
 const MAX_HISTORY = 50;
 
+/** Une entrée d'historique : la scène ET la sélection qui existait avec elle (voir le point 3 de
+ * l'en-tête de module). `scene` est toujours stockée par RÉFÉRENCE, jamais recopiée. */
+export interface HistoryEntry {
+  scene: Scene;
+  selectedIds: string[];
+}
+
 export interface EditorState {
   scene: Scene;
-  selectedId: string | null;
-  past: Scene[];
-  future: Scene[];
+  selectedIds: string[];
+  past: HistoryEntry[];
+  future: HistoryEntry[];
 }
 
 export function initEditorState(scene: Scene): EditorState {
-  return { scene, selectedId: null, past: [], future: [] };
+  return { scene, selectedIds: [], past: [], future: [] };
+}
+
+/**
+ * L'id sélectionné quand il y en a EXACTEMENT un, sinon `null` — l'aide dérivée que réclame le plan
+ * (« expose a derived helper for the common single-selection case ») pour les consommateurs qui
+ * n'ont de sens QUE sur un calque unique : les poignées du canevas (elles manipulent UN cadre), les
+ * sections par type du panneau de propriétés, le sélecteur d'asset du panneau Images.
+ *
+ * `null` pour une sélection MULTIPLE, pas le premier id : c'est le cœur de l'aide. Un
+ * `selectedIds[0] ?? null` afficherait les propriétés du premier calque alors que l'utilisateur en a
+ * sélectionné trois — exactement le genre de « ça marche pour une sélection simple, donc ça marche »
+ * que cette fonction existe pour rendre impossible.
+ */
+export function singleSelectedId(selectedIds: readonly string[]): string | null {
+  return selectedIds.length === 1 ? selectedIds[0] : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Actions
 
 export type EditorAction =
-  | { type: "select"; id: string | null }
+  // Une SEULE action de remplacement (`select`) et une de bascule (`toggleSelection`) : les quatre
+  // constructeurs exportés plus bas (select/selectMany/clearSelection/toggleSelection) ne sont que
+  // les gestes de l'interface exprimés dessus.
+  | { type: "select"; ids: string[] }
+  | { type: "toggleSelection"; id: string }
   | { type: "moveLayer"; id: string; dx: number; dy: number }
   | { type: "resizeLayer"; id: string; frame: Frame }
+  // Tâche 4 (U2, spec §4) : UN lot de cadres, UNE entrée d'historique — voir son cas dans le
+  // réducteur et le commentaire de `setFrames` plus bas.
+  | { type: "setFrames"; changes: readonly FrameChange[] }
   | { type: "rotateLayer"; id: string; deg: number }
   | { type: "setLayerProp"; id: string; patch: LayerPatch }
   | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
@@ -61,14 +119,40 @@ export type EditorAction =
 // puisque parseScene revalide de toute façon tout correctif avant qu'il n'entre dans l'état.
 export type LayerPatch = Record<string, unknown>;
 
+// Le geste « clic » : REMPLACE la sélection par ce seul calque (ou la vide pour `null`). Signature
+// conservée telle quelle à travers la Tâche 3 — c'est ce qui laisse inchangés tous les appelants du
+// cas simple (canvas.tsx au clic, layer-panel.tsx à la prise de focus d'un renommage).
 export function select(id: string | null): EditorAction {
-  return { type: "select", id };
+  return { type: "select", ids: id === null ? [] : [id] };
+}
+// Remplace la sélection par CET ensemble, dans cet ordre.
+export function selectMany(ids: readonly string[]): EditorAction {
+  return { type: "select", ids: [...ids] };
+}
+// Le geste « Maj-clic » : ajoute l'id s'il est absent, le retire s'il est présent.
+export function toggleSelection(id: string): EditorAction {
+  return { type: "toggleSelection", id };
+}
+// Le geste « clic dans le vide ». Nommé plutôt que `select(null)` là où l'intention est « vider »
+// et non « sélectionner rien de précis » — les deux produisent la même action.
+export function clearSelection(): EditorAction {
+  return { type: "select", ids: [] };
 }
 export function moveLayer(id: string, dx: number, dy: number): EditorAction {
   return { type: "moveLayer", id, dx, dy };
 }
 export function resizeLayer(id: string, frame: Frame): EditorAction {
   return { type: "resizeLayer", id, frame };
+}
+// Tâche 4 (U2, spec §4) : « une action appliquant un lot de changements de cadre comme UNE SEULE
+// entrée d'annulation, pas une par calque ». C'est l'action des gestes qui déplacent PLUSIEURS calques
+// d'un coup — aligner et répartir aujourd'hui (components/studio/geometry-strip.tsx#AlignRow), et ce
+// qui manquait à la Tâche 3 pour généraliser Suppr et les flèches à une sélection multiple (voir
+// components/studio/canvas.tsx : les brancher sur N actions empilerait N entrées pour un seul geste).
+// Ne PAS l'utiliser pour un calque unique déplacé à la souris : `moveLayer`/`resizeLayer` disent
+// mieux l'intention et sont déjà couverts.
+export function setFrames(changes: readonly FrameChange[]): EditorAction {
+  return { type: "setFrames", changes };
 }
 export function rotateLayer(id: string, deg: number): EditorAction {
   return { type: "rotateLayer", id, deg };
@@ -117,9 +201,37 @@ function replaceAt<T>(arr: readonly T[], index: number, value: T): T[] {
   return copy;
 }
 
-function pushHistory(past: readonly Scene[], scene: Scene): Scene[] {
-  const next = [...past, scene];
+function pushHistory(past: readonly HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
+  const next = [...past, entry];
   return next.length > MAX_HISTORY ? next.slice(next.length - MAX_HISTORY) : next;
+}
+
+// L'entrée d'historique correspondant à l'état COURANT — la paire (scène, sélection) vers laquelle un
+// undo/redo doit pouvoir revenir. Un seul endroit où cette paire se construit, pour que commit/undo/
+// redo ne puissent pas diverger sur ce qu'ils empilent.
+function snapshot(state: EditorState): HistoryEntry {
+  return { scene: state.scene, selectedIds: state.selectedIds };
+}
+
+// Dédoublonne en conservant la PREMIÈRE occurrence de chaque id (voir le point 1 de l'en-tête).
+function dedupeIds(ids: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+// Deux sélections sont « la même » si elles ont les mêmes ids DANS LE MÊME ORDRE — l'ordre fait
+// partie de la valeur (point 1 de l'en-tête), donc [a, b] et [b, a] sont deux sélections distinctes.
+// Sert uniquement à préserver l'identité référentielle de l'état quand rien ne change réellement, ce
+// que faisait déjà `action.id === state.selectedId` avant la Tâche 3 (et sur quoi React s'appuie pour
+// ne pas re-rendre).
+function sameSelection(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
 }
 
 // Tente de faire entrer `candidate` dans l'état : le valide avec parseScene, et n'empile
@@ -135,8 +247,10 @@ function commit(state: EditorState, candidate: Scene): EditorState {
   }
   return {
     scene: validated,
-    selectedId: state.selectedId,
-    past: pushHistory(state.past, state.scene),
+    selectedIds: state.selectedIds,
+    // L'entrée empilée porte la sélection D'AVANT la modification — c'est CE couple que l'undo
+    // restaurera (point 3 de l'en-tête de module).
+    past: pushHistory(state.past, snapshot(state)),
     future: [],
   };
 }
@@ -190,8 +304,20 @@ function createLayer(type: Layer["type"]): Layer {
 // ─────────────────────────────────────────────────────────────────────────────
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
-    case "select":
-      return action.id === state.selectedId ? state : { ...state, selectedId: action.id };
+    case "select": {
+      const ids = dedupeIds(action.ids);
+      return sameSelection(ids, state.selectedIds) ? state : { ...state, selectedIds: ids };
+    }
+
+    case "toggleSelection": {
+      // `filter` plutôt qu'un vidage : c'est TOUTE la propriété « retirer un calque de la sélection
+      // ne rend pas les autres orphelins ». Ajout EN FIN de tableau, pour que l'ordre reste l'ordre
+      // dans lequel l'utilisateur a cliqué.
+      const ids = state.selectedIds.includes(action.id)
+        ? state.selectedIds.filter((id) => id !== action.id)
+        : [...state.selectedIds, action.id];
+      return { ...state, selectedIds: ids };
+    }
 
     case "moveLayer":
       return updateUnlockedLayer(state, action.id, (layer, layers, index) =>
@@ -203,6 +329,40 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "resizeLayer":
       return updateUnlockedLayer(state, action.id, (layer, layers, index) =>
         replaceAt(layers, index, { ...layer, frame: { ...action.frame } }));
+
+    // Tâche 4 (U2, spec §4). Trois propriétés, chacune épinglée par un test :
+    //
+    //  1. UNE SEULE ENTRÉE D'HISTORIQUE pour tout le lot — un seul `commit()`, quel que soit le nombre
+    //     de calques touchés. C'est LA raison d'être de cette action : une boucle sur `moveLayer`
+    //     empilerait N entrées et forcerait N « annuler » pour défaire un seul geste.
+    //  2. TOLÉRANTE ligne à ligne, ATOMIQUE sur la validation. Un id absent ou un calque verrouillé est
+    //     simplement SAUTÉ (même garde de verrou que move/resize/rotate/delete) et le reste s'applique ;
+    //     mais si la scène ainsi construite est invalide (largeur négative, par exemple), `commit()` la
+    //     refuse EN ENTIER et l'état revient inchangé — jamais un lot à moitié appliqué.
+    //  3. AUCUNE ENTRÉE FANTÔME. Si rien ne change réellement (lot vide, ou tous les cadres déjà à leur
+    //     place — le cas normal quand on aligne un ensemble déjà aligné), l'état est renvoyé TEL QUEL,
+    //     même référence : cliquer deux fois « aligner à gauche » ne laisse pas deux « annuler » à
+    //     consommer dont le second ne défait rien.
+    //
+    // Un même id présent deux fois dans le lot : la dernière occurrence gagne (application séquentielle).
+    // Aucun appelant ne le fait — planAlign/planDistribute produisent un id par calque participant.
+    case "setFrames": {
+      let layers = state.scene.layers;
+      let touched = false;
+      for (const change of action.changes) {
+        const index = layers.findIndex((l) => l.id === change.id);
+        if (index === -1) continue;
+        const layer = layers[index];
+        if (layer.locked) continue;
+        if (sameFrame(layer.frame, change.frame)) continue;
+        // Le cadre est RECOPIÉ : l'état ne doit jamais partager d'objet mutable avec la charge utile
+        // d'une action que l'appelant pourrait réutiliser.
+        layers = replaceAt(layers, index, { ...layer, frame: { ...change.frame } });
+        touched = true;
+      }
+      if (!touched) return state;
+      return commit(state, { ...state.scene, layers });
+    }
 
     case "rotateLayer":
       return updateUnlockedLayer(state, action.id, (layer, layers, index) =>
@@ -221,7 +381,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "addLayer": {
       const layer = action.layer ?? createLayer(action.layerType);
       const next = commit(state, { ...state.scene, layers: [...state.scene.layers, layer] });
-      return next === state ? state : { ...next, selectedId: layer.id };
+      // Un ajout REMPLACE la sélection par le seul calque ajouté (comportement d'avant la Tâche 3,
+      // inchangé) : c'est celui que l'utilisateur vient de créer et va vouloir régler.
+      return next === state ? state : { ...next, selectedIds: [layer.id] };
     }
 
     case "deleteLayer": {
@@ -231,7 +393,11 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       const layers = state.scene.layers.filter((l) => l.id !== action.id);
       const next = commit(state, { ...state.scene, layers });
       if (next === state) return state;
-      return state.selectedId === action.id ? { ...next, selectedId: null } : next;
+      // Retire UNIQUEMENT l'id supprimé de la sélection — les autres survivent. La migration naïve
+      // de l'ancien `selectedId === action.id ? null : …` (« la sélection contient-elle cet id ?
+      // alors vide-la ») viderait toute la sélection dès qu'un seul de ses calques est supprimé.
+      const remaining = next.selectedIds.filter((id) => id !== action.id);
+      return sameSelection(remaining, next.selectedIds) ? next : { ...next, selectedIds: remaining };
     }
 
     case "reorderLayer": {
@@ -266,24 +432,27 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       });
     }
 
+    // undo/redo restaurent la SCÈNE **et** la SÉLECTION portées par l'entrée dépilée, et empilent
+    // dans l'autre pile la paire courante — parfaitement symétriques, donc un aller-retour rend
+    // exactement l'état de départ (point 3 de l'en-tête de module).
     case "undo": {
       if (state.past.length === 0) return state;
-      const scene = state.past[state.past.length - 1];
+      const entry = state.past[state.past.length - 1];
       return {
-        scene,
-        selectedId: state.selectedId,
+        scene: entry.scene,
+        selectedIds: entry.selectedIds,
         past: state.past.slice(0, -1),
-        future: [state.scene, ...state.future],
+        future: [snapshot(state), ...state.future],
       };
     }
 
     case "redo": {
       if (state.future.length === 0) return state;
-      const [scene, ...future] = state.future;
+      const [entry, ...future] = state.future;
       return {
-        scene,
-        selectedId: state.selectedId,
-        past: pushHistory(state.past, state.scene),
+        scene: entry.scene,
+        selectedIds: entry.selectedIds,
+        past: pushHistory(state.past, snapshot(state)),
         future,
       };
     }

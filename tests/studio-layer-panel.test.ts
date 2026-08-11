@@ -35,11 +35,23 @@ function makeScene(): Scene {
   };
 }
 
-function render(scene: Scene, selectedId: string | null = null) {
+function render(scene: Scene, selectedIds: string[] = []) {
   const noop = () => {};
   return renderToStaticMarkup(
-    React.createElement(LayerPanel, { scene, selectedId, dispatch: noop }),
+    React.createElement(LayerPanel, { scene, selectedIds, dispatch: noop }),
   );
+}
+
+// Isole le HTML d'UNE ligne de calque (de son `data-layer-row-id="…"` jusqu'à la ligne suivante, ou
+// la fin) — même raison que `layerNode` dans tests/studio-canvas.test.ts : un slice à largeur fixe
+// déborderait sur la ligne voisine et ferait passer un test pour la mauvaise raison.
+function rowNode(html: string, id: string): string {
+  const start = html.indexOf(`data-layer-row-id="${id}"`);
+  if (start === -1) throw new Error(`ligne du calque « ${id} » absente du HTML rendu`);
+  const openStart = html.lastIndexOf("<li", start);
+  const next = html.indexOf("data-layer-row-id=", start + 1);
+  const end = next === -1 ? html.length : html.lastIndexOf("<li", next);
+  return html.slice(openStart, end);
 }
 
 // Repère le bouton `disabled=""` (attribut booléen RÉEL, tel que sérialisé par react-dom/server) —
@@ -98,6 +110,33 @@ describe("LayerPanel — ordre affiché (rendu réel)", () => {
     const html = render(makeScene());
     expect(html).toContain('data-layer-row-id="c"');
     expect(rowOrder(html)[0]).toBe("c");
+  });
+});
+
+// ── Tâche 3 (U2, spec §3) — « le panneau de calques met en évidence CHAQUE ligne sélectionnée » ──
+describe("LayerPanel — mise en évidence de la sélection", () => {
+  it("une sélection simple ne met en évidence QUE sa ligne", () => {
+    const html = render(makeScene(), ["b"]);
+    expect(rowNode(html, "b")).toContain('aria-selected="true"');
+    expect(rowNode(html, "a")).toContain('aria-selected="false"');
+    expect(rowNode(html, "c")).toContain('aria-selected="false"');
+  });
+
+  it("une sélection MULTIPLE met en évidence TOUTES ses lignes, et elles seules", () => {
+    // Trois calques, deux sélectionnés : la troisième ligne est ce qui empêche ce test de passer
+    // pour un composant qui marquerait tout, et la première ligne sélectionnée ce qui l'empêche de
+    // passer pour un composant resté sur `layer.id === selectedIds[0]`.
+    const html = render(makeScene(), ["a", "c"]);
+    expect(rowNode(html, "a")).toContain('aria-selected="true"');
+    expect(rowNode(html, "c")).toContain('aria-selected="true"');
+    expect(rowNode(html, "b")).toContain('aria-selected="false"');
+  });
+
+  it("une sélection vide ne met AUCUNE ligne en évidence", () => {
+    const html = render(makeScene(), []);
+    for (const id of ["a", "b", "c"]) {
+      expect(rowNode(html, id)).toContain('aria-selected="false"');
+    }
   });
 });
 
