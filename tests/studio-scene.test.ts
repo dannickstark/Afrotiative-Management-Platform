@@ -48,6 +48,52 @@ describe("parseScene", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Migration de `radius` sur un calque FORME (U3 Tâche 2, arbitrage C / défaut de plan #12).
+// La sonde a mesuré, à travers renderScene(), qu'un rayon NUMÉRIQUE ne peut pas exprimer une
+// ellipse : sur 800×400, `radius: 200` donne un STADE. Le champ accepte donc désormais AUSSI une
+// chaîne CSS — sans qu'aucune scène déjà écrite (rayon en pixels) ne se relise différemment.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("parseScene — le rayon d'un calque forme", () => {
+  function sceneWithRadius(radius: unknown) {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 800, height: 400, background: "#000000" },
+      layers: [{
+        id: "s", name: "Forme", visible: true, locked: false,
+        frame: { x: 0, y: 0, w: 800, h: 400 },
+        type: "shape", shape: "rect", fill: "#FF0000",
+        ...(radius === undefined ? {} : { radius }),
+      }],
+    };
+  }
+  function radiusOf(radius: unknown) {
+    const layer = parseScene(sceneWithRadius(radius)).layers[0];
+    if (layer.type !== "shape") throw new Error("calque inattendu");
+    return layer.radius;
+  }
+
+  it("relit un rayon en PIXELS exactement comme avant la migration", () => {
+    for (const value of [0, 1, 8.5, 60, 200, 2593]) {
+      expect(radiusOf(value)).toBe(value);
+    }
+    expect(radiusOf(undefined)).toBeUndefined();
+  });
+
+  it("accepte désormais une chaîne CSS — c'est ce qui rend l'ellipse exprimable", () => {
+    for (const value of ["50%", "0.5%", "8px", "100%", "8px 24px", "8px 24px 8px 24px"]) {
+      expect(radiusOf(value)).toBe(value);
+    }
+  });
+
+  it("refuse ce qui n'est ni un rayon en pixels ni une longueur CSS, en français", () => {
+    for (const value of [-1, "banane", "50", "50 %", "8px 24px 8px 24px 8px", "50%;", true, {}]) {
+      expect(() => parseScene(sceneWithRadius(value))).toThrow(SceneError);
+      expect(() => parseScene(sceneWithRadius(value))).toThrow(/Rayon invalide/);
+    }
+  });
+});
+
 describe("FORMAT_PRESETS", () => {
   it("expose les huit préréglages avec des dimensions positives", () => {
     const keys = Object.keys(FORMAT_PRESETS);

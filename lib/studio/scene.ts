@@ -83,12 +83,35 @@ const gradient = z.object({
 // pouvaient dériver ensemble sans qu'aucun test ne le remarque).
 export const SHAPE_KINDS = ["rect"] as const;
 
+/** LA forme d'un calque forme — le type que lib/studio/shapes.ts décrit et que les deux chemins de
+ * rendu consomment. Dérivé de SHAPE_KINDS, jamais recopié. */
+export type ShapeKind = (typeof SHAPE_KINDS)[number];
+
+// Le rayon des coins d'une forme (U3 Tâche 2, arbitrage C — douzième défaut de plan du programme).
+//
+// HISTORIQUE, INCHANGÉ : un NOMBRE, en pixels. Toute scène déjà écrite se relit exactement pareil.
+// NOUVEAU : une CHAÎNE CSS de une à quatre longueurs en « px » ou « % ». Parce qu'un nombre NE PEUT
+// PAS exprimer une ellipse : la sonde (Tâche 1) l'a mesuré en pixels À TRAVERS renderScene() — sur
+// un cadre 800×400, `radius: 200` (le plus grand rayon utile) donne un STADE, deux demi-cercles
+// reliés par un rectangle, pas une ellipse. Seul `"50%"` en donne une. La Tâche 3 (ellipse) et la
+// Tâche 4 (rayon par coin, « 8px 24px 8px 24px ») en dépendent toutes les deux.
+//
+// `z.custom` plutôt qu'un `z.union` : une union fait remonter à parseScene un `invalid_union`
+// générique (« Entrée invalide ») qui n'apprend rien à un rédacteur, alors qu'un `custom` porte le
+// code que parseScene sait afficher tel quel — un seul message français qui dit les DEUX formes
+// acceptées.
+const RADIUS_LENGTH_RE = /^\d+(?:\.\d+)?(?:px|%)(?: \d+(?:\.\d+)?(?:px|%)){0,3}$/;
+const cssRadius = z.custom<number | string>(
+  (v) => (typeof v === "number" ? Number.isFinite(v) && v >= 0 : typeof v === "string" && RADIUS_LENGTH_RE.test(v)),
+  { message: "Rayon invalide (attendu un nombre de pixels ≥ 0, ou 1 à 4 longueurs en « px » ou « % » séparées par une espace, ex. « 50% »)" },
+);
+
 const shapeLayer = z.object({
   ...layerBase,
   type: z.literal("shape"),
   shape: z.enum(SHAPE_KINDS),
   fill: z.union([hexColor, gradient]),
-  radius: z.number().nonnegative().optional(),
+  radius: cssRadius.optional(),
   border: z.object({
     width: z.number().positive(),
     color: hexColor,

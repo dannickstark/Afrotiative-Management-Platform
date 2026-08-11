@@ -595,7 +595,12 @@ function ShapeFields({
       </TypeSection>
 
       <TypeSection title="Forme" sectionId="forme" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
-        <NumberField label="Rayon des coins" value={layer.radius ?? 0} min={0} onCommit={(v) => patch({ radius: v || undefined })} />
+        {/* `radius` accepte désormais AUSSI une chaîne CSS (U3 Tâche 2, arbitrage C : un nombre ne
+            peut pas exprimer une ellipse). Ce champ NUMÉRIQUE ne sait montrer que la forme
+            historique — aujourd'hui la seule qu'une interface produise, `rect` étant la seule forme
+            du schéma. LA TÂCHE 3, qui livre l'ellipse, DOIT reprendre ce contrôle : tel quel, il
+            afficherait 0 pour un rayon « 50% » et l'écraserait au premier commit. */}
+        <NumberField label="Rayon des coins" value={typeof layer.radius === "number" ? layer.radius : 0} min={0} onCommit={(v) => patch({ radius: v || undefined })} />
       </TypeSection>
 
       <TypeSection title="Bordure" sectionId="bordure" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
