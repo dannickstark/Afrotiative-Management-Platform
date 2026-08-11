@@ -17,11 +17,14 @@
 //     gabarit ; le seuil est le SEUL endroit où l'échelle intervient. Un `scale` non fini, nul ou
 //     négatif désactive l'accrochage au lieu de produire un seuil infini ou négatif.
 //
-//  2. LES CANDIDATS SONT LES CALQUES VISIBLES, VERROUILLÉS COMPRIS, sauf celui qu'on manipule
+//  2. LES CANDIDATS SONT LES CALQUES VISIBLES, VERROUILLÉS COMPRIS, sauf CEUX qu'on manipule
 //     (`snapCandidates`). Deux moitiés, chacune avec sa raison, et chacune épinglée par un test sur la
 //     MÊME fixture (seul l'état du calque change) :
-//       • LE CALQUE EN COURS DE GESTE S'EXCLUT LUI-MÊME : ses propres bords sont à distance 0 de
+//       • TOUT CALQUE EN COURS DE GESTE S'EXCLUT LUI-MÊME : ses propres bords sont à distance 0 de
 //         lui-même, ils gagneraient à chaque pas et le calque serait littéralement impossible à déplacer.
+//         Depuis le glisser de GROUPE (revue finale U0+U2, Important 1), « celui qu'on manipule » est
+//         un ENSEMBLE : les autres participants bougent eux aussi, donc leurs bords ne sont pas des
+//         références — un guide qui les nommerait annoncerait un alignement défait à la fin du geste.
 //       • UN CALQUE VERROUILLÉ **EST** UNE RÉFÉRENCE (défaut de plan #11 ; le plan disait « unlocked »
 //         et a été amendé). Une référence d'accrochage est en LECTURE SEULE : s'accrocher à un calque ne
 //         modifie que celui qu'on tire. L'exclusion avait été recopiée de la Tâche 4, où elle est juste
@@ -193,14 +196,24 @@ export interface SnapSubject {
 
 /**
  * Les calques qui peuvent servir de référence (décision 2) : VISIBLES — verrouillés compris — et jamais
- * celui qu'on manipule. Générique pour que l'appelant récupère ses `Layer` complets sans transtypage.
+ * AUCUN de ceux qu'on manipule. Générique pour que l'appelant récupère ses `Layer` complets sans
+ * transtypage.
+ *
+ * `movingIds` est une LISTE, pas un id (revue finale U0+U2, Important 1) : depuis que le glisser
+ * déplace toute la sélection, un geste bouge N calques à la fois, et un calque qui BOUGE ne peut pas
+ * servir de référence à un autre calque qui bouge — sa ligne aura changé de place à la fin du geste,
+ * donc le guide affirmerait un alignement avec un bord qui n'y sera plus. La liste à un élément est le
+ * cas d'un glisser simple.
  *
  * `visible` omis vaut « visible » : un littéral de test n'a pas à l'épeler, alors qu'un `Layer` de
  * scène le porte toujours. `locked` n'est PAS lu ici (voir la décision 2 en tête de module), mais reste
  * dans `SnapSubject` : `Layer` le porte, et le retirer du type forcerait les appelants à filtrer eux-mêmes.
  */
-export function snapCandidates<T extends SnapSubject>(layers: readonly T[], movingId: string): T[] {
-  return layers.filter((l) => l.id !== movingId && l.visible !== false);
+export function snapCandidates<T extends SnapSubject>(
+  layers: readonly T[],
+  movingIds: readonly string[],
+): T[] {
+  return layers.filter((l) => !movingIds.includes(l.id) && l.visible !== false);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

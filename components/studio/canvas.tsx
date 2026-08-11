@@ -85,7 +85,8 @@ const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
 export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Tâche 5 (U2, spec §5) — le contexte d'accrochage : la scène ENTIÈRE plus les dimensions du plan de
-  // travail. Le moteur en retire lui-même le calque manipulé et les calques masqués (`snapCandidates`,
+  // travail. Le moteur en retire lui-même TOUS les calques que le geste déplace (le calque tiré, et les
+  // autres participants d'un glisser de groupe) ainsi que les calques masqués (`snapCandidates`,
   // lib/studio/snap.ts, décision 2 — un calque VERROUILLÉ reste, lui, une référence légitime) :
   // refiltrer ici serait une deuxième copie de cette règle.
   const { preview, getMoveHandler, getResizeHandler, getRotateHandler } = useLayerDrag(dispatch, scale, {
@@ -106,7 +107,14 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
 
+  // GLISSER DE GROUPE (revue finale U0+U2, Important 1) : l'aperçu peut porter le cadre de PLUSIEURS
+  // calques (`preview.frames`), pas seulement celui qu'on tire. On regarde donc le lot d'abord — il
+  // contient le calque tiré, avec exactement le cadre que `preview.frame` porte — puis on retombe sur
+  // le canal simple. Un aperçu qui n'afficherait que le calque tiré montrerait un geste DIFFÉRENT de
+  // celui qui sera committé, ce qui est précisément le défaut que ce programme n'arrête pas de trouver.
   function frameFor(layer: Layer) {
+    const dansLeLot = preview?.frames?.find((c) => c.id === layer.id);
+    if (dansLeLot) return dansLeLot.frame;
     return preview?.layerId === layer.id && preview.frame ? preview.frame : layer.frame;
   }
   function rotationFor(layer: Layer) {
@@ -209,6 +217,15 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
               image={images?.get(layer.id)}
               scale={scale}
               onPointerDown={(e) => {
+                // Tâche 3, M4 (revue finale U0+U2) : LA GARDE DE BOUTON PASSE AVANT TOUT EFFET DE BORD.
+                // Avant ce correctif, `stopPropagation()`/`preventDefault()` tournaient AVANT le test
+                // `e.button === 0` du chemin Maj — un Maj-clic DROIT était donc avalé ici (mort : aucun
+                // gestionnaire `contextmenu` n'existe) tandis qu'un clic droit SANS Maj traversait
+                // jusqu'à `dispatch(select(...))` et RÉDUISAIT une sélection multiple à un seul calque.
+                // Les deux chemins disent maintenant la même chose : un bouton non primaire n'arme
+                // rien, ne consomme rien, ne touche pas la sélection — et l'événement remonte jusqu'à
+                // la racine, dont la garde `e.button !== 0` est identique.
+                if (e.button !== 0) return;
                 rootRef.current?.focus();
                 if (e.shiftKey) {
                   // Bascule de sélection PURE (voir le commentaire en tête de composant, point 3).
@@ -223,11 +240,34 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
                   // filet disparaît.
                   e.stopPropagation();
                   e.preventDefault();
-                  if (e.button === 0) dispatch(toggleSelection(layer.id));
+                  dispatch(toggleSelection(layer.id));
                   return;
                 }
-                dispatch(select(layer.id));
-                getMoveHandler(layer)(e);
+                // GLISSER DE GROUPE (revue finale U0+U2, Important 1). Avant ce correctif, ce
+                // gestionnaire dispatchait `select(layer.id)` INCONDITIONNELLEMENT puis armait un
+                // déplacement du seul calque tiré : aligner trois calques puis tirer l'un d'eux pour
+                // recaler l'ensemble laissait les deux autres sur place ET détruisait la sélection (la
+                // rangée aligner/répartir disparaissait dans le même geste). Le glisser était le SEUL
+                // geste qui ne refusait ni ne groupait — il DÉTRUISAIT.
+                //
+                //  • le calque est DÉJÀ dans la sélection -> on ne re-sélectionne PAS (un `select`
+                //    réduirait la sélection à ce seul calque) et on arme le déplacement de TOUS les
+                //    participants ;
+                //  • il n'y est pas -> la sélection est remplacée par lui (comportement d'avant,
+                //    inchangé) et le déplacement reste simple.
+                //
+                // Le groupe est pris dans l'ORDRE DES CALQUES (`scene.layers`), pas dans l'ordre des
+                // Maj-clics : c'est déjà l'ordre d'`alignParticipants` (décision 2 de
+                // lib/studio/align.ts), et il n'y a aucune raison qu'un lot de cadres dépende de
+                // l'ordre où l'utilisateur a cliqué. Les calques VERROUILLÉS sont écartés par le moteur
+                // (voir `beginMove`), et les calques MASQUÉS suivent le groupe — décision et motif dans
+                // hooks/use-layer-drag.ts.
+                const déjàSélectionné = selectedIds.includes(layer.id);
+                if (!déjàSélectionné) dispatch(select(layer.id));
+                const groupe = déjàSélectionné && selectedIds.length > 1
+                  ? scene.layers.filter((l) => selectedIds.includes(l.id))
+                  : undefined;
+                getMoveHandler(layer, groupe)(e);
               }}
             />
           );

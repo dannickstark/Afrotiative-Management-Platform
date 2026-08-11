@@ -1482,3 +1482,247 @@ describe("createGestureEngine — REDIMENSIONNEMENT accroché (Tâche 5)", () =>
     expect(actions).toEqual([{ type: "setFrames", changes: [{ id: "l1", frame: { x: 400, y: 100, w: 200, h: 150 } }] }]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GLISSER DE GROUPE (revue finale U0+U2, Important 1).
+//
+// Avant ce correctif, tirer un calque d'une sélection multiple la RÉDUISAIT à ce seul calque et ne
+// déplaçait que lui : « aligner trois calques, en tirer un pour recaler l'ensemble » laissait les deux
+// autres sur place et faisait disparaître la rangée aligner/répartir dans le même geste. Le glisser
+// était le seul geste qui ne refusait ni ne groupait — il détruisait.
+//
+// Les tests ci-dessous pilotent le moteur PUR jusqu'au VRAI réducteur ; le câblage DOM (« quel groupe
+// le canevas passe-t-il, et quand ») est épinglé séparément dans tests/studio-interactions.test.ts.
+const GA: Layer = {
+  id: "ga", name: "A", visible: true, locked: false,
+  frame: { x: 10, y: 10, w: 40, h: 40 },
+  type: "shape", shape: "rect", fill: "#AAAAAA",
+} as Layer;
+const GB: Layer = {
+  id: "gb", name: "B (tiré)", visible: true, locked: false,
+  frame: { x: 100, y: 100, w: 200, h: 150 },
+  type: "shape", shape: "rect", fill: "#BBBBBB",
+} as Layer;
+const GC: Layer = {
+  id: "gc", name: "C", visible: true, locked: false,
+  frame: { x: 500, y: 20, w: 30, h: 30 },
+  type: "shape", shape: "rect", fill: "#CCCCCC",
+} as Layer;
+
+describe("createGestureEngine — GLISSER DE GROUPE : tout le monde bouge, en UNE entrée d'historique", () => {
+  it("tirer un calque d'une sélection de trois déplace LES TROIS, par un SEUL setFrames", () => {
+    const { dispatch, actions, getState } = makeHarnessWith([GA, GB, GC]);
+    const before = getState();
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+    });
+
+    engine.beginMove(GB, { x: 0, y: 0 }, [GA, GB, GC]);
+    engine.move({ x: 37, y: 11 });
+
+    // L'APERÇU porte déjà les trois cadres, calque tiré EN PREMIER.
+    const attendu = [
+      { id: "gb", frame: { x: 137, y: 111, w: 200, h: 150 } },
+      { id: "ga", frame: { x: 47, y: 21, w: 40, h: 40 } },
+      { id: "gc", frame: { x: 537, y: 31, w: 30, h: 30 } },
+    ];
+    expect(previewBox.current?.frames).toEqual(attendu);
+    const aperçu = previewBox.current!.frames!;
+
+    engine.end({ x: 37, y: 11 });
+
+    // UNE action, pas trois `moveLayer` : c'est toute la raison d'être de `setFrames` (Tâche 4).
+    expect(actions).toEqual([{ type: "setFrames", changes: attendu }]);
+    // Et le COMMIT est l'APERÇU, au champ près — jamais un second calcul qui pourrait diverger.
+    if (actions[0].type !== "setFrames") throw new Error("attendu setFrames");
+    expect(actions[0].changes).toEqual(aperçu);
+    expect(getState().scene.layers.map((l) => l.frame)).toEqual([
+      { x: 47, y: 21, w: 40, h: 40 },
+      { x: 137, y: 111, w: 200, h: 150 },
+      { x: 537, y: 31, w: 30, h: 30 },
+    ]);
+    // UN geste = UNE entrée d'historique, quel que soit le nombre de calques emportés.
+    expect(getState().past).toHaveLength(before.past.length + 1);
+  });
+
+  it("un calque VERROUILLÉ du groupe ne bouge pas — ni au commit, ni en aperçu", () => {
+    const verrouillé = { ...GC, locked: true } as Layer;
+    const { dispatch, actions, getState } = makeHarnessWith([GA, GB, verrouillé]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+    });
+
+    engine.beginMove(GB, { x: 0, y: 0 }, [GA, GB, verrouillé]);
+    engine.move({ x: 37, y: 11 });
+    // L'aperçu ne le montre PAS bouger : le réducteur le sauterait de toute façon (setFrames ignore
+    // les verrouillés ligne à ligne), mais un aperçu qui le déplacerait mentirait pendant tout le geste
+    // puis se rétracterait au pointerup.
+    expect(previewBox.current?.frames?.map((c) => c.id)).toEqual(["gb", "ga"]);
+
+    engine.end({ x: 37, y: 11 });
+    expect(actions).toEqual([{
+      type: "setFrames",
+      changes: [
+        { id: "gb", frame: { x: 137, y: 111, w: 200, h: 150 } },
+        { id: "ga", frame: { x: 47, y: 21, w: 40, h: 40 } },
+      ],
+    }]);
+    expect(getState().scene.layers[2].frame).toEqual(GC.frame); // intact
+  });
+
+  it("un calque MASQUÉ du groupe bouge, LUI (décision documentée : une translation n'a aucun effet à distance)", () => {
+    // Contre-épreuve directe du test précédent, MÊME géométrie : seul l'état du calque change. La
+    // décision 4 de lib/studio/align.ts exclut un calque masqué de l'ALIGNEMENT parce qu'il pesait sur
+    // la boîte englobante et décidait donc où atterrissaient des calques VISIBLES. Une translation n'a
+    // pas de boîte : la position d'un participant masqué n'influence celle d'aucun autre, et l'exclure
+    // ne ferait que défaire en silence l'arrangement construit par l'utilisateur.
+    const masqué = { ...GC, visible: false } as Layer;
+    const { dispatch, actions, getState } = makeHarnessWith([GA, GB, masqué]);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginMove(GB, { x: 0, y: 0 }, [GA, GB, masqué]);
+    engine.end({ x: 37, y: 11 });
+
+    if (actions[0].type !== "setFrames") throw new Error("attendu setFrames");
+    expect(actions[0].changes.map((c) => c.id)).toEqual(["gb", "ga", "gc"]);
+    expect(getState().scene.layers[2].frame).toEqual({ x: 537, y: 31, w: 30, h: 30 });
+  });
+
+  it("un groupe qui se réduit à UN participant reste un glisser SIMPLE (chemin `moveLayer` historique)", () => {
+    // Deux façons d'y arriver, et les deux doivent rendre le chemin d'avant, bit pour bit : un groupe
+    // réduit au calque tiré, et un groupe dont tous les AUTRES sont verrouillés. C'est ce qui garantit
+    // que le filtre des verrouillés tourne AVANT le choix « groupe ou pas », et pas après.
+    for (const groupe of [[GB], [GB, { ...GA, locked: true } as Layer]]) {
+      const { dispatch, actions } = makeHarnessWith([GA, GB]);
+      const previewBox: { current: DragPreview | null } = { current: null };
+      const engine = createGestureEngine({
+        dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      });
+
+      engine.beginMove(GB, { x: 0, y: 0 }, groupe);
+      engine.move({ x: 37, y: 11 });
+      // `frames` ABSENT (pas `[]`) : l'objet d'aperçu d'un glisser simple est celui d'avant ce correctif.
+      expect(previewBox.current).toEqual({ layerId: "gb", frame: { x: 137, y: 111, w: 200, h: 150 } });
+
+      engine.end({ x: 37, y: 11 });
+      expect(actions).toEqual([{ type: "moveLayer", id: "gb", dx: 37, dy: 11 }]);
+    }
+  });
+
+  it("cliquer un groupe sans le déplacer ne committe AUCUNE action", () => {
+    const { dispatch, actions } = makeHarnessWith([GA, GB, GC]);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginMove(GB, { x: 50, y: 50 }, [GA, GB, GC]);
+    engine.end({ x: 50, y: 50 });
+
+    expect(actions).toHaveLength(0);
+  });
+
+  it("tirer un calque VERROUILLÉ n'arme rien, même avec un groupe", () => {
+    const tiréVerrouillé = { ...GB, locked: true } as Layer;
+    const { dispatch, actions } = makeHarnessWith([GA, tiréVerrouillé, GC]);
+    const engine = createGestureEngine({ dispatch, getScale: () => 1, onPreviewChange: () => {} });
+
+    engine.beginMove(tiréVerrouillé, { x: 0, y: 0 }, [GA, tiréVerrouillé, GC]);
+    engine.move({ x: 200, y: 200 });
+    engine.end({ x: 200, y: 200 });
+
+    expect(engine.isActive()).toBe(false);
+    expect(actions).toHaveLength(0);
+  });
+});
+
+describe("createGestureEngine — GLISSER DE GROUPE : un calque QUI BOUGE n'est jamais une référence d'accroche", () => {
+  // MÊME géométrie, MÊME geste, seule change l'appartenance de `GS` au groupe. Sans le filtre, le
+  // calque tiré s'accrocherait au bord d'un voisin qui, lui aussi, est en train de se déplacer de la
+  // même quantité : le guide annoncerait un alignement qui n'existera plus au pointerup.
+  const GS: Layer = {
+    id: "gs", name: "Sœur", visible: true, locked: false,
+    frame: { x: 450, y: 300, w: 60, h: 100 }, // lignes x 450/480/510 — aucune ne coïncide avec le plan
+    type: "shape", shape: "rect", fill: "#DDDDDD",
+  } as Layer;
+
+  it("hors du groupe, la sœur EST une référence : le calque tiré accroche sur son bord", () => {
+    const { dispatch, actions } = makeHarnessWith([GB, GS]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([GB, GS]),
+    });
+
+    engine.beginMove(GB, { x: 0, y: 0 }); // glisser SIMPLE : GS n'est pas emportée
+    engine.move({ x: 344, y: 0 }); // bord gauche brut 444, à 6 de la ligne 450
+
+    expect(previewBox.current?.frame).toEqual({ x: 450, y: 100, w: 200, h: 150 });
+    expect(previewBox.current?.guides).toEqual([
+      { axis: "x", at: 450, from: 100, to: 400, kind: "layer-edge", targetIds: ["gs"] },
+    ]);
+
+    engine.end({ x: 344, y: 0 });
+    expect(actions).toEqual([{ type: "setFrames", changes: [{ id: "gb", frame: { x: 450, y: 100, w: 200, h: 150 } }] }]);
+  });
+
+  it("DANS le groupe, la même sœur n'accroche RIEN : aucun guide, et le groupe se translate du delta brut", () => {
+    const { dispatch, actions, getState } = makeHarnessWith([GB, GS]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([GB, GS]),
+    });
+
+    engine.beginMove(GB, { x: 0, y: 0 }, [GB, GS]);
+    engine.move({ x: 344, y: 0 });
+
+    expect(previewBox.current?.guides).toBeUndefined();
+    expect(previewBox.current?.frames).toEqual([
+      { id: "gb", frame: { x: 444, y: 100, w: 200, h: 150 } },
+      { id: "gs", frame: { x: 794, y: 300, w: 60, h: 100 } },
+    ]);
+
+    engine.end({ x: 344, y: 0 });
+    expect(getState().scene.layers.map((l) => l.frame.x)).toEqual([444, 794]);
+    expect(actions).toHaveLength(1);
+  });
+
+  it("un calque HORS groupe accroche pour TOUT LE MONDE : la translation accrochée s'applique à chaque participant, et le commit EST l'aperçu", () => {
+    // Le seul calque qui accroche est celui que le geste ne déplace pas. La correction d'accroche
+    // (−4 px) doit alors se retrouver sur CHAQUE participant, sans quoi le groupe se déformerait au
+    // moment de l'accroche : le calque tiré atterrirait sur la ligne et les autres resteraient au delta
+    // brut. C'est aussi le seul cas de ce bloc où l'aperçu et le commit peuvent DIVERGER (un `end()`
+    // qui recalculerait à partir du cadre BRUT au lieu du cadre accroché) — d'où la comparaison des deux.
+    const GO: Layer = {
+      id: "go", name: "Repère", visible: true, locked: false,
+      frame: { x: 440, y: 300, w: 20, h: 100 }, // ligne x 440, à 4 du bord gauche brut (444)
+      type: "shape", shape: "rect", fill: "#EEEEEE",
+    } as Layer;
+    const { dispatch, actions, getState } = makeHarnessWith([GB, GS, GO]);
+    const previewBox: { current: DragPreview | null } = { current: null };
+    const engine = createGestureEngine({
+      dispatch, getScale: () => 1, onPreviewChange: (p) => { previewBox.current = p; },
+      getSnapContext: () => snapContextFrom([GB, GS, GO]),
+    });
+
+    engine.beginMove(GB, { x: 0, y: 0 }, [GB, GS]);
+    engine.move({ x: 344, y: 0 });
+
+    // Translation RÉALISÉE : 340 (et non 344), sur les deux participants.
+    const attendu = [
+      { id: "gb", frame: { x: 440, y: 100, w: 200, h: 150 } },
+      { id: "gs", frame: { x: 790, y: 300, w: 60, h: 100 } },
+    ];
+    expect(previewBox.current?.frames).toEqual(attendu);
+    expect(previewBox.current?.guides).toEqual([
+      { axis: "x", at: 440, from: 100, to: 400, kind: "layer-edge", targetIds: ["go"] },
+    ]);
+    const aperçu = previewBox.current!.frames!;
+
+    engine.end({ x: 344, y: 0 });
+    expect(actions).toEqual([{ type: "setFrames", changes: attendu }]);
+    if (actions[0].type !== "setFrames") throw new Error("attendu setFrames");
+    expect(actions[0].changes).toEqual(aperçu);
+    expect(getState().scene.layers.map((l) => l.frame.x)).toEqual([440, 790, 440]);
+  });
+});

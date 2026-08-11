@@ -62,7 +62,7 @@ describe("snapCandidates — qui peut servir de référence", () => {
     //
     // La moitié `visible` RESTE : un calque masqué n'a aucune ligne à l'écran, donc un guide qui le
     // nomme affirmerait quelque chose d'invisible — c'est le principe de la décision 7 elle-même.
-    expect(snapCandidates(layers, "moi").map((l) => l.id)).toEqual(["visible", "verrouillé"]);
+    expect(snapCandidates(layers, ["moi"]).map((l) => l.id)).toEqual(["visible", "verrouillé"]);
   });
 
   it("le calque en cours de geste s'exclut LUI-MÊME — sinon ses propres bords l'immobiliseraient", () => {
@@ -77,7 +77,7 @@ describe("snapCandidates — qui peut servir de référence", () => {
     expect(withSelf.guides.length).toBeGreaterThan(0); // s'inclure accroche bien, à distance 0…
 
     const filtered = snapMove({
-      frame: moving, candidates: snapCandidates([sub("moi", moving)], "moi"), canvas: CANVAS, scale: 1,
+      frame: moving, candidates: snapCandidates([sub("moi", moving)], ["moi"]), canvas: CANVAS, scale: 1,
     });
     expect(filtered.guides).toEqual([]); // …et le filtre l'en empêche
     expect(filtered.frame).toBe(moving);
@@ -143,7 +143,7 @@ describe("snapMove — le négatif du plan, appairé avec son positif", () => {
     const proche = frame(104, 250, 50, 40);
     expect(snapMove({ frame: proche, candidates: [a], canvas: CANVAS, scale: 1 }).frame.x).toBe(100);
 
-    const masqué = snapCandidates([sub("a", a.frame, { visible: false })], "moi");
+    const masqué = snapCandidates([sub("a", a.frame, { visible: false })], ["moi"]);
     const out = snapMove({ frame: proche, candidates: masqué, canvas: CANVAS, scale: 1 });
     expect(out.frame).toBe(proche);
     expect(out.guides).toEqual([]);
@@ -155,7 +155,7 @@ describe("snapMove — le négatif du plan, appairé avec son positif", () => {
     // même fixture, donc un futur remaniement qui rétablirait l'exclusion des verrouillés (ou qui
     // laisserait passer les masqués) est rouge immédiatement.
     const proche = frame(104, 250, 50, 40);
-    const verrouillé = snapCandidates([sub("a", a.frame, { locked: true })], "moi");
+    const verrouillé = snapCandidates([sub("a", a.frame, { locked: true })], ["moi"]);
     expect(verrouillé.map((l) => l.id)).toEqual(["a"]);
     const out = snapMove({ frame: proche, candidates: verrouillé, canvas: CANVAS, scale: 1 });
     expect(out.frame.x).toBe(100);

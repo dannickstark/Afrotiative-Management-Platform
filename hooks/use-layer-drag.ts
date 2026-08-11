@@ -7,7 +7,7 @@ import {
   moveLayer, resizeLayer, rotateLayer, setFrames, toCanvasCoords,
   type EditorAction, type Point,
 } from "@/lib/studio/editor-state";
-import { sameFrame } from "@/lib/studio/align";
+import { sameFrame, type FrameChange } from "@/lib/studio/align";
 import {
   snapCandidates, snapMove, snapResize,
   type SnapGuide, type SnapSubject,
@@ -404,6 +404,18 @@ export interface DragPreview {
   layerId: string;
   frame?: Frame;
   rotation?: number;
+  /** GLISSER DE GROUPE (revue finale U0+U2, Important 1) — le cadre d'aperçu de CHAQUE participant,
+   * `layerId` compris et EN PREMIER. Présent UNIQUEMENT quand le geste en déplace plus d'un ; absent
+   * pour un glisser simple, une rotation ou un redimensionnement, si bien que l'objet d'aperçu de tous
+   * les gestes d'avant ce correctif reste comparable à l'octet près (plusieurs tests le comparent
+   * entier avec `toEqual`), exactement comme `guides`.
+   *
+   * C'EST LE MÊME OBJET QUE CELUI QUI SERA COMMITTÉ : `end()` dispatche `setFrames(frames)` tel quel.
+   * L'aperçu ne peut donc pas être en désaccord avec le commit — le seam que ce programme n'arrête pas
+   * de retrouver. L'alternative (n'afficher en aperçu que le calque tiré, et committer le groupe) a été
+   * écartée pour cette seule raison : elle aurait montré à l'utilisateur un geste différent de celui
+   * qu'il obtient. */
+  frames?: FrameChange[];
   /** Tâche 5 (U2, spec §5) — les guides d'accrochage allumés par CE pas de geste, en coordonnées du
    * gabarit. Ils voyagent sur le canal d'aperçu DÉJÀ existant (`onPreviewChange`), exigence explicite
    * du plan : un second canal se désynchroniserait du cadre qu'il est censé expliquer, et il faudrait
@@ -425,6 +437,14 @@ export interface GestureModifiers {
 
 type GestureKind = "move" | "resize" | "rotate";
 
+/** Un calque emporté par un GLISSER DE GROUPE, avec le cadre qu'il avait au pointerdown. Le cadre est
+ * figé au DÉBUT du geste (comme `startFrame` du calque tiré) : chaque pas de geste recalcule à partir
+ * de là, jamais en cumulant sur le pas précédent. */
+interface MoveParticipant {
+  id: string;
+  startFrame: Frame;
+}
+
 interface ActiveGesture {
   kind: GestureKind;
   layerId: string;
@@ -433,6 +453,10 @@ interface ActiveGesture {
   startRotation: number;
   startPointer: Point;
   center?: Point;
+  /** DÉPLACEMENT seulement, et seulement quand ils sont PLUSIEURS : les participants du glisser de
+   * groupe, le calque tiré EN PREMIER. Absent pour un glisser simple — c'est ce qui garde ce
+   * chemin-là bit-identique à avant le correctif. */
+  participants?: readonly MoveParticipant[];
 }
 
 // Hoisté (revue Tâche 2, cheap) : `computePreview()` et `end()` construisaient chacun le MÊME objet
@@ -450,9 +474,10 @@ function resizeOptionsFor(a: ActiveGesture, modifiers: GestureModifiers): Resize
 
 /** Ce que l'accrochage a besoin de savoir de la scène, lu en LIVE à chaque pas de geste (comme
  * `getScale`) : les calques candidats et les dimensions du plan de travail. Le moteur en retire
- * lui-même le calque manipulé et les calques masqués via `snapCandidates` (un calque VERROUILLÉ reste
- * une référence : voir la décision 2 de lib/studio/snap.ts) — l'appelant passe donc `scene.layers` tel
- * quel, sans copie de la règle de filtrage (Tâche 5). */
+ * lui-même TOUS les calques que le geste déplace (glisser de groupe compris) et les calques masqués via
+ * `snapCandidates` (un calque VERROUILLÉ reste une référence : voir la décision 2 de
+ * lib/studio/snap.ts) — l'appelant passe donc `scene.layers` tel quel, sans copie de la règle de
+ * filtrage (Tâche 5). */
 export interface SnapEngineContext {
   layers: readonly SnapSubject[];
   canvas: { width: number; height: number };
@@ -471,7 +496,10 @@ export interface GestureEngineOptions {
 }
 
 export interface GestureEngine {
-  beginMove(layer: Layer, pointer: Point): void;
+  /** `group` (revue finale U0+U2, Important 1) — la sélection ENTIÈRE à emporter, `layer` compris,
+   * dans l'ordre où l'appelant veut la voir committée. Omis ou réduit au seul `layer` : glisser simple,
+   * comportement inchangé. Les calques VERROUILLÉS du groupe sont écartés ici même. */
+  beginMove(layer: Layer, pointer: Point, group?: readonly Layer[]): void;
   beginResize(layer: Layer, handle: HandleId, pointer: Point): void;
   beginRotate(layer: Layer, pointer: Point, center: Point): void;
   move(pointer: Point, modifiers?: GestureModifiers): void;
@@ -492,13 +520,19 @@ export function createGestureEngine({
     return toCanvasCoords({ x: pointer.x - from.x, y: pointer.y - from.y }, getScale());
   }
 
+  /** Tous les calques que CE geste déplace — le calque tiré seul, ou tout le groupe. Sert de filtre
+   * d'accrochage : aucun d'eux n'est une référence légitime (voir `snapCandidates`). */
+  function movingIds(a: ActiveGesture): string[] {
+    return a.participants ? a.participants.map((p) => p.id) : [a.layerId];
+  }
+
   /** Le contexte d'accrochage du geste en cours, candidats déjà filtrés — ou `null` quand
    * l'accrochage est désactivé (aucun `getSnapContext`, ou l'appelant rend `null`). */
   function snapFor(a: ActiveGesture) {
     const ctx = getSnapContext?.();
     if (!ctx) return null;
     return {
-      candidates: snapCandidates(ctx.layers, a.layerId),
+      candidates: snapCandidates(ctx.layers, movingIds(a)),
       canvas: ctx.canvas,
       // `getScale()` et non 1 : c'est ICI que le seuil en px ÉCRAN devient un seuil en px gabarit.
       // Un moteur qui passerait 1 laisserait tous les tests de lib/studio/snap.ts au vert.
@@ -507,7 +541,12 @@ export function createGestureEngine({
     };
   }
 
-  function begin(kind: GestureKind, layer: Layer, pointer: Point, extra?: { handle?: HandleId; center?: Point }) {
+  function begin(
+    kind: GestureKind,
+    layer: Layer,
+    pointer: Point,
+    extra?: { handle?: HandleId; center?: Point; participants?: readonly MoveParticipant[] },
+  ) {
     // Un calque verrouillé « ne répond ni au clic ni au glisser » (spec §2) : le geste ne démarre
     // même pas. C'est une redondance délibérée avec le garde-fou du réducteur (moveLayer/
     // resizeLayer/rotateLayer ignorent déjà un calque locked) — celui-ci reste le VRAI filet de
@@ -516,11 +555,41 @@ export function createGestureEngine({
     active = {
       kind, layerId: layer.id, handle: extra?.handle, center: extra?.center,
       startFrame: layer.frame, startRotation: layer.rotation ?? 0, startPointer: pointer,
+      participants: extra?.participants,
     };
   }
 
-  function beginMove(layer: Layer, pointer: Point) {
-    begin("move", layer, pointer);
+  /**
+   * GLISSER DE GROUPE (revue finale U0+U2, Important 1). Trois règles, chacune épinglée par un test :
+   *
+   *  • UN CALQUE VERROUILLÉ NE BOUGE PAS. Filtré ici, en plus du garde-fou ligne à ligne de `setFrames`
+   *    dans le réducteur : celui-ci reste le VRAI filet, celui-là évite un aperçu mensonger pendant le
+   *    geste (même raison que le refus de `begin()` pour le calque tiré lui-même).
+   *  • UN CALQUE MASQUÉ BOUGE, LUI. La revue demande de choisir et de dire pourquoi. La décision 4 de
+   *    lib/studio/align.ts vient d'exclure les calques masqués de l'ALIGNEMENT, et ce raisonnement-là
+   *    NE TRANSPOSE PAS : ce qui le motive est qu'un calque masqué pesait sur la BOÎTE ENGLOBANTE, donc
+   *    décidait où atterrissaient des calques VISIBLES — un effet à distance invisible. Un glisser de
+   *    groupe est une TRANSLATION PURE : la position d'un participant masqué n'influence celle d'aucun
+   *    autre, et l'exclure ne ferait que défaire en silence l'arrangement que l'utilisateur a construit
+   *    (il retrouverait le calque décalé en le réaffichant, sans jamais avoir vu le geste qui l'a
+   *    laissé derrière). C'est aussi la seule lecture cohérente avec le réducteur, où `locked` bloque
+   *    un changement de position et `visible` ne l'a jamais fait (moveLayer/resizeLayer/setFrames) —
+   *    et avec les outils de référence, où masquer n'est pas verrouiller.
+   *  • LE CALQUE TIRÉ EST TOUJOURS PREMIER, et n'apparaît jamais deux fois : c'est lui qui porte
+   *    l'accroche, et l'ordre du lot est celui de l'entrée d'historique.
+   *
+   * `participants` reste ABSENT pour un groupe d'un seul calque : le glisser simple garde alors son
+   * chemin de commit historique (`moveLayer` avec le delta brut), bit pour bit.
+   */
+  function beginMove(layer: Layer, pointer: Point, group?: readonly Layer[]) {
+    const others = (group ?? [])
+      .filter((l) => l.id !== layer.id && !l.locked)
+      .map((l) => ({ id: l.id, startFrame: l.frame }));
+    begin("move", layer, pointer, {
+      participants: others.length > 0
+        ? [{ id: layer.id, startFrame: layer.frame }, ...others]
+        : undefined,
+    });
   }
   function beginResize(layer: Layer, handle: HandleId, pointer: Point) {
     begin("resize", layer, pointer, { handle });
@@ -543,6 +612,29 @@ export function createGestureEngine({
      * Tâche 5) et le chemin accroché (`setFrames` avec le cadre exact). */
     rawFrame?: Frame;
     delta?: Point;
+    /** Glisser de GROUPE seulement : le cadre de chaque participant, calque tiré compris et en
+     * premier. Absent pour un glisser simple. Aperçu et commit consomment ce MÊME tableau. */
+    frames?: FrameChange[];
+  }
+
+  /**
+   * Les cadres du groupe pour un cadre tiré déjà accroché. La translation RÉALISÉE se lit sur le calque
+   * tiré (`frame` moins `startFrame`) et s'applique telle quelle aux autres : le groupe est déplacé
+   * d'un bloc, accroche comprise — c'est le calque tiré qui accroche pour tout le monde.
+   *
+   * Le calque tiré reçoit `frame` LUI-MÊME, jamais `startFrame + translation` : la seconde forme ne
+   * reproduit pas la première au bit près en arithmétique flottante, et c'est justement lui qui doit
+   * atterrir EXACTEMENT sur la ligne que le guide annonce (même leçon que le commit accroché plus bas).
+   */
+  function groupFrames(a: ActiveGesture, frame: Frame): FrameChange[] | undefined {
+    if (!a.participants) return undefined;
+    const tx = frame.x - a.startFrame.x;
+    const ty = frame.y - a.startFrame.y;
+    return a.participants.map((p) =>
+      p.id === a.layerId
+        ? { id: p.id, frame }
+        : { id: p.id, frame: { ...p.startFrame, x: p.startFrame.x + tx, y: p.startFrame.y + ty } },
+    );
   }
 
   function computeGesture(a: ActiveGesture, pointer: Point, modifiers: GestureModifiers): GestureOutcome {
@@ -550,9 +642,9 @@ export function createGestureEngine({
       const d = screenDelta(pointer, a.startPointer);
       const rawFrame: Frame = { ...a.startFrame, x: a.startFrame.x + d.x, y: a.startFrame.y + d.y };
       const snap = snapFor(a);
-      if (!snap) return { frame: rawFrame, rawFrame, delta: d, guides: [] };
+      if (!snap) return { frame: rawFrame, rawFrame, delta: d, guides: [], frames: groupFrames(a, rawFrame) };
       const { frame, guides } = snapMove({ frame: rawFrame, ...snap });
-      return { frame, rawFrame, delta: d, guides };
+      return { frame, rawFrame, delta: d, guides, frames: groupFrames(a, frame) };
     }
     if (a.kind === "resize") {
       const d = screenDelta(pointer, a.startPointer);
@@ -578,6 +670,9 @@ export function createGestureEngine({
     const preview: DragPreview = { layerId: a.layerId };
     if (outcome.frame) preview.frame = outcome.frame;
     if (outcome.rotation !== undefined) preview.rotation = outcome.rotation;
+    // Champ ABSENT pour un glisser simple — même discipline que `guides`, pour que l'aperçu des gestes
+    // d'avant le glisser de groupe reste comparable entier avec `toEqual`.
+    if (outcome.frames) preview.frames = outcome.frames;
     // Champ ABSENT quand rien n'accroche — voir le commentaire de `DragPreview.guides`.
     if (outcome.guides.length > 0) preview.guides = outcome.guides;
     return preview;
@@ -599,7 +694,18 @@ export function createGestureEngine({
     if (a.kind === "move") {
       const d = outcome.delta!;
       const frame = outcome.frame!;
-      if (outcome.rawFrame && !sameFrame(outcome.rawFrame, frame)) {
+      if (outcome.frames) {
+        // GLISSER DE GROUPE : UN SEUL `setFrames` pour tout le lot, donc UNE SEULE entrée d'historique
+        // (la raison d'être de cette action, Tâche 4) — jamais N `moveLayer`, qui exigeraient N
+        // « annuler » pour défaire un seul geste. Le lot est celui de l'APERÇU, à l'objet près.
+        //
+        // La garde « rien ne s'est passé » est la même qu'en glisser simple, l'accroche comprise : un
+        // clic sans déplacement sur un groupe déjà en place ne dispatche rien. (`setFrames` refuserait
+        // de toute façon un lot sans changement — mais ne rien dispatcher se lit mieux dans la trace
+        // d'actions, et c'est ce que le glisser simple fait déjà.)
+        const bougé = d.x !== 0 || d.y !== 0 || (outcome.rawFrame !== undefined && !sameFrame(outcome.rawFrame, frame));
+        if (bougé) dispatch(setFrames(outcome.frames));
+      } else if (outcome.rawFrame && !sameFrame(outcome.rawFrame, frame)) {
         // Le déplacement a ACCROCHÉ : on committe le CADRE, pas le delta. `moveLayer` ajouterait le
         // delta au cadre courant, et `x + (cible − x)` ne rend pas `cible` au bit près en arithmétique
         // flottante — le calque atterrirait à ~1e-14px de la ligne que le guide vient d'annoncer.
@@ -702,7 +808,11 @@ export function useLayerDrag(
     };
   }, [engine]);
 
-  const getMoveHandler = useCallback((layer: Layer) => bind((p) => engine.beginMove(layer, p)), [bind, engine]);
+  /** `group` : la sélection ENTIÈRE à emporter (calque tiré compris). Omis -> glisser simple. */
+  const getMoveHandler = useCallback(
+    (layer: Layer, group?: readonly Layer[]) => bind((p) => engine.beginMove(layer, p, group)),
+    [bind, engine],
+  );
   const getResizeHandler = useCallback(
     (layer: Layer, handle: HandleId) => bind((p) => engine.beginResize(layer, handle, p)),
     [bind, engine],

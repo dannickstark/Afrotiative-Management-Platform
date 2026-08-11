@@ -635,6 +635,24 @@ async function mountCanvasWithReducer(scene: Scene, initialSelection: string[], 
   return { box, container, unmount };
 }
 
+/** Les deux formes ci-dessus PLUS une troisième, pour le GLISSER DE GROUPE (revue finale U0+U2,
+ * Important 1) : à deux calques on ne distingue pas « le groupe a suivi » de « seul le calque tiré a
+ * bougé et l'autre était déjà là ». Les positions et le geste employés plus bas sont choisis pour
+ * qu'aucune ligne du plan de travail ne tombe dans le seuil d'accroche — l'accroche a ses propres
+ * tests, elle n'a pas à brouiller celui-ci. */
+function sceneWithThreeShapesOnCanvas(): Scene {
+  const scene = sceneWithTwoShapes();
+  scene.layers = [
+    ...scene.layers,
+    {
+      id: "c", name: "Calque C", visible: true, locked: false,
+      frame: { x: 500, y: 30, w: 40, h: 40 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    },
+  ];
+  return scene;
+}
+
 function layerEl(container: HTMLElement, id: string): HTMLElement {
   const el = container.querySelector(`[data-layer-id="${id}"]`) as HTMLElement | null;
   if (!el) throw new Error(`nœud du calque « ${id} » absent du DOM monté`);
@@ -696,13 +714,21 @@ describe("Canvas — sélection multiple par Maj-clic, à travers de VRAIS évé
     unmount();
   });
 
-  it("un clic SIMPLE (sans Maj) REMPLACE la sélection au lieu de l'étendre", async () => {
-    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithTwoShapes(), ["a", "b"]);
+  it("un clic SIMPLE (sans Maj) sur un calque HORS sélection la REMPLACE au lieu de l'étendre", async () => {
+    // PORTÉE (revue finale U0+U2, Important 1) : « remplace » vaut pour un calque qui n'est PAS déjà
+    // dans la sélection. Ce test cliquait auparavant un calque DÉJÀ sélectionné, ce qui en faisait le
+    // témoin du défaut corrigé par Important 1 — tirer un calque d'une sélection multiple la réduisait
+    // à ce seul calque. Le cas « déjà sélectionné » a maintenant son propre bloc, plus bas ; celui-ci
+    // garde la propriété d'origine, sur le cas où elle vaut toujours, et la renforce : la sélection de
+    // départ compte DEUX calques, donc un gestionnaire qui étendrait au lieu de remplacer rendrait
+    // ["b", "c", "a"] et non ["a"].
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithThreeShapesOnCanvas(), ["b", "c"]);
 
     await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
 
     expect(box.state.selectedIds).toEqual(["a"]);
     expect(layerEl(container, "b").getAttribute("data-selected")).toBeNull();
+    expect(layerEl(container, "c").getAttribute("data-selected")).toBeNull();
 
     unmount();
   });
@@ -780,6 +806,138 @@ describe("Canvas — sélection multiple par Maj-clic, à travers de VRAIS évé
     if (!resize || resize.type !== "resizeLayer") throw new Error("attendu resizeLayer");
     expect(resize.frame.w / resize.frame.h).toBeCloseTo(200 / 150, 6);
     expect(resize.frame.w).not.toBeCloseTo(260, 0);
+
+    unmount();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GLISSER DE GROUPE au canevas (revue finale U0+U2, Important 1), à travers de VRAIS événements
+// pointeur DOM.
+//
+// LE DÉFAUT CORRIGÉ, mesuré : sélection ["a","b","c"], tirer « b » -> la sélection devenait ["b"] et
+// seul « b » bougeait. Vécu utilisateur : aligner trois calques, en tirer un pour recaler l'ensemble,
+// et voir les deux autres rester sur place PENDANT que la rangée aligner/répartir disparaît (elle
+// n'existe qu'à deux participants ou plus). Le glisser était le seul geste du canevas qui ne refusait
+// ni ne groupait — il DÉTRUISAIT.
+//
+// tests/studio-drag.test.ts prouve tout du MOTEUR (groupe, verrou, masque, accroche, une seule entrée
+// d'historique) sans dire un mot du CÂBLAGE : une mutation qui remettrait `dispatch(select(layer.id))`
+// inconditionnel dans canvas.tsx, qui passerait `undefined` en guise de groupe, ou qui ferait lire à
+// l'aperçu le seul `preview.frame`, laisserait ce fichier-là entièrement vert.
+describe("Canvas — tirer un calque d'une sélection multiple déplace TOUT LE GROUPE (revue finale, Important 1)", () => {
+  it("la sélection SURVIT au glisser, les trois calques suivent, et l'historique ne retient QU'UNE entrée", async () => {
+    // « b » en (200, 200) 120×80 ; glisser de (+40, +45). Positions x 240/300/360 et y 245/285/325 :
+    // toutes à ≥ 15 des lignes du plan de travail (x 0/266,67/400/533,33/800 ; y 0/200/300/400/600), et
+    // « a »/« c » sont EMPORTÉS par le geste, donc écartés des références. Aucune accroche : la
+    // translation est exactement celle du curseur.
+    const scene = sceneWithThreeShapesOnCanvas();
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, ["a", "b", "c"]);
+    const b = layerEl(container, "b");
+
+    await pointer(b, "pointerdown", { clientX: 250, clientY: 250, button: 0 });
+
+    // (a) le pointerdown NE re-sélectionne PAS : c'est là que la sélection mourait.
+    expect(box.state.selectedIds).toEqual(["a", "b", "c"]);
+    expect(box.actions.some((a) => a.type === "select")).toBe(false);
+
+    await pointer(b, "pointermove", { clientX: 290, clientY: 295 });
+
+    // (b) l'APERÇU montre déjà les TROIS calques déplacés — pas seulement celui qu'on tire. Sans cela,
+    // l'utilisateur verrait un geste différent de celui qu'il obtient au relâchement.
+    expect(parseFloat(layerEl(container, "a").style.left)).toBe(50);
+    expect(parseFloat(layerEl(container, "a").style.top)).toBe(55);
+    expect(parseFloat(layerEl(container, "b").style.left)).toBe(240);
+    expect(parseFloat(layerEl(container, "c").style.left)).toBe(540);
+
+    await pointer(b, "pointerup", { clientX: 290, clientY: 295 });
+
+    // (c) les trois cadres ont bougé de la MÊME translation, et la sélection est intacte.
+    expect(box.state.scene.layers.map((l) => l.frame)).toEqual([
+      { x: 50, y: 55, w: 100, h: 100 },
+      { x: 240, y: 245, w: 120, h: 80 },
+      { x: 540, y: 75, w: 40, h: 40 },
+    ]);
+    expect(box.state.selectedIds).toEqual(["a", "b", "c"]);
+    // (d) UNE seule entrée d'historique pour tout le geste — jamais trois `moveLayer`.
+    expect(box.state.past).toHaveLength(1);
+    expect(box.actions.filter((a) => a.type === "moveLayer")).toHaveLength(0);
+    expect(box.actions.filter((a) => a.type === "setFrames")).toHaveLength(1);
+
+    unmount();
+  });
+
+  it("un calque VERROUILLÉ de la sélection reste sur place pendant que le reste du groupe se déplace", async () => {
+    const scene = sceneWithThreeShapesOnCanvas();
+    scene.layers = [scene.layers[0], scene.layers[1], { ...scene.layers[2], locked: true }];
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, ["a", "b", "c"]);
+    const b = layerEl(container, "b");
+
+    await pointer(b, "pointerdown", { clientX: 250, clientY: 250, button: 0 });
+    await pointer(b, "pointermove", { clientX: 290, clientY: 295 });
+    // Le verrou vaut AUSSI pour l'aperçu : le calque verrouillé n'a pas bougé d'un pixel à l'écran.
+    expect(parseFloat(layerEl(container, "c").style.left)).toBe(500);
+    await pointer(b, "pointerup", { clientX: 290, clientY: 295 });
+
+    expect(box.state.scene.layers.map((l) => l.frame.x)).toEqual([50, 240, 500]);
+
+    unmount();
+  });
+
+  it("tirer un calque HORS de la sélection la remplace et ne déplace que lui (l'autre moitié de la règle)", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithThreeShapesOnCanvas(), ["a", "c"]);
+    const b = layerEl(container, "b");
+
+    await pointer(b, "pointerdown", { clientX: 250, clientY: 250, button: 0 });
+    await pointer(b, "pointermove", { clientX: 290, clientY: 295 });
+    await pointer(b, "pointerup", { clientX: 290, clientY: 295 });
+
+    expect(box.state.selectedIds).toEqual(["b"]);
+    expect(box.state.scene.layers.map((l) => l.frame.x)).toEqual([10, 240, 500]);
+    // Chemin historique conservé pour un calque seul : `moveLayer` avec le delta brut, pas `setFrames`.
+    expect(box.actions.some((a) => a.type === "moveLayer")).toBe(true);
+
+    unmount();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 3, M4 (revue finale U0+U2) — LA GARDE DE BOUTON AVANT LES EFFETS DE BORD.
+//
+// Le gestionnaire du corps d'un calque appelait `stopPropagation()`/`preventDefault()` AVANT de tester
+// `e.button === 0`. Deux conséquences opposées, dans le même gestionnaire : un Maj-clic DROIT était
+// avalé (mort — aucun `contextmenu` n'est posé nulle part), tandis qu'un clic droit SANS Maj tombait
+// jusqu'à `dispatch(select(layer.id))` et RÉDUISAIT une sélection multiple à un seul calque. La racine,
+// elle, refusait déjà tout bouton non primaire (`e.button !== 0`) : les deux chemins se contredisaient.
+describe("Canvas — un bouton non primaire n'arme rien et ne touche PAS la sélection (Tâche 3, M4)", () => {
+  // Le calque visé est HORS de la sélection, exprès : c'est le seul cadrage où les DEUX chemins du
+  // gestionnaire ont encore quelque chose à faire, donc le seul où retirer la garde se voit. Sans la
+  // garde, le clic droit nu dispatcherait `select("b")` (sélection réduite à ["b"]) et le Maj + clic
+  // droit dispatcherait `toggleSelection("b")` (sélection étendue à ["a","c","b"]) — deux mutations
+  // distinctes, chacune rouge sur une des deux lignes ci-dessous.
+  for (const [nom, extra] of [["clic droit", {}], ["Maj + clic droit", { shiftKey: true }]] as const) {
+    it(`${nom} sur le corps d'un calque laisse la sélection multiple INTACTE`, async () => {
+      const { box, container, unmount } = await mountCanvasWithReducer(sceneWithThreeShapesOnCanvas(), ["a", "c"]);
+
+      await pointer(layerEl(container, "b"), "pointerdown", { clientX: 250, clientY: 250, button: 2, ...extra });
+
+      expect(box.state.selectedIds).toEqual(["a", "c"]);
+      // Aucune action DU TOUT : ni sélection, ni bascule, ni geste armé. La racine a la même garde,
+      // donc l'événement qui remonte jusqu'à elle n'efface rien non plus.
+      expect(box.actions).toEqual([]);
+
+      unmount();
+    });
+  }
+
+  it("le clic GAUCHE, lui, agit toujours — la garde ne neutralise pas le geste normal", async () => {
+    // Contre-épreuve obligatoire : sans elle, un gestionnaire qui ne ferait PLUS RIEN, quel que soit le
+    // bouton, passerait les deux tests ci-dessus.
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithThreeShapesOnCanvas(), ["a", "c"]);
+
+    await pointer(layerEl(container, "b"), "pointerdown", { clientX: 250, clientY: 250, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["b"]);
 
     unmount();
   });
