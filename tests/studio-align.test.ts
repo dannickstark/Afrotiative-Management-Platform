@@ -503,6 +503,43 @@ describe("planAlign", () => {
     ]);
   });
 
+  it("un calque MASQUÉ est exclu comme un verrouillé — et n'entre pas non plus dans la boîte englobante", () => {
+    // Revue finale U0+U2, Important 2, avec les valeurs mesurées telles quelles. Si le calque masqué
+    // comptait, la boîte commencerait à 0 et les DEUX calques visibles feraient un bond de 500 px
+    // pour se poser sur le bord d'un calque qu'on ne voit pas. Exclu, la boîte des participants
+    // commence à 500 : seul le second bouge, de 100 px. Deux résultats franchement différents.
+    const layers: AlignSubject[] = [
+      { id: "vis1", frame: { x: 500, y: 0, w: 100, h: 10 } },
+      { id: "vis2", frame: { x: 600, y: 0, w: 100, h: 10 } },
+      { id: "hid", frame: { x: 0, y: 0, w: 100, h: 10 }, visible: false },
+    ];
+    const changes = planAlign(layers, ["vis1", "vis2", "hid"], "left", canvas);
+    expect(changes).toEqual([{ id: "vis2", frame: { x: 500, y: 0, w: 100, h: 10 } }]);
+    // Et le calque masqué n'est JAMAIS dans le lot — pas même déplacé « au passage ».
+    expect(changes.some((c) => c.id === "hid")).toBe(false);
+  });
+
+  it("`visible` ABSENT vaut visible : les littéraux qui ignorent le champ gardent le comportement d'avant", () => {
+    // L'exclusion est déclenchée par un `false` EXPLICITE, jamais par un champ manquant — sinon
+    // ajouter le champ à l'interface aurait silencieusement vidé tous les gestes d'alignement.
+    const layers: AlignSubject[] = [
+      { id: "a", frame: { x: 10, y: 0, w: 100, h: 10 } },
+      { id: "b", frame: { x: 200, y: 0, w: 100, h: 10 }, visible: true },
+    ];
+    expect(planAlign(layers, ["a", "b"], "left", canvas)).toEqual([
+      { id: "b", frame: { x: 10, y: 0, w: 100, h: 10 } },
+    ]);
+  });
+
+  it("tous les participants masqués : rien à aligner, aucun changement", () => {
+    const layers: AlignSubject[] = [
+      { id: "a", frame: { x: 10, y: 0, w: 100, h: 10 }, visible: false },
+      { id: "b", frame: { x: 200, y: 0, w: 100, h: 10 }, visible: false },
+    ];
+    expect(planAlign(layers, ["a", "b"], "left", canvas)).toEqual([]);
+    expect(planDistribute(layers, ["a", "b"], "horizontal")).toEqual([]);
+  });
+
   it("ne renvoie AUCUN changement pour un calque non sélectionné", () => {
     const layers = [
       sub("a", { x: 10, y: 0, w: 100, h: 10 }),

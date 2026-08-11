@@ -40,9 +40,19 @@
 //     Verrouiller un calque, c'est le retirer de ce geste. (Le réducteur refuse de toute façon de
 //     déplacer un calque verrouillé, exactement comme moveLayer/resizeLayer/rotateLayer/deleteLayer :
 //     l'exclusion ici n'est donc pas la seule barrière, mais celle qui rend la boîte honnête.)
-//     La VISIBILITÉ, elle, n'exclut rien : un calque masqué reste sélectionnable et déplaçable
-//     partout ailleurs dans l'éditeur, et inventer ici une exclusion que le plan ne demande pas
-//     créerait une règle de plus à retenir.
+//     LA VISIBILITÉ EXCLUT EXACTEMENT DE LA MÊME FAÇON, et pour la raison ci-dessus mot pour mot.
+//     Ce commentaire a d'abord affirmé le contraire (« la visibilité n'exclut rien »), au motif qu'un
+//     calque masqué reste déplaçable ailleurs et qu'inventer une exclusion ajouterait une règle à
+//     retenir. C'était faux, et mesuré : deux calques visibles à x=500 et x=600 plus un calque MASQUÉ
+//     à x=0, tous sélectionnés, et « aligner à gauche » déplaçait LES DEUX CALQUES VISIBLES de 500 px
+//     pour les poser sur le bord d'un calque qu'on ne voit pas. C'est l'« effet à distance invisible »
+//     du paragraphe précédent, au sens le plus littéral du terme — et le même geste avec le calque
+//     lointain VERROUILLÉ était, lui, déjà correct. La divergence était accidentelle, pas raisonnée
+//     (revue finale U0+U2, Important 2). La Tâche 5 exclut d'ailleurs déjà les calques masqués comme
+//     RÉFÉRENCES d'accrochage (snap.ts), pour un motif compatible : un calque masqué n'a pas de ligne
+//     à l'écran, donc rien à quoi s'aligner honnêtement.
+//     Atteignable en trois gestes : Maj-cliquer trois calques, en masquer un depuis le panneau des
+//     calques (l'œil ne vide pas la sélection), aligner.
 //
 //  5. LES CADRES EXTRÊMES NE BOUGENT PAS À LA RÉPARTITION, et « extrême » se lit en POSITION, pas en
 //     ordre de tableau — voir distributeFrames.
@@ -73,6 +83,10 @@ export interface AlignSubject {
   id: string;
   frame: Frame;
   locked?: boolean;
+  /** `false` exclut le calque du geste ET de la boîte englobante (décision 4). Optionnel, et absent
+   *  vaut VISIBLE : un littéral de test qui ne s'intéresse pas à la visibilité garde le comportement
+   *  par défaut, et seul un `visible: false` explicite exclut. */
+  visible?: boolean;
 }
 
 /** Comparaison de cadres champ à champ — sert à ne PAS produire de changement pour un cadre qui est
@@ -193,16 +207,21 @@ export function distributeFrames(frames: readonly Frame[], axis: DistributeAxis)
 }
 
 /**
- * Les calques qui PARTICIPENT au geste : sélectionnés et non verrouillés (décision 4), dans l'ordre
- * des calques (décision 2). Générique pour que l'appelant récupère ses `Layer` complets — l'interface
- * a besoin de `rotation` pour décider si elle affiche sa note, et re-filtrer de son côté serait une
- * deuxième copie de la règle « sélectionné ∧ non verrouillé », donc une occasion de dériver.
+ * Les calques qui PARTICIPENT au geste : sélectionnés, non verrouillés ET non masqués (décision 4),
+ * dans l'ordre des calques (décision 2). Générique pour que l'appelant récupère ses `Layer` complets
+ * — l'interface a besoin de `rotation` pour décider si elle affiche sa note, et re-filtrer de son
+ * côté serait une deuxième copie de la règle, donc une occasion de dériver.
+ *
+ * CETTE FONCTION EST LE SEUL ENDROIT où la règle est écrite : `planAlign`/`planDistribute` la
+ * traversent tous les deux, donc la boîte englobante ne peut pas diverger de l'ensemble déplacé.
+ * C'était le mécanisme de l'Important 2 — la boîte et le déplacement partageaient déjà cette source,
+ * et il suffisait donc d'y ajouter la visibilité pour corriger les deux d'un coup.
  */
 export function alignParticipants<T extends AlignSubject>(
   layers: readonly T[],
   selectedIds: readonly string[],
 ): T[] {
-  return layers.filter((l) => selectedIds.includes(l.id) && !l.locked);
+  return layers.filter((l) => selectedIds.includes(l.id) && !l.locked && l.visible !== false);
 }
 
 function changesFrom(subjects: readonly AlignSubject[], frames: readonly Frame[]): FrameChange[] {
