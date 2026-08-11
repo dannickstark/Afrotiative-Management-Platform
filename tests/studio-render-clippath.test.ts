@@ -347,6 +347,104 @@ describe("sonde clipPath — mécanisme 3 : nœud <svg> en ligne", () => {
   });
 });
 
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// RÉSERVE 4 — `box-shadow` SUR UNE FORME DÉCOUPÉE : AUCUNE OMBRE, DU TOUT (U3 Tâche 4).
+//
+// « `box-shadow` sur une forme découpée n'a pas été testé (Tâche 4) » — « Ce que la sonde n'a PAS
+// établi », plan U3. Ce bloc referme ce trou-là, et il vit ICI, dans le fichier de la sonde, pour la
+// même raison que la comparaison des deux écritures de polygone : à partir de la Tâche 4 AUCUNE
+// description ne peut plus émettre un `box-shadow` sur une forme découpée (lib/studio/shapes.ts,
+// `layerBoxShadow`), donc la mesure de ce que satori en FAIT ne peut plus passer par le chemin de
+// production. Elle ne peut exister qu'ici, en injectant la CSS à la main.
+//
+// CE QUI EST MESURÉ, et c'est contre-intuitif : l'ombre n'est pas « rectangulaire autour d'un
+// remplissage triangulaire » comme la bordure (réserve 3) — elle est TOTALEMENT ABSENTE. Le SVG émis
+// par satori l'explique : l'ombre est un `<g mask filter>` dont le masque est « tout le canevas en
+// blanc, MOINS la forme découpée en noir » et dont le contenu est cette même forme découpée. Ombre ∩
+// forme, moins la forme : l'ensemble vide. Un `<clipPath>` auto-référent (`clip-path` pointant sur
+// lui-même) achève l'affaire côté resvg.
+//
+// POURQUOI CE N'EST PAS SEULEMENT « un contrôle sans effet ». Le navigateur, lui, découpe aussi
+// l'ombre (`clip-path` s'applique au rendu ENTIER de l'élément, ombre portée comprise) : les deux
+// chemins sont donc D'ACCORD — mais par deux mécanismes indépendants, dont l'un est un accident
+// d'implémentation de satori. Un correctif amont qui ferait entrer l'ombre AVANT le masque livrerait
+// une ombre rectangulaire dans le PNG et toujours rien à l'écran : §0, en attente. C'est pourquoi la
+// Tâche 4 supprime l'ombre des DEUX chemins au lieu de se contenter de la mesurer inerte.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("sonde clipPath — RÉSERVE 4 : box-shadow sur une forme découpée", () => {
+  // Un anneau vert de 40 px (« spread » sans flou) : la classification est franche, sans dégradé à
+  // interpréter. STROKE (#00FF00) est déjà distingué par le sampler — ici il porte l'OMBRE.
+  const ANNEAU = `0px 0px 0px 40px ${STROKE}`;
+  // Cadre 800×400, boîte 400×200 en (200,100) : NON CARRÉE, et détachée des quatre bords pour que
+  // l'anneau ait de la place partout. Sans marge, « pas d'ombre » et « ombre hors canevas » se
+  // confondraient.
+  const W = 800, H = 400, BOX = { w: 400, h: 200, x: 200, y: 100 };
+  async function boîte(style: Record<string, unknown>): Promise<Sampler> {
+    return sampler(await probe(canvasNode(W, H, [boxNode(BOX.w, BOX.h, style, BOX.x, BOX.y)]), W, H));
+  }
+  // Les quatre côtés, à 20 px HORS de la boîte : dans l'anneau si l'ombre est peinte, au fond sinon.
+  const AUTOUR: [number, number][] = [[180, 200], [400, 75], [620, 200], [400, 325]];
+
+  it("un triangle découpé ne porte AUCUNE ombre — pas même rectangulaire", async () => {
+    const px = await boîte({ clipPath: TRIANGLE, boxShadow: ANNEAU });
+    for (const [x, y] of AUTOUR) {
+      expect(`(${x},${y}) ${px(x, y)}`).toBe(`(${x},${y}) fond`);
+    }
+    // Le coin haut-gauche, DANS la boîte mais exclu par le polygone : une ombre portée peinte
+    // derrière la boîte y apparaîtrait à travers le remplissage découpé. Elle n'y est pas non plus.
+    expect(px(210, 110)).toBe("fond");
+    // Et le triangle EST bien peint : sans ces deux points, une image entièrement bleue passerait.
+    expect(px(400, 200)).toBe("remplissage");
+    expect(px(240, 290)).toBe("remplissage");
+  });
+
+  it("TÉMOIN : la MÊME ombre sur la MÊME boîte NON découpée est bel et bien peinte", async () => {
+    // Sans ce témoin, le test ci-dessus serait indiscernable de « satori ignore box-shadow ».
+    const px = await boîte({ boxShadow: ANNEAU });
+    for (const [x, y] of AUTOUR) {
+      expect(`(${x},${y}) ${px(x, y)}`).toBe(`(${x},${y}) bordure`); // le vert, ici l'ombre
+    }
+    expect(px(400, 200)).toBe("remplissage");
+  });
+
+  it("TÉMOIN : sans ombre, ces quatre points sont du fond — le vert vient bien de l'ombre", async () => {
+    const px = await boîte({});
+    for (const [x, y] of AUTOUR) {
+      expect(`(${x},${y}) ${px(x, y)}`).toBe(`(${x},${y}) fond`);
+    }
+  });
+
+  it("une ombre DÉCALÉE (sans spread) est également absente sur une forme découpée", async () => {
+    // Une seconde écriture de l'ombre, parce que « spread » et « offset » ne suivent pas le même
+    // chemin dans satori (l'un élargit le rectangle, l'autre le translate) : un remède qui n'aurait
+    // neutralisé que le premier passerait le test précédent.
+    const décalée = await boîte({ clipPath: TRIANGLE, boxShadow: `60px 60px 0px ${STROKE}` });
+    expect(décalée(640, 340)).toBe("fond");
+    const témoin = await boîte({ boxShadow: `60px 60px 0px ${STROKE}` });
+    expect(témoin(640, 340)).toBe("bordure"); // le vert, ici l'ombre
+  });
+
+  it("sur une forme à `borderRadius`, l'ombre SUIT l'arrondi — c'est ce qui fait l'accord des deux chemins", async () => {
+    // Mesuré aussi DANS UN NAVIGATEUR (Chromium via Playwright, capture PNG échantillonnée aux mêmes
+    // coordonnées) : mêmes classifications aux quatre côtés et au coin. L'ellipse et le rectangle
+    // arrondi peuvent donc porter une ombre sans désaccord éditeur/export — la limite est PAR FORME.
+    const px = await boîte({ borderRadius: "50%", boxShadow: ANNEAU });
+    // Le coin de l'anneau : hors de l'ellipse ÉLARGIE de 40 px (rx=240, ry=140 depuis (400,200)) —
+    // ((400-170)/240)² + ((200-70)/140)² = 1,78 > 1. Une ombre RECTANGULAIRE l'aurait peint.
+    expect(px(170, 70)).toBe("fond");
+    // …tandis qu'au milieu d'un côté, l'ombre est là : l'arrondi ne l'a pas fait disparaître.
+    expect(px(400, 75)).toBe("bordure");
+    expect(px(180, 200)).toBe("bordure");
+  });
+
+  it("TÉMOIN : sur la même boîte SANS arrondi, ce coin d'anneau EST peint", async () => {
+    // La contre-épreuve du test précédent : c'est bien `borderRadius` qui sculpte l'ombre, pas une
+    // limite de l'anneau lui-même.
+    const px = await boîte({ boxShadow: ANNEAU });
+    expect(px(170, 70)).toBe("bordure");
+  });
+});
+
 describe("sonde clipPath — mécanisme 4 : div pivoté (ligne / diagonale), de bout en bout", () => {
   it("renderScene() peint une diagonale à partir d'un rectangle fin pivoté", async () => {
     // Contrairement à clipPath, la rotation EST exprimable par le schéma actuel (`layer.rotation`) :
