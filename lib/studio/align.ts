@@ -159,11 +159,20 @@ export function alignFrames(frames: readonly Frame[], mode: AlignMode, target?: 
  * deux sont des extrêmes).
  *
  * L'ORDRE DE POSE EST L'ORDRE DES POSITIONS, jamais celui du tableau : les cadres sont triés par bord
- * d'attaque (x, ou y), puis par TAILLE, puis par index d'origine. Le tri par taille départage deux
- * cadres au même bord d'attaque sans se replier sur l'ordre du tableau — deux appels avec les mêmes
- * cadres dans un ordre différent rendent donc le même résultat par cadre (la seule exception étant
+ * d'attaque (x, ou y), puis par TAILLE sur l'axe réparti, puis par bord d'attaque et TAILLE sur l'axe
+ * PERPENDICULAIRE, et seulement en dernier ressort par index d'origine. Deux appels avec les mêmes
+ * cadres dans un ordre différent rendent donc le même résultat par cadre — la seule exception étant
  * deux cadres RIGOUREUSEMENT identiques, qu'aucune règle ne peut distinguer et qui reçoivent de toute
- * façon les mêmes valeurs à l'ensemble près).
+ * façon les mêmes valeurs à l'ensemble près.
+ *
+ * LES DEUX CRITÈRES D'AXE PERPENDICULAIRE ONT ÉTÉ AJOUTÉS PAR LA REVUE FINALE U0+U2, parce que
+ * l'affirmation ci-dessus était FAUSSE sans eux : `{x:0,w:10,h:5}` et `{x:0,w:10,h:99}` s'égalent sur
+ * (bord d'attaque, taille) et se départageaient donc par l'index d'entrée — permuter les deux échangeait
+ * leurs placements (0 ↔ 250, mesuré). Sans conséquence pour les appelants d'aujourd'hui
+ * (`alignParticipants` rend l'ordre des CALQUES, donc un ordre déjà déterministe), mais c'était la
+ * troisième affirmation trop large de ce module, et une prose qui promet plus que le code finit par
+ * être crue. Les quatre critères couvrent maintenant les quatre champs d'un `Frame` : l'ordre est TOTAL
+ * à l'identité près, comme celui de `compareCandidates` (lib/studio/snap.ts).
  *
  * Les deux cadres EXTRÊMES (au sens des positions triées) ne bougent pas ; l'espace restant est
  * réparti à parts égales. Le dernier est ÉPINGLÉ sur sa position d'origine plutôt que posé sur le
@@ -184,10 +193,19 @@ export function distributeFrames(frames: readonly Frame[], axis: DistributeAxis)
   const horizontal = axis === "horizontal";
   const lead = (f: Frame) => (horizontal ? f.x : f.y);
   const size = (f: Frame) => (horizontal ? f.w : f.h);
+  const crossLead = (f: Frame) => (horizontal ? f.y : f.x);
+  const crossSize = (f: Frame) => (horizontal ? f.h : f.w);
 
   const order = frames
     .map((_, i) => i)
-    .sort((i, j) => lead(frames[i]) - lead(frames[j]) || size(frames[i]) - size(frames[j]) || i - j);
+    .sort(
+      (i, j) =>
+        lead(frames[i]) - lead(frames[j]) ||
+        size(frames[i]) - size(frames[j]) ||
+        crossLead(frames[i]) - crossLead(frames[j]) ||
+        crossSize(frames[i]) - crossSize(frames[j]) ||
+        i - j,
+    );
 
   const first = frames[order[0]];
   const last = frames[order[order.length - 1]];

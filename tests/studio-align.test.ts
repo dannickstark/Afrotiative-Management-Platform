@@ -264,6 +264,34 @@ describe("distributeFrames — horizontal", () => {
     expect(distributeFrames([g2, g3, g1], "horizontal").map((f) => f.x)).toEqual([225, 400, 0]);
   });
 
+  it("deux cadres qui S'ÉGALENT sur (bord d'attaque, taille) mais DIFFÈRENT sur l'axe perpendiculaire ne dépendent pas non plus de l'ordre d'entrée", () => {
+    // LA contre-épreuve du test précédent (revue finale U0+U2). Le tri se départageait par bord
+    // d'attaque puis taille SUR L'AXE RÉPARTI seulement, puis se repliait sur l'index d'entrée : deux
+    // cadres au même x et à la même largeur mais de HAUTEURS différentes échangeaient donc leurs
+    // placements (0 ↔ 250) d'une permutation à l'autre — alors que la documentation de
+    // `distributeFrames` promettait « le même résultat par cadre » sans réserve. Les critères d'axe
+    // perpendiculaire rendent le tri TOTAL à l'identité près, et l'affirmation vraie.
+    //
+    // Ce que le test exige : chaque cadre, IDENTIFIÉ PAR SA HAUTEUR, reçoit le même x dans les deux
+    // ordres. Comparer les tableaux résultats entre eux ne le dirait pas — ils sont permutés.
+    const plat: Frame = { x: 0, y: 0, w: 10, h: 5 };
+    const haut: Frame = { x: 0, y: 0, w: 10, h: 99 };
+    const loin: Frame = { x: 500, y: 0, w: 10, h: 10 };
+
+    const xParHauteur = (input: Frame[]) =>
+      new Map(distributeFrames(input, "horizontal").map((f) => [f.h, f.x]));
+
+    const direct = xParHauteur([plat, haut, loin]);
+    const permuté = xParHauteur([haut, plat, loin]);
+    expect([...direct.entries()].sort()).toEqual([...permuté.entries()].sort());
+    // …et les valeurs sont bien celles attendues, pas deux fois la même erreur : le plus PLAT (h=5)
+    // passe avant le plus HAUT (h=99) parce que `crossSize` les départage, dans les deux ordres.
+    expect(direct.get(5)).toBe(0);
+    expect(direct.get(99)).toBe(250);
+    expect(permuté.get(5)).toBe(0);
+    expect(permuté.get(99)).toBe(250);
+  });
+
   it("entrée en ordre x DÉCROISSANT : les extrêmes restent les extrêmes de POSITION, pas ceux du tableau", () => {
     const desc: Frame[] = [
       { x: 400, y: 0, w: 100, h: 10 },
