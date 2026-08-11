@@ -244,11 +244,27 @@ function RadiusField({ value, onCommit }: { value: number | string | undefined; 
   );
 }
 
-function SwitchField({ label, checked, onCommit }: { label: string; checked: boolean; onCommit: (v: boolean) => void }) {
+function SwitchField({
+  label, checked, onCommit, disabled, dataField,
+}: {
+  label: string; checked: boolean; onCommit: (v: boolean) => void;
+  /** U3 Tâche 3 (revue, Medium 4) — grise l'interrupteur, et pas seulement visuellement. VÉRIFIÉ dans
+   * la source du composant plutôt que supposé (node_modules/@base-ui/react/switch/root/SwitchRoot.js) :
+   * `Switch.Root` ne rend PAS un `<button disabled>` mais un `<span role="switch">` portant
+   * `aria-disabled="true"`, `data-disabled` et `tabindex="-1"` — son `onClick` commence par
+   * `if (readOnly || disabled) return;` et l'`<input type="checkbox">` caché qu'il pilote porte, lui,
+   * le `disabled` natif. Aucun clic ni aucune touche ne peut donc en sortir un changement. Un test qui
+   * chercherait l'attribut `disabled` sur cet élément passerait donc toujours à côté : c'est
+   * `aria-disabled` qu'il faut lire (voir tests/studio-property-panel.test.ts). */
+  disabled?: boolean;
+  /** Pose `data-field` sur l'interrupteur, pour qu'un test puisse lire SES attributs plutôt que de
+   * chercher une sous-chaîne dans tout le HTML du panneau (leçon des pièges `disabled:` de U1/U2). */
+  dataField?: string;
+}) {
   return (
     <div className="flex items-center justify-between gap-2">
       <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
-      <Switch checked={checked} onCheckedChange={(v) => onCommit(!!v)} />
+      <Switch checked={checked} disabled={disabled} data-field={dataField} onCheckedChange={(v) => onCommit(!!v)} />
     </div>
   );
 }
@@ -713,12 +729,35 @@ function ShapeFields({
       </TypeSection>
 
       <TypeSection title="Bordure" sectionId="bordure" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+        {/* U3 Tâche 3, REVUE (Medium 4) — RÉSERVE 3 DE LA SONDE, TRANCHÉE ICI PLUTÔT QUE REPORTÉE.
+            La bordure ÉCHAPPE au découpage dans satori (contour rectangulaire autour d'un remplissage
+            triangulaire) et pas dans le navigateur (qui clippe l'élément entier, bordure comprise) :
+            l'offrir sur une forme découpée, c'est offrir un contrôle dont le résultat DIFFÈRE entre
+            l'éditeur et l'image livrée — le §0 de ce sous-projet. L'arbitrage F l'avait reporté à la
+            Tâche 4 au motif qu'aucune forme n'en porte par défaut ; c'est vrai de l'INSERTION, mais
+            cette tâche a livré le sélecteur de forme, donc « rectangle bordé » -> « Triangle » se fait
+            en deux clics. Le contrôle est donc grisé, avec sa note — et la bordure est ÉGALEMENT
+            supprimée des deux chemins de rendu (lib/studio/shapes.ts#layerBorder), sans quoi un
+            `border` déjà stocké continuerait de diverger et la note serait fausse : exactement ce que
+            la Tâche 3 avait dû faire pour la rotation. Piloté par `descriptor.clipped`, jamais par une
+            liste de noms. */}
         <SwitchField
           label="Activer la bordure"
           checked={!!layer.border}
+          disabled={descriptor.clipped}
+          dataField="border-enabled"
           onCommit={(v) => patch({ border: v ? { width: 2, color: "#000000", sides: [...SIDES] } : undefined })}
         />
-        {layer.border && (
+        {descriptor.clipped && (
+          <p className="text-[11px] text-muted-foreground" data-testid="shape-border-none">
+            La bordure n&rsquo;est pas disponible sur la forme «&nbsp;{descriptor.label}&nbsp;» : le
+            moteur d&rsquo;export laisserait le contour RECTANGULAIRE autour du remplissage découpé,
+            alors que le navigateur le découperait comme le reste — l&rsquo;écran et l&rsquo;image
+            livrée ne montreraient pas la même chose. Elle n&rsquo;est donc peinte nulle part ici, et
+            une bordure déjà réglée reste conservée telle quelle si vous revenez à un rectangle.
+          </p>
+        )}
+        {!descriptor.clipped && layer.border && (
           <>
             <NumberField
               label="Épaisseur" value={layer.border.width} min={0.1}

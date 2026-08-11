@@ -3,8 +3,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseScene, SHAPE_KINDS, type Scene, type ShapeKind, type ShapeLayer } from "@/lib/studio/scene";
 import {
-  SHAPE_DESCRIPTORS, descriptorFor, layerSupportsRotation, polygonClip, shapeCssFor, shapeLabel,
-  supportsRotation, type ShapeCss,
+  SHAPE_DESCRIPTORS, descriptorFor, layerBorder, layerSupportsRotation, polygonClip, shapeCssFor,
+  shapeLabel, supportsBorder, supportsRotation, type ShapeCss,
 } from "@/lib/studio/shapes";
 import { sceneToElement } from "@/lib/studio/element";
 import { SHAPE_TILES } from "@/lib/studio/shape-gallery";
@@ -587,6 +587,7 @@ describe("la rotation, sur les DEUX chemins", () => {
   });
 
   it("un calque NON forme garde sa rotation — la limite est PAR FORME, pas globale", () => {
+    // (voir plus bas pour la bordure : même structure, même raison, réserve 3 de la sonde)
     // `layerSupportsRotation` est interrogée par les deux chemins pour TOUT calque : si elle se
     // trompait sur un calque texte ou image, cette tâche casserait la rotation de la moitié de
     // l'éditeur sans qu'aucun test de formes ne le voie.
@@ -600,5 +601,89 @@ describe("la rotation, sur les DEUX chemins", () => {
     const root = sceneToElement(scene, new Map());
     const child = (root.props as { children: { props: { style: Record<string, unknown> } }[] }).children[0];
     expect(child.props.style.transform).toBe("rotate(45deg)");
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// LA BORDURE, SUR LES DEUX CHEMINS — RÉSERVE 3 DE LA SONDE (revue de la Tâche 3, Medium 4).
+//
+// La sonde (Tâche 1) a mesuré que **la bordure échappe au découpage** : satori laisse le contour
+// RECTANGULAIRE autour d'un remplissage triangulaire, tandis que le navigateur applique `clip-path` à
+// l'élément ENTIER, bordure comprise. Un `border` sur une forme découpée s'affiche donc autrement dans
+// l'éditeur que dans le PNG livré : §0, mot pour mot.
+//
+// L'arbitrage F reportait la question à la Tâche 4 « parce qu'aucune forme ne porte de bordure par
+// défaut ». Toujours vrai de l'INSERTION (shape-gallery.ts n'en pose aucune) — mais la Tâche 3 a livré
+// le sélecteur de forme, donc « rectangle bordé » -> « Triangle » se fait en DEUX CLICS, et la section
+// Bordure offrait le contrôle sur les cinq formes découpées.
+//
+// Le remède est celui de la rotation, pour la même raison : griser le contrôle NE SUFFIT PAS, sinon un
+// `border` déjà stocké continue de diverger et la note qui l'annonce est fausse. La bordure est donc
+// supprimée DES DEUX CHEMINS, et la valeur stockée survit (elle réapparaît sur un rectangle).
+//
+// MUTATION QUI FAIT ROUGIR : remettre `layer.border` à la place de `layerBorder(layer)` dans
+// lib/studio/element.ts ou dans components/studio/layer-view.tsx (une seule des deux suffit — c'est
+// tout l'intérêt de vérifier les deux chemins séparément).
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("la bordure, sur les DEUX chemins (réserve 3)", () => {
+  const BORDURE = { width: 6, color: "#00FF00", sides: ["top", "right", "bottom", "left"] } as const;
+
+  for (const kind of SHAPE_KINDS) {
+    it(`« ${kind} » : la bordure est peinte SI ET SEULEMENT SI la forme peut en porter`, () => {
+      const attendue = supportsBorder(kind);
+      const layer = shapeLayerOf(kind, { border: { ...BORDURE, sides: [...BORDURE.sides] } });
+
+      // La valeur STOCKÉE n'est jamais touchée — ni ici ni par le panneau : ce qui change est ce qui
+      // est PEINT. C'est le même traitement que `radius` sur une ellipse.
+      expect(layer.border).toEqual({ ...BORDURE, sides: [...BORDURE.sides] });
+      expect(`${kind} peinte=${layerBorder(layer) !== undefined}`).toBe(`${kind} peinte=${attendue}`);
+
+      // Chemin EXPORT — le style réellement remis à Satori.
+      const exportée = exportStyleOf(layer);
+      const attenduCss = "6px solid #00FF00";
+      for (const prop of ["borderTop", "borderRight", "borderBottom", "borderLeft"]) {
+        expect(`${kind} export ${prop}=${String(exportée[prop])}`)
+          .toBe(`${kind} export ${prop}=${attendue ? attenduCss : "undefined"}`);
+      }
+
+      // Chemin ÉDITEUR — les déclarations réellement sérialisées par React, PARSÉES (jamais
+      // `toContain`) : `border-top` et `border-top-left-radius` partagent un préfixe.
+      const editor = editorDeclsOf(layer);
+      for (const prop of ["border-top", "border-right", "border-bottom", "border-left"]) {
+        expect(`${kind} éditeur ${prop}=${String(editor.get(prop))}`)
+          .toBe(`${kind} éditeur ${prop}=${attendue ? attenduCss : "undefined"}`);
+      }
+    });
+  }
+
+  it("les deux camps existent — au moins une forme accepte la bordure, au moins une la refuse", () => {
+    // ANTI-VACUITÉ de la boucle ci-dessus, exactement comme pour la rotation : si toutes les formes
+    // tombaient du même côté, elle ne testerait qu'une moitié de la règle.
+    const bordées = SHAPE_KINDS.filter((k) => supportsBorder(k));
+    expect(bordées.length).toBeGreaterThan(0);
+    expect(bordées.length).toBeLessThan(SHAPE_KINDS.length);
+  });
+
+  it("le verdict est celui du DÉCOUPAGE, jamais une liste de noms", () => {
+    // Si `supportsBorder` se mettait à énumérer des noms, il pourrait dériver de `clipped` à la
+    // prochaine forme ajoutée — le défaut que `SHAPE_KINDS` et `SHAPE_DESCRIPTORS` existent pour tuer.
+    for (const kind of SHAPE_KINDS) {
+      expect(`${kind} : ${supportsBorder(kind)}`).toBe(`${kind} : ${!descriptorFor(kind).clipped}`);
+    }
+  });
+
+  it("un côté SEUL suit la même règle — ce n'est pas « tout ou rien » par accident", () => {
+    // `sides` partiels : le chemin de code est le même, mais une implémentation qui n'aurait filtré
+    // que le cas « quatre côtés » passerait la boucle ci-dessus. (Le rect est le témoin positif.)
+    const partiel = { width: 3, color: "#FF00FF", sides: ["top", "left"] as const };
+    const triangle = shapeLayerOf("triangle", { border: { ...partiel, sides: [...partiel.sides] } });
+    const rect = shapeLayerOf("rect", { border: { ...partiel, sides: [...partiel.sides] } });
+    expect(exportStyleOf(triangle).borderTop).toBeUndefined();
+    expect(exportStyleOf(triangle).borderLeft).toBeUndefined();
+    expect(editorDeclsOf(triangle).get("border-top")).toBeUndefined();
+    expect(exportStyleOf(rect).borderTop).toBe("3px solid #FF00FF");
+    expect(editorDeclsOf(rect).get("border-top")).toBe("3px solid #FF00FF");
+    // Et les côtés NON demandés restent absents partout — le rect prouve que le filtre `sides` vit.
+    expect(exportStyleOf(rect).borderRight).toBeUndefined();
   });
 });

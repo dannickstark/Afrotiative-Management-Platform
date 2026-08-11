@@ -433,6 +433,85 @@ describe("PropertyPanel — calque forme", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3, REVUE (Medium 4) — LA BORDURE N'EST PAS OFFERTE SUR UNE FORME DÉCOUPÉE.
+//
+// Réserve 3 de la sonde : la bordure ÉCHAPPE au découpage dans satori (contour rectangulaire autour
+// d'un remplissage triangulaire) et pas dans le navigateur. L'arbitrage F l'avait reportée à la Tâche 4
+// « puisque aucune forme ne porte de bordure par défaut » — vrai de l'INSERTION, faux depuis que cette
+// tâche a livré le sélecteur de forme : « rectangle bordé » -> « Triangle », deux clics. Le contrôle est
+// donc grisé avec une note, ET la bordure est supprimée des deux chemins de rendu (griser seul aurait
+// laissé un `border` résiduel diverger et rendu la note FAUSSE — la leçon de la rotation).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — la bordure d'une forme découpée (réserve 3)", () => {
+  function shapeOf(kind: string, extra: Partial<ShapeLayer> = {}): Layer {
+    return { ...shapeLayerSolid, shape: kind, ...extra } as Layer;
+  }
+  // Base UI ne rend PAS un `<button disabled>` pour un Switch : c'est un `<span role="switch">` portant
+  // `aria-disabled="true"`, `data-disabled` et `tabindex="-1"`, dont le `onClick` commence par
+  // `if (readOnly || disabled) return;` (vérifié dans node_modules/@base-ui/react/switch/root/
+  // SwitchRoot.js — le `disabled` natif est sur l'`<input type="checkbox">` caché qu'il pilote). Un test
+  // qui chercherait `disabled` sur CETTE balise passerait donc toujours à côté ; on lit `aria-disabled`.
+  function borderSwitchTag(html: string): string {
+    return openingTag(html, "data-field", "border-enabled");
+  }
+
+  it("l'interrupteur de bordure est GRISÉ pour une forme découpée, actif pour les autres", () => {
+    const clipped = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(clipped.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(libres.length).toBeGreaterThan(0);
+
+    for (const kind of clipped) {
+      const tag = borderSwitchTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : true`);
+    }
+    for (const kind of libres) {
+      const tag = borderSwitchTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : false`);
+    }
+  });
+
+  it("la note n'apparaît QUE pour les formes découpées, et les sous-champs disparaissent avec elle", () => {
+    // `shapeLayerSolid` PORTE une bordure (épaisseur 2, blanc) : c'est exactement le calque qu'on
+    // obtient en convertissant un rectangle bordé en triangle, donc le cas résiduel qui compte.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([shapeOf(kind)], "s1", "recap_card");
+      const découpée = descriptorFor(kind).clipped;
+      expect(`${kind} note : ${html.includes('data-testid="shape-border-none"')}`).toBe(`${kind} note : ${découpée}`);
+      // Épaisseur et couleur de bordure : présentes uniquement là où la bordure est peinte. Un contrôle
+      // grisé au-dessus de trois contrôles actifs n'aurait rien empêché.
+      expect(`${kind} épaisseur : ${html.includes('value="2"')}`).toBe(`${kind} épaisseur : ${!découpée}`);
+      expect(`${kind} couleur : ${html.includes('value="#FFFFFF"')}`).toBe(`${kind} couleur : ${!découpée}`);
+    }
+  });
+
+  it("la note dit POURQUOI, nomme la forme, et parle d'écran CONTRE image exportée", () => {
+    // Le précédent de U2 (`safe-areas-none`, `snap-rotation-note`) : expliquer la raison, jamais
+    // « indisponible » tout court.
+    const html = render([shapeOf("star")], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-border-none"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(note).not.toBeNull();
+    expect(note![1]).toContain("Étoile");
+    expect(note![1].length).toBeGreaterThan(40);
+    expect(note![1]).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
+    expect(render([shapeOf("rect")], "s1", "recap_card")).not.toContain('data-testid="shape-border-none"');
+  });
+
+  it("une bordure déjà réglée SURVIT sur le calque — le panneau n'écrit rien en la masquant", () => {
+    // Même garantie que le rayon d'une ellipse : convertir un rectangle bordé en étoile puis revenir
+    // doit rendre la bordure intacte. Il n'y a pas de patch « border: undefined » caché.
+    const layer = shapeOf("star");
+    render([layer], "s1", "recap_card");
+    if (layer.type === "shape") {
+      expect(layer.border).toEqual({ width: 2, color: "#FFFFFF", sides: ["top", "left"] });
+    }
+    // Et l'interrupteur reflète bien cette valeur STOCKÉE (coché), grisé — le même choix d'affichage
+    // que le champ « Rotation (°) », qui montre 30 grisé plutôt que 0.
+    expect(borderSwitchTag(render([layer], "s1", "recap_card"))).toContain('aria-checked="true"');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // U3 Tâche 3 — DETTE 1 du « PIÈGE POUR LA TÂCHE 3 » (tests/studio-shapes.test.ts).
 //
 // Le champ « Rayon des coins » était un champ NUMÉRIQUE : il affichait `0` pour un rayon en CHAÎNE

@@ -3,7 +3,7 @@
 import type { CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
-import { layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
+import { layerBorder, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -100,10 +100,17 @@ function ShapeContent({ layer }: { layer: Extract<Layer, { type: "shape" }> }) {
       ? { backgroundColor: layer.fill === "transparent" ? undefined : layer.fill }
       : { backgroundImage: gradientCss(layer.fill) };
 
+  // `layerBorder` et NON `layer.border` (revue U3 Tâche 3, Medium 4) : sur une forme découpée, le
+  // navigateur clippe l'élément ENTIER — bordure comprise — tandis que satori laisse le contour
+  // rectangulaire autour du remplissage découpé (réserve 3 de la sonde). Laisser passer la bordure ici
+  // livrerait donc un éditeur en désaccord avec son propre export, le §0 de ce sous-projet. La
+  // description tranche (lib/studio/shapes.ts#supportsBorder), les deux chemins la posent — même
+  // discipline que la rotation juste au-dessus.
+  const painted = layerBorder(layer);
   const borderStyle: CSSProperties = {};
-  if (layer.border) {
-    const sides = layer.border.sides ?? ["top", "right", "bottom", "left"];
-    const css = `${layer.border.width}px solid ${layer.border.color}`;
+  if (painted) {
+    const sides = painted.sides ?? ["top", "right", "bottom", "left"];
+    const css = `${painted.width}px solid ${painted.color}`;
     for (const s of sides) {
       const key = `border${s[0].toUpperCase()}${s.slice(1)}` as keyof CSSProperties;
       (borderStyle as Record<string, string>)[key] = css;

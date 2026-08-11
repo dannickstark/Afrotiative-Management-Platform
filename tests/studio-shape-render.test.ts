@@ -292,3 +292,66 @@ describe("renderScene() — chaque forme survit à minSize et à un aspect très
     expect(px(20, 200)).toBe("fond");
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// LA BORDURE N'EST PAS PEINTE SUR UNE FORME DÉCOUPÉE — EN PIXELS (réserve 3, revue de la Tâche 3).
+//
+// Pourquoi en pixels et pas seulement en CSS : c'est le SEUL moyen de voir la divergence que la sonde
+// a mesurée. Satori ne fait pas entrer la bordure dans le `<g clip-path>` — le contour reste
+// RECTANGULAIRE autour d'un remplissage triangulaire — tandis que le navigateur applique `clip-path` à
+// l'élément entier, bordure comprise. Un `border` sur un triangle donnait donc un cadre complet dans le
+// PNG livré et un simple liseré de base à l'écran : §0, mot pour mot.
+//
+// La bordure est donc supprimée des deux chemins (lib/studio/shapes.ts#layerBorder). Ce test le prouve
+// LÀ OÙ ÇA COMPTE : dans les pixels de sortie. MUTATION QUI FAIT ROUGIR : remettre `layer.border` dans
+// `shapeNode()` (lib/studio/element.ts) — le coin haut-gauche redevient VERT.
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+describe("renderScene() — la bordure ne franchit pas la découpe (réserve 3)", () => {
+  const CONTOUR = "#00FF00"; // vert pur : ni le remplissage (rouge) ni le fond (bleu)
+  const BORDURE = { width: 60, color: CONTOUR, sides: ["top", "right", "bottom", "left"] } as const;
+
+  // Un échantillonneur à TROIS couleurs : sans la troisième, « le coin n'est pas du remplissage » ne
+  // distinguerait pas « fond » de « contour » — et c'est justement la distinction qui porte le test.
+  async function triColore(bytes: Uint8Array) {
+    const { data, info } = await sharp(Buffer.from(bytes)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    return (x: number, y: number) => {
+      const i = (y * info.width + x) * info.channels;
+      const p = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+      const near = (t: number[]) => t.every((v, k) => Math.abs(p[k] - v) <= TOLERANCE);
+      if (near([255, 0, 0])) return "remplissage";
+      if (near([0, 0, 255])) return "fond";
+      if (near([0, 255, 0])) return "contour";
+      return `rgba(${p.join(",")})`;
+    };
+  }
+
+  it("triangle bordé : le coin que le polygone exclut reste du FOND, pas du contour", async () => {
+    const scene = sceneOf("triangle", { border: { ...BORDURE, sides: [...BORDURE.sides] } });
+    const px = await triColore((await renderScene({ scene, values: {} })).bytes);
+    // (20,20) est dans le coin haut-gauche : hors du triangle, et DANS la bande de 60 px qu'une
+    // bordure rectangulaire couvrirait.
+    expect(px(20, 20)).toBe("fond");
+    expect(px(780, 20)).toBe("fond");
+    // Et l'image reste bien le triangle attendu : sans ces deux points, une image entièrement bleue
+    // passerait pour un succès.
+    expect(px(400, 200)).toBe("remplissage");
+    expect(px(700, 380)).toBe("remplissage");
+  });
+
+  it("TÉMOIN : la MÊME bordure sur un rect est bel et bien peinte — le contour n'a pas disparu partout", async () => {
+    // Sans ce témoin, le test précédent passerait aussi si la bordure avait cessé d'être émise pour
+    // TOUT LE MONDE (ce qui casserait rect, ellipse et ligne en silence).
+    const scene = sceneOf("rect", { border: { ...BORDURE, sides: [...BORDURE.sides] } });
+    const px = await triColore((await renderScene({ scene, values: {} })).bytes);
+    expect(px(20, 20)).toBe("contour");
+    expect(px(400, 200)).toBe("remplissage");
+  });
+
+  it("TÉMOIN : le vert est bien DISTINGUABLE du fond et du remplissage par cet échantillonneur", async () => {
+    // Anti-vacuité de l'assertion « fond » ci-dessus : si l'échantillonneur classait le vert « fond »,
+    // le premier test passerait même avec une bordure rectangulaire peinte.
+    const scene = sceneOf("rect", { fill: CONTOUR });
+    const px = await triColore((await renderScene({ scene, values: {} })).bytes);
+    expect(px(400, 200)).toBe("contour");
+  });
+});

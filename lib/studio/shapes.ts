@@ -19,6 +19,10 @@
 // ce fichier ne peut atteindre ni `@/db` ni quoi que ce soit de serveur, par construction.
 import type { Layer, ShapeKind, ShapeLayer } from "./scene";
 
+/** La bordure telle que le SCHÉMA la décrit (lib/studio/scene.ts, `shapeLayer.border`) — nommée ici
+ * pour que `layerBorder()` ci-dessous ait un type de retour lisible. */
+export type ShapeBorder = NonNullable<ShapeLayer["border"]>;
+
 // LES SEULES propriétés CSS qui DÉFINISSENT la géométrie d'une forme, et les seules que le plafond
 // du moteur autorise pour cela (feuille de route, « Le plafond du moteur ») : `border-radius` — que
 // la sonde a mesuré capable d'une VRAIE ellipse en « 50% » — et `clip-path: polygon(…)`, mesuré
@@ -206,9 +210,10 @@ const line: ShapeDescriptor = {
 // croise (une coquille dans une table produirait sinon des trous en « evenodd » que personne n'a
 // demandés).
 //
-// Ces formes sont DÉCOUPÉES : `clipped: true`, donc pas de rotation (arbitrage A) et pas de rayon
-// (voir `radiusApplies`). La bordure, elle, échappe encore au découpage (réserve 3) — aucune forme
-// livrée ici ne porte de bordure par défaut, et la Tâche 4 doit soit la résoudre soit l'annoncer.
+// Ces formes sont DÉCOUPÉES : `clipped: true`, donc pas de rotation (arbitrage A), pas de rayon
+// (voir `radiusApplies`) et — depuis la revue de la Tâche 3 — pas de BORDURE non plus : elle échappe
+// au découpage dans satori et pas dans le navigateur (réserve 3 de la sonde). Voir `supportsBorder()`
+// plus bas pour l'arbitrage complet.
 // ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Fabrique une description DÉCOUPÉE à partir d'une table de sommets. Un seul chemin pour toute la
@@ -338,7 +343,50 @@ export function layerSupportsRotation(layer: Layer): boolean {
 }
 
 /** La rotation RÉELLEMENT peinte pour ce calque, en degrés — 0 quand la forme ne tourne pas. Les deux
- * chemins de rendu appellent CECI plutôt que de lire `layer.rotation` directement. */
+ * chemins de rendu appellent CECI plutôt que de lire `layer.rotation` directement.
+ *
+ * TROISIÈME APPELANT depuis la revue de la Tâche 3 (Important 1) : `hooks/use-layer-drag.ts` pose
+ * `startRotation: layerRotation(layer)`, parce que la MATHÉMATIQUE DU GESTE doit lire la même rotation
+ * que la peinture — un calque peint droit et redimensionné comme s'il penchait est le même désaccord
+ * que §0, entre le pixel et le geste cette fois. */
 export function layerRotation(layer: Layer): number {
   return layerSupportsRotation(layer) ? (layer.rotation ?? 0) : 0;
+}
+
+/**
+ * Cette forme peut-elle porter une BORDURE ? (Réserve 3 de la sonde, tranchée par la revue de la
+ * Tâche 3, Medium 4.)
+ *
+ * NON pour une forme découpée, et c'est la MÊME divergence que la rotation, mesurée par la sonde
+ * (Tâche 1, réserve 3) : **la bordure échappe au découpage**. Satori peint un contour RECTANGULAIRE
+ * autour d'un remplissage triangulaire ; le navigateur, lui, applique `clip-path` à l'élément ENTIER,
+ * bordure comprise, et ne laisse donc voir le contour que là où l'arête du polygone longe le bord du
+ * cadre. Le designer verrait un liseré sur la base de son triangle et recevrait un cadre complet dans
+ * le PNG livré : §0, très exactement.
+ *
+ * L'arbitrage F avait reporté la question à la Tâche 4 au motif qu'« aucune forme de la Tâche 3 ne
+ * porte de bordure par défaut ». C'est encore vrai de l'INSERTION (shape-gallery.ts n'en pose aucune),
+ * mais plus du reste : la Tâche 3 a livré un sélecteur de forme, donc « rectangle avec bordure » →
+ * « Triangle » se fait en deux clics, et la section Bordure OFFRAIT le contrôle sur les cinq formes
+ * découpées.
+ *
+ * Le remède est celui de la rotation, et pour la même raison — griser le contrôle NE SUFFIT PAS.
+ * Un `border` déjà stocké (conversion depuis un rectangle, import, scène antérieure, IA) continuerait
+ * de peindre différemment dans l'éditeur et dans l'export, et la note qui annonce « désactivée » serait
+ * FAUSSE. La bordure est donc supprimée DES DEUX CHEMINS de rendu, comme la `transform` de rotation,
+ * et la valeur stockée survit intacte (elle réapparaît si la forme redevient un rectangle) — le même
+ * traitement que `radius` sur une ellipse.
+ *
+ * La Tâche 4 reste libre de RÉSOUDRE le cas (un contour qui suive le polygone demande un chemin SVG,
+ * ou une seconde couche découpée) ; d'ici là, l'éditeur et l'export sont d'accord.
+ */
+export function supportsBorder(kind: ShapeKind): boolean {
+  return !descriptorFor(kind).clipped;
+}
+
+/** La bordure RÉELLEMENT peinte pour ce calque — `undefined` quand la forme ne peut pas en porter.
+ * Les deux chemins de rendu appellent CECI plutôt que de lire `layer.border` directement (même
+ * discipline, même raison que `layerRotation`). */
+export function layerBorder(layer: ShapeLayer): ShapeBorder | undefined {
+  return supportsBorder(layer.shape) ? layer.border : undefined;
 }

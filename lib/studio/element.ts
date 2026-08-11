@@ -1,5 +1,5 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
-import { layerRotation, shapeCssFor } from "./shapes";
+import { layerBorder, layerRotation, shapeCssFor } from "./shapes";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
 // code de bibliothèque.
@@ -89,10 +89,15 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
     ? (layer.fill === "transparent" ? {} : { backgroundColor: layer.fill })
     : { backgroundImage: gradientCss(layer.fill) };
 
+  // `layerBorder` et NON `layer.border` (revue U3 Tâche 3, Medium 4) : la bordure ÉCHAPPE au
+  // découpage ici — satori peint un contour RECTANGULAIRE autour d'un remplissage triangulaire
+  // (réserve 3 de la sonde) — là où le navigateur clippe l'élément entier, bordure comprise. Même
+  // divergence, même remède que la rotation : la description tranche, les deux chemins la posent.
+  const painted = layerBorder(layer);
   const border: Record<string, unknown> = {};
-  if (layer.border) {
-    const sides = layer.border.sides ?? ["top", "right", "bottom", "left"];
-    const css = `${layer.border.width}px solid ${layer.border.color}`;
+  if (painted) {
+    const sides = painted.sides ?? ["top", "right", "bottom", "left"];
+    const css = `${painted.width}px solid ${painted.color}`;
     for (const s of sides) {
       border[`border${s[0].toUpperCase()}${s.slice(1)}`] = css;
     }
