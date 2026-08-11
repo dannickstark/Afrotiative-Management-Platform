@@ -222,6 +222,28 @@ The reducer needs one action applying a batch of frame changes as **a single und
 
 Guides render as thin lines with the existing preview overlay, and disappear on gesture end.
 
+> **Amendment, 2026-08-11 — PLAN DEFECT #10, mine, same class as #9.** "Render *with the existing preview
+> overlay*" read literally means inside `handles-overlay`, which carries a `transform: rotate()` and is
+> positioned at the selected frame's origin. Guides put there would be **rotated and offset**, and absent
+> entirely for any layer that is not the sole unlocked selection. The requirement I actually meant is
+> about the **channel** — guides ride `DragPreview.guides` rather than a second state path — and that
+> part stands and is honoured. Delivered: the lines render as siblings inside the scaled container.
+> Two plan defects in a row (#9 and #10) have been "the named file is right for the single-selection case
+> and wrong for the general one"; both were created by an earlier task and inherited by a later task's
+> file list, and neither task's text mentioned it.
+>
+> **Scope limit to record, not a defect: a rotated layer snaps on MOVE but not on RESIZE.** Measured: at
+> 180° an `e` drag leaves `frame.right` bit-for-bit fixed and moves `frame.x` instead, so "snap the east
+> edge" has no referent — and post-fixing the frame afterwards would re-break Task 1's rotated-resize
+> geometry. This is the honest boundary of the rotation-blind decision inherited from Task 4, not
+> laziness. **The UI does not yet tell the user.** Task 4 set the precedent of surfacing exactly this kind
+> of limit (its rotated-participant note in the align row), so the consistent thing is a matching note
+> during a rotated resize. Deferred as a product decision rather than invented here.
+>
+> **One addition the plan should have specified and did not: the threshold value.** 8 screen pixels,
+> chosen as the common design-tool figure. The plan requires the threshold to be in screen pixels but
+> names no number.
+
 - [ ] Step 1: failing tests · [ ] Step 2: confirm red · [ ] Step 3: implement · [ ] Step 4: green, plus `studio-drag` and `studio-canvas` · [ ] Step 5: commit
 
 ---
