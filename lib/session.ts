@@ -15,8 +15,13 @@ export type SessionUser = {
   image: string | null;
 };
 
+export function isSessionUsable(user: { banned: boolean } | null | undefined): boolean {
+  return !!user && !user.banned;
+}
+
 export async function requireUser(): Promise<SessionUser> {
   const s = await getSession();
-  if (!s?.user) redirect("/login");
-  return s.user as unknown as SessionUser;
+  const user = s?.user as unknown as SessionUser | undefined;
+  if (!isSessionUsable(user)) redirect("/login"); // defense-in-depth — plan 004
+  return user as SessionUser;
 }
