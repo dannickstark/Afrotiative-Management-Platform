@@ -77,3 +77,37 @@ export function resolveTokens(scene: Scene, values: TokenValues): Scene {
     layers,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// U4 Tâche 3 — RÉSOLUTION D'AFFICHAGE (le défaut que le §0 du plan U4 nomme : le navigateur reçoit
+// une chaîne « {{jeton}} » là où il attend une couleur CSS — texte, QR, fond de forme, fond de
+// canevas — et l'ABANDONNE silencieusement, invisible à l'écran sans qu'aucune erreur n'apparaisse).
+//
+// `resolveTokens` ci-dessus prépare la scène pour l'EXPORT RÉEL : couleur + source d'image + contenu
+// de texte, contre de VRAIES valeurs (article ou saisie). L'éditeur, lui, n'a JAMAIS de valeur réelle
+// pour une image ou un texte (spec §2 — un `{{slot}}` d'image garde son espace réservé, un contenu
+// texte reste sa forme technique brute) : SEULE la couleur doit s'afficher, avec un ÉCHANTILLON, pour
+// que le designer voie ce qu'il compose plutôt qu'un champ qui semble avoir perdu sa valeur.
+//
+// Les deux fonctions ci-dessous réutilisent EXACTEMENT `substitute`/`substituteColorFields` — les
+// MÊMES fonctions que `resolveTokens` applique déjà à la dimension couleur — pour qu'une seconde
+// implémentation ne puisse jamais diverger de la première : c'est ce qui rend l'accord éditeur/export
+// STRUCTUREL plutôt qu'accidentel (tests/studio-layer-view.test.ts, « §0 »).
+//
+// PURE, comme `resolveTokens` : ni `layer` ni `value` ne sont mutés (setColorAtPath clone à chaque
+// niveau traversé). Contrairement à `resolveTokens`, un jeton sans valeur d'échantillon ne LÈVE PAS
+// MissingTokensError — ceci est un affichage de MEILLEUR EFFORT (un designer qui n'a pas encore
+// choisi de couleur de catégorie ne doit pas voir le canevas planter), pas une préparation stricte.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Le fond du canevas (`scene.canvas.background`), résolu pour l'affichage — components/studio/canvas.tsx. */
+export function resolveDisplayColor(value: string, values: TokenValues): string {
+  return substitute(value, values);
+}
+
+/** UN calque, avec SEULEMENT ses champs-couleur (colorFieldsOf, Task 2) résolus pour l'affichage —
+ *  components/studio/layer-view.tsx. La source d'une image et le contenu d'un texte ne sont JAMAIS
+ *  touchés : `colorFieldsOf` ne les énumère pas, donc `substituteColorFields` ne peut pas les voir. */
+export function resolveLayerColorsForDisplay(layer: Layer, values: TokenValues): Layer {
+  return substituteColorFields(layer, values);
+}

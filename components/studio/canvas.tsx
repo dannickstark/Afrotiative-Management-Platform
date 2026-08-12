@@ -11,6 +11,8 @@ import { useLayerDrag, HANDLES, nudgeDelta, type HandleId } from "@/hooks/use-la
 // tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
 // que le rendu ne fera pas.
 import { layerSupportsRotation } from "@/lib/studio/shapes";
+import { resolveDisplayColor } from "@/lib/studio/values";
+import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { LayerView } from "./layer-view";
 
 // Le canevas est du DOM, pas un `<canvas>` (spec §2) : chaque calque est une `div` positionnée en
@@ -110,6 +112,12 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
   // entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
+
+  // U4 Tâche 3 — le fond du canevas, résolu pour l'AFFICHAGE (même discipline que LayerView) : un
+  // fond lié à `{{jeton}}` montre l'échantillon plutôt qu'une chaîne CSS invalide silencieusement
+  // abandonnée par le navigateur (le §0 du plan U4). `scene.canvas.background` lui-même n'est jamais
+  // touché — `resolveDisplayColor` est pure, comme `resolveTokens`.
+  const displayBackground = resolveDisplayColor(scene.canvas.background, SAMPLE_VALUES);
 
   // GLISSER DE GROUPE (revue finale U0+U2, Important 1) : l'aperçu peut porter le cadre de PLUSIEURS
   // calques (`preview.frames`), pas seulement celui qu'on tire. On regarde donc le lot d'abord — il
@@ -211,7 +219,7 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
           height: scene.canvas.height,
           transform: `scale(${scale})`,
           transformOrigin: "top left",
-          background: scene.canvas.background === "transparent" ? undefined : scene.canvas.background,
+          background: displayBackground === "transparent" ? undefined : displayBackground,
         }}
       >
         {scene.layers.map((layer) => {
