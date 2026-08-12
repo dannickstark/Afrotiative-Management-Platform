@@ -111,6 +111,62 @@ describe("EditorShell — mode Montage (revue Tâche 6, spec §2/§5)", () => {
   });
 });
 
+// Chantier A Tâche 3 (spec §2/§3) — corps trois zones : fond neutre du canevas, état vide compact de
+// l'inspecteur, et les deux poignées de redimensionnement. Toutes vérifiables sur le HTML STATIQUE
+// (renderToStaticMarkup) — aucune de ces trois preuves n'exige d'interactivité, seulement la
+// STRUCTURE/les CLASSES rendues au premier rendu (`prefs` vaut DEFAULT_PREFS ici, useEffect de
+// useEditorPrefs n'ayant jamais tourné sous ce mode de rendu — voir le commentaire d'en-tête).
+describe("EditorShell — corps trois zones : fond neutre, état vide compact, poignées de glisser (chantier A Tâche 3)", () => {
+  it("le conteneur du canevas porte un fond TOKEN neutre (bg-muted/40), pas bg-muted/20 ni un fond blanc implicite", () => {
+    const html = render();
+    const openTag = html.slice(
+      html.indexOf('data-testid="canvas-backdrop"') - 400,
+      html.indexOf('data-testid="canvas-backdrop"') + 200,
+    );
+    expect(openTag).toContain("bg-muted/40");
+    // Anti-vacuité : l'ANCIEN fond, trop pâle pour se distinguer du blanc (le défaut que corrige
+    // cette tâche), ne doit plus apparaître SUR CE conteneur précis.
+    expect(openTag).not.toContain("bg-muted/20");
+  });
+
+  it("l'état vide de l'inspecteur est COMPACT — une petite carte ancrée en haut, pas le vide plein-écran d'avant cette tâche", () => {
+    const html = render();
+    expect(html).toContain('data-testid="property-panel-empty"');
+    // La carte compacte elle-même, bornée en largeur : la preuve structurelle du changement, pas
+    // seulement un espoir sur les classes du conteneur parent.
+    expect(html).toContain('data-testid="property-panel-empty-hint"');
+    expect(html).toContain("max-w-[220px]");
+    // Anti-vacuité — LA preuve négative que le brief nomme explicitement : l'ancienne structure
+    // centrait le message sur toute la hauteur (`items-center justify-center`, un `<div>` UNIQUE,
+    // sans carte imbriquée). Un mutant qui reviendrait à `justify-center` sur ce conteneur — même en
+    // gardant les deux `data-testid` — ferait rougir CETTE assertion.
+    const emptyTag = html.slice(
+      html.indexOf('data-testid="property-panel-empty"') - 200,
+      html.indexOf('data-testid="property-panel-empty"') + 100,
+    );
+    expect(emptyTag).not.toContain("justify-center");
+  });
+
+  it("les deux poignées de redimensionnement sont rendues — rail-panel↔canevas (un panneau est ouvert par défaut, hasLayers=true -> aucun forçage, mais Calques reste `lastOpenPanel`… ici `openPanel` DEFAULT_PREFS vaut null) et canevas↔inspecteur (toujours montée)", () => {
+    const html = render();
+    // `prefs.openPanel` vaut `null` au tout premier rendu statique (DEFAULT_PREFS, useEffect jamais
+    // exécuté) : la poignée rail-panel↔canevas n'a donc RIEN à redimensionner et ne doit pas
+    // apparaître — exactement la même garde que celle vérifiée en JSX (`prefs.openPanel !== null`).
+    expect(html).not.toContain('data-testid="rail-panel-resize-handle"');
+    // La poignée canevas↔inspecteur, elle, n'est JAMAIS conditionnée par `openPanel` — l'inspecteur
+    // est toujours affiché en mode Montage.
+    expect(html).toContain('data-testid="inspector-resize-handle"');
+  });
+
+  it("l'inspecteur porte la largeur de EditorPrefs.inspectorWidth (300px par défaut) en style inline, pas la classe w-[300px] figée d'avant cette tâche", () => {
+    const html = render();
+    const idx = html.indexOf('data-testid="inspector-resize-handle"');
+    const after = html.slice(idx, idx + 600);
+    expect(after).toContain("width:300px");
+    expect(after).not.toContain("w-[300px]");
+  });
+});
+
 // Correctif revue finale — Important 6 (spec §7) : « la mise à l'échelle du canevas ignore les
 // bandes de règles ». `computeCanvasScale` est PURE (aucun DOM, aucun ResizeObserver) : testable
 // directement, sans avoir besoin de monter le composant ni de simuler une mesure de conteneur.

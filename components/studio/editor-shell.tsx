@@ -13,6 +13,7 @@ import { CanvasChrome, safeAreaDefaultFor, RULER_SIZE } from "./canvas-chrome";
 import { SaveIndicator } from "./save-indicator";
 import { Rail } from "./rail";
 import { PanelHost } from "./panel-host";
+import { PanelResizeHandle } from "./panel-resize-handle";
 import { CalquesPanel } from "./panels/calques-panel";
 import { ModelesPanel } from "./panels/modeles-panel";
 import { ImagesPanel } from "./panels/images-panel";
@@ -30,7 +31,10 @@ import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
 import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions";
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
-import { nextOpenPanel, setOpenPanel, toggleCollapse, type RailCategory } from "@/lib/studio/editor-prefs";
+import {
+  nextOpenPanel, setOpenPanel, toggleCollapse, type RailCategory,
+  RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
+} from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
 import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
@@ -469,17 +473,23 @@ function EditorShellInner({
                 slots `search`/`primaryAction`, restés morts tant qu'un seul `<PanelHost>` ici les
                 enrobait tous en simples `children` sans jamais leur passer ces deux props. Calques,
                 Éléments et Marque n'ont ni l'un ni l'autre (spec §3, tableau : « — ») et restent donc
-                de simples `children` enrobés ICI, inchangé. */}
+                de simples `children` enrobés ICI, inchangé.
+
+                Chantier A Tâche 3 (spec §2/§3) : `width={prefs.railPanelWidth}` descend désormais
+                aux SIX catégories (directement ici pour Calques/Éléments/Marque, via leur propre prop
+                `width` pour Modèles/Texte/Images — voir panel-host.tsx) — une SEULE largeur pour le
+                panneau accosté quelle que soit la catégorie ouverte, puisqu'une seule est jamais
+                montée à la fois. */}
             {prefs.openPanel === "calques" && (
-              <PanelHost open="calques" onOpenChange={collapsePanel}>
+              <PanelHost open="calques" onOpenChange={collapsePanel} width={prefs.railPanelWidth}>
                 <CalquesPanel scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} />
               </PanelHost>
             )}
             {prefs.openPanel === "modeles" && (
-              <ModelesPanel templates={templates} categories={categories} onOpenChange={collapsePanel} />
+              <ModelesPanel templates={templates} categories={categories} onOpenChange={collapsePanel} width={prefs.railPanelWidth} />
             )}
             {prefs.openPanel === "elements" && (
-              <PanelHost open="elements" onOpenChange={collapsePanel}>
+              <PanelHost open="elements" onOpenChange={collapsePanel} width={prefs.railPanelWidth}>
                 <ElementsPanel
                   context={template.context}
                   canvas={{ width: template.width, height: template.height }}
@@ -495,6 +505,7 @@ function EditorShellInner({
                 canvas={{ width: template.width, height: template.height }}
                 dispatch={dispatch}
                 onOpenChange={collapsePanel}
+                width={prefs.railPanelWidth}
               />
             )}
             {prefs.openPanel === "images" && (
@@ -508,12 +519,30 @@ function EditorShellInner({
                 selectedId={singleSelectedId(state.selectedIds)}
                 dispatch={dispatch}
                 onOpenChange={collapsePanel}
+                width={prefs.railPanelWidth}
               />
             )}
             {prefs.openPanel === "marque" && (
-              <PanelHost open="marque" onOpenChange={collapsePanel}>
+              <PanelHost open="marque" onOpenChange={collapsePanel} width={prefs.railPanelWidth}>
                 <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
               </PanelHost>
+            )}
+
+            {/* Chantier A Tâche 3 (spec §2/§3) : la poignée rail-panel↔canevas — seulement quand un
+                panneau est RÉELLEMENT monté (`prefs.openPanel !== null`), sans quoi il n'y aurait
+                rien à redimensionner et la poignée flotterait, orpheline, contre le Rail. `sign={1}`
+                (panel-resize-handle.tsx) : le panneau est posé à GAUCHE de cette poignée, glisser
+                vers la droite l'AGRANDIT. */}
+            {prefs.openPanel !== null && (
+              <PanelResizeHandle
+                currentWidth={prefs.railPanelWidth}
+                min={RAIL_PANEL_WIDTH_MIN}
+                max={RAIL_PANEL_WIDTH_MAX}
+                sign={1}
+                onResize={(w) => setPrefs((p) => ({ ...p, railPanelWidth: w }))}
+                label="Redimensionner le panneau"
+                testId="rail-panel-resize-handle"
+              />
             )}
 
             {/* CanvasChrome (Tâche 7, spec §7) : pastilles flottantes (format + zoom), règles et
@@ -521,10 +550,17 @@ function EditorShellInner({
                 TOGGLE des zones sûres (sa persistance vit dans EditorPrefs, Tâche 1 ; les BANDES elles-
                 mêmes restent de U2, voir canvas-chrome.tsx). `zoom={scale}` : la même échelle que
                 `<Canvas>` reçoit juste en dessous, jamais EditorPrefs.zoom (mémorisé mais sans
-                consommateur avant cette tâche, voir le commentaire de canvas-chrome.tsx). */}
+                consommateur avant cette tâche, voir le commentaire de canvas-chrome.tsx).
+
+                Chantier A Tâche 3 (spec §2/§3) : `bg-muted/20` -> `bg-muted/40` — un fond TOKEN
+                nettement plus affirmé qu'un simple soupçon de teinte (spec : « kill the white void »),
+                pour que l'artboard (son propre box-shadow, canvas.tsx, inchangé) se lise comme une
+                SURFACE posée sur un espace de travail plutôt que comme un rectangle flottant sur un
+                fond qui reste, à cette opacité, visuellement proche du blanc. */}
             <div
               ref={canvasWrapRef}
-              className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/20 p-4"
+              data-testid="canvas-backdrop"
+              className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/40 p-4"
             >
               <CanvasChrome
                 format={template.format}
@@ -555,7 +591,21 @@ function EditorShellInner({
                 est désormais le SEUL foyer de l'aperçu, accessible via ModeSwitch ou `R`. Un seul
                 enfant (PropertyPanel) gère lui-même son propre défilement interne
                 (`property-sections`, property-panel.tsx) : rien ici n'a besoin de défiler. */}
-            <div className="h-full w-[300px] shrink-0 overflow-hidden rounded-lg border">
+            {/* Chantier A Tâche 3 (spec §2/§3) : la poignée canevas↔inspecteur — toujours montée
+                (contrairement à celle du panneau accosté, l'inspecteur est TOUJOURS affiché en mode
+                Montage, jamais conditionné par `prefs.openPanel`). `sign={-1}` : l'inspecteur est
+                posé à DROITE de cette poignée, glisser vers la droite le RÉTRÉCIT. */}
+            <PanelResizeHandle
+              currentWidth={prefs.inspectorWidth}
+              min={INSPECTOR_WIDTH_MIN}
+              max={INSPECTOR_WIDTH_MAX}
+              sign={-1}
+              onResize={(w) => setPrefs((p) => ({ ...p, inspectorWidth: w }))}
+              label="Redimensionner l'inspecteur"
+              testId="inspector-resize-handle"
+            />
+
+            <div className="h-full shrink-0 overflow-hidden rounded-lg border" style={{ width: prefs.inspectorWidth }}>
               <PropertyPanel
                 scene={state.scene} selectedIds={state.selectedIds} context={template.context}
                 dispatch={dispatch} assets={assets}

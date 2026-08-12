@@ -43,7 +43,28 @@ export type EditorPrefs = {
   // chaînes), tandis que shape-gallery.ts#recentTilesFor résout ces ids en tuiles réelles et ignore
   // ceux qui ne correspondent plus à rien.
   recentShapes: string[];
+  // Chantier A Tâche 3 (spec §2/§3) — corps trois zones : largeur COURANTE (px écran) du panneau
+  // accosté (rail-panel.host, ~212px par défaut) et de la colonne inspecteur (property-panel.tsx,
+  // ~300px par défaut), toutes deux redimensionnables par une poignée de glisser
+  // (components/studio/panel-resize-handle.tsx) entre rail-panel↔canevas et canevas↔inspecteur.
+  // MÊME idiome « par champ » que rulers/grid/zoom ci-dessus : mémorisées par UTILISATEUR (pas par
+  // gabarit), et RAMENÉES dans leurs bornes (RAIL_PANEL_WIDTH_MIN/MAX, INSPECTOR_WIDTH_MIN/MAX,
+  // plus bas) à CHAQUE lecture depuis localStorage — jamais seulement à l'écriture — pour qu'une
+  // valeur bricolée à la main, ou persistée sous une borne plus large qu'aujourd'hui, ne fasse
+  // jamais déborder la disposition.
+  railPanelWidth: number;
+  inspectorWidth: number;
 };
+
+// Bornes de redimensionnement (px écran) — chantier A Tâche 3. Le panneau accosté existait déjà à
+// 212px fixe (panel-host.tsx) et l'inspecteur à 300px fixe (editor-shell.tsx) avant cette tâche :
+// ces deux valeurs restent donc les DÉFAUTS ci-dessous, au centre de leurs bornes respectives plutôt
+// qu'à une extrémité, pour qu'un premier chargement (aucune préférence encore persistée) ne se
+// distingue en rien de l'ancien comportement figé.
+export const RAIL_PANEL_WIDTH_MIN = 180;
+export const RAIL_PANEL_WIDTH_MAX = 360;
+export const INSPECTOR_WIDTH_MIN = 240;
+export const INSPECTOR_WIDTH_MAX = 480;
 
 export const DEFAULT_PREFS: EditorPrefs = {
   openPanel: null,
@@ -55,7 +76,16 @@ export const DEFAULT_PREFS: EditorPrefs = {
   zoom: "fit",
   sectionsOpen: {},
   recentShapes: [],
+  railPanelWidth: 212,
+  inspectorWidth: 300,
 };
+
+// PURE — appelée à CHAQUE `pointermove` par la poignée de glisser (panel-resize-handle.tsx), et par
+// parsePrefs plus bas pour ramener une largeur persistée dans ses bornes courantes. Bornes
+// INCLUSIVES des deux côtés (spec Étape 4 : "clampPanelWidth(px, min, max)").
+export function clampPanelWidth(px: number, min: number, max: number): number {
+  return Math.min(Math.max(px, min), max);
+}
 
 const RAIL_CATEGORY_SET = new Set<string>(RAIL_CATEGORIES);
 
@@ -106,6 +136,18 @@ function parseRecentShapes(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === "string");
 }
 
+// Même discipline « par champ » que parseZoom ci-dessus : une valeur du mauvais type (ou non finie —
+// JSON ne peut d'ailleurs jamais transporter NaN/Infinity, mais un type mal formé après une
+// migration de schéma reste possible) retombe sur LE DÉFAUT DE CE CHAMP, jamais sur DEFAULT_PREFS en
+// bloc. Une valeur numérique VALIDE mais HORS BORNES (ex. persistée sous une borne plus large
+// qu'aujourd'hui) n'est pas non plus reprise telle quelle : `clampPanelWidth` la ramène dans les
+// bornes COURANTES, pour que resserrer RAIL_PANEL_WIDTH_MIN/MAX un jour ne laisse jamais une
+// disposition périmée survivre indéfiniment dans le localStorage d'un utilisateur.
+function parsePanelWidth(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return clampPanelWidth(value, min, max);
+}
+
 // Ne lève JAMAIS : une entrée `null`, vide, du JSON syntaxiquement invalide, un tableau ou un objet
 // dont chaque champ est du mauvais type retombent tous sur DEFAULT_PREFS (en bloc pour les deux
 // premiers cas, champ par champ pour le dernier — les deux convergent vers le même résultat quand
@@ -135,6 +177,8 @@ export function parsePrefs(raw: string | null): EditorPrefs {
     zoom: parseZoom(obj.zoom),
     sectionsOpen: parseSectionsOpen(obj.sectionsOpen),
     recentShapes: parseRecentShapes(obj.recentShapes),
+    railPanelWidth: parsePanelWidth(obj.railPanelWidth, DEFAULT_PREFS.railPanelWidth, RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX),
+    inspectorWidth: parsePanelWidth(obj.inspectorWidth, DEFAULT_PREFS.inspectorWidth, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX),
   };
 }
 

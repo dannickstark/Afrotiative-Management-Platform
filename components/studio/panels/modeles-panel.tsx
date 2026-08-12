@@ -39,6 +39,9 @@ export interface ModelesPanelProps {
   templates: TemplateRow[];
   categories: CategoryOption[];
   onOpenChange?: (next: RailCategory | null) => void;
+  // Chantier A Tâche 3 (spec §2/§3) : transmise TELLE QUELLE à PanelHost — voir son commentaire
+  // (panel-host.tsx) pour la source (EditorPrefs.railPanelWidth) et le défaut.
+  width?: number;
 }
 
 // PURE — exportée pour un test direct sans rendu (même discipline que imageSlotsFor,
@@ -51,7 +54,7 @@ export function filterTemplatesBySearch(templates: readonly TemplateRow[], query
   return templates.filter((t) => t.name.toLowerCase().includes(q));
 }
 
-export function ModelesPanel({ templates, categories, onOpenChange = () => {} }: ModelesPanelProps) {
+export function ModelesPanel({ templates, categories, onOpenChange = () => {}, width }: ModelesPanelProps) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterTemplatesBySearch(templates, query), [templates, query]);
 
@@ -59,6 +62,7 @@ export function ModelesPanel({ templates, categories, onOpenChange = () => {} }:
     <PanelHost
       open="modeles"
       onOpenChange={onOpenChange}
+      width={width}
       search={
         <div className="relative">
           <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />

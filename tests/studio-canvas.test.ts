@@ -284,11 +284,11 @@ describe("Canvas — poignées et contour de sélection gardent une taille ÉCRA
 describe("Canvas — l'artboard reste visuellement distinct de son entourage même sans fond opaque (Tâche 7, spec §7)", () => {
   // Avant cette tâche, un calque de fond `scene.canvas.background === "transparent"` ne posait AUCUN
   // fond ni sur le conteneur intérieur (déjà le cas) NI sur le conteneur EXTÉRIEUR
-  // (`data-testid="studio-canvas"`) : la page (fond `bg-muted/20` posé par editor-shell.tsx) se
-  // voyait alors directement à travers tout le canevas, rendant ses limites indiscernables de son
-  // entourage — l'exact défaut que spec §7 demande de corriger (« l'artboard visuellement distinct de
-  // son entourage »). Ce test verrouille un habillage TOUJOURS présent sur ce conteneur, qu'importe le
-  // fond de la scène.
+  // (`data-testid="studio-canvas"`) : la page (fond `bg-muted/20` posé par editor-shell.tsx à
+  // l'époque — `bg-muted/40` depuis le chantier A Tâche 3) se voyait alors directement à travers tout
+  // le canevas, rendant ses limites indiscernables de son entourage — l'exact défaut que spec §7
+  // demande de corriger (« l'artboard visuellement distinct de son entourage »). Ce test verrouille
+  // un habillage TOUJOURS présent sur ce conteneur, qu'importe le fond de la scène.
   it('le conteneur "studio-canvas" porte un box-shadow qui le distingue de son entourage', () => {
     const html = render(makeScene());
     expect(styleAttr(html, 'data-testid="studio-canvas"')).toContain("box-shadow");
