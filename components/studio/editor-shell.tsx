@@ -489,12 +489,19 @@ function EditorShellInner({
               <CanvasChrome
                 format={template.format}
                 zoom={scale}
-                prefs={{ rulers: prefs.rulers, grid: prefs.grid, safeAreas: prefs.safeAreas }}
+                prefs={{
+                  rulers: prefs.rulers, grid: prefs.grid, safeAreas: prefs.safeAreas,
+                  showBindings: prefs.showBindings,
+                }}
                 onToggleRulers={() => setPrefs((p) => ({ ...p, rulers: !p.rulers }))}
                 onToggleGrid={() => setPrefs((p) => ({ ...p, grid: !p.grid }))}
                 onToggleSafeAreas={() => setPrefs((p) => ({ ...p, safeAreas: !p.safeAreas }))}
+                onToggleBindings={() => setPrefs((p) => ({ ...p, showBindings: !p.showBindings }))}
               >
-                <Canvas scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} scale={scale} />
+                <Canvas
+                  scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} scale={scale}
+                  showBindings={prefs.showBindings}
+                />
               </CanvasChrome>
             </div>
 

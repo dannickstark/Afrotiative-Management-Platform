@@ -88,7 +88,11 @@ function tokensInString(value: string): string[] {
 // Ce qui RESTE ici, spécifique à chaque type, est la dimension NON-couleur : le slot d'image, le slot
 // d'URL du QR, le contenu du texte — trois choses que `colorFieldsOf` ne connaît pas et n'a pas à
 // connaître.
-function usesInLayer(layer: Layer): TokenUse[] {
+// EXPORTÉE (U4 Tâche 6) : components/studio/canvas.tsx#Canvas en a besoin pour dessiner le contour
+// d'accent + l'étiquette de jeton d'un calque lié, quand `EditorPrefs.showBindings` est actif — la
+// même fonction que extractTokens() ci-dessous appelle déjà pour valider la scène entière, pas une
+// copie parallèle qui pourrait diverger.
+export function usesInLayer(layer: Layer): TokenUse[] {
   const where = `calque « ${layer.name || layer.id} »`;
   const uses: TokenUse[] = [];
 

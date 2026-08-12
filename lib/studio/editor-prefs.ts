@@ -29,6 +29,11 @@ export type EditorPrefs = {
   rulers: boolean; // default false
   grid: boolean; // default false
   safeAreas: boolean; // default true
+  // U4 Tâche 6 (spec §5) : « voir les liaisons » — un contour d'accent + une étiquette de jeton sur
+  // chaque calque lié, dans components/studio/canvas.tsx. MÊME idiome que rulers/grid ci-dessus
+  // (booléen, décoratif, mémorisé par utilisateur) : par défaut ÉTEINT, pour la même raison que
+  // rulers/grid le sont — un canevas neuf n'a rien à signaler avant qu'un jeton n'y soit posé.
+  showBindings: boolean; // default false
   zoom: number | "fit"; // default "fit"
   sectionsOpen: Record<string, boolean>; // key: `${layerType}.${sectionId}`
   // Tâche 4 (U1, spec §3) : ids de lib/studio/shape-gallery.ts#ShapeTile récemment insérés depuis le
@@ -46,6 +51,7 @@ export const DEFAULT_PREFS: EditorPrefs = {
   rulers: false,
   grid: false,
   safeAreas: true,
+  showBindings: false,
   zoom: "fit",
   sectionsOpen: {},
   recentShapes: [],
@@ -125,6 +131,7 @@ export function parsePrefs(raw: string | null): EditorPrefs {
     rulers: parseBooleanField(obj.rulers, DEFAULT_PREFS.rulers),
     grid: parseBooleanField(obj.grid, DEFAULT_PREFS.grid),
     safeAreas: parseBooleanField(obj.safeAreas, DEFAULT_PREFS.safeAreas),
+    showBindings: parseBooleanField(obj.showBindings, DEFAULT_PREFS.showBindings),
     zoom: parseZoom(obj.zoom),
     sectionsOpen: parseSectionsOpen(obj.sectionsOpen),
     recentShapes: parseRecentShapes(obj.recentShapes),

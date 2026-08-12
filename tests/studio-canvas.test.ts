@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { afterAll, beforeAll, describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene } from "@/lib/studio/scene";
@@ -7,6 +7,8 @@ import { CanvasChrome, safeAreaDefaultFor } from "@/components/studio/canvas-chr
 import { DEFAULT_PREFS, type EditorPrefs } from "@/lib/studio/editor-prefs";
 import { FORMAT_KEYS, FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
 import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
+import { TOKEN_LABELS } from "@/components/studio/token-picker";
+import { installDom, mount } from "./dom-harness";
 
 // Pas de DOM dans `bun test` (voir tests/use-persisted-filters.test.ts) : on rend le composant en
 // chaîne HTML via react-dom/server, ce qui ne nécessite ni `document` ni `window`, et on inspecte
@@ -488,6 +490,24 @@ describe("CanvasChrome — pastilles flottantes, règles et grille optionnelles 
     expect(buttonFragment(on)).toContain('aria-pressed="true"');
     expect(buttonFragment(off)).toContain('aria-pressed="false"');
   });
+
+  // Tâche 6 (U4, spec §5) : « voir les liaisons » suit le MÊME idiome que règles/grille/zones sûres
+  // juste au-dessus — un bouton data-action dont `aria-pressed` reflète `prefs.showBindings`, dans le
+  // même groupe de bascules de chrome.
+  it('expose un bouton data-action="toggle-bindings" qui reflète prefs.showBindings (Tâche 6, U4, spec §5)', () => {
+    const on = renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, showBindings: true } });
+    const off = renderCanvasChrome({ prefs: { ...DEFAULT_PREFS, showBindings: false } });
+    expect(on).toContain('data-action="toggle-bindings"');
+    expect(off).toContain('data-action="toggle-bindings"');
+    function buttonFragment(html: string): string {
+      const re = /<button[^>]*data-action="toggle-bindings"[^>]*>/;
+      const m = re.exec(html);
+      if (!m) throw new Error('bouton data-action="toggle-bindings" introuvable');
+      return m[0];
+    }
+    expect(buttonFragment(on)).toContain('aria-pressed="true"');
+    expect(buttonFragment(off)).toContain('aria-pressed="false"');
+  });
 });
 
 describe("safeAreaDefaultFor — dérivé de l'orientation du format, jamais une paire codée en dur (Tâche 7, spec §7)", () => {
@@ -906,5 +926,187 @@ describe("Canvas — une forme découpée n'offre pas de rotation (U3 Tâche 3)"
     // Les deux mêmes lectures sur le rectangle : la rotation y est bien PEINTE des deux côtés.
     expect(styleAttr(renderSel("rec"), 'data-layer-id="rec"')).toContain("rotate(30deg)");
     expect(styleAttr(renderSel("rec"), 'data-testid="handles-overlay"')).toContain("rotate(30deg)");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// « Voir les liaisons » (Tâche 6, U4, spec §5) — sous le harnais DOM de U0 (tests/dom-harness.ts) :
+// ce bloc a besoin d'une containment/paint-order RÉELLE (parentElement, ordre des enfants), pas
+// seulement d'une chaîne HTML sérialisée — la même raison que le test des guides d'accrochage de
+// tests/studio-interactions.test.ts. `installDom()` est scopé à CE describe (pas au fichier entier)
+// pour ne pas changer quel chemin les describes voisins de ce fichier exercent (ils restent tous en
+// `renderToStaticMarkup`, sans DOM).
+describe("Canvas — « voir les liaisons » : contour d'accent + étiquette de jeton (Tâche 6, U4, spec §5)", () => {
+  let teardownDom: () => void;
+
+  function boundAndPlainScene(): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 800, height: 600, background: "#000000" },
+      layers: [
+        {
+          id: "bound", name: "Titre lié", visible: true, locked: false,
+          frame: { x: 40, y: 40, w: 300, h: 80 },
+          type: "text", content: "{{article.title}}",
+          font: { family: "Noto Sans", size: 32, weight: 700 },
+          color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+        },
+        {
+          id: "plain", name: "Texte libre", visible: true, locked: false,
+          frame: { x: 40, y: 200, w: 300, h: 80 },
+          type: "text", content: "Un texte tout à fait ordinaire",
+          font: { family: "Noto Sans", size: 32, weight: 700 },
+          color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+        },
+      ],
+    };
+  }
+
+  function layerEl(container: HTMLElement, id: string): HTMLElement {
+    const el = container.querySelector(`[data-layer-id="${id}"]`) as HTMLElement | null;
+    if (!el) throw new Error(`nœud du calque « ${id} » absent du DOM monté`);
+    return el;
+  }
+
+  function outlineEls(container: HTMLElement): HTMLElement[] {
+    return Array.from(container.querySelectorAll('[data-testid="binding-outline"]')) as HTMLElement[];
+  }
+
+  beforeAll(() => { teardownDom = installDom(); });
+  afterAll(() => { teardownDom(); });
+
+  it("ÉTEINT (défaut) : aucun contour de liaison, même sur une scène qui en porte un (anti-vacuité)", async () => {
+    const { container, unmount } = await mount(
+      React.createElement(Canvas, { scene: boundAndPlainScene(), selectedIds: [], dispatch: () => {}, scale: 1 }),
+    );
+    expect(outlineEls(container)).toHaveLength(0);
+    unmount();
+  });
+
+  it("ALLUMÉ : EXACTEMENT un contour + une étiquette, sur le calque LIÉ seulement — jamais sur le calque libre voisin", async () => {
+    const { container, unmount } = await mount(
+      React.createElement(Canvas, {
+        scene: boundAndPlainScene(), selectedIds: [], dispatch: () => {}, scale: 1, showBindings: true,
+      }),
+    );
+
+    const outlines = outlineEls(container);
+    expect(outlines).toHaveLength(1);
+    expect(outlines[0].getAttribute("data-layer-id")).toBe("bound");
+
+    const label = outlines[0].querySelector('[data-testid="binding-label"]') as HTMLElement | null;
+    expect(label).not.toBeNull();
+    expect(label!.textContent).toBe(TOKEN_LABELS["article.title"]);
+
+    // CONTAINMENT + ORDRE DE PEINTURE (leçon de la grille de U1 : présent dans le balisage ≠ visible
+    // au bon endroit) : le contour est un ENFANT DIRECT du MÊME conteneur mis à l'échelle que les
+    // calques et les guides — jamais un frère de l'artboard lui-même, jamais un conteneur séparé — et
+    // il vient APRÈS le calque qu'il annote dans l'ordre du DOM (z-index: auto -> l'ordre du DOM EST
+    // l'ordre de peinture), sans quoi le calque opaque le recouvrirait.
+    const scaledContainer = layerEl(container, "bound").parentElement!;
+    expect(outlines[0].parentElement).toBe(scaledContainer);
+    const kids = Array.from(scaledContainer.children);
+    expect(kids.indexOf(outlines[0])).toBeGreaterThan(kids.indexOf(layerEl(container, "bound")));
+    expect(kids.indexOf(outlines[0])).toBeGreaterThan(kids.indexOf(layerEl(container, "plain")));
+
+    unmount();
+  });
+
+  it("détermine PLUSIEURS calques liés en même temps, chacun sa propre étiquette, stable et non ambiguë", async () => {
+    const scene = boundAndPlainScene();
+    scene.layers.push({
+      id: "swatch", name: "Pastille", visible: true, locked: false,
+      frame: { x: 400, y: 40, w: 60, h: 60 },
+      type: "shape", shape: "rect", fill: "{{category.color}}",
+    });
+
+    const { container, unmount } = await mount(
+      React.createElement(Canvas, { scene, selectedIds: [], dispatch: () => {}, scale: 1, showBindings: true }),
+    );
+
+    const outlines = outlineEls(container);
+    expect(outlines).toHaveLength(2); // "bound" (texte) + "swatch" (couleur) — "plain" en est absent
+    const byLayer = new Map(outlines.map((el) => [el.getAttribute("data-layer-id"), el]));
+    expect(byLayer.get("bound")!.querySelector('[data-testid="binding-label"]')!.textContent)
+      .toBe(TOKEN_LABELS["article.title"]);
+    expect(byLayer.get("swatch")!.querySelector('[data-testid="binding-label"]')!.textContent)
+      .toBe(TOKEN_LABELS["category.color"]);
+
+    unmount();
+  });
+
+  it("CONTINUITÉ : décaler légèrement le calque décale son étiquette d'AUTANT, sans le moindre saut", async () => {
+    function sceneAt(x: number): Scene {
+      const scene = boundAndPlainScene();
+      scene.layers[0] = { ...scene.layers[0], frame: { ...scene.layers[0].frame, x } };
+      return scene;
+    }
+
+    const a = await mount(
+      React.createElement(Canvas, { scene: sceneAt(100), selectedIds: [], dispatch: () => {}, scale: 1, showBindings: true }),
+    );
+    const b = await mount(
+      React.createElement(Canvas, { scene: sceneAt(104), selectedIds: [], dispatch: () => {}, scale: 1, showBindings: true }),
+    );
+
+    const outlineA = outlineEls(a.container)[0];
+    const outlineB = outlineEls(b.container)[0];
+    const dLeft = parseFloat(outlineB.style.left) - parseFloat(outlineA.style.left);
+    expect(dLeft).toBe(4); // le contour suit le cadre EXACTEMENT — pas de seuil, pas d'arrondi surprise
+
+    // L'étiquette elle-même reste ancrée au MÊME point relatif (0,0) du contour dans les deux cas :
+    // c'est CE QUI GARANTIT l'absence de saut — un ancrage qui « choisirait un bord » selon la
+    // position du calque romprait cette égalité au moment où le calque franchirait le seuil.
+    const labelA = outlineA.querySelector('[data-testid="binding-label"]') as HTMLElement;
+    const labelB = outlineB.querySelector('[data-testid="binding-label"]') as HTMLElement;
+    expect(labelA.style.left).toBe(labelB.style.left);
+    expect(labelA.style.top).toBe(labelB.style.top);
+
+    a.unmount();
+    b.unmount();
+  });
+
+  // MUTATION (écho du §0 de U3, « la mathématique du geste doit lire la même rotation que la
+  // peinture ») : une forme DÉCOUPÉE (triangle) ne tourne dans AUCUN des deux moteurs de rendu
+  // (lib/studio/shapes.ts#layerSupportsRotation) — son contour de sélection ne penche déjà pas pour
+  // cette raison (describe précédent de ce fichier). Le contour de LIAISON doit suivre la MÊME
+  // discipline : lire la rotation PEINTE (`rotationFor`, qui retombe sur 0 ici), jamais la rotation
+  // BRUTE du calque (`layer.rotation`, non nulle). Un rectangle témoin — qui, lui, tourne bel et bien
+  // dans les deux moteurs — prouve que l'absence de `rotate()` sur le triangle est bien parce que la
+  // forme ne tourne pas, pas parce que le mécanisme entier serait muet.
+  it("la rotation du contour est la rotation PEINTE, jamais la rotation BRUTE d'une forme découpée", async () => {
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 800, height: 400, background: "#000000" },
+      layers: [
+        {
+          id: "tri", name: "Triangle lié", visible: true, locked: false,
+          frame: { x: 0, y: 0, w: 200, h: 200 }, rotation: 45,
+          type: "shape", shape: "triangle", fill: "{{category.color}}",
+        },
+        {
+          id: "rec", name: "Rectangle lié", visible: true, locked: false,
+          frame: { x: 300, y: 0, w: 200, h: 200 }, rotation: 30,
+          type: "shape", shape: "rect", fill: "{{category.color}}",
+        },
+      ],
+    };
+
+    const { container, unmount } = await mount(
+      React.createElement(Canvas, { scene, selectedIds: [], dispatch: () => {}, scale: 1, showBindings: true }),
+    );
+
+    const outlines = outlineEls(container);
+    const tri = outlines.find((el) => el.getAttribute("data-layer-id") === "tri")!;
+    const rec = outlines.find((el) => el.getAttribute("data-layer-id") === "rec")!;
+
+    // La forme découpée : AUCUNE rotation peinte — pas même `rotate(0deg)` : un mutant qui lirait
+    // `layer.rotation` brut (45°) au lieu de `rotationFor(layer)` ferait rougir CETTE assertion.
+    expect(tri.style.transform).toBe("");
+    // Le témoin : le rectangle, lui, tourne bel et bien — la même surcouche n'est donc pas
+    // structurellement muette sur la rotation, seulement fidèle à ce qui est réellement peint.
+    expect(rec.style.transform).toBe("rotate(30deg)");
+
+    unmount();
   });
 });

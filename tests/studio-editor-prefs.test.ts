@@ -17,6 +17,7 @@ describe("editor prefs — pure, never throws", () => {
   it("round-trips a full prefs object", () => {
     const p = {
       openPanel: "texte" as const, lastOpenPanel: "images" as const, rulers: true, grid: true, safeAreas: false,
+      showBindings: true,
       zoom: 0.5, sectionsOpen: { "text.ombre": false }, recentShapes: ["qr", "rect"],
     };
     expect(parsePrefs(serializePrefs(p))).toEqual(p);
@@ -49,6 +50,26 @@ describe("editor prefs — pure, never throws", () => {
     expect(DEFAULT_PREFS.grid).toBe(false);
     expect(DEFAULT_PREFS.safeAreas).toBe(true);
     expect(DEFAULT_PREFS.zoom).toBe("fit");
+  });
+
+  // U4 Tâche 6 (spec §5) : « voir les liaisons » — même discipline « par champ, jamais en bloc » que
+  // rulers/grid/safeAreas ci-dessus.
+  describe("showBindings — même idiome que rulers/grid (U4 Tâche 6)", () => {
+    it("défaut : ÉTEINT", () => {
+      expect(DEFAULT_PREFS.showBindings).toBe(false);
+    });
+
+    it("une valeur persistée `true` est restaurée", () => {
+      const raw = JSON.stringify({ showBindings: true });
+      expect(parsePrefs(raw).showBindings).toBe(true);
+    });
+
+    it("une valeur corrompue retombe sur son propre défaut (false), sans faire tomber le reste de l'objet", () => {
+      const raw = JSON.stringify({ showBindings: "oui", rulers: true });
+      const parsed = parsePrefs(raw);
+      expect(parsed.showBindings).toBe(false);
+      expect(parsed.rulers).toBe(true); // le reste de l'objet survit intact
+    });
   });
 
   it("keeps an unknown sectionsOpen key rather than dropping it", () => {
