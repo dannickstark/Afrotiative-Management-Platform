@@ -12,11 +12,23 @@ import { readFileSync } from "node:fs";
 
 const NEEDED_KEYS = ["DATABASE_URL", "DIRECT_URL", "BETTER_AUTH_SECRET", "BETTER_AUTH_URL"];
 
+// TEST_LANE=pure is set ONLY by scripts/test-fast.ts for its parallel lane of DB-free files. In that
+// lane we must NOT restore DATABASE_URL/DIRECT_URL from .env.local and must NOT run the reap below:
+// several DB-free shards run CONCURRENTLY, and letting each open a pool + reap the shared Neon DB is
+// the exact cross-shard `pipeline_runs` contention the serial rule exists to avoid. Skipping the DB
+// creds also makes the lane self-policing — a DB-touching file misfiled into the pure lane fails fast
+// with a clear connection error instead of silently contending. Default (`bun test`, CI) never sets
+// TEST_LANE, so this branch is inert and the preload is byte-identical to before.
+const PURE_LANE = process.env.TEST_LANE === "pure";
+const DB_KEYS = new Set(["DATABASE_URL", "DIRECT_URL"]);
+
 try {
   const raw = readFileSync(".env.local", "utf8");
   for (const line of raw.split("\n")) {
     const m = line.match(/^\s*([\w.-]+)\s*=\s*"?([^"\n]*)"?\s*$/);
-    if (m && NEEDED_KEYS.includes(m[1]) && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
+    if (m && NEEDED_KEYS.includes(m[1]) && !(PURE_LANE && DB_KEYS.has(m[1])) && process.env[m[1]] === undefined) {
+      process.env[m[1]] = m[2];
+    }
   }
 } catch {
   // .env.local absent — DB-touching tests will fail with a clear connection error; others still run.
