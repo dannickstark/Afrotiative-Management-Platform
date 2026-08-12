@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PageHeader } from "@/components/shell/page-header";
 import { IntervalPicker } from "@/components/settings/interval-picker";
 import { formatDate } from "@/lib/format";
 import {
@@ -283,8 +284,8 @@ export function SocialChannelForm({
     // (app/(app)/settings/social/[channel]/page.tsx, which also wraps <ChannelSetupGuide> in the
     // SAME max-w-2xl) — this root only needs its OWN vertical rhythm between its cards, not a
     // second, redundant max-w-2xl.
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">{label}</h1>
+    <div className="space-y-6">
+      <PageHeader title={label} />
 
       <Card>
         <CardHeader>

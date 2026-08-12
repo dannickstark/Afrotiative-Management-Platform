@@ -129,7 +129,7 @@ export function NotificationsBell({ unreadCount, alerts }: { unreadCount: number
                       <p className="text-[11px] text-muted-foreground">{relativeDate(alert.createdAt)}</p>
                     </div>
                     {!alert.read && (
-                      <span className="mt-1.5 size-2 shrink-0 rounded-full bg-[var(--accent-brand)]" aria-hidden />
+                      <span className="mt-1.5 size-2 shrink-0 rounded-full bg-accent-brand" aria-hidden />
                     )}
                   </Link>
                 </li>

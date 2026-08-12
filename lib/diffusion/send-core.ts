@@ -79,6 +79,15 @@ export async function sendToChannelCore(input: SendToChannelInput): Promise<Send
   const renderStore = process.env.NODE_ENV === "test" ? input.renderStore : undefined;
   const fetchImpl = process.env.NODE_ENV === "test" ? input.fetchImpl : undefined;
 
+  // 0. Available? Channels without a real adapter (StubChannel) must never reach send() — that
+  //    would fabricate a "sent" distribution row with a fake externalId (plan 001's whole point).
+  //    The UI already disables the button for these (computeSendDisabledReason), but this is the
+  //    server-side backstop: reachable directly via the server action, or via the scheduler if an
+  //    operator enables autoEnabled for one of these channels.
+  if (!socialChannel.available) {
+    return { ok: false, message: `Canal non disponible : aucun adaptateur réel.` };
+  }
+
   // 1. Published?
   const [article] = await db.select({ status: articles.status }).from(articles).where(eq(articles.id, articleId));
   if (!article) return { ok: false, message: "Article introuvable." };

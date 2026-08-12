@@ -14,7 +14,7 @@ import {
 // still pass if only one of the checks were actually wired up.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("computeSendDisabledReason — les quatre cas requis", () => {
-  const allGood = { isPublished: true, channelEnabled: true, r2Configured: true, canSend: true, channelLabel: "Facebook" };
+  const allGood = { isPublished: true, channelEnabled: true, r2Configured: true, canSend: true, channelLabel: "Facebook", channelAvailable: true };
 
   it("autorisé quand les quatre conditions sont réunies", () => {
     expect(computeSendDisabledReason(allGood)).toBeNull();
@@ -68,6 +68,23 @@ describe("computeSendDisabledReason — les quatre cas requis", () => {
       computeSendDisabledReason({ ...allGood, alreadySent: true }),
     ]);
     expect(reasons.size).toBe(5);
+  });
+
+  // Plan 001: whatsapp/x/tiktok still route to StubChannel (no real adapter) — the panel must
+  // refuse the send instead of reporting a fake "sent".
+  it("refuses a channel with no real adapter, with a visible reason", () => {
+    expect(computeSendDisabledReason({ channelAvailable: false, isPublished: true, channelEnabled: true, r2Configured: true, canSend: true, channelLabel: "WhatsApp" }))
+      .toBe("La diffusion automatique sur WhatsApp n'est pas encore disponible.");
+  });
+
+  it("allows an available, published, enabled channel", () => {
+    expect(computeSendDisabledReason({ channelAvailable: true, isPublished: true, channelEnabled: true, r2Configured: true, canSend: true, channelLabel: "Facebook" }))
+      .toBeNull();
+  });
+
+  it("permission reason still wins over unavailable", () => {
+    expect(computeSendDisabledReason({ channelAvailable: false, isPublished: true, channelEnabled: true, r2Configured: true, canSend: false, channelLabel: "WhatsApp" }))
+      .toBe("Vous n'avez pas la permission de diffuser sur les réseaux sociaux.");
   });
 });
 

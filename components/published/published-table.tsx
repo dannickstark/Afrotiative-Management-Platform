@@ -14,7 +14,7 @@ export function PublishedTable({ rows, filtered }: { rows: PublishedRow[]; filte
     );
   }
   return (
-    <div className="rounded-lg border">
+    <div className="overflow-x-auto rounded-lg border">
       <Table>
         <TableHeader>
           <TableRow>

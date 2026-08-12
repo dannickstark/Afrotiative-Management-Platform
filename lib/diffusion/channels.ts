@@ -47,6 +47,8 @@ export interface SocialChannel {
   // getDecryptedCredentials(channel) (e.g. Task 2's lib/diffusion/meta/facebook.ts expects
   // `credentials.pageId` / `credentials.pageAccessToken`).
   readonly credentialFields: readonly { key: string; label: string }[];
+  // available:false = no real adapter yet (StubChannel); UI must refuse the send — see plan 001
+  readonly available: boolean;
   send(input: SendInput): Promise<SendResult>;
 }
 
@@ -95,6 +97,7 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
       { key: "pageId", label: "Identifiant de la Page Facebook (Page ID)" },
       { key: "pageAccessToken", label: "Jeton d’accès de la Page (Page Access Token)" },
     ],
+    available: true,
     // D2 — real adapter (lib/diffusion/meta/facebook.ts). A fresh FacebookChannel per call (no
     // shared GraphClient state to worry about) — same "new X().method(input)" shape StubChannel
     // used, so this swap is the ONLY thing that changed for this channel (this file's own header
@@ -112,6 +115,7 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
       { key: "igUserId", label: "Identifiant utilisateur Instagram (IG User ID)" },
       { key: "pageAccessToken", label: "Jeton d’accès (le même que celui de la Page Facebook liée)" },
     ],
+    available: true,
     // D3 — real adapter (lib/diffusion/meta/instagram.ts): create container → poll status_code →
     // media_publish. Same "new X().method(input)" swap as Facebook above — nothing else here changed.
     send: (input) => new InstagramChannel().send(input),
@@ -120,12 +124,16 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
     key: "whatsapp", label: CHANNEL_LABELS.whatsapp, context: "social_post", format: "wa_square",
     captionLimits: { min: 1, max: 1024, default: 300 },
     credentialFields: [], // no credential needed — see this file's header comment
+    // available:false = no real adapter yet (StubChannel); UI must refuse the send — see plan 001
+    available: false,
     send: (input) => new StubChannel("whatsapp").send(input),
   },
   x: {
     key: "x", label: CHANNEL_LABELS.x, context: "social_post", format: "x_landscape",
     captionLimits: { min: 1, max: 280, default: 260 },
     credentialFields: [], // X is deferred (roadmap "Décisions D2 → D7") — no adapter/credentials yet
+    // available:false = no real adapter yet (StubChannel); UI must refuse the send — see plan 001
+    available: false,
     send: (input) => new StubChannel("x").send(input),
   },
   tiktok: {
@@ -136,6 +144,8 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
     format: "story",
     captionLimits: { min: 1, max: 2200, default: 300 },
     credentialFields: [], // TikTok is deferred (roadmap "Décisions D2 → D7") — no adapter/credentials yet
+    // available:false = no real adapter yet (StubChannel); UI must refuse the send — see plan 001
+    available: false,
     send: (input) => new StubChannel("tiktok").send(input),
   },
   linkedin: {
@@ -151,6 +161,7 @@ export const SOCIAL_CHANNELS: Readonly<Record<Channel, SocialChannel>> = {
       { key: "organizationUrn", label: "URN de l'organisation (Page entreprise)" },
       { key: "accessToken", label: "Jeton d'accès" },
     ],
+    available: true,
     // D7 — real adapter (lib/diffusion/linkedin/linkedin.ts): download the render → initialize the
     // image upload → PUT the bytes → poll until AVAILABLE → POST the post. Same "new X().method
     // (input)" swap as Facebook/Instagram above — nothing else here changed.

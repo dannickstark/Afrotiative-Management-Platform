@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/shell/page-header";
 import { testIntegration } from "@/lib/actions/integration-actions";
 import { formatDate, pipelineStatusLabel } from "@/lib/format";
 import type { getIntegrationStatus } from "@/lib/queries/settings";
@@ -35,8 +36,8 @@ const INTEGRATIONS: { name: IntegrationName; label: string; description: string 
 // Jina/Firecrawl key-presence. No token-spending LLM completion is ever triggered from here.
 export function IntegrationCards({ status }: { status: IntegrationStatus }) {
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Intégrations</h1>
+    <div className="space-y-6">
+      <PageHeader title="Intégrations" />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {INTEGRATIONS.map((i) => (
           <IntegrationCard key={i.name} name={i.name} label={i.label} description={i.description}

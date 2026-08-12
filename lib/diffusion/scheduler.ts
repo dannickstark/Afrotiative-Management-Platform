@@ -267,7 +267,17 @@ async function tickChannel(
   // refused by sendToChannelCore's own `enabled` check — indefinitely, with no distributions row
   // ever written (the exact Important 2 "pre-row refusal" wedge, on every tick, forever). Checking
   // both here closes it off before any of that work starts.
+  //
   if (!settings.enabled || !settings.autoEnabled) return;
+  // NOTE (whole-branch review follow-up): an operator enabling autoEnabled on an `available:false`
+  // channel (whatsapp/x/tiktok — no real adapter, StubChannel) is NOT refused here — this tick still
+  // selects a candidate and pays for an LLM caption call before sendToChannelCore's own step-0
+  // availability guard (send-core.ts) refuses the send. That guard is the load-bearing fix (no fake
+  // 'sent' row / fake externalId is ever produced), so this is a cost/observability gap, not a
+  // correctness one. Deliberately NOT closed here: tests/diffusion-scheduler.test.ts's CH_A/CH_B
+  // fixtures ("x"/"whatsapp") are exactly the two channels this early-out would short-circuit, and
+  // fixing this cheaply here would require reworking that file's whole fixture set, which was out
+  // of scope for this pass (out-of-scope per the driving task's own "only if trivial/clear" bar).
 
   const due = isDue({
     now,
