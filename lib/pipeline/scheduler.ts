@@ -1,4 +1,5 @@
 import { Cron } from "croner";
+import { SCHEDULE_TZ } from "@/lib/pipeline/schedule-expr";
 
 // Module-singleton scheduled job (SP2). One process, one job — matches the single-instance
 // Railway deployment; the pipeline_runs_one_running interlock (hasRunningRun()) is the backstop
@@ -113,8 +114,8 @@ export async function reloadSchedule(): Promise<void> {
     // the DB-level backstop against overlap with a manual/external run too (suspenders).
     // catch: true — croner swallows+logs anything triggerScheduledRun could still throw, so a
     // failed fire can never crash the timer (triggerScheduledRun already catches its own errors).
-    job = new Cron(scheduleCron, { protect: true, catch: true }, triggerScheduledRun);
-    console.log(`[scheduler] planification active: ${scheduleCron} (prochaine: ${job.nextRun()?.toISOString()})`);
+    job = new Cron(scheduleCron, { timezone: SCHEDULE_TZ, protect: true, catch: true }, triggerScheduledRun);
+    console.log(`[scheduler] planification active: ${scheduleCron} (${SCHEDULE_TZ}, prochaine: ${job.nextRun()?.toISOString()})`);
   } catch (e) {
     console.error(`[scheduler] cron invalide « ${scheduleCron} » — planification désactivée: ${(e as Error).message}`);
   }
