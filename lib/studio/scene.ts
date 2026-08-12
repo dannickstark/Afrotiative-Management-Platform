@@ -12,10 +12,20 @@ const frenchZodMessages = frLocale().localeError;
 // #RGB, #RRGGBB ou #RRGGBBAA. Les jetons ({{category.color}}) sont autorisés partout où une
 // couleur est attendue — c'est tokens.ts qui vérifiera qu'ils sont légaux dans ce contexte.
 const TOKEN_RE = /^\{\{\s*[a-zA-Z][\w.]*\s*\}\}$/;
+
+// U4 Tâche 1 (spike) — LE registre des nœuds « couleur » du schéma. `hexColor` est le SEUL nœud
+// couleur ; toute couleur de la scène est CE nœud partagé (overlay, ombre, texte, contour, arrêts de
+// dégradé, remplissage, bordure, fg/bg d'un QR, fond du canevas). Le marquer une fois ici suffit :
+// le registre de Zod v4 indexe par IDENTITÉ de nœud, et cette identité survit aux enveloppes que le
+// schéma pose par-dessus (`.optional()` → def.innerType, `z.array` → def.element, `z.union` /
+// `z.discriminatedUnion` → def.options, `z.object` → def.shape) — c'est ce que la sonde a prouvé.
+// `.refine()` N'enveloppe PAS : en Zod v4 il ajoute un check au MÊME nœud string, donc le marqueur
+// posé après lui tient. lib/studio reste sans base : `z.registry` est du pur cœur Zod, client-safe.
+export const COLOR_REGISTRY = z.registry<{ color: true }>();
 const hexColor = z.string().refine(
   (v) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v) || v === "transparent" || TOKEN_RE.test(v),
   { message: "Couleur invalide (attendu #RGB, #RRGGBB, #RRGGBBAA, « transparent » ou un jeton)" },
-);
+).register(COLOR_REGISTRY, { color: true });
 
 const frame = z.object({
   x: z.number(), y: z.number(),
@@ -230,6 +240,61 @@ export const sceneSchema = z.object({
   // liste de calques exprime déjà exactement cela.
   layers: z.array(layer),
 });
+
+// U4 Tâche 1 (spike) — LE marcheur candidat pour la Tâche 2. Il descend un nœud de schéma EN
+// PARALLÈLE de sa valeur (il faut la valeur pour résoudre une union — quel membre a matché — et une
+// array — combien d'arrêts — et une option — présente ou absente) et rend le CHEMIN de chaque nœud
+// que `COLOR_REGISTRY` reconnaît. Les enveloppes traversées : `optional`/`nullable` (def.innerType),
+// `object` (def.shape), `array` (def.element), `union`/`discriminatedUnion` (def.options, membre
+// choisi par safeParse). `z.string` refine-é est une FEUILLE : le registre l'y arrête. On lit
+// `._zod.def`, la surface d'introspection du cœur Zod v4 (typée `any` : c'est de l'interne Zod).
+function collectColorPaths(node: unknown, value: unknown, path: (string | number)[], out: (string | number)[][]): void {
+  const def = (node as { _zod?: { def?: Record<string, unknown> } })?._zod?.def;
+  if (!def) return;
+  if (COLOR_REGISTRY.has(node as z.core.$ZodType)) { out.push(path); return; }
+  switch (def.type) {
+    case "optional":
+    case "nullable":
+      if (value === undefined || value === null) return;
+      collectColorPaths(def.innerType, value, path, out);
+      return;
+    case "object":
+      for (const [key, child] of Object.entries(def.shape as Record<string, unknown>)) {
+        collectColorPaths(child, (value as Record<string, unknown>)?.[key], [...path, key], out);
+      }
+      return;
+    case "array":
+      if (Array.isArray(value)) {
+        value.forEach((item, i) => collectColorPaths(def.element, item, [...path, i], out));
+      }
+      return;
+    case "union": // couvre z.union ET z.discriminatedUnion (même def.type en Zod v4)
+      for (const opt of def.options as z.core.$ZodType[]) {
+        if ((opt as unknown as { safeParse(v: unknown): { success: boolean } }).safeParse(value).success) {
+          collectColorPaths(opt, value, path, out);
+          return;
+        }
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+/** Les chemins des champs couleur d'UN calque (ex. `["color","shadow.color","stroke.color"]`),
+ *  énumérés depuis le SCHÉMA — pas d'une liste écrite à la main. Produit de la Tâche 1 pour la 2. */
+export function colorFieldPaths(layerValue: Layer): string[] {
+  const out: (string | number)[][] = [];
+  collectColorPaths(layer, layerValue, [], out);
+  return out.map((p) => p.join("."));
+}
+
+/** Idem au niveau scène — prouve que `canvas.background` s'énumère aussi (même marcheur). */
+export function sceneColorFieldPaths(scene: Scene): string[] {
+  const out: (string | number)[][] = [];
+  collectColorPaths(sceneSchema, scene, [], out);
+  return out.map((p) => p.join("."));
+}
 
 export type Frame = z.infer<typeof frame>;
 export type ImageSource = z.infer<typeof imageSource>;
