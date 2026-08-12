@@ -90,6 +90,55 @@ describe("shapes.ts — garde-fou de complétude sur SHAPE_KINDS", () => {
     expect(Object.keys(SHAPE_DESCRIPTORS).sort()).toEqual([...SHAPE_KINDS].sort());
   });
 
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE FINALE U3, IMPORTANT 2 — `Record<ShapeKind, …>` ÉPINGLE LES CLÉS, PAS LES VALEURS.
+  //
+  // Le typechecker exige une entrée par forme (c'est ce qui rend une description manquante
+  // impossible), et le test ci-dessus le redouble à l'exécution. Mais RIEN ne disait QUELLE forme
+  // porte QUELS drapeaux. Mesuré : poser `thin: true` sur `rect` — un seul jeton — survivait à 484
+  // tests verts sur 9 fichiers, tout en faisant insérer la tuile Rectangle de la galerie en
+  // `{w: 236.25, h: 5}` au lieu d'un carré. C'est la famille de défaut de U2 mot pour mot : chaque
+  // propriété assertie tient en chaque point testé pendant que la fonction saute ENTRE les points.
+  // Les blocs plus bas vérifient la COHÉRENCE DES CAMPS (« une forme découpée ne tourne pas », « les
+  // deux camps sont non vides ») — jamais l'APPARTENANCE elle-même.
+  //
+  // Le remède est celui de `PIXEL_PROOFS` (tests/studio-shape-render.test.ts) : UNE table littérale
+  // de valeurs attendues, comparée clé par clé. Elle n'est pas dérivée de `SHAPE_DESCRIPTORS` — ce
+  // serait une tautologie ; elle est écrite à la main, et c'est le point.
+  //
+  // MUTATIONS VÉRIFIÉES, une par drapeau et sur trois formes différentes : `rect.thin = true`,
+  // `line.radiusApplies = false`, `star.clipped = false`, `ellipse.radiusApplies = true`,
+  // `hexagon.thin = true` — chacune fait rougir ce bloc.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  const DRAPEAUX_ATTENDUS: Record<ShapeKind, { label: string; clipped: boolean; radiusApplies: boolean; thin: boolean }> = {
+    // `rect` et `line` sont les SEULES à qui un rayon veut dire quelque chose (coins / extrémités) ;
+    // `line` est la SEULE barre fine ; les cinq polygones sont les SEULES découpées.
+    rect:     { label: "Rectangle",         clipped: false, radiusApplies: true,  thin: false },
+    ellipse:  { label: "Ellipse",           clipped: false, radiusApplies: false, thin: false },
+    line:     { label: "Ligne",             clipped: false, radiusApplies: true,  thin: true  },
+    triangle: { label: "Triangle",          clipped: true,  radiusApplies: false, thin: false },
+    star:     { label: "Étoile",            clipped: true,  radiusApplies: false, thin: false },
+    hexagon:  { label: "Hexagone",          clipped: true,  radiusApplies: false, thin: false },
+    arrow:    { label: "Flèche",            clipped: true,  radiusApplies: false, thin: false },
+    bubble:   { label: "Bulle de dialogue", clipped: true,  radiusApplies: false, thin: false },
+  };
+
+  it("la table de valeurs attendues couvre EXACTEMENT les formes du schéma", () => {
+    // Même garde d'exécution que pour SHAPE_DESCRIPTORS : `bun test` ne typecheck pas, donc une forme
+    // ajoutée sans ligne attendue ici doit rougir aussi.
+    expect(Object.keys(DRAPEAUX_ATTENDUS).sort()).toEqual([...SHAPE_KINDS].sort());
+  });
+
+  for (const kind of SHAPE_KINDS) {
+    it(`« ${kind} » : ses drapeaux sont EXACTEMENT ceux attendus, pas seulement cohérents entre eux`, () => {
+      const d = descriptorFor(kind);
+      const attendu = DRAPEAUX_ATTENDUS[kind];
+      // Comparaison d'OBJET, jamais drapeau par drapeau : un `expect(d.thin).toBe(attendu.thin)` isolé
+      // laisserait passer un drapeau qu'on aurait oublié de comparer le jour où un quatrième arrive.
+      expect({ label: d.label, clipped: d.clipped, radiusApplies: d.radiusApplies, thin: d.thin }).toEqual(attendu);
+    });
+  }
+
   it("une forme SANS description LÈVE — jamais un repli silencieux sur un rectangle", () => {
     // Le repli silencieux est le scénario que §0 décrit : le designer insère une ellipse, l'export
     // contient un rectangle, et rien n'échoue. Ici, ça lève, en français, en nommant la forme.
