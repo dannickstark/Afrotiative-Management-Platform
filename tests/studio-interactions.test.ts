@@ -2,7 +2,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:
 import React from "react";
 import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harness";
 import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
-import { useEditorKeymap } from "@/hooks/use-editor-keymap";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
@@ -1466,33 +1465,16 @@ async function mountShellAttached(scene: Scene) {
   };
 }
 
-/** Monte le VRAI `Canvas` derrière le VRAI `editorReducer` ET le VRAI `useEditorKeymap` — SANS le
- * reste d'`EditorShell` (rail, panneaux, `PropertyPanel`). Sert UNIQUEMENT au test « Échap » plus
- * bas : `PropertyPanel` pose un `<Select>` (base-ui) dès qu'un calque est sélectionné, et ce
- * `<Select>`, MÊME FERMÉ, s'avère intercepter « Échap » au niveau `document` — `stopPropagation()`
- * avant que l'événement n'atteigne l'écouteur `window` de ce fichier, constaté en instrumentant les
- * trois phases (capture, cible, bouillonnement) d'un événement `Escape` réel une fois qu'un calque
- * est sélectionné dans le VRAI `EditorShell`. C'est un comportement de la bibliothèque de composants
- * (base-ui `Select`), PRÉ-EXISTANT à cette tâche et hors de son périmètre (voir task-1-report.md) —
- * ce harnais allégé, RÉEL sur les trois autres points (`window`, `useEditorKeymap`, `editorReducer`),
- * contourne la seule pièce non pertinente ici (le chrome complet du panneau de propriétés) pour
- * prouver « Échap efface la sélection » sans dépendre d'un tiers qui n'a rien à voir avec le keymap. */
-async function mountKeymapCanvas(scene: Scene, initialSelection: string[]) {
-  const initial: EditorState = { ...initEditorState(scene), selectedIds: initialSelection };
-  const box: { state: EditorState } = { state: initial };
-
-  function Host() {
-    const [state, dispatch] = React.useReducer(editorReducer, initial);
-    useEditorKeymap(state, dispatch);
-    box.state = state;
-    return React.createElement(CanvasC, {
-      scene: state.scene, selectedIds: state.selectedIds, dispatch, scale: 1,
-    });
-  }
-
-  const { container, unmount } = await mount(React.createElement(Host));
-  document.body.appendChild(container);
-  return { box, cleanup: () => { unmount(); container.remove(); } };
+function sceneWithOneShapeLayer(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 1080, height: 1080, background: "#111111" },
+    layers: [{
+      id: "sh", name: "Forme", visible: true, locked: false,
+      frame: { x: 10, y: 10, w: 200, h: 200 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    }],
+  };
 }
 
 describe("EditorShell — le keymap central câble ⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches sur `window` (Chantier B, Tâche 1)", () => {
@@ -1515,14 +1497,64 @@ describe("EditorShell — le keymap central câble ⌘Z/⌘⇧Z/⌘A/Échap/Supp
     }
   });
 
-  it("Échap RÉEL efface la sélection (harnais Canvas+réducteur+`useEditorKeymap`, voir mountKeymapCanvas)", async () => {
-    const { box, cleanup } = await mountKeymapCanvas(shellSceneTwoLayers(), ["t", "u"]);
+  // CRITIQUE (revue post-livraison) — c'est CE test, sur le VRAI EditorShell (avec son VRAI
+  // PropertyPanel), qui manquait au premier jet : celui-ci utilisait un harnais Canvas+réducteur SANS
+  // PropertyPanel qui MASQUAIT le défaut réel. Vérifié RED avant le correctif (phase de capture +
+  // garde de popup, hooks/use-editor-keymap.ts + lib/studio/keymap.ts) : avec l'ancien écouteur en
+  // bouillonnement, ce test-ci échouait — `shellLayerEl(container, "t").getAttribute("data-selected")`
+  // restait `"true"` après Échap, un `<SelectField>` du panneau de propriétés (posé dès qu'un calque
+  // est sélectionné, quel que soit son type) interceptant l'événement avant `window`.
+  it("Échap RÉEL efface la sélection — à travers le VRAI EditorShell (PropertyPanel COMPRIS)", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
     try {
-      expect(box.state.selectedIds).toEqual(["t", "u"]);
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
 
       await pressKey({ key: "Escape" });
 
-      expect(box.state.selectedIds).toEqual([]);
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // LA GARDE DE POPUP (revue post-livraison) — le corollaire du passage en capture ci-dessus : un
+  // `<Select>` RÉELLEMENT ouvert (pas seulement monté fermé, comme le test précédent) doit encore
+  // pouvoir se fermer sur Échap SANS que le keymap central ne désélectionne le calque en même temps.
+  //
+  // `it.skipIf(!popoverEffectsLive)` — MÊME garde que les seams Images/TokenPicker/SelectField en
+  // tête de fichier (Seam 1 et suivants) : ouvrir RÉELLEMENT un `<Select>` (le tiroir inspecteur en
+  // `Sheet`, PUIS le popup du `SelectField` lui-même) dépend du même `useIsoLayoutEffect` qu'eux —
+  // sans `--isolate`, un fichier voisin peut l'avoir figé en no-op AVANT ce fichier-ci, et le
+  // déclencheur `[data-field="shape"]` n'atteint alors jamais le DOM (`bun run test:pure`, qui
+  // agrège tous les fichiers dans le même processus, l'a montré rouge — voir task-1-report.md).
+  it.skipIf(!popoverEffectsLive)("Échap avec un VRAI <Select> OUVERT ferme le POPUP au lieu de désélectionner (garde de popup)", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBe("true");
+
+      // Cherché dans `document`, jamais `container` : sous 1280px (largeur par défaut de jsdom, ici),
+      // le panneau de propriétés vit dans le tiroir inspecteur (`Sheet`, base-ui `Dialog`), PORTALÉ
+      // dans `document.body` — un `container.querySelector` ne le trouve pas à cette largeur.
+      const trigger = document.querySelector('[data-field="shape"]') as HTMLButtonElement | null;
+      expect(trigger).not.toBeNull();
+      await click(trigger!);
+      await flush();
+      expect(trigger!.getAttribute("aria-expanded")).toBe("true");
+      // Le popup est RÉELLEMENT ouvert selon le signal EXACT que `lib/studio/keymap.ts#isPopupOpen`
+      // regarde (`aria-haspopup` + `aria-expanded="true"` sur le déclencheur) — pas `[data-open]`, qui
+      // se serait AUSSI révélé vrai avant ce clic (sections repliables ouvertes par défaut, tiroir
+      // inspecteur déjà ouvert) et n'aurait donc rien prouvé de spécifique à CE popup.
+      expect(document.querySelector('[aria-haspopup][aria-expanded="true"]')).not.toBeNull();
+
+      await pressKey({ key: "Escape" });
+
+      // Le POPUP s'est fermé (base-ui a bien reçu l'événement — notre écouteur, en capture, s'est
+      // effacé devant lui via la garde de popup)…
+      expect(trigger!.getAttribute("aria-expanded")).toBe("false");
+      // …et la sélection du calque N'A PAS été effacée par le keymap central au même geste.
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBe("true");
     } finally {
       cleanup();
     }

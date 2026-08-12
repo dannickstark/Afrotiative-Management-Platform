@@ -1,14 +1,23 @@
 import { describe, expect, it } from "bun:test";
-import { resolveShortcut, isEditingText, type EditorCommand } from "@/lib/studio/keymap";
+import { resolveShortcut, isEditingText, isPopupOpen, type EditorCommand } from "@/lib/studio/keymap";
 
 // tests/studio-keymap.test.ts — Chantier B, Tâche 1 : `resolveShortcut` en PUR (aucun DOM, aucun
 // harnais) — juste des littéraux, sur le modèle de tests/studio-mode.test.ts pour
 // `isModeToggleShortcut`. Le câblage RÉEL (fenêtre, focus DOM réel) est couvert séparément par
 // tests/studio-interactions.test.ts (voir sa section « EditorShell — keymap central »).
+//
+// `isPopupOpen` (revue post-livraison, voir task-1-report.md) : ajoutée après qu'un test EN CONDITIONS
+// RÉELLES (VRAI EditorShell, VRAI PropertyPanel) a montré qu'Échap n'atteignait jamais l'écouteur
+// `window` du keymap — un `<Select>` base-ui du panneau de propriétés l'interceptait en premier dès
+// qu'un calque est sélectionné. Le correctif (hooks/use-editor-keymap.ts en phase de CAPTURE)
+// introduit un risque symétrique : sans cette garde, c'est NOTRE écouteur qui intercepterait Échap ET
+// les flèches AVANT un popup ouvert, cassant la navigation clavier d'un `<Select>` ouvert.
 
-const SEL: { hasSelection: boolean; isEditingText: boolean } = { hasSelection: true, isEditingText: false };
+const SEL: { hasSelection: boolean; isEditingText: boolean; isPopupOpen: boolean } =
+  { hasSelection: true, isEditingText: false, isPopupOpen: false };
 const NO_SEL = { ...SEL, hasSelection: false };
 const EDITING = { ...SEL, isEditingText: true };
+const POPUP_OPEN = { ...SEL, isPopupOpen: true };
 
 describe("resolveShortcut — chaque chord vers sa commande", () => {
   it("⌘Z -> undo", () => {
@@ -85,6 +94,36 @@ describe("resolveShortcut — LA GARDE DE FOCUS (ctx.isEditingText) coupe TOUT r
   });
 });
 
+describe("resolveShortcut — LA GARDE DE POPUP (ctx.isPopupOpen) coupe TOUT raccourci géré ici", () => {
+  const CHORDS: Array<{ nom: string; event: Parameters<typeof resolveShortcut>[0] }> = [
+    { nom: "⌘Z", event: { key: "z", metaKey: true } },
+    { nom: "⌘⇧Z", event: { key: "z", metaKey: true, shiftKey: true } },
+    { nom: "⌘A", event: { key: "a", metaKey: true } },
+    { nom: "Échap", event: { key: "Escape" } },
+    { nom: "Suppr", event: { key: "Delete" } },
+    { nom: "flèche", event: { key: "ArrowLeft" } },
+  ];
+
+  for (const { nom, event } of CHORDS) {
+    it(`${nom} pendant qu'un popup (Select/Popover) est ouvert -> null`, () => {
+      expect(resolveShortcut(event, POPUP_OPEN)).toBeNull();
+    });
+  }
+
+  // Anti-vacuité, même recette que la garde de focus ci-dessus.
+  it("anti-vacuité : Échap guardé par un popup ouvert -> null, Échap NON guardé -> deselect", () => {
+    const event = { key: "Escape" };
+    expect(resolveShortcut(event, POPUP_OPEN)).toBeNull();
+    expect(resolveShortcut(event, SEL)).toEqual({ kind: "deselect" });
+  });
+
+  it("anti-vacuité : une flèche guardée par un popup ouvert -> null (protège la navigation du popup), NON guardée -> nudge", () => {
+    const event = { key: "ArrowDown" };
+    expect(resolveShortcut(event, POPUP_OPEN)).toBeNull();
+    expect(resolveShortcut(event, SEL)).toEqual({ kind: "nudge", dx: 0, dy: 1 });
+  });
+});
+
 describe("resolveShortcut — anti-vacuité : deux chords distincts -> deux commandes distinctes", () => {
   it("⌘Z et ⌘A ne se confondent pas", () => {
     const undoCmd = resolveShortcut({ key: "z", metaKey: true }, SEL);
@@ -116,6 +155,20 @@ describe("isEditingText — input/textarea/select/contentEditable", () => {
 
   it("un BUTTON -> false (un déclencheur focusable n'est pas un champ de saisie)", () => {
     expect(isEditingText({ tagName: "BUTTON" } as unknown as EventTarget)).toBe(false);
+  });
+});
+
+describe("isPopupOpen — signal DOM `data-open`/`role=\"listbox\"`/`role=\"menu\"`", () => {
+  it("aucun élément ouvert -> false", () => {
+    expect(isPopupOpen({ querySelector: () => null })).toBe(false);
+  });
+
+  it("un élément correspond (Select/Popover ouvert, porté dans document.body) -> true", () => {
+    expect(isPopupOpen({ querySelector: () => ({}) })).toBe(true);
+  });
+
+  it("root null (jamais en pratique — document existe toujours) -> false, sans lever", () => {
+    expect(isPopupOpen(null)).toBe(false);
   });
 });
 
