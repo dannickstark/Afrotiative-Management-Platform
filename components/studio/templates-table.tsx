@@ -4,19 +4,22 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Archive, ArchiveRestore, Copy, Loader2, MoreHorizontal, Pencil, Plus } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import {
+  LayoutGrid, List, Loader2, Plus,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useTemplatesView } from "@/hooks/use-templates-view";
+import { TemplatesGallery } from "@/components/studio/templates-gallery";
+import {
+  CONTEXT_LABEL, StateBadge, TemplateRowMenu, dateFormatter, formatLabel, groupTemplatesByContext,
+} from "@/components/studio/templates-shared";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RoleGate } from "@/components/role-gate";
 // Imports directs (PAS le barrel @/lib/studio) : ce barrel tire @/db (le pool `pg`) dans le graphe
@@ -31,14 +34,6 @@ import { TEMPLATE_CONTEXTS, CHANNELS, CHANNEL_LABELS, type TemplateContext, type
 import type { TemplateRow, CategoryOption } from "@/lib/queries/studio";
 import { createTemplate, duplicateTemplate, archiveTemplate, renameTemplate } from "@/lib/actions/studio-actions";
 
-const CONTEXT_LABEL: Record<TemplateContext, string> = {
-  article_image: "Image à la une",
-  social_post: "Publication sociale",
-  quote_card: "Carte citation",
-  newsletter_header: "Bandeau newsletter",
-  recap_card: "Carte récap",
-};
-
 // Portée affichée : canal, catégorie, les deux, ou « Défaut » si ni l'un ni l'autre — c'est
 // littéralement le gabarit appliqué à tout le contexte, sans restriction. Un canal inconnu de
 // CHANNEL_LABELS (ex. une valeur "test-*" injectée par une suite de tests) s'affiche tel quel :
@@ -50,28 +45,10 @@ function scopeLabel(row: TemplateRow): string {
   return parts.length > 0 ? parts.join(" · ") : "Défaut";
 }
 
-// État affiché : archivé prime sur tout, sinon brouillon (jamais publié) / publié à jour /
-// modifications non publiées — exactement le triplet du §1 du design ("brouillon / publié /
-// modifications non publiées"), l'archivage s'y ajoutant comme un quatrième état orthogonal.
-function StateBadge({ row }: { row: TemplateRow }) {
-  if (row.archived) return <Badge variant="outline">Archivé</Badge>;
-  if (row.publishedVersion === null) return <Badge variant="secondary">Brouillon</Badge>;
-  if (row.hasUnpublishedChanges) return <Badge variant="secondary">Modifications non publiées</Badge>;
-  return <Badge>Publié</Badge>;
-}
-
 function formatPresetLabel(key: FormatKey): string {
   const preset = FORMAT_PRESETS[key];
   return `${preset.label} (${preset.width}×${preset.height})`;
 }
-
-function formatLabel(row: TemplateRow): string {
-  const preset = (FORMAT_PRESETS as Record<string, { label: string }>)[row.format];
-  const label = preset?.label ?? row.format;
-  return `${label} (${row.width}×${row.height})`;
-}
-
-const dateFormatter = new Intl.DateTimeFormat("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
 
 const NO_CHANNEL = "__aucun__";
 const NO_CATEGORY = "__aucune__";
@@ -333,45 +310,10 @@ function RenameTemplateDialog({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Menu par ligne : dupliquer / renommer / archiver-désarchiver — les trois actions CRUD qui
-// n'avaient, avant ce correctif, aucun point d'entrée écran. Gardé par RoleGate(template:manage —
-// admin/éditeur, lib/rbac.ts) : défense en profondeur, comme components/queue/row-actions.tsx,
-// même si le RBAC serveur (requirePermission dans lib/actions/studio-actions.ts) reste la vraie
-// barrière — un journaliste qui appellerait l'action directement se heurterait de toute façon à un
-// rejet, RoleGate n'évite ici que de lui montrer un bouton inutile.
-function TemplateRowMenu({
-  row, isPending, onDuplicate, onArchiveToggle, onRequestRename,
-}: {
-  row: TemplateRow;
-  isPending: boolean;
-  onDuplicate: (row: TemplateRow) => void;
-  onArchiveToggle: (row: TemplateRow) => void;
-  onRequestRename: (row: TemplateRow) => void;
-}) {
-  return (
-    <RoleGate allow={["admin", "editor"]}>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={<Button variant="ghost" size="icon-sm" aria-label={`Actions pour ${row.name}`} data-action="row-menu" />}
-        >
-          <MoreHorizontal aria-hidden />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={isPending} onClick={() => onRequestRename(row)} data-action="rename">
-            <Pencil aria-hidden />Renommer
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={isPending} onClick={() => onDuplicate(row)} data-action="duplicate">
-            <Copy aria-hidden />Dupliquer
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={isPending} onClick={() => onArchiveToggle(row)} data-action="archive-toggle">
-            {row.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-            {row.archived ? "Désarchiver" : "Archiver"}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </RoleGate>
-  );
-}
+// TemplateRowMenu (menu par ligne : dupliquer / renommer / archiver-désarchiver) vit désormais dans
+// components/studio/templates-shared.tsx (Chantier A, Tâche 5), importé plus haut — voir le
+// commentaire d'en-tête de ce fichier pour pourquoi (templates-gallery.tsx pose CE MÊME menu sur
+// chaque carte, spec §4 : « the same actions the table row has »).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // `showHeader` (Tâche 2, U1 spec §3) : par défaut `true`, comportement inchangé pour /studio
@@ -388,10 +330,16 @@ export function TemplatesTable({
   const router = useRouter();
   const [renameTarget, setRenameTarget] = useState<TemplateRow | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Chantier A, Tâche 5 (spec §4) — bascule grille/tableau, RÉSERVÉE à la page complète /studio
+  // (`showHeader === true`, voir le commentaire ci-dessus). Le panneau Modèles du rail
+  // (`showHeader === false`, components/studio/panels/modeles-panel.tsx) reste TOUJOURS le tableau,
+  // sans bascule visible : ~212-360px de large (panel-host.tsx) est trop étroit pour une grille de
+  // vignettes rendues, et la préférence persistée ci-dessous est PARTAGÉE par navigateur (comme
+  // EditorPrefs) — le panneau n'a donc aucune raison d'en lire ni d'en écrire une valeur qu'il ne
+  // sait pas afficher.
+  const [view, setView] = useTemplatesView();
 
-  const groups = TEMPLATE_CONTEXTS
-    .map((context) => ({ context, rows: templates.filter((t) => t.context === context) }))
-    .filter((g) => g.rows.length > 0);
+  const groups = groupTemplatesByContext(templates);
 
   function handleDuplicate(row: TemplateRow) {
     startTransition(async () => {
@@ -429,9 +377,33 @@ export function TemplatesTable({
       {showHeader && (
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-semibold">Gabarits</h1>
-          <RoleGate allow={["admin", "editor"]}>
-            <CreateTemplateDialog categories={categories} />
-          </RoleGate>
+          <div className="flex items-center gap-2">
+            {/* Deux boutons distincts (pas un seul bouton bascule) : chacun pose une valeur EXPLICITE
+                (setView("grid") / setView("table")), jamais un XOR aveugle sur l'état courant — l'état
+                actif (aria-pressed + variant "secondary") reste lisible sans avoir à connaître l'état
+                précédent. data-testid EXPORTÉS (Chantier A, Tâche 5) : tests/studio-templates-gallery.
+                test.ts prouve, via lib/studio/templates-view-pref.ts, que la valeur choisie persiste
+                réellement (parseTemplatesView(serializeTemplatesView(v)) === v). */}
+            <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="Affichage des gabarits">
+              <Button
+                type="button" size="icon-sm" variant={view === "grid" ? "secondary" : "ghost"}
+                aria-pressed={view === "grid"} title="Vue grille" data-testid="templates-view-grid"
+                onClick={() => setView("grid")}
+              >
+                <LayoutGrid aria-hidden />
+              </Button>
+              <Button
+                type="button" size="icon-sm" variant={view === "table" ? "secondary" : "ghost"}
+                aria-pressed={view === "table"} title="Vue tableau" data-testid="templates-view-table"
+                onClick={() => setView("table")}
+              >
+                <List aria-hidden />
+              </Button>
+            </div>
+            <RoleGate allow={["admin", "editor"]}>
+              <CreateTemplateDialog categories={categories} />
+            </RoleGate>
+          </div>
         </div>
       )}
 
@@ -441,6 +413,12 @@ export function TemplatesTable({
             Aucun gabarit pour l&rsquo;instant.
           </CardContent>
         </Card>
+      ) : showHeader && view === "grid" ? (
+        <TemplatesGallery
+          templates={templates} isPending={isPending}
+          onDuplicate={handleDuplicate} onArchiveToggle={handleArchiveToggle}
+          onRequestRename={setRenameTarget}
+        />
       ) : (
         groups.map((group) => (
           <Card key={group.context}>

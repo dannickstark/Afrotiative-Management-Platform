@@ -81,6 +81,7 @@
 //   tests/studio-preview.test.ts  → (recap_card, "test-preview-actions", null)
 //                                    (social_post, "test-preview-fail", null)
 //                                    (social_post, "test-preview-overflow", null)
+//   tests/studio-templates-gallery.test.ts → (recap_card, "test-templates-gallery-thumb", null)
 //   tests/studio-manual.test.ts   → (recap_card, null, <categoryId frais>) pour le gabarit publié du
 //                                    chemin heureux — sans risque de collision (categoryId frais à
 //                                    chaque exécution, comme (article_image, null, <categoryId>)
