@@ -146,3 +146,79 @@ export function zoomPresetScale(
     Math.min(viewport.width / selectionBounds.w, viewport.height / selectionBounds.h) * SELECTION_FILL_RATIO;
   return clampZoom(absoluteTarget / fitScale);
 }
+
+// ── Chantier B, Tâche 4 : pan (Espace-glisser) + zoom molette centré curseur ────────────────────
+// Reste dans le MÊME module PUR — aucun DOM/React ici non plus (voir l'en-tête de fichier) :
+// `wheelZoomScale`/`zoomAtCursor` transforment des nombres. Le câblage réel (l'écouteur `wheel`, les
+// écouteurs `pointerdown`/`pointermove` du pan, la lecture/écriture de `scrollLeft`/`scrollTop`) vit
+// dans components/studio/editor-shell.tsx#canvasWrapRef — PAS ici, et PAS dans canvas.tsx (qui ne
+// porte pas le conteneur `overflow-auto`, voir son propre commentaire de tête).
+
+/** La sensibilité de la molette ⌘/Ctrl (zoom) — une réponse EXPONENTIELLE de `deltaY`, pas un pas
+ * fixe par événement, pour rester continue avec l'AMPLITUDE du geste (un pincement trackpad envoie
+ * plusieurs `wheel` par seconde avec un `deltaY` fractionnaire ; une molette de souris envoie de gros
+ * pas discrets d'un coup) — la MÊME exigence de continuité que `zoomAtCursor` documente plus bas,
+ * appliquée cette fois à la conversion delta -> échelle plutôt qu'à la conversion échelle -> défilement. */
+const WHEEL_ZOOM_SENSITIVITY = 0.002;
+
+/** La prochaine échelle ABSOLUE (PAS un facteur relatif à `fitScale` — l'appelant fait cette
+ * conversion lui-même, exactement comme il le fait déjà pour `zoomPresetScale`) pour un
+ * `WheelEvent.deltaY` donné, à partir de l'échelle courante. `deltaY` négatif (molette « vers le
+ * haut »/pincement « écarter ») AGRANDIT, d'où le signe moins à l'exposant. Une entrée non finie
+ * renvoie `prevScale` INCHANGÉE (même discipline défensive que `clampZoom` ci-dessus) : un `deltaY`
+ * corrompu ne doit jamais propager de NaN dans `scale`. */
+export function wheelZoomScale(prevScale: number, deltaY: number): number {
+  if (!Number.isFinite(prevScale) || !Number.isFinite(deltaY)) return prevScale;
+  return prevScale * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY);
+}
+
+export interface ZoomAtCursorPoint {
+  x: number;
+  y: number;
+}
+
+export interface ZoomAtCursorResult {
+  scale: number;
+  scroll: ZoomAtCursorPoint;
+}
+
+/**
+ * La fonction de CHOIX du zoom-molette-centré-curseur (brief Tâche 4) : quel `scroll` du conteneur
+ * `overflow-auto` (editor-shell.tsx#canvasWrapRef) garde le POINT DU CANEVAS sous le curseur
+ * IDENTIQUE avant et après un changement d'échelle.
+ *
+ * `cursor` : la position du pointeur en px ÉCRAN, relative au coin haut-gauche du conteneur — PAS
+ * `clientX`/`clientY` bruts, l'appelant retranche déjà `getBoundingClientRect()`. `scroll` : le
+ * `scrollLeft`/`scrollTop` COURANT du conteneur, AVANT ce changement d'échelle.
+ *
+ * Dérivation : le point du canevas sous le curseur est `canvasPt = (scroll + cursor) / prevScale` —
+ * les pixels ÉCRAN entre le bord du contenu et ce point, divisés par l'échelle courante, donnent sa
+ * coordonnée en pixels GABARIT. Pour le garder sous le MÊME curseur une fois passé à `nextScale`, il
+ * faut `(newScroll + cursor) / nextScale == canvasPt`, d'où `newScroll = canvasPt * nextScale -
+ * cursor`.
+ *
+ * `viewport` fait partie de la signature (brief) mais n'entre dans AUCUN calcul ici : le point fixe
+ * ne dépend que du curseur et du défilement courant, jamais de la taille du conteneur — le
+ * navigateur borne lui-même `scrollLeft`/`scrollTop` à la plage valide au moment de l'affectation, et
+ * ajouter ici une borne dérivée de `viewport` romprait le point fixe EXACT pour tout appel qui la
+ * franchirait, sans qu'aucun appelant actuel n'en ait besoin (voir task-4-report.md).
+ */
+export function zoomAtCursor(
+  prevScale: number,
+  nextScale: number,
+  cursor: ZoomAtCursorPoint,
+  scroll: ZoomAtCursorPoint,
+  _viewport: ZoomViewport,
+): ZoomAtCursorResult {
+  const canvasPt = {
+    x: (scroll.x + cursor.x) / prevScale,
+    y: (scroll.y + cursor.y) / prevScale,
+  };
+  return {
+    scale: nextScale,
+    scroll: {
+      x: canvasPt.x * nextScale - cursor.x,
+      y: canvasPt.y * nextScale - cursor.y,
+    },
+  };
+}

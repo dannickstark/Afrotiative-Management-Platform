@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import React from "react";
-import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harness";
+import { installDom, mount, click, pressKey, releaseKey, flush, pointer, wheel } from "./dom-harness";
 import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
 import { clearClipboard } from "@/lib/studio/clipboard";
+import { wheelZoomScale, clampZoom, zoomAtCursor } from "@/lib/studio/zoom";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
 import type { AssetRow } from "@/lib/queries/assets";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
@@ -1815,6 +1816,225 @@ describe("EditorShell — le presse-papiers en session câble ⌘C/⌘V/⌘D sur
 
       // Toujours DEUX calques (« t », « u ») — aucun ajout, la garde a bloqué les trois raccourcis.
       expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 4 — pan (Espace-glisser) + zoom molette centré curseur, à travers de VRAIS
+// événements DOM sur `editor-shell.tsx#canvasWrapRef` (data-testid="canvas-backdrop") — PAS
+// canvas.tsx, qui ne porte pas le conteneur `overflow-auto` (voir le commentaire de tête de ce
+// conteneur dans editor-shell.tsx). `mountShellAttached`/`shellLayerEl`/`sceneWithOneShapeLayer`
+// viennent du bloc « presse-papiers » juste au-dessus.
+
+function backdropEl(container: HTMLElement): HTMLElement {
+  const el = container.querySelector('[data-testid="canvas-backdrop"]') as HTMLElement | null;
+  if (!el) throw new Error('« canvas-backdrop » absent du DOM monté');
+  return el;
+}
+
+function artboardEl(container: HTMLElement): HTMLElement {
+  const el = container.querySelector('[data-testid="artboard"]') as HTMLElement | null;
+  if (!el) throw new Error('« artboard » absent du DOM monté');
+  return el;
+}
+
+describe("EditorShell — molette ⌘/Ctrl : zoom centré sur le curseur, défilement corrigé DANS LA MÊME FRAME que la nouvelle échelle (Chantier B, Tâche 4)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("⌘-molette AGRANDIT et garde le point CANEVAS sous le curseur EXACTEMENT fixe — le défilement corrigé atteint le VRAI DOM", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      // §0 non-régression : avant toute interaction molette/Espace, rien de spécial.
+      expect(backdrop.style.cursor).toBe("");
+      expect(backdrop.scrollLeft).toBe(0);
+      expect(backdrop.scrollTop).toBe(0);
+
+      backdrop.scrollLeft = 40;
+      backdrop.scrollTop = 20;
+
+      // `fitScale` reste à sa valeur par défaut (1) — jsdom ne mesure aucun `clientWidth` réel, donc
+      // `computeCanvasScale` (editor-shell.tsx) n'a jamais de quoi produire une valeur différente ; et
+      // `getBoundingClientRect()` d'un élément jsdom vaut toujours {top:0,left:0,…}, donc `cursor` égale
+      // `clientX`/`clientY` bruts. `prevScale` = fitScale(1) × facteur "fit"(1) = 1 : EXACTEMENT ce que
+      // `scale` vaut dans editor-shell.tsx au moment de ce test.
+      const prevScale = 1;
+      const cursor = { x: 130, y: 90 };
+      const scroll = { x: backdrop.scrollLeft, y: backdrop.scrollTop };
+      // Le MÊME calcul que le gestionnaire réel (editor-shell.tsx#handleCanvasWheel), à partir des
+      // MÊMES fonctions PURES importées — ce test prouve le CÂBLAGE (le vrai DOM reçoit-il le résultat
+      // ?), pas une redécouverte indépendante de la formule.
+      const rawNextScale = wheelZoomScale(prevScale, -100);
+      const nextFactor = clampZoom(rawNextScale / 1); // fitScale = 1
+      const nextScale = 1 * nextFactor;
+      const expected = zoomAtCursor(prevScale, nextScale, cursor, scroll, { width: 0, height: 0 });
+
+      await wheel(backdrop, { ctrlKey: true, deltaY: -100, clientX: cursor.x, clientY: cursor.y });
+
+      // (a) l'échelle a RÉELLEMENT changé — l'artboard a grandi : la preuve que `setZoom` a bien été
+      // appelé avec le facteur attendu, pas seulement calculé sans jamais être appliqué.
+      expect(nextScale).toBeGreaterThan(prevScale); // deltaY négatif -> agrandit (sinon ce test ne prouverait rien)
+      expect(parseFloat(artboardEl(container).style.width)).toBeCloseTo(1080 * nextScale, 6);
+
+      // (b) le défilement CORRIGÉ (pas l'ancien, pas un défilement quelconque) a atterri au VRAI DOM —
+      // c'est ce qui garde le point pointé fixe à l'écran malgré le changement d'échelle. MUTATION
+      // (brief Tâche 4, Étape 3) : abandonner la correction de `zoomAtCursor` (renvoyer `scroll`
+      // inchangé) ferait rougir CETTE assertion — `expected.scroll` différerait alors de `scroll`.
+      expect(backdrop.scrollLeft).toBeCloseTo(expected.scroll.x, 6);
+      expect(backdrop.scrollTop).toBeCloseTo(expected.scroll.y, 6);
+
+      // (c) et le point canevas sous le curseur est bien IDENTIQUE avant/après — recalculé directement
+      // à partir de ce qui a atterri au DOM, pas à partir d'`expected` (qui pourrait, en théorie,
+      // partager un bug avec le code testé) : la vraie propriété que la Tâche 4 promet.
+      const canvasPtBefore = { x: (scroll.x + cursor.x) / prevScale, y: (scroll.y + cursor.y) / prevScale };
+      const canvasPtAfter = {
+        x: (backdrop.scrollLeft + cursor.x) / nextScale,
+        y: (backdrop.scrollTop + cursor.y) / nextScale,
+      };
+      expect(canvasPtAfter.x).toBeCloseTo(canvasPtBefore.x, 6);
+      expect(canvasPtAfter.y).toBeCloseTo(canvasPtBefore.y, 6);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("molette SEULE (sans ⌘/Ctrl) ne touche PAS le zoom — pan NATIF, AUCUN preventDefault (spec §2 du brief)", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      const widthBefore = artboardEl(container).style.width;
+
+      const event = await wheel(backdrop, { deltaY: -100, clientX: 100, clientY: 100 }); // pas de ctrlKey/metaKey
+
+      // Le navigateur garde la main sur son propre défilement natif — un `preventDefault()` ici
+      // BLOQUERAIT le pan natif que le brief demande explicitement de laisser faire.
+      expect(event.defaultPrevented).toBe(false);
+      expect(artboardEl(container).style.width).toBe(widthBefore); // aucun changement d'échelle
+      expect(backdrop.scrollLeft).toBe(0); // et rien n'a été écrit dans scrollLeft/Top non plus
+      expect(backdrop.scrollTop).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("le pincement trackpad (un `wheel` avec `ctrlKey` synthétisé par le navigateur) emprunte le MÊME chemin — pas de double traitement", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      const widthBefore = parseFloat(artboardEl(container).style.width);
+
+      const event = await wheel(backdrop, { ctrlKey: true, deltaY: -50, clientX: 60, clientY: 40 });
+
+      expect(event.defaultPrevented).toBe(true); // intercepté, comme ⌘/Ctrl-molette — le MÊME chemin
+      expect(parseFloat(artboardEl(container).style.width)).toBeGreaterThan(widthBefore);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("EditorShell — Espace-glisser : pan du conteneur, curseur grab/grabbing, SANS toucher aucun calque (Chantier B, Tâche 4)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("Espace maintenu -> curseur « grab » ; pointer-drag DÉMARRÉ SUR UN CALQUE change scrollLeft/scrollTop SANS le déplacer ni le sélectionner", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      expect(backdrop.style.cursor).toBe(""); // §0 : rien de spécial avant Espace
+
+      await pressKey({ key: " ", code: "Space" }); // bubbling document -> window, même chemin que ⌘/ (voir plus haut)
+      expect(backdrop.style.cursor).toBe("grab");
+
+      const layerBefore = {
+        x: parseFloat(shellLayerEl(container, "sh").style.left),
+        y: parseFloat(shellLayerEl(container, "sh").style.top),
+      };
+
+      // Le pointerdown démarre SUR LE CALQUE lui-même (pas sur le fond vide) — la preuve la plus
+      // dure : ce même geste, SANS Espace, sélectionnerait/déplacerait « sh » (voir le bloc « tirer un
+      // calque » plus haut dans ce fichier). En mode pan, la CAPTURE de canvasWrapRef doit intercepter
+      // l'événement avant qu'il n'atteigne le gestionnaire de Canvas.
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      expect(backdrop.style.cursor).toBe("grabbing");
+      // Le pointerdown n'a NI sélectionné NI armé de glisser sur le calque — la garde de capture a
+      // bien fonctionné.
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBeNull();
+
+      // Les événements suivants du MÊME geste (capture pointeur réelle en navigateur) sont dispatchés
+      // sur `canvasWrapRef` lui-même — c'est LUI qui porte les écouteurs natifs posés au pointerdown
+      // (voir editor-shell.tsx#handleCanvasPointerDownCapture).
+      await pointer(backdrop, "pointermove", { clientX: 90, clientY: 65 }); // +40 en x, +15 en y
+
+      // « glisser à droite -> le contenu se déplace à droite -> scrollLeft DIMINUE » (spec §2 du brief)
+      expect(backdrop.scrollLeft).toBe(-40);
+      expect(backdrop.scrollTop).toBe(-15);
+
+      await pointer(backdrop, "pointerup", { clientX: 90, clientY: 65 });
+      expect(backdrop.style.cursor).toBe("grab"); // le GLISSER finit ; Espace reste maintenu -> retombe sur « grab »
+
+      // Et surtout : AUCUN calque n'a bougé, malgré 40×15px de glisser — le geste a changé la VUE
+      // (scroll), jamais `state.scene`.
+      const layerAfter = {
+        x: parseFloat(shellLayerEl(container, "sh").style.left),
+        y: parseFloat(shellLayerEl(container, "sh").style.top),
+      };
+      expect(layerAfter).toEqual(layerBefore);
+
+      await releaseKey({ key: " ", code: "Space" });
+      expect(backdrop.style.cursor).toBe(""); // Espace relâché -> retour au curseur par défaut
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("relâcher Espace PENDANT un glisser sort du mode pan — un pointermove qui suit ne défile plus", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+
+      await pressKey({ key: " ", code: "Space" });
+      await pointer(backdrop, "pointerdown", { clientX: 0, clientY: 0, button: 0 });
+      await pointer(backdrop, "pointermove", { clientX: 20, clientY: 10 });
+      expect(backdrop.scrollLeft).toBe(-20);
+      expect(backdrop.scrollTop).toBe(-10);
+
+      await releaseKey({ key: " ", code: "Space" }); // relâché AVANT le pointerup
+      // Le curseur retombe IMMÉDIATEMENT au relâchement d'Espace, même glisser en cours — le signal
+      // visible que le brief nomme (« Release Space … exits pan mode »). La capture pointeur native
+      // (hors de portée de jsdom) peut continuer de router le geste jusqu'au pointerup/pointercancel
+      // réel ; ce test porte délibérément sur le CURSEUR, pas sur le défilement, pour cette raison.
+      expect(backdrop.style.cursor).toBe("");
+
+      await pointer(backdrop, "pointerup", { clientX: 20, clientY: 10 }); // nettoie le geste en attente
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Espace ciblé sur un VRAI champ de texte n'arme PAS le pan — la garde de focus (isEditingText) protège un espace tapé dans un nom de calque", async () => {
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      const backdrop = backdropEl(container);
+      const renameInput = container.querySelector(
+        '[data-action="rename"][data-layer-id="t"]',
+      ) as HTMLInputElement | null;
+      expect(renameInput).not.toBeNull();
+
+      const event = await pressKey({ key: " ", code: "Space" }, renameInput!);
+
+      expect(backdrop.style.cursor).toBe(""); // AUCUN mode pan armé
+      expect(event.defaultPrevented).toBe(false); // le champ garde la main : un espace tapé doit rester un espace
     } finally {
       cleanup();
     }

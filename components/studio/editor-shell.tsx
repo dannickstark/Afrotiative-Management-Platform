@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -42,7 +42,10 @@ import {
   RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
 } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
-import { clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS } from "@/lib/studio/zoom";
+import {
+  clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS, wheelZoomScale, zoomAtCursor,
+} from "@/lib/studio/zoom";
+import { isEditingText, isPopupOpen } from "@/lib/studio/keymap";
 import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
@@ -417,6 +420,116 @@ function EditorShellInner({
     setZoom(zoomPresetScale("selection", fitScale, bounds, viewport));
   }
 
+  // ── Chantier B, Tâche 4 : pan (Espace-glisser) + zoom molette centré curseur ──────────────────
+  // Le PIÈGE (voir task-4-brief.md) : `setZoom` déclenche un rendu qui change `transform: scale()`
+  // (canvas.tsx). Poser `canvasWrapRef.current.scrollLeft/Top` DANS le gestionnaire `wheel`, AVANT ce
+  // rendu, appliquerait le nouveau défilement contre l'ANCIENNE taille de contenu — le point visé
+  // SAUTERAIT à l'écran. `pendingWheelScrollRef` porte donc la correction calculée par
+  // `zoomAtCursor` (lib/studio/zoom.ts, PURE) jusqu'au `useLayoutEffect` ci-dessous, qui ne
+  // s'exécute QU'APRÈS que React a peint la nouvelle `scale` — même échelle et défilement corrigé
+  // dans la MÊME frame, jamais deux peintures successives.
+  const pendingWheelScrollRef = useRef<{ x: number; y: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const pending = pendingWheelScrollRef.current;
+    if (!pending) return; // un changement de `scale` par un AUTRE chemin (slot, ⇧0/1/2…) n'a rien en attente — no-op
+    pendingWheelScrollRef.current = null;
+    const el = canvasWrapRef.current;
+    if (!el) return;
+    el.scrollLeft = pending.x;
+    el.scrollTop = pending.y;
+  }, [scale]);
+
+  // Molette ⌘/Ctrl (spec §2 du brief) : zoom centré sur le curseur. Molette SEULE : PAS de
+  // `preventDefault` — le défilement NATIF du conteneur `overflow-auto` fait déjà le pan, rien à
+  // câbler ici pour ce cas. Le pincement trackpad synthétise un `wheel` avec `ctrlKey` (spec
+  // navigateur) : le MÊME chemin ⌘/Ctrl le couvre déjà, pas de second gestionnaire.
+  function handleCanvasWheel(e: React.WheelEvent<HTMLDivElement>) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const el = canvasWrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cursor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const prevScale = scale;
+    const rawNextScale = wheelZoomScale(prevScale, e.deltaY);
+    const nextFactor = clampZoom(rawNextScale / fitScale);
+    const nextScale = fitScale * nextFactor;
+    const scroll = { x: el.scrollLeft, y: el.scrollTop };
+    const viewport = { width: el.clientWidth, height: el.clientHeight };
+    const corrected = zoomAtCursor(prevScale, nextScale, cursor, scroll, viewport);
+    pendingWheelScrollRef.current = corrected.scroll;
+    setZoom(nextFactor);
+  }
+
+  // `Espace`-glisser pan (spec §2 du brief). `spacePanning` : Espace physiquement maintenu (garde de
+  // focus ci-dessous respectée — un designer qui tape un espace dans un champ de saisie doit obtenir
+  // un espace, pas armer le pan). `dragging` : un GLISSER de pan est EN COURS (curseur « grabbing »
+  // plutôt que « grab » — la même distinction qu'un simple survol vs. un geste actif).
+  const [spacePanning, setSpacePanning] = useState(false);
+  const [panDragging, setPanDragging] = useState(false);
+  // Le NETTOYAGE d'un glisser EN COURS (retire les écouteurs pointermove/up/cancel, voir
+  // `handleCanvasPointerDownCapture` ci-dessous) — porté par une ref pour que `onKeyUp` puisse y
+  // accéder : « Release Space … exits pan mode » (brief §2) vaut aussi pour un glisser DÉJÀ armé, pas
+  // seulement pour le curseur au repos. `null` tant qu'aucun glisser n'est en cours.
+  const endPanDragRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      if (isEditingText(e.target) || isPopupOpen(document)) return; // même garde que le keymap central
+      e.preventDefault(); // Espace fait nativement défiler la PAGE quand rien n'a le focus — évite le conflit
+      setSpacePanning(true);
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      setSpacePanning(false);
+      endPanDragRef.current?.(); // un glisser EN COURS s'arrête AUSSI — pas seulement le curseur
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  // Posé en CAPTURE (pas en bouillonnement) sur `canvasWrapRef` : en mode pan, ce pointerdown doit
+  // atteindre CE gestionnaire AVANT le gestionnaire propre de `Canvas` (sélection/glisser un calque,
+  // canvas.tsx) — `stopPropagation()` ici empêche ensuite ce même événement de redescendre vers lui.
+  // Sans ce court-circuit, Espace-glisser sur un calque le déplacerait ou changerait la sélection en
+  // plus de faire défiler le conteneur — deux gestes différents armés par le même pointerdown.
+  function handleCanvasPointerDownCapture(e: React.PointerEvent<HTMLDivElement>) {
+    if (!spacePanning || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startScrollLeft = target.scrollLeft;
+    const startScrollTop = target.scrollTop;
+    target.setPointerCapture?.(e.pointerId);
+    setPanDragging(true);
+
+    // « glisser à droite -> le contenu se déplace à droite -> scrollLeft DIMINUE » (spec §2 du
+    // brief) : le contenu suit le curseur, donc le défilement va dans le sens OPPOSÉ au geste.
+    function handleMove(ev: PointerEvent) {
+      target.scrollLeft = startScrollLeft - (ev.clientX - startX);
+      target.scrollTop = startScrollTop - (ev.clientY - startY);
+    }
+    function endDrag() {
+      target.removeEventListener("pointermove", handleMove);
+      target.removeEventListener("pointerup", endDrag);
+      target.removeEventListener("pointercancel", endDrag);
+      endPanDragRef.current = null;
+      setPanDragging(false);
+    }
+    target.addEventListener("pointermove", handleMove);
+    target.addEventListener("pointerup", endDrag);
+    target.addEventListener("pointercancel", endDrag);
+    endPanDragRef.current = endDrag;
+  }
+
   // Chantier B, Tâche 1 — le KEYMAP CENTRAL (⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches, avec la garde de focus
   // de lib/studio/keymap.ts). Monté ICI, sur `state`/`dispatch` déjà en place, plutôt que dans un
   // composant enfant : c'est ce qui lui donne accès à la sélection ET à la scène ENTIÈRES pour
@@ -789,6 +902,14 @@ function EditorShellInner({
                 "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900",
                 layout !== "full" && "min-w-[240px]",
               )}
+              // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur) + Espace-glisser (pan) — voir les
+              // handlers ci-dessus. `style.cursor` reflète l'état PAN (grab en attente, grabbing en
+              // cours) exactement comme n'importe quelle autre affordance de curseur du canevas
+              // (poignées de redimensionnement, canvas.tsx#HANDLE_CURSOR) ; `undefined` en dehors du
+              // mode pan laisse le curseur PAR DÉFAUT du navigateur, §0 non-régression.
+              style={{ cursor: panDragging ? "grabbing" : spacePanning ? "grab" : undefined }}
+              onWheel={handleCanvasWheel}
+              onPointerDownCapture={handleCanvasPointerDownCapture}
             >
               <CanvasChrome
                 format={template.format}

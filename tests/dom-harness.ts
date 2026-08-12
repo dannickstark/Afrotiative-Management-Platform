@@ -218,6 +218,19 @@ export async function pressKey(init: KeyboardEventInit, target: EventTarget = do
   return event;
 }
 
+/** Le pendant « relâchement » de `pressKey` ci-dessus — un VRAI KeyboardEvent "keyup", même défaut de
+ * cible (`document`, bubbling jusqu'à `window`). Ajoutée pour Chantier B, Tâche 4 (Espace-glisser) :
+ * `pressKey` seul ne peut exercer QUE l'armement d'un raccourci maintenu (garde de focus, prévention
+ * du défaut) — un geste « maintenir Espace, glisser, RELÂCHER Espace » a aussi besoin du relâchement
+ * lui-même comme VRAI événement DOM, pas d'un appel direct au `setState` qui l'observerait. */
+export async function releaseKey(init: KeyboardEventInit, target: EventTarget = document): Promise<KeyboardEvent> {
+  const event = new KeyboardEvent("keyup", { bubbles: true, cancelable: true, ...init });
+  await act(async () => {
+    target.dispatchEvent(event);
+  });
+  return event;
+}
+
 /** Dispatche un VRAI événement pointeur (pointerdown/pointermove/pointerup/pointercancel) qui bubble
  * depuis `el`, enveloppé dans `act`. jsdom 30 ne construit pas `PointerEvent` de façon fiable (l'API
  * Pointer Events n'y est pas implémentée) — on utilise donc `MouseEvent` avec le NOM de type
@@ -237,6 +250,18 @@ export async function pointer(
     const event = new MouseEvent(type, { bubbles: true, cancelable: true, view: window, ...init });
     el.dispatchEvent(event);
   });
+}
+
+/** Dispatche un VRAI `WheelEvent` "wheel" qui bubble depuis `el`, enveloppé dans `act` (Chantier B,
+ * Tâche 4 — molette ⌘/Ctrl zoom-au-curseur / pan). Contrairement à `pointer()` ci-dessus, jsdom
+ * implémente une VRAIE classe `WheelEvent` (héritée de `MouseEvent`, donc `deltaY`/`ctrlKey`/
+ * `clientX`/`clientY` y sont tous portés) — inutile de synthétiser via un nom de type détourné. */
+export async function wheel(el: Element, init: WheelEventInit = {}): Promise<WheelEvent> {
+  const event = new window.WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  return event;
 }
 
 /** Laisse les effets/mises à jour d'état en attente se stabiliser sans dispatcher d'événement —

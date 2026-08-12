@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS } from "@/lib/studio/zoom";
+import {
+  clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS, wheelZoomScale, zoomAtCursor,
+} from "@/lib/studio/zoom";
 
 // tests/studio-zoom.test.ts — Chantier B, Tâche 3 : lib/studio/zoom.ts en PUR (aucun DOM/React), sur
 // le modèle de tests/studio-keymap.test.ts. `clampZoom`/`nextZoom`/`zoomPresetScale` sont des
@@ -156,5 +158,100 @@ describe("zoomPresetScale(\"selection\", …) — cadre la boîte englobante dan
   it("passe par clampZoom : une sélection minuscule dans un grand viewport ne dépasse pas le maximum", () => {
     const factor = zoomPresetScale("selection", 1, { x: 0, y: 0, w: 1, h: 1 }, { width: 2000, height: 2000 });
     expect(factor).toBe(ZOOM_STEPS[ZOOM_STEPS.length - 1]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 4 — pan (Espace-glisser) + zoom molette centré curseur, en PUR.
+
+describe("wheelZoomScale — deltaY négatif AGRANDIT, deltaY positif RÉDUIT, réponse continue à l'amplitude", () => {
+  it("deltaY = 0 -> l'échelle ne change pas", () => {
+    expect(wheelZoomScale(1, 0)).toBe(1);
+    expect(wheelZoomScale(2.5, 0)).toBe(2.5);
+  });
+
+  it("deltaY négatif (molette vers le haut / pincement « écarter ») agrandit strictement", () => {
+    expect(wheelZoomScale(1, -100)).toBeGreaterThan(1);
+    expect(wheelZoomScale(1, -10)).toBeGreaterThan(1);
+  });
+
+  it("deltaY positif (molette vers le bas / pincement « rapprocher ») réduit strictement", () => {
+    expect(wheelZoomScale(1, 100)).toBeLessThan(1);
+    expect(wheelZoomScale(1, 10)).toBeLessThan(1);
+  });
+
+  it("un plus GRAND |deltaY| produit un changement d'échelle plus IMPORTANT — pas un pas fixe par événement", () => {
+    const small = wheelZoomScale(1, -10);
+    const large = wheelZoomScale(1, -100);
+    expect(large - 1).toBeGreaterThan(small - 1);
+  });
+
+  it("une entrée non finie renvoie prevScale INCHANGÉE, jamais NaN propagé", () => {
+    expect(wheelZoomScale(NaN, -10)).toBeNaN(); // NaN reste NaN quand c'est lui-même l'entrée corrompue…
+    expect(wheelZoomScale(1, NaN)).toBe(1); // …mais un deltaY corrompu, lui, ne doit RIEN changer à une échelle saine
+    expect(wheelZoomScale(1, Infinity)).toBe(1);
+  });
+});
+
+describe("zoomAtCursor — le point du CANEVAS sous le curseur reste EXACTEMENT fixe (Chantier B, Tâche 4)", () => {
+  const viewport = { width: 800, height: 600 };
+
+  function canvasPointFor(scale: number, cursor: { x: number; y: number }, scroll: { x: number; y: number }) {
+    return { x: (scroll.x + cursor.x) / scale, y: (scroll.y + cursor.y) / scale };
+  }
+
+  it("le point canevas sous le curseur AVANT == APRÈS, balayé sur plusieurs combinaisons d'échelle/curseur/défilement", () => {
+    const cases = [
+      { prevScale: 1, nextScale: 2, cursor: { x: 100, y: 50 }, scroll: { x: 0, y: 0 } },
+      { prevScale: 0.5, nextScale: 1, cursor: { x: 300, y: 200 }, scroll: { x: 150, y: 80 } },
+      { prevScale: 2, nextScale: 0.5, cursor: { x: 10, y: 400 }, scroll: { x: 500, y: 300 } },
+      { prevScale: 1, nextScale: 1, cursor: { x: 250, y: 250 }, scroll: { x: 42, y: 17 } }, // sans changement d'échelle
+      { prevScale: 0.31, nextScale: 8, cursor: { x: 0, y: 0 }, scroll: { x: 0, y: 0 } }, // coin haut-gauche, bornes extrêmes
+      { prevScale: 8, nextScale: 0.1, cursor: { x: 799, y: 599 }, scroll: { x: 1200, y: 900 } }, // coin bas-droit du viewport
+    ];
+    for (const c of cases) {
+      const before = canvasPointFor(c.prevScale, c.cursor, c.scroll);
+      const result = zoomAtCursor(c.prevScale, c.nextScale, c.cursor, c.scroll, viewport);
+      expect(result.scale).toBe(c.nextScale);
+      const after = canvasPointFor(c.nextScale, c.cursor, result.scroll);
+      expect(after.x).toBeCloseTo(before.x, 9);
+      expect(after.y).toBeCloseTo(before.y, 9);
+    }
+  });
+
+  it("anti-vacuité : SANS la correction de défilement (scroll laissé tel quel), le point dériverait — la fonction, elle, corrige bien", () => {
+    const prevScale = 1;
+    const nextScale = 2;
+    const cursor = { x: 100, y: 50 };
+    const scroll = { x: 0, y: 0 };
+    const result = zoomAtCursor(prevScale, nextScale, cursor, scroll, viewport);
+    // Le mutant décrit par le brief (« drop the scroll adjustment ») renverrait `scroll` inchangé —
+    // ce test prouve que ce mutant-là romprait bien le point fixe, donc que `result.scroll` DOIT
+    // différer de `scroll` ici pour que le point reste fixe.
+    expect(result.scroll).not.toEqual(scroll);
+    const driftedAfter = canvasPointFor(nextScale, cursor, scroll); // le mutant : scroll NON corrigé
+    const before = canvasPointFor(prevScale, cursor, scroll);
+    expect(driftedAfter.x).not.toBeCloseTo(before.x, 9); // le point DÉRIVE bien sans la correction
+  });
+
+  it("continuité : un tout petit changement d'échelle produit un tout petit changement de défilement, jamais un saut", () => {
+    const prevScale = 1;
+    const cursor = { x: 400, y: 300 };
+    const scroll = { x: 120, y: 90 };
+    let previous = zoomAtCursor(prevScale, prevScale, cursor, scroll, viewport);
+    for (let i = 1; i <= 50; i += 1) {
+      const nextScale = prevScale + i * 0.001; // pas de 0,001 en 0,001, balayé
+      const result = zoomAtCursor(prevScale, nextScale, cursor, scroll, viewport);
+      expect(Math.abs(result.scroll.x - previous.scroll.x)).toBeLessThan(1);
+      expect(Math.abs(result.scroll.y - previous.scroll.y)).toBeLessThan(1);
+      previous = result;
+    }
+  });
+
+  it("échelle INCHANGÉE (prevScale === nextScale) -> le défilement ne bouge pas non plus", () => {
+    const scroll = { x: 77, y: 33 };
+    const result = zoomAtCursor(1.5, 1.5, { x: 200, y: 150 }, scroll, viewport);
+    expect(result.scroll.x).toBeCloseTo(scroll.x, 9);
+    expect(result.scroll.y).toBeCloseTo(scroll.y, 9);
   });
 });
