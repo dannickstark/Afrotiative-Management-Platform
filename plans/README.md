@@ -41,7 +41,7 @@ Drizzle query builder (no raw SQL from input); server actions begin with `requir
 | 010 | Shared `StatCard`/`Metric` + dashboard hierarchy | ui | P1 | M | 007 | DONE |
 | 011 | States & feedback (EmptyState, loading skeletons, responsive tables, a11y) | ui/a11y | P1 | M | none | DONE — A/B/C/D/E all done |
 | 012 | Brand identity & editorial login (monogram, wordmark, split-screen) | ui/design | P1 | M | 007,009 | DONE |
-| 013 | WhatsApp diffusion adapter (D4) — design/spike | direction | P2 | L | 001 | TODO |
+| 013 | WhatsApp diffusion adapter (D4) — design/spike | direction | P2 | L | 001 | DONE |
 
 **Dependency notes:** 007 (type scale) unblocks the visual consistency in 008/010/012 — do it first among the UI plans. 001 must land before 013 (the adapter replaces the gated stub). 003/004/005 are independent and can go in any order.
 
