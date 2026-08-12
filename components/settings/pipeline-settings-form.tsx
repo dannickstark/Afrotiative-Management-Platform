@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { ScheduleField } from "@/components/settings/schedule-field";
 import { updatePipelineSettings } from "@/lib/actions/pipeline-settings-actions";
 import { pipelineSettingsSchema } from "@/lib/validation";
 import type { PipelineSettings } from "@/lib/queries/settings";
@@ -193,15 +194,11 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
           <CardDescription>Déclenche automatiquement le pipeline selon une planification cron.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-1.5">
-            <Label htmlFor="schedule-cron">Cron de planification (optionnel)</Label>
-            <Input
-              id="schedule-cron" disabled={isSaving}
-              value={form.scheduleCron}
-              onChange={(e) => setForm((f) => ({ ...f, scheduleCron: e.target.value }))}
-              placeholder="0 */2 * * *"
-            />
-          </div>
+          <ScheduleField
+            value={form.scheduleCron}
+            disabled={isSaving}
+            onChange={(cron) => setForm((f) => ({ ...f, scheduleCron: cron }))}
+          />
         </CardContent>
       </Card>
 
