@@ -111,8 +111,13 @@ export type ShapeDescriptor = {
  *
  *  — SUR LE CHEMIN DE PRODUCTION : tests/studio-shape-render.test.ts échantillonne le point
  *    (700,380) du triangle sur un cadre 800×400 et l'exige « remplissage ». C'est très exactement le
- *    point que la variante à espaces laisse VIDE. MESURÉ : remplacer `join(",")` par `join(", ")`
- *    ci-dessous fait rougir 8 tests de ce seul fichier (21 sur les six fichiers de formes).
+ *    point que la variante à espaces laisse VIDE. MUTATION QUI FAIT ROUGIR : remplacer `join(",")`
+ *    par `join(", ")` ci-dessous — le point (700,380) du triangle passe de « remplissage » à
+ *    « fond », et toutes les formes découpées perdent la moitié droite de leur géométrie sur un cadre
+ *    non carré. AUCUN COMPTE N'EST CITÉ ICI, DÉLIBÉRÉMENT (revue finale U3, Minor 1) : la phrase
+ *    précédente annonçait « 8 tests de ce seul fichier (21 sur les six fichiers) » et la mesure
+ *    donnait 9 et 22 sur sept fichiers — périmée d'un cran par la Tâche 4, qui n'avait aucune raison
+ *    de la relire. Un compte dérive à chaque test ajouté ; ce que la mutation PROUVE, non.
  *  — LA COMPARAISON DES DEUX ÉCRITURES elle-même : tests/studio-render-clippath.test.ts, describe
  *    « RÉSERVE 1 », qui rend la MÊME suite de sommets écrite des deux façons sur le MÊME cadre et
  *    montre en pixels que la géométrie diffère, témoins compris. Aucune description n'émet ni ne peut

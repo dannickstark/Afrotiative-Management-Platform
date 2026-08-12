@@ -290,6 +290,22 @@ describe("renderScene() — chaque forme survit à minSize et à un aspect très
     const px = await pixelsOf(sceneOf("triangle", { frame: { x: 0, y: 0, w: 1, h: 400 } }));
     expect(px(400, 200)).toBe("fond");
     expect(px(20, 200)).toBe("fond");
+    // TÉMOIN POSITIF — revue finale U3, Minor 4 : les deux lignes ci-dessus sont DEUX NÉGATIFS, et une
+    // image entièrement bleue (calque jamais peint, exception avalée, rendu dégradé) les passait toutes
+    // les deux. Il faut donc montrer que quelque chose EST peint dans la colonne du calque.
+    //
+    // Et ce témoin ne peut pas être un « remplissage » : sur une colonne de 1 px, AUCUN pixel de sortie
+    // n'est intégralement couvert (mesuré — le plus rouge lu est rgba(152,23,152) en x=0, un mélange
+    // franc mais hors tolérance des deux couleurs primaires). Affirmer « remplissage » ici serait un
+    // faux témoin, et ce programme a déjà tranché qu'un témoin absent vaut mieux qu'un faux. On affirme
+    // donc ce qui est VRAI et suffisant : le pixel n'est ni le fond ni le remplissage — c'est un
+    // mélange — et sa composante ROUGE est très au-dessus de celle du fond (0), donc du remplissage y
+    // est bien arrivé. La colonne peinte, plus les deux négatifs, disent « dans son cadre, et nulle
+    // part ailleurs ».
+    const dansLaColonne = px(0, 399);
+    const canaux = /^rgba\((\d+),(\d+),(\d+),\d+\)$/.exec(dansLaColonne);
+    expect(`(0,399) mélange : ${canaux !== null} — lu ${dansLaColonne}`).toBe(`(0,399) mélange : true — lu ${dansLaColonne}`);
+    expect(Number(canaux![1])).toBeGreaterThan(80); // rouge : le fond en a 0 (± tolérance 24)
   });
 });
 
