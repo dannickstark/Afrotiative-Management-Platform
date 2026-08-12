@@ -26,10 +26,25 @@ const TEMPLATE_CHANNEL = "tiktok" as const;
 const DISABLED_CHANNEL = "x" as const;
 const NO_TEMPLATE_CHANNEL = "whatsapp" as const;
 
+// TEMPLATE_CHANNEL/DISABLED_CHANNEL/NO_TEMPLATE_CHANNEL (tiktok/x/whatsapp) are, in the REAL
+// registry, all `available:false` (StubChannel — no real adapter yet). send-core.ts's step-0
+// availability guard (added for the "refuse un canal sans adaptateur réel" test below) now refuses
+// ANY send through the real registry entry for these three before any other check runs — which
+// would short-circuit every test below that exists to exercise a LATER step (published/enabled/
+// render) using its own real registry channel. Those tests pass this override instead: same
+// channel identity, `available:true`, so they reach the step they actually mean to test. Only the
+// dedicated availability-guard test below uses the real (unavailable) registry entry directly.
+function availableOverride(channel: Channel): SocialChannel {
+  return { ...SOCIAL_CHANNELS[channel], available: true };
+}
+
 // Controllable SocialChannel double — every REGISTERED channel's `send` delegates to StubChannel
 // (lib/diffusion/channels.ts), which always succeeds and can never be made to fail. sendToChannelCore
 // accepts a test-only `channelOverride` (same convention as renderForArticle's `store`/`fetchImpl`/
 // `assets` — lib/studio/index.ts) precisely so failure/retry behavior is exercisable at all.
+// `available: true` (NOT copied from the registry — see the comment above availableOverride): a
+// FakeChannel simulates a channel WITH a working adapter, so it must clear the step-0 guard the
+// same way a real facebook/instagram/linkedin entry would.
 class FakeChannel implements SocialChannel {
   readonly key: Channel = TEMPLATE_CHANNEL;
   readonly label = SOCIAL_CHANNELS[TEMPLATE_CHANNEL].label;
@@ -37,6 +52,7 @@ class FakeChannel implements SocialChannel {
   readonly format: FormatKey = "story";
   readonly captionLimits = SOCIAL_CHANNELS[TEMPLATE_CHANNEL].captionLimits;
   readonly credentialFields = SOCIAL_CHANNELS[TEMPLATE_CHANNEL].credentialFields;
+  readonly available = true;
   readonly calls: SendInput[] = [];
   constructor(private readonly results: SendResult[]) {}
   async send(input: SendInput): Promise<SendResult> {
@@ -119,6 +135,7 @@ describe("sendToChannelCore — ordonnancement (D1 §4/§7, Task 5)", () => {
   it("refuse un article non publié — aucune ligne distributions écrite", async () => {
     const r = await sendToChannelCore({
       articleId: articleUnpublished, channel: TEMPLATE_CHANNEL, caption: "x", triggeredBy: "manual", actorId: null,
+      channelOverride: availableOverride(TEMPLATE_CHANNEL),
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -130,6 +147,7 @@ describe("sendToChannelCore — ordonnancement (D1 §4/§7, Task 5)", () => {
   it("refuse un canal désactivé, en le nommant — aucune ligne écrite", async () => {
     const r = await sendToChannelCore({
       articleId: articleDisabled, channel: DISABLED_CHANNEL, caption: "x", triggeredBy: "manual", actorId: null,
+      channelOverride: availableOverride(DISABLED_CHANNEL),
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -141,7 +159,7 @@ describe("sendToChannelCore — ordonnancement (D1 §4/§7, Task 5)", () => {
   it("un rendu en échec refuse l'envoi et n'écrit AUCUNE ligne distributions", async () => {
     const r = await sendToChannelCore({
       articleId: articleRenderFails, channel: TEMPLATE_CHANNEL, caption: "x", triggeredBy: "manual", actorId: null,
-      renderStore: new MemoryRenderStore(), fetchImpl: fetch,
+      renderStore: new MemoryRenderStore(), fetchImpl: fetch, channelOverride: availableOverride(TEMPLATE_CHANNEL),
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -157,14 +175,51 @@ describe("sendToChannelCore — ordonnancement (D1 §4/§7, Task 5)", () => {
   // a RESOLVED template that then fails during rendering (missing image token); this one never
   // resolves a template at all.
   it("aucun gabarit « post social » configuré (ok:true,url:null) refuse l'envoi, en nommant le canal — aucune ligne distributions écrite", async () => {
+    // NO_TEMPLATE_CHANNEL (whatsapp) is itself `available:false` in the real registry, which the
+    // new step-0 availability guard (below) would now refuse BEFORE ever reaching template
+    // resolution — that would test the wrong thing here. This test is specifically about the
+    // "no `social_post` template resolves" branch, so it supplies a channelOverride identical to
+    // the registry entry except `available:true`, exactly like FakeChannel does for TEMPLATE_CHANNEL
+    // above — the availability guard itself is covered by its own test below.
+    const availableOverride: SocialChannel = { ...SOCIAL_CHANNELS[NO_TEMPLATE_CHANNEL], available: true };
     const r = await sendToChannelCore({
       articleId: articleNoTemplate, channel: NO_TEMPLATE_CHANNEL, caption: "x", triggeredBy: "manual", actorId: null,
-      renderStore: new MemoryRenderStore(), fetchImpl: fetch,
+      renderStore: new MemoryRenderStore(), fetchImpl: fetch, channelOverride: availableOverride,
     });
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.message).toContain(SOCIAL_CHANNELS[NO_TEMPLATE_CHANNEL].label);
     expect(r.message.toLowerCase()).toContain("gabarit");
+    const rows = await db.select().from(distributions).where(and(eq(distributions.articleId, articleNoTemplate), eq(distributions.channel, NO_TEMPLATE_CHANNEL)));
+    expect(rows).toHaveLength(0);
+  });
+
+  // The gap this test closes (whole-branch review, plan 001 follow-up): computeSendDisabledReason
+  // (the UI's own gate) already refuses a send for `available:false` channels (whatsapp/x/tiktok —
+  // StubChannel), but that was UI-only — a direct call to sendToChannelCore (the server action, or
+  // an operator enabling autoEnabled) still reached StubChannel.send() → {ok:true, externalId:
+  // "stub-…"} → a `sent` distributions row with a FAKE external id. sendToChannelCore's own step-0
+  // guard (send-core.ts) now refuses this before the channel's `send` is ever invoked and before
+  // any distributions row is written — mirrors this file's other "refuses X — aucune ligne écrite"
+  // tests above.
+  it("refuse un canal sans adaptateur réel (available:false) AVANT tout envoi — channel.send n'est jamais appelé, aucune ligne distributions écrite", async () => {
+    expect(SOCIAL_CHANNELS[NO_TEMPLATE_CHANNEL].available).toBe(false); // sanity: whatsapp is genuinely unavailable today
+    const spy: SendInput[] = [];
+    const unavailable: SocialChannel = {
+      ...SOCIAL_CHANNELS[NO_TEMPLATE_CHANNEL],
+      async send(input: SendInput): Promise<SendResult> {
+        spy.push(input); // must never fire
+        return { ok: true, externalId: "ne-devrait-jamais-apparaitre" };
+      },
+    };
+    const r = await sendToChannelCore({
+      articleId: articleNoTemplate, channel: NO_TEMPLATE_CHANNEL, caption: "x", triggeredBy: "manual", actorId: null,
+      renderStore: new MemoryRenderStore(), fetchImpl: fetch, channelOverride: unavailable,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.message.toLowerCase()).toContain("disponible");
+    expect(spy).toHaveLength(0); // the underlying channel's send() was never invoked
     const rows = await db.select().from(distributions).where(and(eq(distributions.articleId, articleNoTemplate), eq(distributions.channel, NO_TEMPLATE_CHANNEL)));
     expect(rows).toHaveLength(0);
   });

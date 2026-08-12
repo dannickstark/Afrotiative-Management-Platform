@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, renderAssets } from "@/db";
+import { isSafePublicHttpUrl } from "@/lib/url-guard";
 
 // app/api/studio/asset-fonts/[id]/route.ts — Tâche 13 (Lot 3). Proxy MÊME ORIGINE pour les octets
 // d'une police d'asset, ajouté après avoir piloté un VRAI navigateur (pas repérable par `bun test`,
@@ -30,6 +31,10 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/studio/asset-fo
     return new Response(null, { status: 404 });
   }
   if (!row || row.kind !== "font") return new Response(null, { status: 404 });
+  // SSRF guard: row.url is DB-stored and this route is deliberately unauthenticated, so validate
+  // it before fetching even though today it is only ever operator-controlled (write side is
+  // template:manage-gated).
+  if (!isSafePublicHttpUrl(row.url)) return new Response(null, { status: 404 });
 
   let upstream: Response;
   try {

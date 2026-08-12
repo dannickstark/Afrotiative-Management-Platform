@@ -26,7 +26,7 @@ export function SettingsNav({ role }: { role: Role }) {
           <Link key={item.href} href={item.href}
             className={cn("flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm",
               active
-                ? "border-[var(--accent-brand)] font-medium text-foreground"
+                ? "border-accent-brand font-medium text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground")}>
             <Icon className="size-4" /> {item.label}
           </Link>

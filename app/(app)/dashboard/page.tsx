@@ -6,6 +6,7 @@ import { SummaryCards } from "@/components/dashboard/summary-cards";
 import { PendingList } from "@/components/dashboard/pending-list";
 import { ErrorList } from "@/components/dashboard/error-list";
 import { AlertBanner } from "@/components/dashboard/alert-banner";
+import { PageHeader } from "@/components/shell/page-header";
 
 export default async function DashboardPage() {
   const user = await requireUser();
@@ -21,7 +22,7 @@ export default async function DashboardPage() {
   ]);
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold">Tableau de bord</h1>
+      <PageHeader title="Tableau de bord" description="Vue d'ensemble de la production éditoriale." />
       {unreadCount > 0 && <AlertBanner count={unreadCount} alerts={unreadAlerts} />}
       <SummaryCards d={d} />
       <div className="grid gap-6 lg:grid-cols-2">

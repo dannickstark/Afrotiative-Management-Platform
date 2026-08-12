@@ -32,6 +32,33 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const FAR_FUTURE = new Date(2099, 0, 15, 12, 0, 0, 0);
 
+// CH_A/CH_B ("x"/"whatsapp") are, in the REAL registry, `available:false` (StubChannel — no real
+// adapter yet). send-core.ts's step-0 availability guard now refuses ANY send through the real
+// registry entry for these two before any other check runs — which would short-circuit every test
+// in this file, since all of them exist to exercise LATER scheduler mechanics (due/not-due,
+// no-double-send, lastAutoSendAt persistence, failure isolation, pre-row-refusal skipping), not the
+// availability gate itself. Same fix/convention as tests/diffusion-send.test.ts's own
+// availableOverride: same channel identity, `available:true`, so sends reach the step actually
+// under test — StubChannel.send still runs underneath and always succeeds.
+function availableOverride(channel: Channel): SocialChannel {
+  return { ...SOCIAL_CHANNELS[channel], available: true };
+}
+
+// Wraps triggerDiffusionTick so CH_A/CH_B clear the step-0 availability guard by DEFAULT on every
+// call in this file, without having to repeat channelOverrides at each of the 14 call sites below.
+// A caller-supplied channelOverrides entry for CH_A/CH_B (the failing-/throwing-channel tests
+// further down, which need a specific broken `send`) takes precedence over this default.
+function tick(opts: Parameters<typeof triggerDiffusionTick>[0] = {}) {
+  return triggerDiffusionTick({
+    ...opts,
+    channelOverrides: {
+      [CH_A]: availableOverride(CH_A),
+      [CH_B]: availableOverride(CH_B),
+      ...opts.channelOverrides,
+    },
+  });
+}
+
 let server: ReturnType<typeof Bun.serve>;
 let categoryId: string;
 let templateIdA: string;
@@ -129,7 +156,7 @@ describe("triggerDiffusionTick — un canal dû envoie exactement un article", (
     const before = await getChannelSettings(CH_A);
     expect(before.lastAutoSendAt).toBeNull();
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
     const rows = await distributionsFor(articleId, CH_A);
     expect(rows).toHaveLength(1);
@@ -149,7 +176,7 @@ describe("triggerDiffusionTick — un canal non dû n'envoie rien", () => {
     await insertChannelSettings(CH_A, { lastAutoSendAt: recentSend, autoIntervalHours: 6 });
     const articleId = await createArticle(1, "Article — canal non dû");
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
     const rows = await distributionsFor(articleId, CH_A);
     expect(rows).toHaveLength(0);
@@ -162,7 +189,7 @@ describe("triggerDiffusionTick — un canal non dû n'envoie rien", () => {
     await insertChannelSettings(CH_A, { autoEnabled: false, lastAutoSendAt: null });
     const articleId = await createArticle(1, "Article — auto désactivé");
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
     expect(await distributionsFor(articleId, CH_A)).toHaveLength(0);
   });
@@ -176,7 +203,7 @@ describe("triggerDiffusionTick — un canal non dû n'envoie rien", () => {
     await insertChannelSettings(CH_A, { enabled: false, autoEnabled: true, autoIntervalHours: 6, lastAutoSendAt: null });
     const articleId = await createArticle(1, "Article — canal désactivé manuellement");
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
     expect(await distributionsFor(articleId, CH_A)).toHaveLength(0);
     // lastAutoSendAt untouched — the `enabled` check happens BEFORE isDue/selectNextArticle are
@@ -203,14 +230,14 @@ describe("triggerDiffusionTick — deux tics consécutifs n'envoient pas deux fo
     const olderDay = await createArticle(2, "Article — jour plus ancien");
     const moreRecentDay = await createArticle(1, "Article — jour plus récent");
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
     const afterFirst = await distributionsFor(moreRecentDay, CH_A);
     expect(afterFirst).toHaveLength(1);
     expect(afterFirst[0].status).toBe("sent");
     expect(await distributionsFor(olderDay, CH_A)).toHaveLength(0); // not yet — only one candidate is due per tick
 
     // Second tick, SAME instant — a slow/duplicated fire, or a naive re-poll.
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
     expect(await distributionsFor(moreRecentDay, CH_A)).toHaveLength(1); // still just the one row
     expect(await distributionsFor(olderDay, CH_A)).toHaveLength(0); // the other article was NEVER picked up
@@ -222,7 +249,7 @@ describe("triggerDiffusionTick — lastAutoSendAt persisté, un redémarrage sim
     await insertChannelSettings(CH_A, { autoIntervalHours: 6, lastAutoSendAt: null });
     const articleId = await createArticle(1, "Article — persistance redémarrage");
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
     expect(await distributionsFor(articleId, CH_A)).toHaveLength(1);
 
     // getChannelSettings has no in-memory cache — this IS a fresh DB read, exactly what a newly
@@ -233,7 +260,7 @@ describe("triggerDiffusionTick — lastAutoSendAt persisté, un redémarrage sim
 
     // "Restart" = a brand-new triggerDiffusionTick call with no carried-over in-process state
     // (there is none to carry — every value it used came straight from this same DB read).
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
     expect(await distributionsFor(articleId, CH_A)).toHaveLength(1); // still just 1 — no burst
   }, 20000); // two full tick round-trips over the network Neon connection
 });
@@ -262,10 +289,11 @@ describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificat
 
     const failingChannel: SocialChannel = {
       ...SOCIAL_CHANNELS[CH_A],
+      available: true, // clears send-core.ts's step-0 guard — this test is about send() failing, not availability
       send: async (_input: SendInput): Promise<SendResult> => ({ ok: false, message: "Erreur simulée (test)." }),
     };
 
-    await expect(triggerDiffusionTick({
+    await expect(tick({
       now: FAR_FUTURE, channels: [CH_A, CH_B],
       channelOverrides: { [CH_A]: failingChannel },
       renderStore: new MemoryRenderStore(), fetchImpl: fetch,
@@ -295,7 +323,7 @@ describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificat
     // cleanly (it would exercise a RETRY of the earlier failure, not a fresh candidate).
     const laterArticle = await createArticle(0, "Article — tic suivant, canal sain");
     await insertChannelSettings(CH_A, { autoIntervalHours: 6, autoMaxBacklogDays: 30, lastAutoSendAt: null }); // reset A, now healthy (no override)
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
     const laterRows = await distributionsFor(laterArticle, CH_A);
     expect(laterRows).toHaveLength(1);
     expect(laterRows[0].status).toBe("sent");
@@ -322,10 +350,11 @@ describe("triggerDiffusionTick — un échec d'envoi ne bloque pas le planificat
 
     const throwingChannel: SocialChannel = {
       ...SOCIAL_CHANNELS[CH_A],
+      available: true, // clears send-core.ts's step-0 guard — this test is about send() throwing, not availability
       send: async () => { throw new Error("Bug simulé (test) — send() qui lève au lieu de renvoyer {ok:false}."); },
     };
 
-    await expect(triggerDiffusionTick({
+    await expect(tick({
       now: FAR_FUTURE, channels: [CH_A, CH_B],
       channelOverrides: { [CH_A]: throwingChannel },
       renderStore: new MemoryRenderStore(), fetchImpl: fetch,
@@ -364,7 +393,7 @@ describe("triggerDiffusionTick — un refus AVANT écriture ne bloque pas le can
 
     const healthyArticle = await createArticle(2, "Article — sain, jour plus ancien");
 
-    await triggerDiffusionTick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
+    await tick({ now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch });
 
     // The broken candidate got NO distributions row at all — the exact pre-row-refusal case.
     expect(await distributionsFor(brokenArticle, CH_A)).toHaveLength(0);
@@ -398,7 +427,7 @@ describe("triggerDiffusionTick — un refus AVANT écriture ne bloque pas le can
       brokenByDay[day] = id;
     }
 
-    await expect(triggerDiffusionTick({
+    await expect(tick({
       now: FAR_FUTURE, channels: [CH_A], renderStore: new MemoryRenderStore(), fetchImpl: fetch,
     })).resolves.toBeUndefined();
 

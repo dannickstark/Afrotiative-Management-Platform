@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { sendToChannel, generateCaptionForArticle } from "@/lib/actions/diffusion-actions";
+import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
 import type { ChannelDiffusionState } from "@/lib/queries/diffusion";
 
 export type DiffusionDistributionView = {
@@ -52,9 +53,15 @@ export function computeSendDisabledReason(input: {
   // out for every OTHER gate. Defaults to false so every existing call site (and the four
   // originally-required cases) keeps behaving exactly as before.
   alreadySent?: boolean;
+  // Plan 001: whatsapp/x/tiktok still route to StubChannel (no real adapter) — this refuses the
+  // send instead of reporting a fake "sent". Placed after alreadySent/canSend so an unauthorized
+  // editor still sees the permission reason first, before this file's other, article/channel-state
+  // reasons.
+  channelAvailable: boolean;
 }): string | null {
   if (input.alreadySent) return `Déjà diffusé sur ${input.channelLabel}.`;
   if (!input.canSend) return "Vous n'avez pas la permission de diffuser sur les réseaux sociaux.";
+  if (!input.channelAvailable) return `La diffusion automatique sur ${input.channelLabel} n'est pas encore disponible.`;
   if (!input.isPublished) return "L'article doit d'abord être publié sur WordPress avant d'être diffusé.";
   if (!input.channelEnabled) return `Le canal ${input.channelLabel} est désactivé dans les réglages de diffusion.`;
   if (!input.r2Configured) return "Stockage R2 non configuré : la génération de l'image de diffusion est indisponible.";
@@ -148,6 +155,7 @@ function DiffusionChannelCard({
   const reason = computeSendDisabledReason({
     isPublished, channelEnabled: true, r2Configured, canSend, channelLabel: label,
     alreadySent: view.kind === "sent",
+    channelAvailable: SOCIAL_CHANNELS[channel].available,
   });
 
   function handleSend() {

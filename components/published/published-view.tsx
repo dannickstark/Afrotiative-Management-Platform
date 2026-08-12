@@ -1,6 +1,7 @@
 import { PublishedFilterBar } from "./published-filter-bar";
 import { PublishedTable } from "./published-table";
 import { PublishedPagination } from "./published-pagination";
+import { PageHeader } from "@/components/shell/page-header";
 import type { PublishedFilters, PublishedPage } from "@/lib/queries/published";
 
 export function PublishedView({
@@ -12,11 +13,13 @@ export function PublishedView({
 }) {
   const filtered = Boolean(filters.search || filters.categoryId || filters.from || filters.to || filters.author);
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Articles publiés</h1>
-        <span className="text-sm text-muted-foreground">{page.total} article{page.total > 1 ? "s" : ""}</span>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Articles publiés"
+        actions={
+          <span className="text-sm text-muted-foreground">{page.total} article{page.total > 1 ? "s" : ""}</span>
+        }
+      />
       <PublishedFilterBar filters={filters} categories={categories} />
       <PublishedTable rows={page.rows} filtered={filtered} />
       {page.pageCount > 1 && <PublishedPagination page={page.page} pageCount={page.pageCount} />}

@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { StatCard } from "@/components/ui/stat-card";
 import { formatSecondsDuration } from "@/lib/format";
 import type { RunTrendsSummary, TrendDay } from "@/lib/queries/runs";
 
@@ -17,10 +18,10 @@ export function RunTrends({ perDay, summary }: { perDay: TrendDay[]; summary: Ru
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatTile label="Exécutions (7 j)" value={String(summary.runs7d)} />
-          <StatTile label="Articles produits (7 j)" value={String(summary.articles7d)} />
-          <StatTile label="Taux d'échec" value={`${summary.failureRatePct.toLocaleString("fr-FR")} %`} />
-          <StatTile
+          <StatCard label="Exécutions (7 j)" value={summary.runs7d} />
+          <StatCard label="Articles produits (7 j)" value={summary.articles7d} />
+          <StatCard label="Taux d'échec" value={`${summary.failureRatePct.toLocaleString("fr-FR")} %`} />
+          <StatCard
             label="Durée moyenne"
             value={summary.avgDurationSec != null ? formatSecondsDuration(summary.avgDurationSec) : "—"}
           />
@@ -65,14 +66,5 @@ export function RunTrends({ perDay, summary }: { perDay: TrendDay[]; summary: Ru
         )}
       </CardContent>
     </Card>
-  );
-}
-
-function StatTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-border p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-xl font-semibold text-foreground">{value}</p>
-    </div>
   );
 }

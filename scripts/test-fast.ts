@@ -39,16 +39,17 @@ import { cpus } from "node:os";
 // Files proven to touch neither DB nor network — the parallel lane. See the regenerate command above.
 const PURE_FILES = new Set<string>([
   "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
-  "article-preview-incomplete.test.ts", "auto-publish.test.ts",
+  "article-preview-incomplete.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
   "completeness.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
-  "embeddings.test.ts", "extract-chain.test.ts", "extract-images.test.ts", "format-utc.test.ts",
+  "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
   "interval-picker.test.ts", "live-panel.test.ts",
-  "mock-llm.test.ts", "nav-sections.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
+  "mock-llm.test.ts", "nav-sections.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
   "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "resend.test.ts", "rss-parse.test.ts",
   "run-detail.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
-  "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts", "settings-rbac.test.ts",
-  "shell-nav.test.ts", "smoke.test.ts",
+  "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts",
+  "session-guard.test.ts", "settings-rbac.test.ts",
+  "shell-nav.test.ts", "smoke.test.ts", "stat-card.test.ts",
   "status.test.ts", "studio-align.test.ts", "studio-asset-picker.test.ts", "studio-asset-validate.test.ts",
   "studio-canvas.test.ts", "studio-config.test.ts", "studio-constraints-field.test.ts",
   "studio-drag.test.ts", "studio-dynamic-text.test.ts",
@@ -63,7 +64,7 @@ const PURE_FILES = new Set<string>([
   "studio-save-indicator.test.ts", "studio-scene.test.ts", "studio-server-import.test.ts",
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
   "studio-snap.test.ts", "studio-texte-panel.test.ts", "studio-token-picker.test.ts",
-  "studio-tokens.test.ts", "studio-values.test.ts", "use-persisted-filters.test.ts",
+  "studio-tokens.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
   "wp-client.test.ts", "wp-config.test.ts",
 ]);
 

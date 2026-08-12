@@ -50,7 +50,7 @@ export function TagsInput({
             variant="outline"
             className={cn(
               "gap-1",
-              t.isNew && "border-[var(--accent-brand)]/40 bg-[var(--accent-brand)]/10 text-[var(--accent-brand)]",
+              t.isNew && "border-accent-brand/40 bg-accent-brand/10 text-accent-brand",
             )}
           >
             {t.tagName}
@@ -85,7 +85,7 @@ export function TagsInput({
               {canCreate && (
                 <CommandItem value={trimmed} onSelect={() => addTag(trimmed, true)}>
                   <Plus className="size-3.5" /> Créer « {trimmed} »
-                  <span className="ml-auto text-[9px] font-semibold tracking-wide text-[var(--accent-brand)] uppercase">
+                  <span className="ml-auto text-[9px] font-semibold tracking-wide text-accent-brand uppercase">
                     nouveau
                   </span>
                 </CommandItem>

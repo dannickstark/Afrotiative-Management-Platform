@@ -30,7 +30,7 @@ export function HistoryPanel({ revisions }: { revisions: ArticleDetail["revision
         const { label, isAi } = describeRevision(r.action, r.actorName);
         return (
           <li key={r.id} className="flex gap-2 text-xs">
-            <span className={isAi ? "text-[var(--accent-brand)]" : "text-muted-foreground"}>
+            <span className={isAi ? "text-accent-brand" : "text-muted-foreground"}>
               {isAi ? <Sparkles className="mt-0.5 size-3.5" /> : <User className="mt-0.5 size-3.5" />}
             </span>
             <div className="min-w-0 flex-1">

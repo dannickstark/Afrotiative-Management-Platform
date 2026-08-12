@@ -1,6 +1,6 @@
 import { AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { EmptyState } from "./empty-state";
+import { EmptyState } from "@/components/shell/empty-state";
 
 export function ErrorList({ items }: { items: { id: string; name: string; message: string | null }[] }) {
   return (

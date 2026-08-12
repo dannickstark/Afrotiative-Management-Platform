@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PageHeader } from "@/components/shell/page-header";
+import { EmptyState } from "@/components/shell/empty-state";
 import { FeedSheet } from "./feed-sheet";
 import { toggleFeed, deleteFeed, testFeed } from "@/lib/actions/feed-actions";
 import { relativeDate } from "@/lib/format";
@@ -63,17 +65,19 @@ export function FeedsTable({ feeds }: { feeds: Feed[] }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Sources RSS</h1>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden /> Ajouter une source
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Sources RSS"
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden /> Ajouter une source
+          </Button>
+        }
+      />
 
       {feeds.length > 0 && <HealthSummary feeds={feeds} />}
 
-      <div className="rounded-lg border">
+      <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -90,8 +94,16 @@ export function FeedsTable({ feeds }: { feeds: Feed[] }) {
           <TableBody>
             {feeds.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
-                  Aucune source configurée.
+                <TableCell colSpan={8} className="border-0 p-0">
+                  <EmptyState
+                    title="Aucune source configurée"
+                    hint="Ajoutez un flux RSS pour commencer à alimenter le pipeline."
+                    action={
+                      <Button onClick={openCreate} variant="outline" size="sm">
+                        <Plus aria-hidden /> Ajouter une source
+                      </Button>
+                    }
+                  />
                 </TableCell>
               </TableRow>
             ) : (

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { BrandMark } from "./brand-mark";
 import { NavMain } from "./nav-main";
 import { NavUser } from "./nav-user";
 import { visibleNavSections } from "./nav-items";
@@ -63,13 +64,7 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<Link href="/dashboard" />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-[var(--accent-brand)] text-sm font-semibold text-[var(--accent-brand-foreground)]">
-                A
-              </div>
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">Afrotiative</span>
-                <span className="truncate text-xs text-sidebar-foreground/70">Back-office</span>
-              </div>
+              <BrandMark variant={sidebarState === "collapsed" ? "mark" : "full"} />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

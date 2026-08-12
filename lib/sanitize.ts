@@ -21,9 +21,9 @@ const ALLOWED_ATTR = ["href", "target"];
  * than a global DOMPurify.addHook(), which would mutate the shared isomorphic-dompurify singleton
  * also used by lib/extract/readability.ts.
  *
- * NOTE: this is wired into the human-edit save path only (saveDraft, below). The pipeline's own
- * AI-generated bodyHtml (lib/pipeline/stages.ts) is NOT yet sanitized here — that wiring is
- * deferred to SP4 Task 6, which restructures stageItem's insert path.
+ * NOTE: applied on BOTH write paths — the human-edit save (saveDraft, below) and the pipeline's
+ * AI-generated bodyHtml (lib/pipeline/stages.ts + lib/pipeline/regenerate.ts sanitize at write
+ * time).
  */
 export function sanitizeArticleHtml(html: string): string {
   // ALLOW_DATA_ATTR defaults to true in DOMPurify — it lets data-* attributes through regardless

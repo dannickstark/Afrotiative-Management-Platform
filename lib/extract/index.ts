@@ -3,6 +3,7 @@ import { jinaExtract } from "./jina";
 import { firecrawlExtract } from "./firecrawl";
 import { readabilityExtract } from "./readability";
 import { extractImages } from "./images";
+import { isSafePublicHttpUrl } from "@/lib/url-guard";
 
 export type Extracted = { title: string; text: string; images: string[]; via: string };
 export type ExtractResult = Extracted & { attempts: { provider: string; ok: boolean; reason?: string }[] };
@@ -85,6 +86,9 @@ export function hasExternalExtractor(): boolean {
 }
 
 async function backfillImages(url: string): Promise<string[]> {
+  // SSRF guard: same reasoning as the externalOnly comment above — this fetches `url` directly,
+  // and on the ingest path `url` is feed-publisher-supplied, not operator-vetted.
+  if (!isSafePublicHttpUrl(url)) return [];
   try {
     const res = await fetch(url, {
       headers: { "user-agent": "AfrotiativeBot/1.0" },
