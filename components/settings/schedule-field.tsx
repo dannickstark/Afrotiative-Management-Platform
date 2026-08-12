@@ -10,7 +10,7 @@ import {
   MINUTE_OPTIONS,
   type ScheduleSpec,
 } from "@/lib/pipeline/schedule-expr";
-import { formatDate } from "@/lib/format";
+import { formatDateUtc } from "@/lib/format";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -202,7 +202,7 @@ export function ScheduleField(props: { value: string; onChange: (cron: string) =
             <ul>
               {runs.map((r, i) => (
                 <li key={i}>
-                  {formatDate(r)} (UTC)
+                  {formatDateUtc(r)} (UTC)
                 </li>
               ))}
             </ul>
