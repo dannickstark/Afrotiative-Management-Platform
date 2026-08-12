@@ -118,7 +118,7 @@ describe("GeometryStrip — note « texte contraint qui déborde maxLines » (ch
       expect(note!.textContent).toBe(maxLinesOverflowNote(1, "story"));
       expect(note!.textContent).toBe(
         "Texte contraint en largeur : le retour à la ligne change dans « Story (Instagram / WhatsApp) » "
-        + "et dépasse la limite de 1 ligne posée sur ce calque — le surplus sera coupé au rendu (maxLines).",
+        + "et dépasse la limite de 1 ligne posée sur ce calque — le texte risque de déborder du cadre dans ce format.",
       );
     } finally {
       unmount();
@@ -182,7 +182,7 @@ describe("GeometryStrip — note « texte contraint qui déborde maxLines » (ch
 
   it("sans `previewFormat` : la note reste honnête, sans NOMMER de format inexistant", () => {
     expect(maxLinesOverflowNote(2)).toBe(
-      "Texte contraint en largeur : le retour à la ligne change et dépasse la limite de 2 lignes posée sur ce calque — le surplus sera coupé au rendu (maxLines).",
+      "Texte contraint en largeur : le retour à la ligne change et dépasse la limite de 2 lignes posée sur ce calque — le texte risque de déborder du cadre dans ce format.",
     );
   });
 

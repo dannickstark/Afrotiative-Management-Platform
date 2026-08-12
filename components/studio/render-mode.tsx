@@ -234,15 +234,22 @@ function FilmstripThumb({
           prop, jamais fournie par property-panel.tsx) trouve ICI sa place naturelle : c'est LE
           filmstrip qu'un designer regarde pour évaluer chaque format, pas la bande de géométrie d'un
           format unique. Discrète, dans le style des autres notes de ce chantier, et UNIQUEMENT quand
-          `overflow` est réellement vrai pour CE format précis — jamais un avertissement permanent. */}
+          `overflow` est réellement vrai pour CE format précis — jamais un avertissement permanent.
+
+          CORRECTIF HONNÊTETÉ (revue de branche, avant fusion chantier D) : le libellé disait « Texte
+          tronqué » et le survol « le surplus sera coupé au rendu (maxLines) » — un MÉCANISME
+          (troncage) que le moteur réel ne fournit PAS (voir le même correctif sur
+          maxLinesOverflowNote, geometry-strip.tsx, pour la preuve : lineClamp de satori est inerte
+          sur le style réellement peint, `display:"flex"`). Reformulé sans ce mécanisme : le texte
+          DÉBORDE du cadre, il n'est pas proprement coupé. */}
       {overflow && (
         <span
           className="truncate text-[10px] text-amber-600 dark:text-amber-500"
           data-testid="filmstrip-overflow-badge"
           data-format={format}
-          title="Un texte contraint dépasse sa limite de lignes dans ce format — le surplus sera coupé au rendu (maxLines). Mesuré avec la police de repli, approximatif si ce calque porte une police personnalisée."
+          title="Un texte contraint dépasse sa limite de lignes dans ce format — il risque de déborder du cadre. Mesuré avec la police de repli, approximatif si ce calque porte une police personnalisée."
         >
-          Texte tronqué
+          Texte déborde
         </span>
       )}
     </button>

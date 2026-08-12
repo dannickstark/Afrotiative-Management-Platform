@@ -277,14 +277,14 @@ describe("§0 — le filmstrip et la génération relayoutent IDENTIQUEMENT (cha
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Chantier D, Tâche 6 (handoff H1) — la note « texte tronqué » de FilmstripThumb, épinglée via
+// Chantier D, Tâche 6 (handoff H1) — la note « texte déborde » de FilmstripThumb, épinglée via
 // l'amorce de test `initialOverflowFormats` (même convention que initialDegraded/initialStale déjà
 // établie plus bas dans ce fichier) puisque react-dom/server n'exécute aucun effet (voir le
 // commentaire d'en-tête de RenderModeProps.initialOverflowFormats, render-mode.tsx). Ce test épingle
 // donc le CÂBLAGE (la légende suit-elle réellement la donnée par vignette ?), pas la mesure
 // satori/maxLines elle-même — celle-ci reste testée bout en bout côté serveur, avec un VRAI rendu,
 // dans tests/studio-preview.test.ts (previewTemplateCore + overflowingLayerIds).
-describe("FilmstripThumb — la note « texte tronqué » (handoff H1) suit `initialOverflowFormats`, PAR FORMAT", () => {
+describe("FilmstripThumb — la note « texte déborde » (handoff H1) suit `initialOverflowFormats`, PAR FORMAT", () => {
   it("un format listé dans initialOverflowFormats affiche la note ; un format non listé (anti-vacuité) ne l'affiche PAS", () => {
     const html = render(fixtureProps({ format: "ig_portrait", initialOverflowFormats: ["story"] }));
     // "story" : la note est présente, épinglée à SA vignette précisément (data-format="story").
@@ -299,6 +299,16 @@ describe("FilmstripThumb — la note « texte tronqué » (handoff H1) suit `ini
   it("initialOverflowFormats absent (défaut réel de composition) : AUCUNE vignette n'affiche la note", () => {
     const html = render(fixtureProps({ format: "ig_portrait" }));
     expect(html).not.toContain('data-testid="filmstrip-overflow-badge"');
+  });
+
+  // CORRECTIF HONNÊTETÉ (revue de branche, avant fusion chantier D) — même correctif que
+  // maxLinesOverflowNote (geometry-strip.tsx) : la copie affirmait un MÉCANISME (troncage) que le
+  // moteur réel ne fournit pas (lineClamp de satori est inerte sur `display:"flex"`, le style
+  // réellement peint). Épinglé ici pour qu'une régression vers cette affirmation fausse rougisse.
+  it("la copie de la note N'AFFIRME PAS un troncage (« coupé »/« tronqué ») — le mécanisme réel est un débordement, pas un troncage propre", () => {
+    const html = render(fixtureProps({ format: "ig_portrait", initialOverflowFormats: ["story"] }));
+    expect(html).toContain("il risque de déborder du cadre");
+    expect(html).not.toMatch(/coupé|tronqu[ée]/i);
   });
 
   it("MUTATION (sceneForFormat ignore relayout) : si la bande cessait d'appeler relayoutToFormat, le premier test « § relayout » ci-dessus rougirait sur le cadre ATTENDU (1000, pas 1520) — vérifié manuellement (rapport de tâche), pas rejoué ici pour ne pas dupliquer le sabotage dans le fichier de production", () => {

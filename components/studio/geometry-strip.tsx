@@ -71,11 +71,23 @@ export interface GeometryStripProps {
  * raisons ; (2) tests/studio-geometry-strip.test.ts peut ainsi affirmer l'égalité de la vraie
  * propriété accessible contre CETTE fonction plutôt que contre une chaîne recopiée à la main qui
  * pourrait dériver du composant sans qu'aucun test ne le remarque.
+ *
+ * CORRECTIF HONNÊTETÉ (revue de branche, avant fusion chantier D) : la copie affirmait « le surplus
+ * sera coupé au rendu (maxLines) » — un MÉCANISME précis (troncage) que le moteur réel ne fournit
+ * PAS. `lib/studio/relayout-warn.ts` documente déjà, vérifié empiriquement, que le `lineClamp` de
+ * satori n'a AUCUN effet avec le style réellement peint par `element.ts#textStyleFor`
+ * (`display: "flex"` — satori ne tronque qu'en `display: "block"`, jamais atteint ici) : le texte en
+ * trop ne disparaît pas, il DÉBORDE visuellement du cadre. La direction de l'alerte reste correcte
+ * (« ce texte ne tient plus dans ce format »), mais l'ANCIENNE phrase promettait un filet de sécurité
+ * (troncage propre) qui n'existe pas tant qu'un lineClamp réel n'est pas implémenté (billet séparé,
+ * hors périmètre ici) — un designer qui la lisait pouvait légitimement croire le rendu final propre.
+ * Reformulé SANS ce mécanisme : « risque de déborder du cadre », vrai quel que soit l'état du futur
+ * lineClamp.
  */
 export function maxLinesOverflowNote(maxLines: number, previewFormat?: FormatKey): string {
   const formatPart = previewFormat ? ` dans « ${FORMAT_PRESETS[previewFormat].label} »` : "";
   const linePart = maxLines > 1 ? "lignes" : "ligne";
-  return `Texte contraint en largeur : le retour à la ligne change${formatPart} et dépasse la limite de ${maxLines} ${linePart} posée sur ce calque — le surplus sera coupé au rendu (maxLines).`;
+  return `Texte contraint en largeur : le retour à la ligne change${formatPart} et dépasse la limite de ${maxLines} ${linePart} posée sur ce calque — le texte risque de déborder du cadre dans ce format.`;
 }
 
 // La place que U1 avait laissée ici (spec §6 : « U2 ajoutera ici une rangée align/distribute une fois
