@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, Undo2, Redo2 } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, PanelRight } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -24,6 +24,7 @@ import { PropertyPanel } from "./property-panel";
 import { VersionHistory } from "./version-history";
 import { ModeSwitch } from "./mode-switch";
 import { RenderMode } from "./render-mode";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { editorReducer, initEditorState, singleSelectedId, undo, redo } from "@/lib/studio/editor-state";
 import { createAutosaveController, type AutosaveState } from "@/lib/studio/autosave";
 import { shouldShowUnpublishedBadge } from "@/lib/studio/scene-diff";
@@ -31,6 +32,7 @@ import { validateScene, type TemplateContext } from "@/lib/studio/tokens";
 import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions";
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
+import { useEditorLayout } from "@/hooks/use-editor-layout";
 import {
   nextOpenPanel, setOpenPanel, toggleCollapse, type RailCategory,
   RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
@@ -179,6 +181,16 @@ function EditorShellInner({
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
 
+  // ── Réactif (Chantier A Tâche 4, spec §2/§9) ──────────────────────────────
+  // `layout` retombe sur `"full"` (hooks/use-editor-layout.ts) tant que le premier effet n'a pas
+  // tourné — SSR/renderToStaticMarkup compris (voir tests/studio-editor-shell.test.ts, qui n'installe
+  // AUCUN DOM et attend donc exactement la disposition trois colonnes historique). En dessous de
+  // 1280px, l'inspecteur (1024–1279 : `inspector-drawer`) puis le panneau accosté ET l'inspecteur
+  // (768–1023 : `all-drawers`) quittent la colonne fixe pour un `Sheet` (components/ui/sheet.tsx) —
+  // voir `inspectorOpen`/`panelContent` plus bas. Sous 768px (`too-small`), la branche Montage/Rendu
+  // entière cède la place à un état lecture seule (voir le rendu, plus bas).
+  const layout = useEditorLayout();
+
   // ── Rail + panneau accosté (Tâche 1, spec §3) ────────────────────────────
   // Tâche 7 (U1, spec §7) : le défaut des zones sûres suit le FORMAT de CE gabarit uniquement au tout
   // premier lancement dans ce navigateur (voir hooks/use-editor-prefs.ts et
@@ -220,6 +232,25 @@ function EditorShellInner({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [setPrefs]);
+
+  // ── Inspecteur en tiroir (Chantier A Tâche 4, spec §2/§9) ─────────────────
+  // Sous 1280px, l'inspecteur (property-panel.tsx) n'a plus de colonne dédiée — il vit dans un
+  // `Sheet` contrôlé par CET état, jamais par le composant `Sheet` lui-même (même recette que
+  // components/studio/version-history.tsx : `open`/`onOpenChange` posés depuis le parent, un simple
+  // bouton — pas `SheetTrigger` — pour l'ouvrir manuellement, ci-dessous dans le rendu). `false` par
+  // défaut : rien ne force le tiroir ouvert tant que rien n'est sélectionné.
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  // S'ouvre tout SEUL dès qu'une sélection apparaît (brief : « opened on selection ») — jamais à la
+  // refermeture (une sélection qui se vide ne doit pas arracher le tiroir sous les yeux de
+  // l'utilisateur qui y lisait autre chose). Inerte en `full` (la colonne fixe suffit) : ce guard,
+  // plutôt qu'un simple `layout !== "full"` dans la dépendance, évite de rouvrir le tiroir à chaque
+  // sélection quand l'écran repasse en dessous de 1280px alors qu'une sélection était déjà en cours.
+  const hadSelectionRef = useRef(state.selectedIds.length > 0);
+  useEffect(() => {
+    const hasSelection = state.selectedIds.length > 0;
+    if (layout !== "full" && hasSelection && !hadSelectionRef.current) setInspectorOpen(true);
+    hadSelectionRef.current = hasSelection;
+  }, [state.selectedIds, layout]);
 
   // ── Modes Montage ⇄ Rendu réel (Tâche 5, U1 spec §5) ──────────────────────
   // `mode` ne pilote qu'un rendu CONDITIONNEL plus bas (jamais une `key` React) : basculer ne
@@ -337,6 +368,74 @@ function EditorShellInner({
   }, [template.width, template.height, prefs.rulers]);
 
   const showUnpublishedBadge = shouldShowUnpublishedBadge(template.publishedVersion, state.scene, publishedScene);
+
+  // ── Panneau accosté : le MÊME contenu, docked (full/inspector-drawer) ou en tiroir (all-drawers) ─
+  // Chantier A Tâche 4 : factorisé pour ne pas dupliquer les six branches par catégorie deux fois —
+  // seule la largeur transmise à PanelHost/ModelesPanel/TextePanel/ImagesPanel change selon l'endroit
+  // où ce contenu atterrit (`undefined` laisse chacun retomber sur son défaut de 212px dans un
+  // `Sheet`, dont la largeur suit déjà ses propres classes responsives — jamais la préférence de
+  // largeur DESKTOP `prefs.railPanelWidth`, pensée pour une colonne fixe, pas pour un tiroir).
+  function panelBody(width: number | undefined): ReactNode {
+    switch (prefs.openPanel) {
+      case "calques":
+        return (
+          <PanelHost open="calques" onOpenChange={collapsePanel} width={width}>
+            <CalquesPanel scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} />
+          </PanelHost>
+        );
+      case "modeles":
+        return (
+          <ModelesPanel templates={templates} categories={categories} onOpenChange={collapsePanel} width={width} />
+        );
+      case "elements":
+        return (
+          <PanelHost open="elements" onOpenChange={collapsePanel} width={width}>
+            <ElementsPanel
+              context={template.context}
+              canvas={{ width: template.width, height: template.height }}
+              recentShapes={prefs.recentShapes}
+              dispatch={dispatch}
+              onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
+            />
+          </PanelHost>
+        );
+      case "texte":
+        return (
+          <TextePanel
+            context={template.context}
+            canvas={{ width: template.width, height: template.height }}
+            dispatch={dispatch}
+            onOpenChange={collapsePanel}
+            width={width}
+          />
+        );
+      case "images":
+        return (
+          <ImagesPanel
+            context={template.context}
+            assets={assets}
+            scene={state.scene}
+            // Tâche 3 (U2) : ce panneau assigne un asset à UN calque image — une sélection
+            // multiple lui arrive donc comme `null` et désactive son sélecteur, voir la note en
+            // tête de images-panel.tsx.
+            selectedId={singleSelectedId(state.selectedIds)}
+            dispatch={dispatch}
+            onOpenChange={collapsePanel}
+            width={width}
+          />
+        );
+      case "marque":
+        return (
+          <PanelHost open="marque" onOpenChange={collapsePanel} width={width}>
+            <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
+          </PanelHost>
+        );
+      default:
+        return null;
+    }
+  }
+
+  const panelContent = panelBody(layout === "all-drawers" ? undefined : prefs.railPanelWidth);
 
   return (
     <div className="flex h-full flex-col gap-3" data-testid="editor-shell">
@@ -462,9 +561,19 @@ function EditorShellInner({
           dans l'en-tête ci-dessus (editor-shell.tsx:353), frères dans sa colonne gauche/centrale, et
           y restent visibles quel que soit `mode` puisque cet en-tête n'est jamais conditionné par
           lui — la même garantie « les deux états », sans plus jamais dépendre d'un positionnement
-          absolu ni d'un pad réservé sur CE conteneur. */}
+          absolu ni d'un pad réservé sur CE conteneur.
+
+          Chantier A Tâche 4 (spec §2/§9, responsive) : sous 768px (`layout === "too-small"`), cette
+          zone entière cède la place à `TooSmallState` — QUEL que soit `mode` (Montage/Rendu réel),
+          ni l'un ni l'autre n'a la place de tenir. Entre 768 et 1279px, la STRUCTURE Montage
+          ci-dessous reste la même (Rail/panneau/canevas/inspecteur, dans cet ordre) — seuls le
+          panneau accosté (`all-drawers` UNIQUEMENT) et l'inspecteur (`inspector-drawer` ET
+          `all-drawers`) migrent d'une colonne fixe vers un `Sheet` (components/ui/sheet.tsx),
+          voir `panelContent`/`inspectorOpen` ci-dessus. */}
       <div className="flex flex-1 gap-3 overflow-hidden">
-        {mode === "montage" ? (
+        {layout === "too-small" ? (
+          <TooSmallState scene={state.scene} width={template.width} height={template.height} />
+        ) : mode === "montage" ? (
           <>
             <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
 
@@ -479,70 +588,40 @@ function EditorShellInner({
                 aux SIX catégories (directement ici pour Calques/Éléments/Marque, via leur propre prop
                 `width` pour Modèles/Texte/Images — voir panel-host.tsx) — une SEULE largeur pour le
                 panneau accosté quelle que soit la catégorie ouverte, puisqu'une seule est jamais
-                montée à la fois. */}
-            {prefs.openPanel === "calques" && (
-              <PanelHost open="calques" onOpenChange={collapsePanel} width={prefs.railPanelWidth}>
-                <CalquesPanel scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} />
-              </PanelHost>
-            )}
-            {prefs.openPanel === "modeles" && (
-              <ModelesPanel templates={templates} categories={categories} onOpenChange={collapsePanel} width={prefs.railPanelWidth} />
-            )}
-            {prefs.openPanel === "elements" && (
-              <PanelHost open="elements" onOpenChange={collapsePanel} width={prefs.railPanelWidth}>
-                <ElementsPanel
-                  context={template.context}
-                  canvas={{ width: template.width, height: template.height }}
-                  recentShapes={prefs.recentShapes}
-                  dispatch={dispatch}
-                  onShapeInserted={(id) => setPrefs((p) => ({ ...p, recentShapes: withRecentShape(p.recentShapes, id) }))}
-                />
-              </PanelHost>
-            )}
-            {prefs.openPanel === "texte" && (
-              <TextePanel
-                context={template.context}
-                canvas={{ width: template.width, height: template.height }}
-                dispatch={dispatch}
-                onOpenChange={collapsePanel}
-                width={prefs.railPanelWidth}
-              />
-            )}
-            {prefs.openPanel === "images" && (
-              <ImagesPanel
-                context={template.context}
-                assets={assets}
-                scene={state.scene}
-                // Tâche 3 (U2) : ce panneau assigne un asset à UN calque image — une sélection
-                // multiple lui arrive donc comme `null` et désactive son sélecteur, voir la note en
-                // tête de images-panel.tsx.
-                selectedId={singleSelectedId(state.selectedIds)}
-                dispatch={dispatch}
-                onOpenChange={collapsePanel}
-                width={prefs.railPanelWidth}
-              />
-            )}
-            {prefs.openPanel === "marque" && (
-              <PanelHost open="marque" onOpenChange={collapsePanel} width={prefs.railPanelWidth}>
-                <MarquePanel assets={assets} brandLogoUrl={brandLogoUrl} categories={categoryColors} />
-              </PanelHost>
-            )}
+                montée à la fois.
 
-            {/* Chantier A Tâche 3 (spec §2/§3) : la poignée rail-panel↔canevas — seulement quand un
-                panneau est RÉELLEMENT monté (`prefs.openPanel !== null`), sans quoi il n'y aurait
-                rien à redimensionner et la poignée flotterait, orpheline, contre le Rail. `sign={1}`
-                (panel-resize-handle.tsx) : le panneau est posé à GAUCHE de cette poignée, glisser
-                vers la droite l'AGRANDIT. */}
-            {prefs.openPanel !== null && (
-              <PanelResizeHandle
-                currentWidth={prefs.railPanelWidth}
-                min={RAIL_PANEL_WIDTH_MIN}
-                max={RAIL_PANEL_WIDTH_MAX}
-                sign={1}
-                onResize={(w) => setPrefs((p) => ({ ...p, railPanelWidth: w }))}
-                label="Redimensionner le panneau"
-                testId="rail-panel-resize-handle"
-              />
+                Chantier A Tâche 4 (spec §2/§9) : sous 1024px (`all-drawers`), CE MÊME contenu
+                (`panelContent`, calculé plus haut) n'est plus docké — il vit dans un `Sheet` contrôlé
+                par `prefs.openPanel !== null`, jamais par un second état dupliqué. La poignée de
+                redimensionnement rail-panel↔canevas n'a plus de sens dans un tiroir (largeur fixée par
+                le `Sheet`) : elle disparaît avec la colonne docquée, pas seulement quand aucun panneau
+                n'est ouvert. */}
+            {layout === "all-drawers" ? (
+              <Sheet open={prefs.openPanel !== null} onOpenChange={(next) => { if (!next) collapsePanel(null); }}>
+                <SheetContent
+                  side="left"
+                  data-testid="panel-drawer"
+                  showCloseButton={false}
+                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:w-auto"
+                >
+                  {panelContent}
+                </SheetContent>
+              </Sheet>
+            ) : (
+              <>
+                {panelContent}
+                {prefs.openPanel !== null && (
+                  <PanelResizeHandle
+                    currentWidth={prefs.railPanelWidth}
+                    min={RAIL_PANEL_WIDTH_MIN}
+                    max={RAIL_PANEL_WIDTH_MAX}
+                    sign={1}
+                    onResize={(w) => setPrefs((p) => ({ ...p, railPanelWidth: w }))}
+                    label="Redimensionner le panneau"
+                    testId="rail-panel-resize-handle"
+                  />
+                )}
+              </>
             )}
 
             {/* CanvasChrome (Tâche 7, spec §7) : pastilles flottantes (format + zoom), règles et
@@ -556,11 +635,20 @@ function EditorShellInner({
                 nettement plus affirmé qu'un simple soupçon de teinte (spec : « kill the white void »),
                 pour que l'artboard (son propre box-shadow, canvas.tsx, inchangé) se lise comme une
                 SURFACE posée sur un espace de travail plutôt que comme un rectangle flottant sur un
-                fond qui reste, à cette opacité, visuellement proche du blanc. */}
+                fond qui reste, à cette opacité, visuellement proche du blanc.
+
+                Chantier A Tâche 4 (spec §2/§9) : `min-w-[240px]` hors `full` — le brief nomme
+                explicitement « canvas full-bleed with a minimum width » pour `all-drawers` ; la même
+                garantie protège aussi `inspector-drawer`, où l'inspecteur devenu tiroir libère
+                justement de la place que le canevas ne doit pas re-perdre au premier redimensionnement
+                brusque. */}
             <div
               ref={canvasWrapRef}
               data-testid="canvas-backdrop"
-              className="flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/40 p-4"
+              className={cn(
+                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/40 p-4",
+                layout !== "full" && "min-w-[240px]",
+              )}
             >
               <CanvasChrome
                 format={template.format}
@@ -590,29 +678,74 @@ function EditorShellInner({
                 hauteur était LE défaut de l'ancienne colonne unique) — Rendu réel (Tâche 5, spec §5)
                 est désormais le SEUL foyer de l'aperçu, accessible via ModeSwitch ou `R`. Un seul
                 enfant (PropertyPanel) gère lui-même son propre défilement interne
-                (`property-sections`, property-panel.tsx) : rien ici n'a besoin de défiler. */}
-            {/* Chantier A Tâche 3 (spec §2/§3) : la poignée canevas↔inspecteur — toujours montée
-                (contrairement à celle du panneau accosté, l'inspecteur est TOUJOURS affiché en mode
-                Montage, jamais conditionné par `prefs.openPanel`). `sign={-1}` : l'inspecteur est
-                posé à DROITE de cette poignée, glisser vers la droite le RÉTRÉCIT. */}
-            <PanelResizeHandle
-              currentWidth={prefs.inspectorWidth}
-              min={INSPECTOR_WIDTH_MIN}
-              max={INSPECTOR_WIDTH_MAX}
-              sign={-1}
-              onResize={(w) => setPrefs((p) => ({ ...p, inspectorWidth: w }))}
-              label="Redimensionner l'inspecteur"
-              testId="inspector-resize-handle"
-            />
+                (`property-sections`, property-panel.tsx) : rien ici n'a besoin de défiler.
 
-            <div className="h-full shrink-0 overflow-hidden rounded-lg border" style={{ width: prefs.inspectorWidth }}>
-              <PropertyPanel
-                scene={state.scene} selectedIds={state.selectedIds} context={template.context}
-                dispatch={dispatch} assets={assets}
-                sectionsOpen={prefs.sectionsOpen}
-                onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}
-              />
-            </div>
+                Chantier A Tâche 4 (spec §2/§9) : cette colonne fixe — ELLE et sa poignée de
+                redimensionnement — n'existent plus qu'en `full` (>=1280px). En dessous
+                (`inspector-drawer`/`all-drawers`), l'inspecteur devient un `Sheet` déclenché soit
+                AUTOMATIQUEMENT dès qu'une sélection apparaît (`inspectorOpen`, effet ci-dessus), soit
+                MANUELLEMENT via le déclencheur `data-testid="inspector-drawer-trigger"` — jamais de
+                colonne ET de tiroir en même temps, pour ne jamais réclamer une largeur que l'écran n'a
+                pas (l'audit nomme précisément ce défaut à 1024px). */}
+            {layout === "full" ? (
+              <>
+                {/* Chantier A Tâche 3 (spec §2/§3) : la poignée canevas↔inspecteur — toujours montée
+                    (contrairement à celle du panneau accosté, l'inspecteur est TOUJOURS affiché en
+                    mode Montage `full`, jamais conditionné par `prefs.openPanel`). `sign={-1}` :
+                    l'inspecteur est posé à DROITE de cette poignée, glisser vers la droite le
+                    RÉTRÉCIT. */}
+                <PanelResizeHandle
+                  currentWidth={prefs.inspectorWidth}
+                  min={INSPECTOR_WIDTH_MIN}
+                  max={INSPECTOR_WIDTH_MAX}
+                  sign={-1}
+                  onResize={(w) => setPrefs((p) => ({ ...p, inspectorWidth: w }))}
+                  label="Redimensionner l'inspecteur"
+                  testId="inspector-resize-handle"
+                />
+
+                <div
+                  data-testid="inspector-column"
+                  className="h-full shrink-0 overflow-hidden rounded-lg border"
+                  style={{ width: prefs.inspectorWidth }}
+                >
+                  <PropertyPanel
+                    scene={state.scene} selectedIds={state.selectedIds} context={template.context}
+                    dispatch={dispatch} assets={assets}
+                    sectionsOpen={prefs.sectionsOpen}
+                    onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}
+                  />
+                </div>
+              </>
+            ) : (
+              <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  data-testid="inspector-drawer-trigger"
+                  title="Propriétés"
+                  aria-label="Propriétés"
+                  className="h-full shrink-0 self-stretch"
+                  onClick={() => setInspectorOpen(true)}
+                >
+                  <PanelRight />
+                </Button>
+                <SheetContent data-testid="inspector-drawer">
+                  <SheetHeader>
+                    <SheetTitle>Propriétés</SheetTitle>
+                  </SheetHeader>
+                  <div className="flex-1 overflow-auto px-4 pb-4">
+                    <PropertyPanel
+                      scene={state.scene} selectedIds={state.selectedIds} context={template.context}
+                      dispatch={dispatch} assets={assets}
+                      sectionsOpen={prefs.sectionsOpen}
+                      onSectionsOpenChange={(next) => setPrefs((p) => ({ ...p, sectionsOpen: next }))}
+                    />
+                  </div>
+                </SheetContent>
+              </Sheet>
+            )}
           </>
         ) : (
           <RenderMode
@@ -620,6 +753,54 @@ function EditorShellInner({
             articles={previewArticles} disabled={!storageConfigured}
             view={view} onViewChange={setView}
           />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── État « écran trop petit » (Chantier A Tâche 4, spec §2/§9) ──────────────────────────────────
+// Sous 768px, ni Montage (rail + panneau + canevas + inspecteur) ni Rendu réel (case large + bande de
+// vignettes, components/studio/render-mode.tsx) n'ont la place de tenir sans écraser quelque chose —
+// le brief nomme explicitement cette largeur « preview only ». Repli documenté par le brief lui-même
+// (« reuse the render-mode preview if easy, else a simple message + the artboard preview ») : RÉUTILISER
+// RenderMode aurait fait de cet état un TROISIÈME mode d'édition à part entière (templateId/context/
+// previewArticles/vue préservée…) pour un palier qui n'édite justement plus rien — le repli « message +
+// aperçu de l'artboard » est la lecture la plus honnête de « preview only » : LE même `<Canvas>` que
+// Montage, mais SANS dispatch réel (`() => {}`) ni sélection possible (`pointer-events-none` sur son
+// conteneur) — un aperçu, pas un éditeur miniature.
+function TooSmallState({ scene, width, height }: { scene: Scene; width: number; height: number }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    function computeScale() {
+      const el2 = wrapRef.current;
+      if (!el2) return;
+      const next = computeCanvasScale({ width: el2.clientWidth, height: el2.clientHeight }, { width, height }, false);
+      setScale(next);
+    }
+    computeScale();
+    const ro = new ResizeObserver(computeScale);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [width, height]);
+
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-hidden" data-testid="editor-too-small">
+      <div className="max-w-[280px] rounded-lg border bg-card p-4 text-center shadow-sm">
+        <p className="text-sm font-medium">Écran trop petit pour l&rsquo;édition — aperçu seulement</p>
+        <p className="mt-1 text-xs text-muted-foreground">Agrandissez la fenêtre pour retrouver les outils d&rsquo;édition.</p>
+      </div>
+      <div
+        ref={wrapRef}
+        data-testid="editor-too-small-preview"
+        className="pointer-events-none flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-4"
+      >
+        {scale !== null && (
+          <Canvas scene={scene} selectedIds={[]} dispatch={() => {}} scale={scale} />
         )}
       </div>
     </div>

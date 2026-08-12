@@ -1,6 +1,7 @@
-import { describe, it, expect, mock } from "bun:test";
+import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { installDom, mount } from "./dom-harness";
 import type { Scene } from "@/lib/studio/scene";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
 import { RULER_SIZE } from "@/components/studio/canvas-chrome";
@@ -199,5 +200,139 @@ describe("computeCanvasScale — l'échelle tient compte des bandes de règles (
     // des règles ajouté (60 - 32 - 2×20 = -12 <= 0) — précisément le cas que ce correctif introduit.
     expect(computeCanvasScale({ width: 60, height: 200 }, { width: 1000, height: 1000 }, false)).not.toBeNull();
     expect(computeCanvasScale({ width: 60, height: 200 }, { width: 1000, height: 1000 }, true)).toBeNull();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Chantier A Tâche 4 (spec §2/§9, responsive) — U0 harnais DOM : `EditorShell` MONTÉ (pas
+// `renderToStaticMarkup`, qui ne fait jamais tourner `useEffect` donc jamais
+// hooks/use-editor-layout.ts) à une largeur SIMULÉE, pour vérifier la COMPOSITION que produit
+// chaque palier — pas sa visibilité (leçon U1 : « present ≠ visible », brief). Ce fichier importe
+// déjà `EditorShell` de façon STATIQUE en tête de fichier (ligne ~38, AVANT tout `installDom()`) —
+// exactement le schéma documenté dans tests/studio-interactions.test.ts qui gèle
+// `@base-ui/utils/useIsoLayoutEffect.mjs` sur un no-op pour le composant `Sheet` (Dialog base-ui,
+// components/ui/sheet.tsx) importé transitivement par editor-shell.tsx : un VRAI clic qui ouvrirait
+// un `Sheet` échouerait donc ici à porter son contenu jusqu'à `document.body` (vérifié empiriquement
+// en écrivant la même sonde). Les trois assertions ci-dessous n'en ont pas besoin : chacune se lit
+// sur le DOM FERMÉ (le déclencheur `data-testid="inspector-drawer-trigger"` est un `<button>` natif,
+// aucune machinerie base-ui) — la preuve de composition que le brief demande (« the inspector is a
+// drawer… NOT an inline column ») ne réclame jamais d'ouvrir ce tiroir.
+function installLayoutTestGlobals(): () => void {
+  const g = globalThis as unknown as Record<string, unknown> & { window: Record<string, unknown> };
+  const snapshot = new Map<string, { had: boolean; value: unknown }>();
+  const set = (key: string, value: unknown) => {
+    snapshot.set(key, { had: Object.prototype.hasOwnProperty.call(g, key), value: g[key] });
+    g[key] = value;
+  };
+  // Même liste, même raison que tests/studio-interactions.test.ts (jsdom 30 sans
+  // `pretendToBeVisual` ne fournit ni l'un ni l'autre) : monter EditorShell — même en `too-small`,
+  // qui rend encore <Canvas> en aperçu — exige un `ResizeObserver` réel dès le premier rendu.
+  set("Element", g.window.Element);
+  set("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0) as unknown as number);
+  set("cancelAnimationFrame", (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>));
+  set("getComputedStyle", (g.window.getComputedStyle as (...a: unknown[]) => unknown).bind(g.window));
+  set(
+    "ResizeObserver",
+    class {
+      constructor(_cb: ResizeObserverCallback) {}
+      observe(_target: Element): void {}
+      unobserve(_target: Element): void {}
+      disconnect(): void {}
+    },
+  );
+  return () => {
+    for (const [key, prior] of snapshot) {
+      if (prior.had) g[key] = prior.value;
+      else delete g[key];
+    }
+  };
+}
+
+describe("EditorShell — réactif : editorLayoutMode pilote la composition réellement montée (Chantier A Tâche 4)", () => {
+  let teardownDom: () => void;
+  let teardownGlobals: () => void;
+
+  beforeAll(() => {
+    teardownDom = installDom();
+    teardownGlobals = installLayoutTestGlobals();
+  });
+  afterAll(() => {
+    teardownGlobals();
+    teardownDom();
+  });
+
+  // `window.innerWidth` est une propriété de données ORDINAIRE sous jsdom (vérifié : `writable`,
+  // `configurable`, pas un accesseur) — une simple réaffectation suffit. Restaurée SEULEMENT une fois
+  // `EditorShell` entièrement monté (donc l'effet de hooks/use-editor-layout.ts déjà exécuté, `mount()`
+  // de tests/dom-harness.ts attend `act()` jusque-là) — jamais avant : `window.innerWidth` reste lu de
+  // façon PARESSEUSE par cet effet (planifié, pas exécuté au moment où on l'affecte), donc la restaurer
+  // avant que `mount()` ne se résolve ferait lire la valeur restaurée, pas la largeur simulée. C'est le
+  // bogue d'une première version de ce test — mesuré : sans ce séquencement, `mount()` voyait la
+  // largeur *restaurée* (celle du test précédent, ou celle par défaut de jsdom, 1024) au lieu de celle
+  // demandée ici, quel que soit l'argument passé.
+  async function mountAtWidth(px: number) {
+    const original = Object.getOwnPropertyDescriptor(window, "innerWidth");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: px });
+    const { container, unmount } = await mount(React.createElement(EditorShell, {
+      template, initialScene: scene(), publishedScene: null, versions: [], previewArticles: [],
+    }));
+    if (original) Object.defineProperty(window, "innerWidth", original);
+    return { container, unmount };
+  }
+
+  it("1100px (inspector-drawer) : l'inspecteur est un TIROIR (déclencheur + Sheet), pas la colonne fixe — le canevas garde sa place", async () => {
+    const { container, unmount } = await mountAtWidth(1100);
+
+    expect(container.querySelector('[data-testid="editor-shell"]')).not.toBeNull();
+    // Le canevas est bien monté, PAS remplacé par l'état trop-petit.
+    expect(container.querySelector('[data-testid="canvas-backdrop"]')).not.toBeNull();
+    // LA preuve négative : ni la poignée de redimensionnement de l'inspecteur…
+    expect(container.querySelector('[data-testid="inspector-resize-handle"]')).toBeNull();
+    // …ni la colonne fixe elle-même n'apparaissent QUELQUE PART dans l'arbre.
+    expect(container.querySelector('[data-testid="inspector-column"]')).toBeNull();
+    // LA preuve positive : le déclencheur du tiroir est bien monté — « present », même si son
+    // contenu (le `Sheet`) ne l'est pas tant qu'on ne clique pas (« ≠ visible »).
+    expect(container.querySelector('[data-testid="inspector-drawer-trigger"]')).not.toBeNull();
+
+    unmount();
+  });
+
+  it("700px (too-small) : l'état lecture seule remplace TOUTE la coque d'édition — Rail, panneau et canevas d'édition disparaissent", async () => {
+    const { container, unmount } = await mountAtWidth(700);
+
+    expect(container.querySelector('[data-testid="editor-shell"]')).not.toBeNull();
+    const tooSmall = container.querySelector('[data-testid="editor-too-small"]');
+    expect(tooSmall).not.toBeNull();
+    // Le libellé EXACT du brief — un mutant qui reformulerait ce message sans y toucher structurellement
+    // (ex. en retirant « aperçu seulement ») ferait rougir cette assertion précise.
+    expect(tooSmall!.textContent).toContain("Écran trop petit pour l’édition — aperçu seulement");
+    // Anti-vacuité — LA preuve que ce n'est pas un simple bandeau AJOUTÉ par-dessus la coque
+    // d'édition habituelle : Rail/canevas d'édition/panneau accosté n'existent PLUS du tout dans cet
+    // arbre, quel que soit `mode` (Montage par défaut ici).
+    expect(container.querySelector('[data-testid="editor-rail"]')).toBeNull();
+    expect(container.querySelector('[data-testid="canvas-backdrop"]')).toBeNull();
+    expect(container.querySelector('[data-testid="inspector-drawer-trigger"]')).toBeNull();
+
+    unmount();
+  });
+
+  it("1400px (full) : les trois colonnes historiques — inspecteur en colonne fixe, PAS de tiroir", async () => {
+    const { container, unmount } = await mountAtWidth(1400);
+
+    expect(container.querySelector('[data-testid="editor-shell"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="editor-rail"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="canvas-backdrop"]')).not.toBeNull();
+    // La colonne fixe et sa poignée sont bien là…
+    expect(container.querySelector('[data-testid="inspector-resize-handle"]')).not.toBeNull();
+    const inspectorColumn = container.querySelector('[data-testid="inspector-column"]') as HTMLElement | null;
+    expect(inspectorColumn).not.toBeNull();
+    expect(inspectorColumn!.style.width).toBe("300px");
+    // …et AUCUN mécanisme de tiroir ne coexiste avec elle — un mutant qui rendrait les DEUX à la
+    // fois (colonne ET déclencheur) laisserait les deux tests précédents indifférents à ce défaut
+    // précis, puisqu'aucun des deux ne vérifie l'ABSENCE du tiroir en `full`.
+    expect(container.querySelector('[data-testid="inspector-drawer-trigger"]')).toBeNull();
+    expect(container.querySelector('[data-testid="editor-too-small"]')).toBeNull();
+
+    unmount();
   });
 });
