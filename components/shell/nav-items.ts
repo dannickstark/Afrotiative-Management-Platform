@@ -1,4 +1,4 @@
-import { LayoutDashboard, Inbox, Calendar, Newspaper, Activity, Settings, LayoutTemplate, Images, Wand2 } from "lucide-react";
+import { LayoutDashboard, Inbox, Newspaper, Activity, Settings, LayoutTemplate, Images, Wand2 } from "lucide-react";
 import type { Role } from "@/lib/auth";
 
 export type NavChild = { href: string; label: string; roles?: Role[] };
@@ -45,7 +45,6 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/dashboard", label: "Tableau de bord", icon: LayoutDashboard },
       { href: "/queue", label: "File de revue", icon: Inbox, badgeKey: "pending" },
-      { href: "/calendar", label: "Calendrier", icon: Calendar },
       { href: "/published", label: "Articles publiés", icon: Newspaper },
     ],
   },
