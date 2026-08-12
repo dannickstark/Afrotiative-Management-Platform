@@ -635,6 +635,55 @@ describe("PropertyPanel — le rayon d'une forme (dette 1)", () => {
     expect(note).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
   });
 
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE FINALE U3, IMPORTANT 3 — LA TERNAIRE DE CETTE NOTE N'ÉTAIT PAS ÉPINGLÉE.
+  //
+  // Mesuré : ÉCHANGER LES DEUX BRANCHES (property-panel.tsx) passait 63 tests sur 0 échec. Une étoile
+  // s'entendait dire « sa géométrie EST un arrondi (border-radius: 50%) » et l'ellipse « un découpage
+  // arrondirait les coins du cadre » — chacune l'explication de l'autre. Le test ci-dessus n'exige que
+  // le LIBELLÉ de la forme et `length > 40`, ce qu'un texte inversé satisfait parfaitement.
+  //
+  // Ici le contenu de CHAQUE branche est affirmé, DANS l'élément de la note (jamais dans tout le HTML
+  // du panneau), et la clé du choix est `descriptor.clipped` — la description elle-même, jamais une
+  // liste de noms — de sorte que le test ne peut pas dériver de la table de descriptions. Les
+  // contre-épreuves croisées sont ce qui interdit l'échange : chaque branche doit contenir SA raison
+  // et NE PAS contenir celle de l'autre.
+  //
+  // MUTATION QUI FAIT ROUGIR : échanger les deux branches de la ternaire (les deux camps échouent).
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("chaque branche de la note porte SA raison, et pas celle de l'autre camp (revue finale, Important 3)", () => {
+    const sans = SHAPE_KINDS.filter((k) => !descriptorFor(k).radiusApplies);
+    const découpées = sans.filter((k) => descriptorFor(k).clipped);
+    const arrondies = sans.filter((k) => !descriptorFor(k).clipped);
+    // Anti-vacuité des DEUX boucles : c'est exactement l'absence d'un des deux camps qui rendrait
+    // l'échange des branches indétectable.
+    expect(découpées.length).toBeGreaterThan(0);
+    expect(arrondies.length).toBeGreaterThan(0);
+
+    for (const kind of découpées) {
+      const note = elementWith(
+        render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card"),
+        "data-testid", "shape-radius-ignored",
+      );
+      expect(`${kind} : ${note.includes("découpage")}`).toBe(`${kind} : true`);
+      expect(`${kind} : ${note.includes("sommets de la forme")}`).toBe(`${kind} : true`);
+      // La raison de l'AUTRE camp est absente — sans ces deux lignes, un texte inversé passerait.
+      expect(`${kind} : ${note.includes("border-radius")}`).toBe(`${kind} : false`);
+      expect(`${kind} : ${note.includes("stade")}`).toBe(`${kind} : false`);
+    }
+
+    for (const kind of arrondies) {
+      const note = elementWith(
+        render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card"),
+        "data-testid", "shape-radius-ignored",
+      );
+      expect(`${kind} : ${note.includes("border-radius: 50%")}`).toBe(`${kind} : true`);
+      expect(`${kind} : ${note.includes("stade")}`).toBe(`${kind} : true`);
+      expect(`${kind} : ${note.includes("découpage")}`).toBe(`${kind} : false`);
+      expect(`${kind} : ${note.includes("sommets")}`).toBe(`${kind} : false`);
+    }
+  });
+
   it("un rayon déjà stocké survit à une forme qui l'ignore — il n'est pas effacé du calque", () => {
     // Convertir un rectangle arrondi en étoile puis revenir doit rendre le rayon intact : le panneau
     // n'écrit RIEN quand il masque le champ (il n'y a pas de patch « radius: undefined » caché).
