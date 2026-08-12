@@ -7,7 +7,16 @@ import { CanvasChrome, safeAreaDefaultFor } from "@/components/studio/canvas-chr
 import { DEFAULT_PREFS, type EditorPrefs } from "@/lib/studio/editor-prefs";
 import { FORMAT_KEYS, FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
 import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
-import { TOKEN_LABELS } from "@/components/studio/token-picker";
+// PAS "@/components/studio/token-picker" (correctif revue, U4 Tâche 6) : ce module ré-exporte bien
+// TOKEN_LABELS, mais importe aussi Popover/PopoverContent/PopoverTrigger (base-ui) pour le
+// sélecteur lui-même — importer DEPUIS lui, MÊME dans un fichier de test, charge tout l'arbre
+// Popover statiquement. `studio-canvas.test.ts` trie ALPHABÉTIQUEMENT avant
+// `studio-interactions.test.ts` : sous `bun test` sans `--isolate`, ce seul import gelait
+// `useIsoLayoutEffect` avant que studio-interactions.test.ts n'ait la moindre chance d'installer son
+// propre DOM, et faisait sauter SILENCIEUSEMENT 3 de ses tests comportementaux les plus forts
+// (TokenPicker illégal inerte, SelectField illégal non sélectionnable, le seam Images onPick). La
+// table est PURE — voir lib/studio/token-labels.ts — donc rien ici n'a besoin de token-picker.tsx.
+import { TOKEN_LABELS } from "@/lib/studio/token-labels";
 import { installDom, mount } from "./dom-harness";
 
 // Pas de DOM dans `bun test` (voir tests/use-persisted-filters.test.ts) : on rend le composant en
