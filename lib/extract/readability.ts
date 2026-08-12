@@ -3,6 +3,7 @@ import { Readability } from "@mozilla/readability";
 import DOMPurify from "isomorphic-dompurify";
 import { extractImages } from "./images";
 import type { Extracted } from "./index";
+import { isSafePublicHttpUrl } from "@/lib/url-guard";
 
 export function readabilityFromHtml(html: string, url: string): Extracted {
   const dom = new JSDOM(html, { url });
@@ -25,6 +26,9 @@ export function readabilityFromHtml(html: string, url: string): Extracted {
 }
 
 export async function readabilityExtract(url: string): Promise<Extracted> {
+  // SSRF guard: item.url comes from the feed publisher (content, not operator-vetted) and is
+  // fetched directly by our server — same reasoning as the externalOnly comment in ./index.ts.
+  if (!isSafePublicHttpUrl(url)) return { title: "", text: "", images: [], via: "readability" };
   const res = await fetch(url, {
     headers: { "user-agent": "AfrotiativeBot/1.0" },
     signal: AbortSignal.timeout(15000),

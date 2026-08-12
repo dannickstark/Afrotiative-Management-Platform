@@ -31,7 +31,7 @@ Drizzle query builder (no raw SQL from input); server actions begin with `requir
 |---|------|----------|----------|--------|------------|--------|
 | 001 | Gate deferred diffusion channels (no fake "sent") | bug | **P0** | S | none | DONE |
 | 002 | Remove dead Calendar nav stub | tech-debt | **P0** | S | none | DONE |
-| 003 | SSRF guard on RSS ingest extraction | security | **P0** | S | none | TODO |
+| 003 | SSRF guard on RSS ingest extraction | security | **P0** | S | none | DONE |
 | 004 | `requireUser` re-checks `banned` | security | **P0** | S | none | TODO |
 | 005 | Go-live production-config checklist (auth/cookies) | dx/security | **P0** | S | none | TODO |
 | 006 | Security hardening bundle (cron compare, font proxy, stale comment) | security | P1 | S | none | TODO |
