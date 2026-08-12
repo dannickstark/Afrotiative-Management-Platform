@@ -37,6 +37,7 @@ class FakeChannel implements SocialChannel {
   readonly format: FormatKey = "story";
   readonly captionLimits = SOCIAL_CHANNELS[TEMPLATE_CHANNEL].captionLimits;
   readonly credentialFields = SOCIAL_CHANNELS[TEMPLATE_CHANNEL].credentialFields;
+  readonly available = SOCIAL_CHANNELS[TEMPLATE_CHANNEL].available;
   readonly calls: SendInput[] = [];
   constructor(private readonly results: SendResult[]) {}
   async send(input: SendInput): Promise<SendResult> {
