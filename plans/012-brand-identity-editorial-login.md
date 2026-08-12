@@ -99,11 +99,11 @@ In `components/login-form.tsx`: keep ALL logic; drop the now-redundant card chro
 - Visual verification of the split-screen and sidebar wordmark.
 
 ## Done criteria (ALL)
-- [ ] `BrandMark` exists and is used by BOTH the sidebar and the login page
-- [ ] The literal placeholder "A" square in `app-sidebar.tsx` is gone (replaced by `BrandMark`)
-- [ ] `/login` is an editorial split-screen; login logic/tests unchanged (`tests/login.test.ts` green)
-- [ ] `tests/brand-mark.test.ts` passes, registered in `PURE_FILES`; `test:pure` + typecheck green
-- [ ] `plans/README.md` row 012 → DONE
+- [x] `BrandMark` exists and is used by BOTH the sidebar and the login page
+- [x] The literal placeholder "A" square in `app-sidebar.tsx` is gone (replaced by `BrandMark`)
+- [x] `/login` is an editorial split-screen; login logic/tests unchanged (`tests/login.test.ts` green)
+- [x] `tests/brand-mark.test.ts` passes, registered in `PURE_FILES`; `test:pure` + typecheck green
+- [x] `plans/README.md` row 012 → DONE
 
 ## STOP conditions
 - If a real logo/brand kit is provided before this runs, STOP and wire that asset into `BrandMark` instead of the typographic monogram (the split-screen and adoption points stay the same).

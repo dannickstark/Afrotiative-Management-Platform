@@ -39,7 +39,7 @@ import { cpus } from "node:os";
 // Files proven to touch neither DB nor network — the parallel lane. See the regenerate command above.
 const PURE_FILES = new Set<string>([
   "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
-  "article-preview-incomplete.test.ts", "auto-publish.test.ts",
+  "article-preview-incomplete.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
   "completeness.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
   "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
