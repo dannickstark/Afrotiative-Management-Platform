@@ -33,6 +33,7 @@ import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
 import { useEditorLayout } from "@/hooks/use-editor-layout";
+import { useEditorKeymap } from "@/hooks/use-editor-keymap";
 import {
   nextOpenPanel, setOpenPanel, toggleCollapse, type RailCategory,
   RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
@@ -180,6 +181,12 @@ function EditorShellInner({
 }: EditorShellInnerProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
+
+  // Chantier B, Tâche 1 — le KEYMAP CENTRAL (⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches, avec la garde de focus
+  // de lib/studio/keymap.ts). Monté ICI, sur `state`/`dispatch` déjà en place, plutôt que dans un
+  // composant enfant : c'est ce qui lui donne accès à la sélection ET à la scène ENTIÈRES pour
+  // ⌘A (sélectionner tous les calques) sans faire remonter ces deux valeurs par une prop dédiée.
+  useEditorKeymap(state, dispatch);
 
   // ── Réactif (Chantier A Tâche 4, spec §2/§9) ──────────────────────────────
   // `layout` retombe sur `"full"` (hooks/use-editor-layout.ts) tant que le premier effet n'a pas

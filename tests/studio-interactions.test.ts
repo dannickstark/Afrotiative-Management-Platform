@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:
 import React from "react";
 import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harness";
 import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
+import { useEditorKeymap } from "@/hooks/use-editor-keymap";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
@@ -1398,4 +1399,226 @@ describe("SelectField (emplacement image/QR) — une option ILLÉGALE reste dans
       unmount();
     },
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam 10 — Chantier B, Tâche 1 : le KEYMAP CENTRAL (lib/studio/keymap.ts + hooks/use-editor-
+// keymap.ts), à travers de VRAIS événements clavier `window`. tests/studio-keymap.test.ts prouve
+// `resolveShortcut`/`isEditingText` en PUR (littéraux, aucun DOM) ; ni lui ni les tests unitaires du
+// hook (il n'y en a pas — un hook n'a de sens qu'attaché à un composant) ne disent un mot du CÂBLAGE
+// réel : que EditorShell monte bien l'écouteur `window`, que Suppr/flèches ont RÉELLEMENT migré hors
+// de Canvas (et pas simplement dupliqués en plus), et que la garde de focus s'applique à un VRAI
+// `<input>` du panneau de calques — pas à un littéral `{ tagName: "INPUT" }` de complaisance.
+//
+// Chaque test ci-dessous RATTACHE son conteneur à `document.body` (même recette que
+// tests/studio-mode-switch.test.ts#mountAttached) : un événement dispatché dans un arbre DÉTACHÉ
+// n'atteint jamais `window`, où vit l'écouteur central (hooks/use-editor-keymap.ts).
+//
+// `shellLayerEl` (et non le `layerEl` partagé plus haut) : dès qu'un calque est sélectionné et que
+// le panneau « calques » est ouvert, `RenameField` (layer-panel.tsx) pose lui aussi un
+// `data-layer-id` sur son `<Input>` de renommage — un `layerEl` non scopé au canevas peut donc
+// résoudre vers CE `<input>` plutôt que vers le nœud du calque sur le canevas, selon l'ordre du DOM.
+// Trouvé PAR la Tâche 1 elle-même (un premier jet de ce fichier ciblait le mauvais nœud et lisait un
+// `style.left` vide) — scopé ici pour de bon.
+function shellLayerEl(container: HTMLElement, id: string): HTMLElement {
+  const el = container.querySelector(`[data-testid="studio-canvas"] [data-layer-id="${id}"]`) as HTMLElement | null;
+  if (!el) throw new Error(`nœud CANEVAS du calque « ${id} » absent du DOM monté`);
+  return el;
+}
+
+function shellSceneTwoLayers(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 1080, height: 1080, background: "#111111" },
+    layers: [
+      {
+        id: "t", name: "Texte", visible: true, locked: false,
+        frame: { x: 10, y: 10, w: 200, h: 80 },
+        type: "text", content: "Contenu",
+        font: { family: "Noto Sans", size: 24, weight: 400 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      },
+      {
+        id: "u", name: "Autre texte", visible: true, locked: false,
+        frame: { x: 300, y: 300, w: 150, h: 80 },
+        type: "text", content: "Second",
+        font: { family: "Noto Sans", size: 24, weight: 400 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      },
+    ],
+  };
+}
+
+/** Monte le VRAI `EditorShell` sur `scene`, RATTACHÉ à `document.body` (nécessaire pour que les
+ * événements clavier ciblés sur un calque ou un `<input>` du panneau atteignent l'écouteur `window`
+ * du keymap central). `cleanup()` démonte ET détache, sur le modèle de
+ * tests/studio-mode-switch.test.ts#mountAttached. */
+async function mountShellAttached(scene: Scene) {
+  const { container, unmount } = await mount(
+    React.createElement(EditorShellC, {
+      template: TEMPLATE, initialScene: scene, publishedScene: null, versions: [], previewArticles: [],
+    }),
+  );
+  document.body.appendChild(container);
+  return {
+    container,
+    cleanup: () => { unmount(); container.remove(); },
+  };
+}
+
+/** Monte le VRAI `Canvas` derrière le VRAI `editorReducer` ET le VRAI `useEditorKeymap` — SANS le
+ * reste d'`EditorShell` (rail, panneaux, `PropertyPanel`). Sert UNIQUEMENT au test « Échap » plus
+ * bas : `PropertyPanel` pose un `<Select>` (base-ui) dès qu'un calque est sélectionné, et ce
+ * `<Select>`, MÊME FERMÉ, s'avère intercepter « Échap » au niveau `document` — `stopPropagation()`
+ * avant que l'événement n'atteigne l'écouteur `window` de ce fichier, constaté en instrumentant les
+ * trois phases (capture, cible, bouillonnement) d'un événement `Escape` réel une fois qu'un calque
+ * est sélectionné dans le VRAI `EditorShell`. C'est un comportement de la bibliothèque de composants
+ * (base-ui `Select`), PRÉ-EXISTANT à cette tâche et hors de son périmètre (voir task-1-report.md) —
+ * ce harnais allégé, RÉEL sur les trois autres points (`window`, `useEditorKeymap`, `editorReducer`),
+ * contourne la seule pièce non pertinente ici (le chrome complet du panneau de propriétés) pour
+ * prouver « Échap efface la sélection » sans dépendre d'un tiers qui n'a rien à voir avec le keymap. */
+async function mountKeymapCanvas(scene: Scene, initialSelection: string[]) {
+  const initial: EditorState = { ...initEditorState(scene), selectedIds: initialSelection };
+  const box: { state: EditorState } = { state: initial };
+
+  function Host() {
+    const [state, dispatch] = React.useReducer(editorReducer, initial);
+    useEditorKeymap(state, dispatch);
+    box.state = state;
+    return React.createElement(CanvasC, {
+      scene: state.scene, selectedIds: state.selectedIds, dispatch, scale: 1,
+    });
+  }
+
+  const { container, unmount } = await mount(React.createElement(Host));
+  document.body.appendChild(container);
+  return { box, cleanup: () => { unmount(); container.remove(); } };
+}
+
+describe("EditorShell — le keymap central câble ⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches sur `window` (Chantier B, Tâche 1)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("⌘A RÉEL sur `window` sélectionne TOUS les calques", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBeNull();
+
+      await pressKey({ key: "a", metaKey: true });
+
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Échap RÉEL efface la sélection (harnais Canvas+réducteur+`useEditorKeymap`, voir mountKeymapCanvas)", async () => {
+    const { box, cleanup } = await mountKeymapCanvas(shellSceneTwoLayers(), ["t", "u"]);
+    try {
+      expect(box.state.selectedIds).toEqual(["t", "u"]);
+
+      await pressKey({ key: "Escape" });
+
+      expect(box.state.selectedIds).toEqual([]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("une flèche RÉELLE déplace le calque sélectionné — Suppr/flèches ont RÉELLEMENT migré hors de Canvas#handleKeyDown", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      // Sélectionne « t » par un VRAI pointerdown (sans pointerup — aucun geste de glisser à committer,
+      // même recette que les tests de sélection simple plus haut dans ce fichier).
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "ArrowRight" });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11); // 10 + NUDGE_STEP(1)
+
+      await pressKey({ key: "ArrowDown", shiftKey: true });
+      expect(parseFloat(shellLayerEl(container, "t").style.top)).toBe(20); // 10 + NUDGE_STEP_SHIFT(10)
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Suppr RÉEL supprime le calque sélectionné", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, button: 0 });
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "Delete" });
+
+      expect(container.querySelector('[data-testid="studio-canvas"] [data-layer-id="u"]')).toBeNull();
+      // « t », lui, n'a pas bougé — Suppr n'agit que sur la sélection, jamais sur le reste de la scène.
+      expect(shellLayerEl(container, "t")).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘Z RÉEL annule le dernier geste committé, ⌘⇧Z RÉEL le rétablit", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pressKey({ key: "ArrowRight" }); // UN geste committé (moveLayer -> une entrée d'historique)
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11);
+
+      await pressKey({ key: "z", metaKey: true });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(10); // annulé
+
+      await pressKey({ key: "z", metaKey: true, shiftKey: true });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11); // rétabli
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("LA GARDE DE FOCUS : ⌘Z et ⌘A ciblés sur un VRAI <input> de renommage (layer-panel.tsx) ne dispatchent RIEN (mutation : sans la garde, ce test rougit)", async () => {
+    // Panneau « calques » ouvert au montage — seul chemin non interactif pour obtenir le VRAI
+    // <input data-action="rename"> de RenameField (même recette que le test ⌘/ plus haut).
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      // Un geste committé D'ABORD : si la garde de ⌘Z ci-dessous ne tenait pas, il y aurait quelque
+      // chose de RÉEL à annuler, et ce test le verrait.
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pressKey({ key: "ArrowRight" });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11);
+
+      const renameInput = container.querySelector(
+        '[data-action="rename"][data-layer-id="u"]',
+      ) as HTMLInputElement | null;
+      expect(renameInput).not.toBeNull();
+      // Sélectionne « u » par un VRAI pointerdown sur le canevas (même geste que les autres tests de
+      // ce fichier) plutôt que par `renameInput.focus()` : jsdom + le suivi de valeur des champs
+      // contrôlés de React (`handleEventsForInputEventPolyfill`, cherchant un `attachEvent` propre à
+      // IE, absent de jsdom) rend un VRAI `.focus()` imprévisible dans ce harnais — repéré en
+      // instrumentant le montage, voir task-1-report.md. `isEditingText` (lib/studio/keymap.ts) ne
+      // regarde de toute façon que `e.target` de l'événement clavier, jamais `document.activeElement` :
+      // CIBLER `renameInput` avec `pressKey` ci-dessous prouve la garde exactement de la même façon,
+      // sans dépendre d'un focus DOM réel.
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, button: 0 });
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+
+      await pressKey({ key: "z", metaKey: true }, renameInput!);
+      // ⌘Z gardé : la position de « t » (annulable) N'A PAS bougé.
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11);
+
+      await pressKey({ key: "a", metaKey: true }, renameInput!);
+      // ⌘A gardé : « t » reste NON sélectionné.
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
 });

@@ -1,12 +1,12 @@
 "use client";
 
 import { useRef } from "react";
-import type { Dispatch, CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import type { Dispatch, CSSProperties, PointerEvent } from "react";
 import type { Layer, Scene } from "@/lib/studio/scene";
 import {
-  type EditorAction, select, toggleSelection, clearSelection, singleSelectedId, deleteLayer, moveLayer,
+  type EditorAction, select, toggleSelection, clearSelection, singleSelectedId,
 } from "@/lib/studio/editor-state";
-import { useLayerDrag, HANDLES, nudgeDelta, type HandleId } from "@/hooks/use-layer-drag";
+import { useLayerDrag, HANDLES, type HandleId } from "@/hooks/use-layer-drag";
 // U3 Tâche 3 (arbitrage A) : LA MÊME question que les deux chemins de rendu posent — cette forme
 // tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
 // que le rendu ne fera pas.
@@ -125,16 +125,23 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
     canvas: scene.canvas,
   });
 
-  // Le calque à OUTILLER (poignées, rotation, clavier) : celui d'une sélection SIMPLE, jamais le
-  // premier d'une sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une
-  // sélection multiple laisserait croire qu'elles agissent sur l'ensemble. Les opérations par LOT sur
-  // une sélection multiple attendaient l'action « un lot = une entrée d'historique » : la Tâche 4 l'a
+  // Le calque à OUTILLER (poignées, rotation) : celui d'une sélection SIMPLE, jamais le premier d'une
+  // sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une sélection
+  // multiple laisserait croire qu'elles agissent sur l'ensemble. Les opérations par LOT sur une
+  // sélection multiple attendaient l'action « un lot = une entrée d'historique » : la Tâche 4 l'a
   // livrée (`setFrames`, lib/studio/editor-state.ts) et s'en sert pour aligner/répartir
   // (components/studio/geometry-strip.tsx#AlignRow). Suppr et les flèches restent DÉLIBÉRÉMENT en
-  // sélection simple ici — les généraliser est un geste de produit à part entière (que faut-il faire
-  // d'un calque verrouillé dans le lot ? d'un calque masqué ?), hors du périmètre de la Tâche 4 ; ce
-  // qu'il ne faut surtout pas faire, c'est les dispatcher une action par calque, ce qui empilerait N
-  // entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
+  // sélection simple — les généraliser est un geste de produit à part entière (que faut-il faire d'un
+  // calque verrouillé dans le lot ? d'un calque masqué ?), hors périmètre ; ce qu'il ne faut surtout
+  // pas faire, c'est les dispatcher une action par calque, ce qui empilerait N entrées d'annulation
+  // pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
+  //
+  // Chantier B, Tâche 1 : Suppr et les flèches ne sont PLUS gérées ICI — `handleKeyDown` (posé sur ce
+  // composant, focus canevas requis) a migré vers le KEYMAP CENTRAL, un écouteur `window` unique monté
+  // dans editor-shell.tsx (hooks/use-editor-keymap.ts). Ce hook réutilise EXACTEMENT la même dérivation
+  // qu'ici — `singleSelectedId` puis un calque visible et non verrouillé — pour ne rien changer au
+  // comportement d'un canevas focalisé ; `selectedLayer` ci-dessous reste donc utile aux poignées/
+  // rotation seules, plus au clavier.
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
 
@@ -165,20 +172,6 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
       : (layer.rotation ?? 0);
   }
 
-  function handleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (!selectedLayer || selectedLayer.locked) return;
-    if (e.key === "Delete") {
-      e.preventDefault();
-      dispatch(deleteLayer(selectedLayer.id));
-      return;
-    }
-    const nudge = nudgeDelta(e.key, e.shiftKey);
-    if (nudge) {
-      e.preventDefault();
-      dispatch(moveLayer(selectedLayer.id, nudge.x, nudge.y));
-    }
-  }
-
   function handleRotateDown(layer: Layer) {
     return (e: PointerEvent<HTMLElement>) => {
       const canvasRect = rootRef.current?.getBoundingClientRect();
@@ -197,8 +190,12 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
   return (
     <div
       ref={rootRef}
+      // `tabIndex={0}` reste nécessaire même sans `onKeyDown` propre à ce composant (Chantier B,
+      // Tâche 1 : Suppr/flèches ont migré vers le keymap central, window-level — voir plus haut) :
+      // `rootRef.current?.focus()`, plus bas, déplace le focus DOM ici au clic d'un calque, ce qui
+      // fait sortir `document.activeElement` d'un éventuel champ de saisie du panneau de propriétés —
+      // exactement ce que `isEditingText` (lib/studio/keymap.ts) regarde pour lever sa garde.
       tabIndex={0}
-      onKeyDown={handleKeyDown}
       // « Cliquer le canevas vide efface la sélection » (Tâche 3, spec §3). Posé ICI, sur la racine,
       // et atteint UNIQUEMENT par les pointerdown qui n'ont été absorbés par rien : le corps d'un
       // calque comme une poignée passent tous par `bind()` (use-layer-drag.ts), qui appelle
