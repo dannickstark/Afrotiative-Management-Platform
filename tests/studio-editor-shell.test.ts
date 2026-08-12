@@ -312,6 +312,18 @@ describe("EditorShell — réactif : editorLayoutMode pilote la composition rée
     expect(container.querySelector('[data-testid="editor-rail"]')).toBeNull();
     expect(container.querySelector('[data-testid="canvas-backdrop"]')).toBeNull();
     expect(container.querySelector('[data-testid="inspector-drawer-trigger"]')).toBeNull();
+    // Correctif revue (Chantier A Tâche 4, Important) : « aperçu seulement » n'était pas honnête —
+    // annuler/rétablir (dispatch(undo())/dispatch(redo()), un VRAI HistoryEntry du réducteur),
+    // Historique (VersionHistory.onRestore remonte l'éditeur avec une AUTRE scène) et Publier restaient
+    // des actions RÉELLES rendues par l'en-tête, monté sans condition de `layout` — et undo/redo/
+    // restaurer sont ensuite autosauvegardés (l'effet qui compare `state.scene` à sa valeur d'origine
+    // ne distingue pas la PROVENANCE d'un changement), donc persistés en base malgré l'étiquette
+    // lecture seule. Les quatre doivent être ABSENTS ici (repliés, pas seulement `disabled` — un
+    // affordance visible resterait malhonnête sur un écran qui prétend n'en avoir aucune).
+    expect(container.querySelector('[title="Annuler"]')).toBeNull();
+    expect(container.querySelector('[title="Rétablir"]')).toBeNull();
+    expect(container.querySelector('[data-action="version-history"]')).toBeNull();
+    expect(container.querySelector('[data-action="publish"]')).toBeNull();
 
     unmount();
   });
@@ -332,6 +344,14 @@ describe("EditorShell — réactif : editorLayoutMode pilote la composition rée
     // précis, puisqu'aucun des deux ne vérifie l'ABSENCE du tiroir en `full`.
     expect(container.querySelector('[data-testid="inspector-drawer-trigger"]')).toBeNull();
     expect(container.querySelector('[data-testid="editor-too-small"]')).toBeNull();
+    // Anti-vacuité, appariée au test 700px ci-dessus : les quatre contrôles d'édition de l'en-tête
+    // SONT bien là en `full` — un mutant qui les replierait à TOUTES les largeurs (au lieu de
+    // seulement `too-small`) ferait rougir CETTE assertion précise, jamais couverte par le test 700px
+    // seul.
+    expect(container.querySelector('[title="Annuler"]')).not.toBeNull();
+    expect(container.querySelector('[title="Rétablir"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="version-history"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="publish"]')).not.toBeNull();
 
     unmount();
   });

@@ -511,29 +511,47 @@ function EditorShellInner({
           >
             100%
           </Button>
-          <Button
-            type="button" variant="ghost" size="icon-sm" title="Annuler"
-            disabled={state.past.length === 0} onClick={() => dispatch(undo())}
-          >
-            <Undo2 />
-          </Button>
-          <Button
-            type="button" variant="ghost" size="icon-sm" title="Rétablir"
-            disabled={state.future.length === 0} onClick={() => dispatch(redo())}
-          >
-            <Redo2 />
-          </Button>
-          <VersionHistory
-            templateId={template.id} publishedVersion={template.publishedVersion} versions={versions}
-            onRestore={onRestore}
-          />
-          <Button
-            type="button" data-action="publish" disabled={!storageConfigured || publishing}
-            title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
-            onClick={() => void handlePublish()}
-          >
-            {publishing ? "Publication…" : "Publier"}
-          </Button>
+          {/* Correctif revue (Chantier A Tâche 4) : « aperçu seulement » n'était PAS honnête —
+              annuler/rétablir/restaurer une version restaient de VRAIES actions (dispatch(undo())/
+              dispatch(redo()), un vrai `HistoryEntry` du réducteur ; `VersionHistory.onRestore`
+              remonte l'éditeur avec une AUTRE scène) rendues depuis cet en-tête, monté SANS condition
+              de `layout` — et ces deux mutations sont ensuite autosauvegardées (l'effet plus haut ne
+              distingue pas d'où vient un changement de `state.scene`), donc persistées en base malgré
+              l'étiquette lecture seule. Repliées ici plutôt que simplement désactivées : un bouton
+              `disabled` resterait un AFFORDANCE visible d'édition sur un écran qui prétend n'en avoir
+              aucune — la même discipline que `TooSmallState` (Canvas en lecture seule, PAS un Canvas
+              éditable désactivé au pixel près). */}
+          {layout !== "too-small" && (
+            <>
+              <Button
+                type="button" variant="ghost" size="icon-sm" title="Annuler"
+                disabled={state.past.length === 0} onClick={() => dispatch(undo())}
+              >
+                <Undo2 />
+              </Button>
+              <Button
+                type="button" variant="ghost" size="icon-sm" title="Rétablir"
+                disabled={state.future.length === 0} onClick={() => dispatch(redo())}
+              >
+                <Redo2 />
+              </Button>
+              <VersionHistory
+                templateId={template.id} publishedVersion={template.publishedVersion} versions={versions}
+                onRestore={onRestore}
+              />
+              {/* Minor (même revue) : `Publier` ne mute jamais `state.scene` lui-même (il publie l'état
+                  déjà enregistré) — replié malgré tout, pour la même cohérence « rien d'actionnable »
+                  qu'annuler/rétablir/restaurer, plutôt que de laisser un seul bouton d'action survivre
+                  seul dans un en-tête par ailleurs inerte. */}
+              <Button
+                type="button" data-action="publish" disabled={!storageConfigured || publishing}
+                title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
+                onClick={() => void handlePublish()}
+              >
+                {publishing ? "Publication…" : "Publier"}
+              </Button>
+            </>
+          )}
         </div>
       </header>
 
