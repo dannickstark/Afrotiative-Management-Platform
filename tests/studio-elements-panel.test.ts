@@ -168,6 +168,20 @@ describe("ElementsPanel — chaque forme a son icône (U3 Tâche 3)", () => {
   }
   // lucide-react pose `class="lucide lucide-<nom> …"` sur son <svg> (vérifié en rendant l'icône) :
   // c'est ce nom-là qui identifie l'icône réellement rendue, pas le composant importé.
+  /** La tranche de HTML entre deux marqueurs, en LEVANT si l'un des deux manque — revue finale U3
+   * (Minor 2). Écrit avec deux `indexOf` NON VÉRIFIÉS, un marqueur renommé rend -1 : la tranche
+   * s'élargit alors silencieusement à tout le HTML (ou se vide), et une assertion qu'on croyait portée
+   * sur la seule section des récents porte en réalité sur la grille entière. C'est le piège que ce
+   * programme a déjà rencontré trois fois — il échoue franchement, désormais. */
+  function sliceBetween(html: string, from: string, to: string): string {
+    const start = html.indexOf(from);
+    const end = html.indexOf(to);
+    if (start === -1) throw new Error(`marqueur de début introuvable dans le HTML rendu : ${from}`);
+    if (end === -1) throw new Error(`marqueur de fin introuvable dans le HTML rendu : ${to}`);
+    if (end <= start) throw new Error(`marqueurs dans le mauvais ordre : « ${to} » précède « ${from} »`);
+    return html.slice(start, end);
+  }
+
   function iconOf(html: string, tileId: string): string {
     const m = /class="lucide lucide-([a-z0-9-]+)/.exec(tileHtml(html, tileId));
     if (!m) throw new Error(`aucune icône lucide dans la tuile « ${tileId} »`);
@@ -216,7 +230,7 @@ describe("ElementsPanel — chaque forme a son icône (U3 Tâche 3)", () => {
     // La section des récents rend les MÊMES tuiles : une icône codée en dur dans une seule des deux
     // sections divergerait sans que rien ne le remarque.
     const html = render("social_post", ["star", "line"]);
-    const recents = html.slice(html.indexOf('data-testid="elements-recent"'), html.indexOf('data-testid="elements-shapes"'));
+    const recents = sliceBetween(html, 'data-testid="elements-recent"', 'data-testid="elements-shapes"');
     expect(/class="lucide lucide-([a-z0-9-]+)/.exec(recents)).not.toBeNull();
     expect(new Set([iconOf(recents, "star"), iconOf(recents, "line")]).size).toBe(2);
   });
