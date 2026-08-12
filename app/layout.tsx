@@ -5,8 +5,9 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
+import { cn } from "@/lib/utils";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
+const inter = Inter({subsets:['latin'],variable:'--font-sans'});
 const lora = Lora({ subsets: ["latin"], variable: "--font-editorial" });
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html
       lang="fr"
       suppressHydrationWarning
-      className={`${inter.variable} ${lora.variable} h-full`}
+      className={cn("h-full", lora.variable, "font-sans", inter.variable)}
     >
       {/* `h-full` + `overflow-hidden` : body est borné à la hauteur du viewport et ne défile pas
           lui-même. C'est ce qui permet à <main className="overflow-auto"> (app/(app)/layout.tsx)
