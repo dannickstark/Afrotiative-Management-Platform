@@ -16,11 +16,19 @@ const TOKEN_RE = /^\{\{\s*[a-zA-Z][\w.]*\s*\}\}$/;
 // U4 Tâche 1 (spike) — LE registre des nœuds « couleur » du schéma. `hexColor` est le SEUL nœud
 // couleur ; toute couleur de la scène est CE nœud partagé (overlay, ombre, texte, contour, arrêts de
 // dégradé, remplissage, bordure, fg/bg d'un QR, fond du canevas). Le marquer une fois ici suffit :
-// le registre de Zod v4 indexe par IDENTITÉ de nœud, et cette identité survit aux enveloppes que le
+// le registre de Zod v4 indexe par IDENTITÉ de nœud, et cette identité survit aux ENVELOPPES que le
 // schéma pose par-dessus (`.optional()` → def.innerType, `z.array` → def.element, `z.union` /
 // `z.discriminatedUnion` → def.options, `z.object` → def.shape) — c'est ce que la sonde a prouvé.
-// `.refine()` N'enveloppe PAS : en Zod v4 il ajoute un check au MÊME nœud string, donc le marqueur
-// posé après lui tient. lib/studio reste sans base : `z.registry` est du pur cœur Zod, client-safe.
+//
+// ⚠️ ORDRE CRITIQUE — `.register()` DOIT être le DERNIER appel de la chaîne, après TOUS les
+// `.refine()`/`.check()`. En Zod v4, `.refine()`/`.check()` ne mutent pas : ils CLONENT le nœud
+// (`this.clone(def)` → `new inst._zod.constr(def)`, cf. core/util.js + classic/schemas.js), donc
+// `z.string() !== z.string().refine(…)`. Le registre étant indexé par identité, un marqueur posé
+// AVANT un `.refine()` est laissé sur l'ANCIEN objet et DISPARAÎT silencieusement du clone final :
+// `colorFieldPaths` sous-compterait alors sans lever d'erreur (un chemin couleur manquant, muet).
+// Ici l'ordre est correct : `.register()` s'applique à l'objet FINAL, celui que le schéma référence.
+// Quiconque ajoute un champ marqué doit garder `.register()` en dernier. lib/studio reste sans base :
+// `z.registry` est du pur cœur Zod, client-safe.
 export const COLOR_REGISTRY = z.registry<{ color: true }>();
 const hexColor = z.string().refine(
   (v) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v) || v === "transparent" || TOKEN_RE.test(v),
