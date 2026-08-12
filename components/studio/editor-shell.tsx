@@ -454,6 +454,17 @@ function EditorShellInner({
     const prevScale = scale;
     const rawNextScale = wheelZoomScale(prevScale, e.deltaY);
     const nextFactor = clampZoom(rawNextScale / fitScale);
+    // GARDE (revue chantier B T4, Important) : un `deltaY` nul, ou qui pousse encore contre une
+    // borne DÉJÀ atteinte (8× ou 0,1×, molette qui continue de tourner), produit un `nextFactor`
+    // IDENTIQUE à `factor` — donc un `scale` NUMÉRIQUEMENT INCHANGÉ. Sans cette garde,
+    // `pendingWheelScrollRef` serait quand même écrit, mais le `useLayoutEffect` ci-dessus, keyed sur
+    // `[scale]`, ne se redéclenche JAMAIS pour une valeur inchangée (`Object.is` côté React) — la
+    // correction resterait donc en attente, ORPHELINE, jusqu'au PROCHAIN changement RÉEL de `scale`
+    // par un chemin complètement différent (slot, ⇧0/⇧1/⇧2, zoomToSelection), qui appliquerait alors
+    // un défilement calculé pour un curseur/geste qui n'a plus rien à voir — un saut de vue silencieux
+    // et différé. `return` AVANT d'écrire la ref ou d'appeler `setZoom` : un no-op véritable, rien en
+    // attente pour la prochaine fois.
+    if (nextFactor === factor) return;
     const nextScale = fitScale * nextFactor;
     const scroll = { x: el.scrollLeft, y: el.scrollTop };
     const viewport = { width: el.clientWidth, height: el.clientHeight };

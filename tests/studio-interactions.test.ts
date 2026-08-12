@@ -1936,6 +1936,61 @@ describe("EditorShell — molette ⌘/Ctrl : zoom centré sur le curseur, défil
       cleanup();
     }
   });
+
+  it("un défilement de molette OBSOLÈTE (facteur déjà au CLAMP, la molette continue de tourner) ne corrompt PAS un zoom RÉEL et SANS RAPPORT survenant plus tard (revue chantier B T4, Important)", async () => {
+    // LE BUG (trouvé en revue) : `handleCanvasWheel` écrivait `pendingWheelScrollRef` et appelait
+    // `setZoom` INCONDITIONNELLEMENT, même quand `nextFactor` retombe sur la MÊME valeur que `factor`
+    // (le facteur est déjà au clamp 8×/0,1×, ou un `deltaY` nul) — un geste parfaitement ORDINAIRE
+    // (l'utilisateur continue de tourner la molette sans savoir qu'il a atteint la borne). Puisque
+    // `scale` ne change alors PAS numériquement, le `useLayoutEffect` keyed sur `[scale]` ne se
+    // redéclenche JAMAIS (`Object.is` sur une valeur inchangée) — la correction reste ORPHELINE dans
+    // la ref jusqu'au PROCHAIN changement RÉEL de `scale`, par un chemin complètement différent (ici,
+    // le bouton « − » du slot), qui l'appliquerait alors À TORT, écrasant un défilement entre-temps
+    // devenu obsolète pour un curseur/geste qui n'a plus rien à voir.
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+
+      // 1) ⌘-molette avec un `deltaY` énorme -> facteur immédiatement CLAMPÉ au maximum (8×) en un
+      // seul événement (déterministe quelle que soit `WHEEL_ZOOM_SENSITIVITY`, un réglage produit
+      // explicitement non figé — voir lib/studio/zoom.ts). Un défilement corrigé, RÉEL, est appliqué
+      // ici : l'échelle a RÉELLEMENT changé, l'effet se déclenche.
+      await wheel(backdrop, { ctrlKey: true, deltaY: -5000, clientX: 60, clientY: 40 });
+      expect(parseFloat(artboardEl(container).style.width)).toBeCloseTo(1080 * 8, 6); // bien au clamp (ZOOM_STEPS max)
+
+      // 2) La molette continue de tourner DANS LE MÊME SENS alors que le facteur est DÉJÀ au clamp —
+      // `nextFactor` vaut encore 8 : AUCUN changement d'échelle ne doit avoir lieu (la garde). Un
+      // curseur DÉLIBÉRÉMENT différent de l'étape 1, pour qu'une correction calculée à partir de LUI
+      // (si elle était écrite à tort) soit clairement distinguable d'un no-op véritable.
+      const widthAtClamp = artboardEl(container).style.width;
+      await wheel(backdrop, { ctrlKey: true, deltaY: -5000, clientX: 999, clientY: 777 });
+      expect(artboardEl(container).style.width).toBe(widthAtClamp); // no-op confirmé : rien n'a bougé
+
+      // 3) Puis quelque chose d'AUTRE fait défiler le conteneur — un pan natif (molette SANS ⌘/Ctrl,
+      // Espace-glisser, une poignée de barre de défilement…) : SANS RAPPORT avec le zoom, jamais câblé
+      // pour corriger quoi que ce soit. Simulé ICI directement sur `scrollLeft`/`scrollTop` — le
+      // MÉCANISME exact importe peu, seul compte qu'un défilement RÉEL a eu lieu entre le no-op de
+      // l'étape 2 et le zoom SANS RAPPORT de l'étape 4.
+      backdrop.scrollLeft = 500;
+      backdrop.scrollTop = 300;
+
+      // 4) Un zoom RÉEL et SANS RAPPORT avec la molette : le bouton « − » du slot
+      // (lib/studio/zoom.ts#nextZoom), un chemin qui NE touche JAMAIS `scrollLeft`/`scrollTop` lui-même.
+      const zoomOut = container.querySelector('[data-testid="zoom-out"]') as HTMLButtonElement;
+      expect(zoomOut).not.toBeNull();
+      await click(zoomOut);
+      expect(parseFloat(artboardEl(container).style.width)).toBeCloseTo(1080 * 6, 6); // nextZoom(8,-1) = 6 : l'échelle a bien changé
+
+      // Le défilement de l'étape 3 doit SURVIVRE intact — AUCUNE correction de molette obsolète ne
+      // doit l'écraser. AVANT le correctif : le `pendingWheelScrollRef` laissé par l'étape 2
+      // s'appliquerait ICI (premier changement RÉEL de `scale` après son écriture), ramenant le
+      // défilement à une valeur calculée pour un curseur/geste qui n'a plus rien à voir.
+      expect(backdrop.scrollLeft).toBe(500);
+      expect(backdrop.scrollTop).toBe(300);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe("EditorShell — Espace-glisser : pan du conteneur, curseur grab/grabbing, SANS toucher aucun calque (Chantier B, Tâche 4)", () => {
