@@ -188,14 +188,29 @@ export async function click(el: Element): Promise<void> {
   });
 }
 
-/** Dispatche un VRAI KeyboardEvent "keydown" sur `document` (pas sur un élément précis) — les
- * raccourcis clavier de l'éditeur (⌘/, etc.) s'enregistrent via `document.addEventListener`, jamais
- * via une prop React sur un nœud particulier. */
-export async function pressKey(init: KeyboardEventInit): Promise<void> {
+/** Dispatche un VRAI KeyboardEvent "keydown" sur `document` par défaut — les raccourcis clavier de
+ * l'éditeur (⌘/, « R », etc.) s'enregistrent via `document`/`window.addEventListener`, jamais via une
+ * prop React sur un nœud particulier.
+ *
+ * `target` (U3 Tâche 5, additif — la valeur par défaut est l'ancien comportement) permet de viser un
+ * ÉLÉMENT précis, ce qu'exigent deux besoins distincts :
+ *   - une touche adressée à un contrôle focalisé (flèches sur un bouton d'un groupe) doit remonter par
+ *     la chaîne DOM de ce contrôle, pas apparaître sur `document` comme si personne n'avait le focus ;
+ *   - la garde « pas de raccourci pendant la frappe » (isModeToggleShortcut, lib/studio/studio-mode.ts)
+ *     lit `event.target.tagName` — la viser sur un `<input>` RÉEL est la seule façon de l'exercer.
+ * ATTENTION : un élément DÉTACHÉ du document ne propage pas jusqu'à `window` (le chemin d'événement
+ * s'arrête à la racine de son propre arbre) — rattacher le conteneur monté à `document.body` est
+ * nécessaire pour qu'un écouteur `window` voie l'événement.
+ *
+ * Renvoie l'événement dispatché (additif) : `event.defaultPrevented` est la SEULE façon d'observer
+ * qu'un gestionnaire a bien appelé — ou bien s'est abstenu d'appeler — `preventDefault()`, ce qui
+ * distingue « le raccourci a été intercepté » de « la touche a été laissée au navigateur » (Cmd+R). */
+export async function pressKey(init: KeyboardEventInit, target: EventTarget = document): Promise<KeyboardEvent> {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
   await act(async () => {
-    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-    document.dispatchEvent(event);
+    target.dispatchEvent(event);
   });
+  return event;
 }
 
 /** Dispatche un VRAI événement pointeur (pointerdown/pointermove/pointerup/pointercancel) qui bubble

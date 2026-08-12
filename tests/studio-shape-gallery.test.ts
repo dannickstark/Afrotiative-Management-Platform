@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { SHAPE_TILES, shapeTilesFor, buildShapeLayer, recentTilesFor, withRecentShape } from "@/lib/studio/shape-gallery";
 import { parseScene, SHAPE_KINDS } from "@/lib/studio/scene";
+import { descriptorFor, shapeLabel } from "@/lib/studio/shapes";
 import { CONTEXT_TOKENS, TEMPLATE_CONTEXTS, type TemplateContext } from "@/lib/studio/tokens";
 
 // tests/studio-shape-gallery.test.ts — Tâche 4 (U1, spec §3), révisé après revue (voir
@@ -81,6 +82,80 @@ describe("shape gallery — buildShapeLayer", () => {
         expect(l.frame.y + l.frame.h).toBeLessThanOrEqual(canvas.height);
       }
     }
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // U3 Tâche 3 — CE QU'EST UNE « LIGNE », géométriquement, et ce que ça change à l'insertion.
+  //
+  // Décision documentée dans la description de la forme (lib/studio/shapes.ts, descripteur `line`) :
+  // une ligne est un RECTANGLE FIN NON PIVOTÉ — son épaisseur EST la hauteur de son cadre — et une
+  // diagonale s'obtient en la faisant tourner (mécanisme 4 de la sonde, mesuré de bout en bout par
+  // renderScene()). Conséquence ici : la galerie ne peut pas l'insérer dans le cadre CARRÉ des autres
+  // formes, sans quoi elle serait indiscernable d'un rectangle au moment même de l'insertion.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  describe("l'insertion respecte la forme insérée (barre fine contre carré)", () => {
+    const canvases = [{ width: 1200, height: 630 }, { width: 1080, height: 1080 }, { width: 1080, height: 1920 }];
+
+    it("il existe au moins une forme fine et au moins une qui ne l'est pas", () => {
+      // ANTI-VACUITÉ des deux boucles ci-dessous.
+      const fines = SHAPE_KINDS.filter((k) => descriptorFor(k).thin);
+      expect(fines.length).toBeGreaterThan(0);
+      expect(fines.length).toBeLessThan(SHAPE_KINDS.length);
+    });
+
+    it("une forme FINE est insérée comme une barre — large, et d'une épaisseur qui reste visible", () => {
+      for (const kind of SHAPE_KINDS.filter((k) => descriptorFor(k).thin)) {
+        const tile = SHAPE_TILES.find((t) => t.kind === "shape" && t.shape === kind)!;
+        for (const canvas of canvases) {
+          const l = buildShapeLayer(tile, canvas, "social_post");
+          // Une barre : nettement plus large que haute (au moins 5:1) …
+          expect(`${kind}@${canvas.width}x${canvas.height} w/h>=5 : ${l.frame.w / l.frame.h >= 5}`)
+            .toBe(`${kind}@${canvas.width}x${canvas.height} w/h>=5 : true`);
+          // … mais JAMAIS d'épaisseur nulle ou sous-pixel : « une ligne a une vraie hauteur » (brief),
+          // et le schéma exige d'ailleurs h > 0 (frame.h .positive()).
+          expect(l.frame.h).toBeGreaterThanOrEqual(2);
+        }
+      }
+    });
+
+    it("une forme NON fine reste insérée dans un cadre carré, comme avant cette tâche", () => {
+      for (const kind of SHAPE_KINDS.filter((k) => !descriptorFor(k).thin)) {
+        const tile = SHAPE_TILES.find((t) => t.kind === "shape" && t.shape === kind)!;
+        for (const canvas of canvases) {
+          const l = buildShapeLayer(tile, canvas, "social_post");
+          expect(`${kind}@${canvas.width}x${canvas.height} carré : ${l.frame.w === l.frame.h}`)
+            .toBe(`${kind}@${canvas.width}x${canvas.height} carré : true`);
+        }
+      }
+    });
+
+    it("toute forme insérée reste DANS le canevas, y compris la barre", () => {
+      // Le test « lands inside the canvas » plus haut couvre déjà SHAPE_TILES ; celui-ci le refait en
+      // itérant SHAPE_KINDS pour que la garde reste vraie forme par forme, cadre spécial compris.
+      for (const kind of SHAPE_KINDS) {
+        const tile = SHAPE_TILES.find((t) => t.kind === "shape" && t.shape === kind)!;
+        for (const canvas of canvases) {
+          const l = buildShapeLayer(tile, canvas, "social_post");
+          expect(l.frame.x).toBeGreaterThanOrEqual(0);
+          expect(l.frame.y).toBeGreaterThanOrEqual(0);
+          expect(l.frame.x + l.frame.w).toBeLessThanOrEqual(canvas.width);
+          expect(l.frame.y + l.frame.h).toBeLessThanOrEqual(canvas.height);
+        }
+      }
+    });
+
+    it("chaque tuile de forme insère EXACTEMENT la forme qu'elle annonce", () => {
+      // La fonction de choix « quelle tuile insère quelle forme » — celle que le plan nomme
+      // explicitement (« which shape does this gallery tile insert »). Balayée sur les huit formes
+      // plutôt que sur la seule tuile rectangle, qui ne pouvait rien révéler.
+      for (const kind of SHAPE_KINDS) {
+        const tile = SHAPE_TILES.find((t) => t.kind === "shape" && t.shape === kind)!;
+        const l = buildShapeLayer(tile, { width: 1200, height: 630 }, "social_post");
+        expect(l.type).toBe("shape");
+        if (l.type === "shape") expect(`${tile.id} -> ${l.shape}`).toBe(`${tile.id} -> ${kind}`);
+        expect(l.name).toBe(shapeLabel(kind));
+      }
+    });
   });
 
   it("builds a plain layer with no special status — a normal shape/qr layer", () => {

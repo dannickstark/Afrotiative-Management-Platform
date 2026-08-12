@@ -1,10 +1,10 @@
 import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ElementsPanel, insertShapeTile } from "@/components/studio/panels/elements-panel";
-import { shapeTilesFor } from "@/lib/studio/shape-gallery";
+import { ElementsPanel, iconFor, insertShapeTile } from "@/components/studio/panels/elements-panel";
+import { buildShapeLayer, shapeTilesFor, type ShapeTileRow } from "@/lib/studio/shape-gallery";
 import { editorReducer, initEditorState, type EditorAction } from "@/lib/studio/editor-state";
-import type { Scene } from "@/lib/studio/scene";
+import { SHAPE_KINDS, type Scene } from "@/lib/studio/scene";
 import type { TemplateContext } from "@/lib/studio/tokens";
 
 // tests/studio-elements-panel.test.ts — Tâche 4 (U1, spec §3), ajouté en réponse à la revue
@@ -144,5 +144,94 @@ describe("insertShapeTile — ce qu'un clic déclenche, composé avec le VRAI r�
     expect(added.type).toBe("qr");
     if (added.type === "qr") expect(added.slot).toBe("article.url");
     expect(recorded).toEqual(["qr"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — HUIT TUILES DE FORME, HUIT ICÔNES.
+//
+// L'icône de tuile était choisie par le TYPE de tuile (`shape` | `qr`) : avec une seule forme au
+// schéma, ça se voyait à peine ; avec huit, la section « Formes » aurait aligné huit carrés
+// identiques, distinguables seulement en lisant leurs libellés. Ce n'est pas une décoration : la
+// galerie est le seul moyen d'insérer une forme, et une grille d'icônes identiques annule tout
+// l'intérêt d'une grille.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+describe("ElementsPanel — chaque forme a son icône (U3 Tâche 3)", () => {
+  // Le HTML d'UNE tuile, de sa balise ouvrante à la fermeture du bouton — l'icône est un ENFANT du
+  // bouton, donc `buttonTagFor` (la balise ouvrante seule) ne peut pas la voir.
+  function tileHtml(html: string, tileId: string): string {
+    const start = html.indexOf(`data-tile="${tileId}"`);
+    if (start === -1) throw new Error(`aucune tuile data-tile="${tileId}"`);
+    const open = html.lastIndexOf("<button", start);
+    const end = html.indexOf("</button>", start);
+    return html.slice(open, end);
+  }
+  // lucide-react pose `class="lucide lucide-<nom> …"` sur son <svg> (vérifié en rendant l'icône) :
+  // c'est ce nom-là qui identifie l'icône réellement rendue, pas le composant importé.
+  /** La tranche de HTML entre deux marqueurs, en LEVANT si l'un des deux manque — revue finale U3
+   * (Minor 2). Écrit avec deux `indexOf` NON VÉRIFIÉS, un marqueur renommé rend -1 : la tranche
+   * s'élargit alors silencieusement à tout le HTML (ou se vide), et une assertion qu'on croyait portée
+   * sur la seule section des récents porte en réalité sur la grille entière. C'est le piège que ce
+   * programme a déjà rencontré trois fois — il échoue franchement, désormais. */
+  function sliceBetween(html: string, from: string, to: string): string {
+    const start = html.indexOf(from);
+    const end = html.indexOf(to);
+    if (start === -1) throw new Error(`marqueur de début introuvable dans le HTML rendu : ${from}`);
+    if (end === -1) throw new Error(`marqueur de fin introuvable dans le HTML rendu : ${to}`);
+    if (end <= start) throw new Error(`marqueurs dans le mauvais ordre : « ${to} » précède « ${from} »`);
+    return html.slice(start, end);
+  }
+
+  function iconOf(html: string, tileId: string): string {
+    const m = /class="lucide lucide-([a-z0-9-]+)/.exec(tileHtml(html, tileId));
+    if (!m) throw new Error(`aucune icône lucide dans la tuile « ${tileId} »`);
+    return m[1];
+  }
+
+  it("les huit formes du schéma portent huit icônes DISTINCTES", () => {
+    const html = render("social_post");
+    const icons = SHAPE_KINDS.map((kind) => iconOf(html, kind));
+    // Le compte des DISTINCTES, pas leur nom : le choix d'une icône est un goût, « deux formes ne
+    // peuvent pas partager la même » est une règle — exactement le raisonnement de la garde
+    // d'unicité des libellés (tests/studio-shapes.test.ts).
+    expect(new Set(icons).size).toBe(SHAPE_KINDS.length);
+    expect(icons).toHaveLength(8);
+  });
+
+  it("la tuile QR garde la sienne, distincte de toutes les formes", () => {
+    const html = render("social_post");
+    const shapes = new Set(SHAPE_KINDS.map((kind) => iconOf(html, kind)));
+    expect(shapes.has(iconOf(html, "qr"))).toBe(false);
+  });
+
+  it("une tuile de FORME sans champ `shape` LÈVE — jamais une icône de repli silencieuse", () => {
+    // Revue de la Tâche 3 (Low) : `iconFor` se rabattait en silence sur `QrCode`. SYMÉTRIE VOULUE avec
+    // `descriptorFor` (lib/studio/shapes.ts), qui lève plutôt que de rendre un rectangle, et avec
+    // `buildShapeLayer` (shape-gallery.ts), qui lève sur EXACTEMENT la même tuile — vérifié ici côte à
+    // côte pour que les deux gardes ne puissent pas diverger. Inatteignable par le catalogue (la garde
+    // de complétude de tests/studio-shape-gallery.test.ts lie SHAPE_TILES au schéma), et c'est
+    // justement pour ça qu'un repli s'y installerait sans que personne le voie.
+    const invalide = { id: "losange", label: "Losange", kind: "shape", available: true } as ShapeTileRow;
+    expect(() => iconFor(invalide)).toThrow(/losange/);
+    expect(() => buildShapeLayer(invalide, { width: 800, height: 600 }, "social_post")).toThrow(/losange/);
+    // TÉMOINS, sans quoi un `iconFor` qui lèverait TOUJOURS passerait la ligne du dessus : la MÊME
+    // tuile munie d'un `shape` rend une icône, et cette icône n'est PAS celle du QR — c'est-à-dire pas
+    // le repli que ce correctif vient de retirer. Et la tuile QR, qui n'est pas une forme du schéma,
+    // garde la sienne sans lever.
+    const qr = { id: "qr", label: "QR code", kind: "qr", available: true } as ShapeTileRow;
+    // (une icône lucide est un objet `forwardRef`, pas une fonction — d'où `toBeTruthy` ici.)
+    const étoile = iconFor({ ...invalide, shape: "star" } as ShapeTileRow);
+    expect(étoile).toBeTruthy();
+    expect(étoile).not.toBe(iconFor(qr));
+    expect(() => iconFor(qr)).not.toThrow();
+  });
+
+  it("l'icône suit la tuile dans « Utilisés récemment » aussi", () => {
+    // La section des récents rend les MÊMES tuiles : une icône codée en dur dans une seule des deux
+    // sections divergerait sans que rien ne le remarque.
+    const html = render("social_post", ["star", "line"]);
+    const recents = sliceBetween(html, 'data-testid="elements-recent"', 'data-testid="elements-shapes"');
+    expect(/class="lucide lucide-([a-z0-9-]+)/.exec(recents)).not.toBeNull();
+    expect(new Set([iconOf(recents, "star"), iconOf(recents, "line")]).size).toBe(2);
   });
 });

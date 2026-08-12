@@ -18,6 +18,7 @@
 // le test de complétude itère `SHAPE_KINDS` directement plutôt qu'une copie — même construction que
 // lib/diffusion/channels.ts (itère CHANNELS) et lib/studio/dynamic-text.ts (itère TOKEN_IDS).
 import { SHAPE_KINDS, type Layer } from "./scene";
+import { descriptorFor, shapeLabel } from "./shapes";
 import { CONTEXT_TOKENS, type TemplateContext, type TokenId } from "./tokens";
 import { centeredFrame } from "./layer-geometry";
 
@@ -31,8 +32,22 @@ export type ShapeTile = {
 // U3 ajoute ellipse/ligne/polygones EN AJOUTANT DES ENTRÉES ICI, une fois — et seulement une fois —
 // que SHAPE_KINDS (scene.ts) les accepte. La section « Formes » énumère ce tableau ; le garde-fou de
 // complétude le compare au SCHÉMA, pas à une copie de ce tableau.
+// U3 Tâche 2 : le libellé d'une FORME vient désormais de sa description (lib/studio/shapes.ts), la
+// même que consultent les deux chemins de rendu — plutôt que d'exister en deux exemplaires français
+// qui pourraient dériver. La tuile QR n'est pas une forme du schéma : elle garde le sien.
+// U3 Tâche 3 : les sept formes promises par la feuille de route rejoignent le rectangle. L'ordre est
+// celui de SHAPE_KINDS (scene.ts) — les deux formes pleines, le trait, puis la famille polygonale —
+// et la tuile QR ferme la liste, comme avant. `id` est la clé de forme elle-même : c'est cet `id` que
+// EditorPrefs.recentShapes persiste (withRecentShape), donc il doit rester stable.
 export const SHAPE_TILES: readonly ShapeTile[] = [
-  { id: "rect", label: "Rectangle", kind: "shape", shape: "rect" },
+  { id: "rect", label: shapeLabel("rect"), kind: "shape", shape: "rect" },
+  { id: "ellipse", label: shapeLabel("ellipse"), kind: "shape", shape: "ellipse" },
+  { id: "line", label: shapeLabel("line"), kind: "shape", shape: "line" },
+  { id: "triangle", label: shapeLabel("triangle"), kind: "shape", shape: "triangle" },
+  { id: "star", label: shapeLabel("star"), kind: "shape", shape: "star" },
+  { id: "hexagon", label: shapeLabel("hexagon"), kind: "shape", shape: "hexagon" },
+  { id: "arrow", label: shapeLabel("arrow"), kind: "shape", shape: "arrow" },
+  { id: "bubble", label: shapeLabel("bubble"), kind: "shape", shape: "bubble" },
   { id: "qr", label: "QR code", kind: "qr" },
 ];
 
@@ -91,8 +106,24 @@ const SIZE_RATIO = 0.35;
 // Correctif revue finale (Minor) : le clamp centré vit désormais dans lib/studio/layer-geometry.ts
 // (`centeredFrame`) — ce fichier en portait auparavant une copie quasi identique à celle de
 // dynamic-text.ts:frameFor, désormais elle-même remplacée par le même appel partagé.
-function frameFor(canvas: { width: number; height: number }): Layer["frame"] {
-  const desired = Math.min(canvas.width, canvas.height) * SIZE_RATIO;
+// U3 Tâche 3 — l'épaisseur d'un TRAIT inséré, en fraction de la plus petite dimension du canevas.
+// Même raisonnement que SIZE_RATIO (relatif, jamais fixe) : 8 ‰ donne ~9 px sur un format social
+// (1080) et ~3 px sur un petit canevas de 400, toujours visible et jamais grossier. Le plancher de
+// 2 px garantit un trait attrapable même sur un canevas minuscule (le schéma, lui, n'interdit qu'une
+// hauteur nulle) ; c'est ensuite un cadre comme un autre, que les poignées redimensionnent.
+const THIN_RATIO = 0.008;
+const THIN_MIN = 2;
+
+// PURE — le cadre inséré, qui dépend de la FORME et non de la seule tuile : une « ligne » posée dans
+// le carré des autres formes serait indiscernable d'un rectangle à l'instant de l'insertion. La
+// question est posée à la DESCRIPTION de la forme (`descriptorFor(kind).thin`, lib/studio/shapes.ts),
+// jamais à son nom — même discipline que `supportsRotation` pour la rotation.
+function frameFor(canvas: { width: number; height: number }, shape?: (typeof SHAPE_KINDS)[number]): Layer["frame"] {
+  const min = Math.min(canvas.width, canvas.height);
+  const desired = min * SIZE_RATIO;
+  if (shape && descriptorFor(shape).thin) {
+    return centeredFrame(canvas, desired, Math.max(THIN_MIN, Math.round(min * THIN_RATIO)));
+  }
   return centeredFrame(canvas, desired, desired);
 }
 
@@ -113,7 +144,7 @@ export function buildShapeLayer(
   canvas: { width: number; height: number },
   context: TemplateContext,
 ): Layer {
-  const frame = frameFor(canvas);
+  const frame = frameFor(canvas, tile.shape);
   const base = { id: crypto.randomUUID(), name: tile.label, visible: true, locked: false, frame };
 
   switch (tile.kind) {

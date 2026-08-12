@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
+import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -34,13 +35,21 @@ export interface LayerViewProps {
 }
 
 function frameStyle(frame: Frame, rotation: number, layer: Layer): CSSProperties {
+  // U3 Tâche 3 (arbitrage A) : une forme DÉCOUPÉE ne tourne pas — et c'est le NAVIGATEUR qui doit
+  // renoncer, pas seulement satori. Le navigateur, lui, tournerait très bien la découpe : c'est
+  // précisément le problème. Satori ne tourne que le remplissage (réserve 2 de la sonde), donc toute
+  // scène portant déjà une rotation sur un triangle s'afficherait ici autrement que dans le PNG livré
+  // — le §0 du plan U3. L'éditeur ne simule donc pas une rotation que l'export ne sait pas faire.
+  // `rotation` est la valeur PEINTE (elle peut venir d'un aperçu de geste, canvas.tsx), d'où le filtre
+  // sur la prop plutôt qu'un appel à `layerRotation(layer)` qui ignorerait l'aperçu.
+  const applied = layerSupportsRotation(layer) ? rotation : 0;
   return {
     position: "absolute",
     left: frame.x,
     top: frame.y,
     width: frame.w,
     height: frame.h,
-    transform: rotation ? `rotate(${rotation}deg)` : undefined,
+    transform: applied ? `rotate(${applied}deg)` : undefined,
     opacity: layer.opacity,
     boxSizing: "border-box",
   };
@@ -76,6 +85,12 @@ function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" 
       style={{
         width: "100%", height: "100%",
         objectFit: layer.fit,
+        // `imageLayer.radius`, un NOMBRE (lib/studio/scene.ts:46) — et NON son homonyme
+        // `shapeLayer.radius`, qui est `number | string` depuis l'arbitrage C (« 50% » pour l'ellipse).
+        // Deux champs de même nom et de types différents ; ce qui les tient à l'écart ici est le
+        // narrowing du prop (`Extract<Layer, { type: "image" }>`), donc le typechecker. Voir
+        // lib/studio/element.ts#imageNode pour la garde du chemin d'export et
+        // tests/studio-shapes.test.ts, « les DEUX champs `radius` du schéma restent SÉPARÉS ».
         borderRadius: layer.radius,
         filter: layer.blur ? `blur(${layer.blur}px)` : undefined,
       }}
@@ -91,10 +106,17 @@ function ShapeContent({ layer }: { layer: Extract<Layer, { type: "shape" }> }) {
       ? { backgroundColor: layer.fill === "transparent" ? undefined : layer.fill }
       : { backgroundImage: gradientCss(layer.fill) };
 
+  // `layerBorder` et NON `layer.border` (revue U3 Tâche 3, Medium 4) : sur une forme découpée, le
+  // navigateur clippe l'élément ENTIER — bordure comprise — tandis que satori laisse le contour
+  // rectangulaire autour du remplissage découpé (réserve 3 de la sonde). Laisser passer la bordure ici
+  // livrerait donc un éditeur en désaccord avec son propre export, le §0 de ce sous-projet. La
+  // description tranche (lib/studio/shapes.ts#supportsBorder), les deux chemins la posent — même
+  // discipline que la rotation juste au-dessus.
+  const painted = layerBorder(layer);
   const borderStyle: CSSProperties = {};
-  if (layer.border) {
-    const sides = layer.border.sides ?? ["top", "right", "bottom", "left"];
-    const css = `${layer.border.width}px solid ${layer.border.color}`;
+  if (painted) {
+    const sides = painted.sides ?? ["top", "right", "bottom", "left"];
+    const css = `${painted.width}px solid ${painted.color}`;
     for (const s of sides) {
       const key = `border${s[0].toUpperCase()}${s.slice(1)}` as keyof CSSProperties;
       (borderStyle as Record<string, string>)[key] = css;
@@ -106,7 +128,20 @@ function ShapeContent({ layer }: { layer: Extract<Layer, { type: "shape" }> }) {
       style={{
         width: "100%", height: "100%",
         ...fillStyle, ...borderStyle,
-        borderRadius: layer.radius,
+        // `layerBoxShadow` et NON `layer.shadow` (U3 Tâche 4) : une forme DÉCOUPÉE ne porte pas
+        // d'ombre, et il faut que ce soit vrai ICI autant que dans l'export. Le navigateur découpe
+        // l'ombre portée avec le reste de l'élément, satori n'en peint aucune non plus (mesuré,
+        // réserve 4) — les deux sont d'accord, mais pour deux raisons indépendantes dont l'une est un
+        // accident d'implémentation. La description tranche (shapes.ts#supportsShadow), les deux
+        // chemins la posent, et l'accord ne dépend plus du hasard. `undefined` ne sérialise RIEN, donc
+        // une forme sans ombre reste octet pour octet celle d'avant cette tâche.
+        boxShadow: layerBoxShadow(layer),
+        // C'EST le point de contact avec lib/studio/shapes.ts — LA MÊME description que le moteur
+        // d'export interroge (element.ts:shapeNode). Ne pas redériver la géométrie ici : c'est
+        // exactement la divergence silencieuse que §0 du plan U3 décrit (le designer dessine une
+        // forme, l'image exportée en contient une autre, aucun test ne rougit), et c'est la même
+        // discipline que TextContent applique déjà avec textStyleFor.
+        ...shapeCssFor(layer),
       }}
     />
   );

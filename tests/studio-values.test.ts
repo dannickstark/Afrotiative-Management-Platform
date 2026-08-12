@@ -78,7 +78,8 @@ describe("resolveTokens", () => {
   });
 
   it("résout un jeton dans CHAQUE champ porteur de jeton (round-trip avec extractTokens, à l'exception documentée du slot QR)", () => {
-    // Une scène qui met un jeton dans les onze emplacements substituables listés dans le brief,
+    // Une scène qui met un jeton dans les douze emplacements substituables (onze du brief d'origine,
+    // plus l'ombre d'une forme depuis U3 Tâche 4),
     // PLUS un calque QR (dont le slot n'est jamais substitué par resolveTokens — voir plus bas).
     // Si resolveTokens oublie un seul des onze champs substituables, extractTokens(resolveTokens(...))
     // le signalera : c'est la garantie structurelle que les deux fonctions ne peuvent pas diverger.
@@ -107,6 +108,9 @@ describe("resolveTokens", () => {
           ...base, id: "shape-solid", name: "", type: "shape", shape: "rect",
           fill: "{{category.color}}",
           border: { width: 1, color: "{{article.byline}}" },
+          // U3 Tâche 4 : douzième emplacement substituable. `shapeLayer.shadow.color` est une couleur
+          // comme les autres — sans son ajout à resolveTokens, l'aller-retour ci-dessous le signale.
+          shadow: { x: 0, y: 2, blur: 4, color: "{{source.names}}" },
         },
         {
           ...base, id: "shape-gradient", name: "", type: "shape", shape: "rect",

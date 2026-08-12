@@ -1,9 +1,10 @@
 import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Scene, Layer } from "@/lib/studio/scene";
+import { SHAPE_KINDS, type Scene, type Layer, type ShapeLayer } from "@/lib/studio/scene";
+import { descriptorFor, shapeLabel, SHAPE_OPTIONS } from "@/lib/studio/shapes";
 import type { AssetRow } from "@/lib/queries/assets";
-import { PropertyPanel } from "@/components/studio/property-panel";
+import { PropertyPanel, radiusPatch } from "@/components/studio/property-panel";
 // Tâche 6 (U1, spec §6) — même précédent que studio-marque-panel.test.ts / studio-texte-panel.test.ts
 // / studio-elements-panel.test.ts / studio-mode-switch.test.ts : on affirme contre une valeur
 // IMPORTÉE plutôt qu'une chaîne re-dérivée à la main.
@@ -12,6 +13,9 @@ import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
 // SHAPE_KINDS pour shape-gallery (une garde de complétude qui compare deux copies manuscrites peut
 // dériver sans que rien ne le remarque, revue U1 Tâche 4, Important 1).
 import { ALIGN_MODES } from "@/lib/studio/align";
+// Revue de la Tâche 3 (Important 1) : le VRAI moteur de geste, pour vérifier la PRÉMISSE d'une note de
+// ce panneau au lieu de la croire — voir « la PRÉMISSE du masquage est vraie » plus bas.
+import { createGestureEngine, type DragPreview } from "@/hooks/use-layer-drag";
 
 // Même convention que tests/studio-layer-panel.test.ts : pas de DOM sous `bun test`, donc un rendu
 // STRUCTUREL (react-dom/server) plutôt qu'une simulation de clic/frappe — la logique de mutation
@@ -92,6 +96,25 @@ function openingTag(html: string, attr: string, value: string): string {
   const match = new RegExp(`<[a-z]+[^>]*${attr}="${value}"[^>]*>`).exec(html);
   if (!match) throw new Error(`balise introuvable dans le HTML rendu : ${attr}="${value}"`);
   return match[0];
+}
+
+/** L'ÉLÉMENT ENTIER (balise ouvrante + contenu + fermante) portant `attr="value"`, et non sa seule
+ * balise ouvrante — introduit par la revue de la Tâche 3 (Medium 3) : `openingTag` ne peut RIEN dire
+ * du TEXTE affiché à l'intérieur d'un élément, si bien qu'une assertion « le libellé est là » se
+ * rabattait sur tout le HTML du panneau et se satisfaisait d'une note voisine qui nommait la même
+ * forme. Refuse un élément qui en contiendrait un autre de MÊME nom de balise : la recherche du
+ * premier `</tag>` serait alors fausse, et échouer franchement vaut mieux que rendre un fragment. */
+function elementWith(html: string, attr: string, value: string): string {
+  const tag = openingTag(html, attr, value);
+  const name = /^<([a-z]+)/.exec(tag)![1];
+  const start = html.indexOf(tag);
+  const end = html.indexOf(`</${name}>`, start + tag.length);
+  if (end === -1) throw new Error(`aucune fermeture </${name}> après ${attr}="${value}"`);
+  const element = html.slice(start, end + name.length + 3);
+  if (element.indexOf(`<${name}`, 1) !== -1) {
+    throw new Error(`<${name}> imbriqué dans ${attr}="${value}" : l'extraction serait tronquée`);
+  }
+  return element;
 }
 
 /** Nombre d'occurrences EXACTES d'une sous-chaîne dans le HTML rendu. Introduit par la revue finale
@@ -294,6 +317,57 @@ describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
     expect(straight).not.toContain('data-testid="align-rotation-note"');
   });
 
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE FINALE U3, IMPORTANT 1 — LA CINQUIÈME INSTANCE DU §0, ET LE TEST QUI L'AURAIT ATTRAPÉE.
+  //
+  // `align-rotation-note` lisait `layer.rotation` BRUT là où sa sœur `snap-rotation-note`, soixante
+  // lignes plus haut dans le même fichier, avait déjà reçu la garde correspondante. Sur une forme
+  // DÉCOUPÉE, la rotation stockée n'est peinte NULLE PART (lib/studio/shapes.ts#layerRotation) : le
+  // cadre non pivoté EST la boîte visible à l'écran, et la note affirmait le contraire. Et le champ
+  // « Rotation (°) » étant GRISÉ sur sa valeur résiduelle, l'utilisateur ne pouvait pas faire taire
+  // l'avertissement — un cul-de-sac avec une explication fausse.
+  //
+  // Rien ne rougissait : la correction `layerRotation(l) !== 0` passait 174 tests inchangés. Ce test
+  // est ce qui manquait. MUTATION QUI LE FAIT ROUGIR : rétablir `(l.rotation ?? 0) !== 0` dans
+  // geometry-strip.tsx#AlignRow (le camp découpé échoue) ; et `hasRotated = false` en dur, ou
+  // `layerRotation(l) === 0`, fait échouer le camp témoin.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("la note d'alignement lit la rotation PEINTE : absente sur une forme découpée pivotée, présente sur une forme qui tourne (revue finale, Important 1)", () => {
+    function shapeOf(kind: string): Layer {
+      return {
+        id: "s1", name: "Forme", visible: true, locked: false,
+        frame: { x: 10, y: 20, w: 200, h: 150 }, rotation: 30,
+        type: "shape", shape: kind, fill: "#123456",
+      } as Layer;
+    }
+    const découpées = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(découpées.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(libres.length).toBeGreaterThan(0);
+
+    // CAMP DÉCOUPÉ : `rotation: 30` stocké, rotation peinte 0 -> la note serait FAUSSE, elle est absente.
+    for (const kind of découpées) {
+      const html = render([shapeOf(kind)], "s1", "recap_card");
+      expect(`${kind} note d'alignement : ${html.includes('data-testid="align-rotation-note"')}`)
+        .toBe(`${kind} note d'alignement : false`);
+      // LE CUL-DE-SAC, épinglé lui aussi : le champ de rotation est grisé SUR la valeur résiduelle,
+      // donc l'utilisateur ne pourrait pas l'effacer pour faire disparaître un tel avertissement.
+      const rotation = openingTag(html, "data-field", "rotation");
+      expect(rotation).toContain('value="30"');
+      expect(/\sdisabled(?:=|>|\s|\/)/.test(rotation)).toBe(true);
+    }
+
+    // CAMP TÉMOIN, au MÊME point : la même rotation sur une forme qui tourne affiche bien la note, et
+    // elle dit ce qu'elle prétend dire. Sans lui, une note jamais rendue passerait la boucle ci-dessus.
+    for (const kind of libres) {
+      const html = render([shapeOf(kind)], "s1", "recap_card");
+      expect(`${kind} note d'alignement : ${html.includes('data-testid="align-rotation-note"')}`)
+        .toBe(`${kind} note d'alignement : true`);
+      const note = elementWith(html, "data-testid", "align-rotation-note");
+      expect(note).toContain("boîte visible");
+    }
+  });
+
   // ── Tâche 5 (U2) : la même discipline pour la LIMITE D'ACCROCHAGE d'un calque pivoté ────────────
   it("prévient qu'un calque PIVOTÉ s'accroche différemment — et seulement s'il l'est vraiment", () => {
     // La revue de la Tâche 5 a tranché : la limite ne doit pas mourir en silence (la Tâche 4 avait
@@ -409,6 +483,555 @@ describe("PropertyPanel — calque forme", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3, REVUE (Medium 4) — LA BORDURE N'EST PAS OFFERTE SUR UNE FORME DÉCOUPÉE.
+//
+// Réserve 3 de la sonde : la bordure ÉCHAPPE au découpage dans satori (contour rectangulaire autour
+// d'un remplissage triangulaire) et pas dans le navigateur. L'arbitrage F l'avait reportée à la Tâche 4
+// « puisque aucune forme ne porte de bordure par défaut » — vrai de l'INSERTION, faux depuis que cette
+// tâche a livré le sélecteur de forme : « rectangle bordé » -> « Triangle », deux clics. Le contrôle est
+// donc grisé avec une note, ET la bordure est supprimée des deux chemins de rendu (griser seul aurait
+// laissé un `border` résiduel diverger et rendu la note FAUSSE — la leçon de la rotation).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — la bordure d'une forme découpée (réserve 3)", () => {
+  function shapeOf(kind: string, extra: Partial<ShapeLayer> = {}): Layer {
+    return { ...shapeLayerSolid, shape: kind, ...extra } as Layer;
+  }
+  // Base UI ne rend PAS un `<button disabled>` pour un Switch : c'est un `<span role="switch">` portant
+  // `aria-disabled="true"`, `data-disabled` et `tabindex="-1"`, dont le `onClick` commence par
+  // `if (readOnly || disabled) return;` (vérifié dans node_modules/@base-ui/react/switch/root/
+  // SwitchRoot.js — le `disabled` natif est sur l'`<input type="checkbox">` caché qu'il pilote). Un test
+  // qui chercherait `disabled` sur CETTE balise passerait donc toujours à côté ; on lit `aria-disabled`.
+  function borderSwitchTag(html: string): string {
+    return openingTag(html, "data-field", "border-enabled");
+  }
+
+  it("l'interrupteur de bordure est GRISÉ pour une forme découpée, actif pour les autres", () => {
+    const clipped = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(clipped.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(libres.length).toBeGreaterThan(0);
+
+    for (const kind of clipped) {
+      const tag = borderSwitchTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : true`);
+    }
+    for (const kind of libres) {
+      const tag = borderSwitchTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : false`);
+    }
+  });
+
+  it("la note n'apparaît QUE pour les formes découpées, et les sous-champs disparaissent avec elle", () => {
+    // `shapeLayerSolid` PORTE une bordure (épaisseur 2, blanc) : c'est exactement le calque qu'on
+    // obtient en convertissant un rectangle bordé en triangle, donc le cas résiduel qui compte.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([shapeOf(kind)], "s1", "recap_card");
+      const découpée = descriptorFor(kind).clipped;
+      expect(`${kind} note : ${html.includes('data-testid="shape-border-none"')}`).toBe(`${kind} note : ${découpée}`);
+      // Épaisseur et couleur de bordure : présentes uniquement là où la bordure est peinte. Un contrôle
+      // grisé au-dessus de trois contrôles actifs n'aurait rien empêché.
+      expect(`${kind} épaisseur : ${html.includes('value="2"')}`).toBe(`${kind} épaisseur : ${!découpée}`);
+      expect(`${kind} couleur : ${html.includes('value="#FFFFFF"')}`).toBe(`${kind} couleur : ${!découpée}`);
+    }
+  });
+
+  it("la note dit POURQUOI, nomme la forme, et parle d'écran CONTRE image exportée", () => {
+    // Le précédent de U2 (`safe-areas-none`, `snap-rotation-note`) : expliquer la raison, jamais
+    // « indisponible » tout court.
+    const html = render([shapeOf("star")], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-border-none"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(note).not.toBeNull();
+    expect(note![1]).toContain("Étoile");
+    expect(note![1].length).toBeGreaterThan(40);
+    expect(note![1]).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
+    expect(render([shapeOf("rect")], "s1", "recap_card")).not.toContain('data-testid="shape-border-none"');
+  });
+
+  it("une bordure déjà réglée SURVIT sur le calque — le panneau n'écrit rien en la masquant", () => {
+    // Même garantie que le rayon d'une ellipse : convertir un rectangle bordé en étoile puis revenir
+    // doit rendre la bordure intacte. Il n'y a pas de patch « border: undefined » caché.
+    const layer = shapeOf("star");
+    render([layer], "s1", "recap_card");
+    if (layer.type === "shape") {
+      expect(layer.border).toEqual({ width: 2, color: "#FFFFFF", sides: ["top", "left"] });
+    }
+    // Et l'interrupteur reflète bien cette valeur STOCKÉE (coché), grisé — le même choix d'affichage
+    // que le champ « Rotation (°) », qui montre 30 grisé plutôt que 0.
+    expect(borderSwitchTag(render([layer], "s1", "recap_card"))).toContain('aria-checked="true"');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — DETTE 1 du « PIÈGE POUR LA TÂCHE 3 » (tests/studio-shapes.test.ts).
+//
+// Le champ « Rayon des coins » était un champ NUMÉRIQUE : il affichait `0` pour un rayon en CHAÎNE
+// (« 50% », que le schéma accepte depuis la Tâche 2) et l'ÉCRASAIT au premier commit. La valeur est
+// désormais affichée TELLE QU'ELLE EST, et la conversion saisie -> stockée passe par la SEULE
+// grammaire du rayon (lib/studio/scene.ts#parseRadiusInput), testée là-bas.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — le rayon d'une forme (dette 1)", () => {
+  // La balise de CE champ, jamais un `toContain("50%")` qui matcherait n'importe où dans le HTML
+  // (leçon des deux pièges de sous-chaîne relevés en revue de U1/U2).
+  function radiusTag(html: string): string {
+    return openingTag(html, "data-field", "radius");
+  }
+  function shapeWith(radius: number | string | undefined): Layer {
+    return { ...shapeLayerSolid, radius } as Layer;
+  }
+
+  it("un rayon en POURCENTAGE s'affiche « 50% » — jamais « 0 »", () => {
+    const tag = radiusTag(render([shapeWith("50%")], "s1", "recap_card"));
+    expect(tag).toContain('value="50%"');
+    expect(tag).not.toContain('value="0"');
+  });
+
+  it("un rayon en pixels reste affiché tel quel, et l'absence de rayon affiche un champ VIDE", () => {
+    expect(radiusTag(render([shapeWith(4)], "s1", "recap_card"))).toContain('value="4"');
+    expect(radiusTag(render([shapeWith(undefined)], "s1", "recap_card"))).toContain('value=""');
+  });
+
+  it("le champ n'est plus un `<input type=\"number\">` — un nombre ne peut pas porter « 50% »", () => {
+    expect(radiusTag(render([shapeWith("50%")], "s1", "recap_card"))).not.toContain('type="number"');
+  });
+
+  // Le HTML sérialisé ne permet aucun clic (pas de DOM sous `bun test`) : on teste donc la fonction
+  // PURE que le champ appelle, exactement comme elements-panel.tsx#insertShapeTile — c'est elle qui
+  // décide s'il faut écrire, et quoi.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // U3 Tâche 3 — LE RAYON EST IGNORÉ, PAS MAL APPLIQUÉ, LÀ OÙ IL N'A PAS DE SENS.
+  //
+  // `descriptorFor(kind).radiusApplies` (lib/studio/shapes.ts) porte la décision ; l'interface la
+  // SUIT, plutôt que d'offrir un contrôle sans effet. Pour une ellipse, laisser passer le rayon la
+  // transformerait en stade ; pour une forme découpée, `borderRadius` arrondirait les coins du CADRE
+  // et pas les sommets du polygone (« aucun effet » pour une étoile, « rabote la base » pour un
+  // triangle). Les deux camps sont vérifiés, sans quoi la boucle serait à moitié vacante.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("le champ n'existe QUE pour les formes où le rayon veut dire quelque chose, avec une note ailleurs", () => {
+    const avec = SHAPE_KINDS.filter((k) => descriptorFor(k).radiusApplies);
+    const sans = SHAPE_KINDS.filter((k) => !descriptorFor(k).radiusApplies);
+    expect(avec.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(sans.length).toBeGreaterThan(0);
+
+    for (const kind of avec) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      expect(`${kind} champ : ${html.includes('data-field="radius"')}`).toBe(`${kind} champ : true`);
+      expect(`${kind} note : ${html.includes('data-testid="shape-radius-ignored"')}`).toBe(`${kind} note : false`);
+    }
+    for (const kind of sans) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      expect(`${kind} champ : ${html.includes('data-field="radius"')}`).toBe(`${kind} champ : false`);
+      expect(`${kind} note : ${html.includes('data-testid="shape-radius-ignored"')}`).toBe(`${kind} note : true`);
+    }
+  });
+
+  it("la note dit POURQUOI, en français, et nomme la forme concernée", () => {
+    // Une note qui dirait seulement « indisponible » serait un cul-de-sac : le précédent de U2
+    // (`safe-areas-none`, `snap-rotation-note`) est d'expliquer la raison.
+    const html = render([{ ...shapeLayerSolid, shape: "star" } as Layer], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-radius-ignored"[^>]*>([\s\S]*?)<\/p>/.exec(html)![1];
+    expect(note).toContain("Étoile");
+    expect(note.length).toBeGreaterThan(40);
+    expect(note).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE FINALE U3, IMPORTANT 3 — LA TERNAIRE DE CETTE NOTE N'ÉTAIT PAS ÉPINGLÉE.
+  //
+  // Mesuré : ÉCHANGER LES DEUX BRANCHES (property-panel.tsx) passait 63 tests sur 0 échec. Une étoile
+  // s'entendait dire « sa géométrie EST un arrondi (border-radius: 50%) » et l'ellipse « un découpage
+  // arrondirait les coins du cadre » — chacune l'explication de l'autre. Le test ci-dessus n'exige que
+  // le LIBELLÉ de la forme et `length > 40`, ce qu'un texte inversé satisfait parfaitement.
+  //
+  // Ici le contenu de CHAQUE branche est affirmé, DANS l'élément de la note (jamais dans tout le HTML
+  // du panneau), et la clé du choix est `descriptor.clipped` — la description elle-même, jamais une
+  // liste de noms — de sorte que le test ne peut pas dériver de la table de descriptions. Les
+  // contre-épreuves croisées sont ce qui interdit l'échange : chaque branche doit contenir SA raison
+  // et NE PAS contenir celle de l'autre.
+  //
+  // MUTATION QUI FAIT ROUGIR : échanger les deux branches de la ternaire (les deux camps échouent).
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("chaque branche de la note porte SA raison, et pas celle de l'autre camp (revue finale, Important 3)", () => {
+    const sans = SHAPE_KINDS.filter((k) => !descriptorFor(k).radiusApplies);
+    const découpées = sans.filter((k) => descriptorFor(k).clipped);
+    const arrondies = sans.filter((k) => !descriptorFor(k).clipped);
+    // Anti-vacuité des DEUX boucles : c'est exactement l'absence d'un des deux camps qui rendrait
+    // l'échange des branches indétectable.
+    expect(découpées.length).toBeGreaterThan(0);
+    expect(arrondies.length).toBeGreaterThan(0);
+
+    for (const kind of découpées) {
+      const note = elementWith(
+        render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card"),
+        "data-testid", "shape-radius-ignored",
+      );
+      expect(`${kind} : ${note.includes("découpage")}`).toBe(`${kind} : true`);
+      expect(`${kind} : ${note.includes("sommets de la forme")}`).toBe(`${kind} : true`);
+      // La raison de l'AUTRE camp est absente — sans ces deux lignes, un texte inversé passerait.
+      expect(`${kind} : ${note.includes("border-radius")}`).toBe(`${kind} : false`);
+      expect(`${kind} : ${note.includes("stade")}`).toBe(`${kind} : false`);
+    }
+
+    for (const kind of arrondies) {
+      const note = elementWith(
+        render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card"),
+        "data-testid", "shape-radius-ignored",
+      );
+      expect(`${kind} : ${note.includes("border-radius: 50%")}`).toBe(`${kind} : true`);
+      expect(`${kind} : ${note.includes("stade")}`).toBe(`${kind} : true`);
+      expect(`${kind} : ${note.includes("découpage")}`).toBe(`${kind} : false`);
+      expect(`${kind} : ${note.includes("sommets")}`).toBe(`${kind} : false`);
+    }
+  });
+
+  it("un rayon déjà stocké survit à une forme qui l'ignore — il n'est pas effacé du calque", () => {
+    // Convertir un rectangle arrondi en étoile puis revenir doit rendre le rayon intact : le panneau
+    // n'écrit RIEN quand il masque le champ (il n'y a pas de patch « radius: undefined » caché).
+    const layer = { ...shapeLayerSolid, shape: "star", radius: 24 } as Layer;
+    const html = render([layer], "s1", "recap_card");
+    expect(html).toContain('data-testid="shape-radius-ignored"');
+    if (layer.type === "shape") expect(layer.radius).toBe(24);
+  });
+
+  it("radiusPatch : une saisie refusée n'écrase RIEN (aucun patch), une saisie valide écrit", () => {
+    expect(radiusPatch("banane", "50%")).toBeNull();   // le « 50% » stocké survit
+    expect(radiusPatch("50%", "50%")).toBeNull();      // inchangé -> aucune entrée d'historique
+    expect(radiusPatch("12", "50%")).toEqual({ radius: 12 });
+    expect(radiusPatch("60%", "50%")).toEqual({ radius: "60%" });
+    expect(radiusPatch("", 12)).toEqual({ radius: undefined });
+    expect(radiusPatch("0", 12)).toEqual({ radius: undefined });
+    expect(radiusPatch("", undefined)).toBeNull();     // rien -> rien : aucun patch
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — DETTE 2 du piège, moitié INTERFACE : le contrôle de rotation d'une forme découpée est
+// GRISÉ, avec une note française. L'autre moitié (la `transform` supprimée dans LES DEUX chemins de
+// rendu) est prouvée par tests/studio-shapes.test.ts (CSS) et tests/studio-shape-render.test.ts
+// (pixels, octet pour octet) — les deux sont nécessaires : griser seul laisserait toute scène portant
+// déjà une rotation s'afficher différemment dans l'éditeur et dans l'export.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — la rotation d'une forme découpée (dette 2)", () => {
+  function shapeOf(kind: string, extra: Partial<ShapeLayer> = {}): Layer {
+    return { ...shapeLayerSolid, shape: kind, ...extra } as Layer;
+  }
+  // La balise du champ de rotation, pour lire `disabled` en tant qu'ATTRIBUT — jamais en sous-chaîne :
+  // la classe des `<input>` de ce dépôt contient `disabled:opacity-50`, donc un `toContain("disabled")`
+  // passerait toujours et un `not.toContain("disabled")` échouerait toujours (le piège relevé deux
+  // fois en revue de U1/U2).
+  function rotationTag(html: string): string {
+    return openingTag(html, "data-field", "rotation");
+  }
+
+  it("le champ de rotation est DÉSACTIVÉ pour une forme découpée, et actif pour les autres", () => {
+    const clipped = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(clipped.length).toBeGreaterThan(0); // anti-vacuité
+    expect(libres.length).toBeGreaterThan(0);
+
+    for (const kind of clipped) {
+      const tag = rotationTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} désactivé : ${/\sdisabled(?:=|>|\s|\/)/.test(tag)}`).toBe(`${kind} désactivé : true`);
+    }
+    for (const kind of libres) {
+      const tag = rotationTag(render([shapeOf(kind)], "s1", "recap_card"));
+      expect(`${kind} désactivé : ${/\sdisabled(?:=|>|\s|\/)/.test(tag)}`).toBe(`${kind} désactivé : false`);
+    }
+  });
+
+  it("les autres types de calque gardent un champ de rotation actif", () => {
+    // La limite est PAR FORME, pas globale (arbitrage A) : un texte, une image ou un QR tournent.
+    for (const [layer, id, ctx] of [
+      [textLayer, "t", "social_post"], [imageLayer, "i", "article_image"], [qrLayer, "q", "social_post"],
+    ] as [Layer, string, Parameters<typeof PropertyPanel>[0]["context"]][]) {
+      const tag = rotationTag(render([layer], id, ctx));
+      expect(`${layer.type} désactivé : ${/\sdisabled(?:=|>|\s|\/)/.test(tag)}`).toBe(`${layer.type} désactivé : false`);
+    }
+  });
+
+  it("une note française dit POURQUOI, et n'apparaît QUE là", () => {
+    const html = render([shapeOf("triangle")], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-rotation-none"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(note).not.toBeNull();
+    expect(note![1]).toContain("Triangle");
+    expect(note![1].length).toBeGreaterThan(40);
+    // Contrôle POSITIF dans le test négatif : sans lui, une note jamais rendue passerait la ligne
+    // suivante.
+    expect(render([shapeOf("rect")], "s1", "recap_card")).not.toContain('data-testid="shape-rotation-none"');
+  });
+
+  it("la note « calque pivoté » de l'accrochage ne s'affiche PLUS pour une rotation devenue inerte", () => {
+    // `snap-rotation-note` (U2 Tâche 5) annonce « Calque pivoté : l'accrochage est désactivé… ». Sur une
+    // forme découpée portant un `rotation` résiduel, ce serait faux deux fois : le calque n'est pas
+    // pivoté à l'écran, et l'accrochage n'a aucune raison d'être désactivé.
+    expect(render([shapeOf("triangle", { rotation: 30 })], "s1", "recap_card")).not.toContain('data-testid="snap-rotation-note"');
+    // TÉMOIN : la même rotation sur un rectangle affiche bien la note (elle n'a pas disparu partout).
+    expect(render([shapeOf("rect", { rotation: 30 })], "s1", "recap_card")).toContain('data-testid="snap-rotation-note"');
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE DE LA TÂCHE 3, Important 1 — LA PRÉMISSE DU MASQUAGE CI-DESSUS, VÉRIFIÉE.
+  //
+  // geometry-strip.tsx justifie le `tourne &&` du test précédent par : « cette note serait fausse deux
+  // fois (le calque n'est pas pivoté à l'écran, ET l'accrochage n'est pas désactivé) ». La seconde
+  // moitié était FAUSSE quand elle a été écrite : `begin()` (hooks/use-layer-drag.ts) lisait encore
+  // `layer.rotation` brut, et `snapResize` renonce dès que `rotationDeg !== 0` (lib/studio/snap.ts).
+  // La note avait donc été retirée SUR UNE PRÉMISSE FAUSSE, et aucun test ne reliait l'affirmation de
+  // l'interface au comportement réel du geste.
+  //
+  // Ce test est ce lien, dans les DEUX SENS — la note absente ⟺ l'accrochage marche, la note présente
+  // ⟺ l'accrochage est coupé — sur le MÊME calque que le test ci-dessus et avec le VRAI moteur de
+  // geste. MUTATION QUI LE FAIT ROUGIR : `startRotation: layer.rotation ?? 0` dans `begin()`.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("la PRÉMISSE du masquage est vraie : l'accrochage marche VRAIMENT sur cette forme (revue, Important 1)", () => {
+    // Bord voisin à x=304 : le bord est brut d'un glisser de +6 vaut 306, donc à 2 px de la ligne.
+    const bord: Layer = { ...shapeLayerSolid, id: "v", frame: { x: 304, y: 90, w: 60, h: 180 } } as Layer;
+
+    function guidesAuRedimensionnement(kind: string): number {
+      const calque = shapeOf(kind, { rotation: 30, frame: { x: 100, y: 100, w: 200, h: 150 } });
+      let aperçu: DragPreview | null = null;
+      const engine = createGestureEngine({
+        dispatch: () => {}, getScale: () => 1,
+        onPreviewChange: (p) => { aperçu = p; },
+        getSnapContext: () => ({ layers: [calque, bord], canvas: { width: 800, height: 600 } }),
+      });
+      engine.beginResize(calque, "e", { x: 0, y: 0 });
+      engine.move({ x: 6, y: 0 });
+      // L'aperçu doit exister : sans cette exigence, un aperçu MORT rendrait 0 guide et se lirait
+      // comme « accrochage coupé » (le court-circuit relevé en revue finale U0+U2).
+      if (aperçu === null) throw new Error("aucun aperçu émis — le moteur de geste n'a rien produit");
+      return (aperçu as DragPreview).guides?.length ?? 0;
+    }
+
+    // TRIANGLE : rotation inerte -> pas de note, ET l'accrochage fonctionne.
+    const triangle = render([shapeOf("triangle", { rotation: 30 })], "s1", "recap_card");
+    expect(triangle).not.toContain('data-testid="snap-rotation-note"');
+    expect(guidesAuRedimensionnement("triangle")).toBe(1);
+
+    // RECTANGLE : rotation PEINTE -> note affichée, ET l'accrochage est bien coupé. Les deux moitiés
+    // de la biconditionnelle, sans quoi « pas de note » et « accrochage actif » pourraient être vrais
+    // partout pour de mauvaises raisons.
+    const rect = render([shapeOf("rect", { rotation: 30 })], "s1", "recap_card");
+    expect(rect).toContain('data-testid="snap-rotation-note"');
+    expect(guidesAuRedimensionnement("rect")).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 4 — L'OMBRE D'UNE FORME, ET LE CAS DES FORMES DÉCOUPÉES.
+//
+// MESURÉ AVANT D'ÉCRIRE LE CONTRÔLE (tests/studio-render-clippath.test.ts, « RÉSERVE 4 ») : sur une
+// forme découpée, satori ne peint AUCUNE ombre, et le navigateur non plus (`clip-path` découpe le
+// rendu ENTIER d'un élément, ombre portée comprise). Les deux chemins sont donc d'accord — mais par
+// deux mécanismes indépendants dont l'un est un accident d'implémentation, d'où la suppression dans
+// les deux chemins (lib/studio/shapes.ts#layerBoxShadow) plutôt qu'une inertie de chance.
+//
+// Côté interface, la règle de U2 s'applique telle quelle : « interdire en le disant vaut mieux
+// qu'autoriser sans effet » (`snap-rotation-note`, `safe-areas-none`, et les deux notes de la Tâche 3).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
+  const OMBRE = { x: 5, y: 7, blur: 9, color: "#ABCDEF" } as const;
+  function shapeOf(kind: string, extra: Partial<ShapeLayer> = {}): Layer {
+    return { ...shapeLayerSolid, shape: kind, ...extra } as Layer;
+  }
+  // Base UI ne rend PAS un `<button disabled>` pour un Switch : c'est un `<span role="switch">` portant
+  // `aria-disabled="true"` (vérifié dans node_modules/@base-ui/react/switch/root/SwitchRoot.js — le
+  // `disabled` natif vit sur l'`<input type="checkbox">` caché). Chercher `disabled` sur CETTE balise
+  // passerait donc quoi qu'il arrive : on lit `aria-disabled`, comme pour la bordure.
+  function shadowSwitchTag(html: string): string {
+    return openingTag(html, "data-field", "shadow-enabled");
+  }
+
+  it("la section Ombre existe pour une forme, et l'interrupteur reflète la valeur stockée", () => {
+    const avec = render([shapeOf("rect", { shadow: { ...OMBRE } })], "s1", "recap_card");
+    expect(avec).toContain('data-section="ombre"');
+    expect(shadowSwitchTag(avec)).toContain('aria-checked="true"');
+    const sans = render([shapeOf("rect")], "s1", "recap_card");
+    expect(sans).toContain('data-section="ombre"');
+    expect(shadowSwitchTag(sans)).toContain('aria-checked="false"');
+  });
+
+  it("les quatre champs de l'ombre n'apparaissent QUE lorsqu'une ombre est réglée", () => {
+    const avec = render([shapeOf("rect", { shadow: { ...OMBRE } })], "s1", "recap_card");
+    // Les trois valeurs numériques sont uniques dans cette fixture (le calque porte radius 4 et une
+    // bordure de 2 : 5, 7 et 9 n'y apparaissent nulle part ailleurs — vérifié champ par champ).
+    for (const v of ["5", "7", "9"]) expect(avec).toContain(`value="${v}"`);
+    expect(avec).toContain('value="#ABCDEF"');
+    const sans = render([shapeOf("rect")], "s1", "recap_card");
+    for (const v of ["5", "7", "9"]) expect(sans).not.toContain(`value="${v}"`);
+    expect(sans).not.toContain('value="#ABCDEF"');
+  });
+
+  it("l'interrupteur d'ombre est GRISÉ pour une forme découpée, actif pour les autres", () => {
+    const découpées = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(découpées.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(libres.length).toBeGreaterThan(0);
+
+    for (const kind of découpées) {
+      const tag = shadowSwitchTag(render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : true`);
+    }
+    for (const kind of libres) {
+      const tag = shadowSwitchTag(render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card"));
+      expect(`${kind} grisé : ${tag.includes('aria-disabled="true"')}`).toBe(`${kind} grisé : false`);
+    }
+  });
+
+  it("la note n'apparaît QUE pour les formes découpées, et les sous-champs disparaissent avec elle", () => {
+    // Le calque PORTE une ombre : c'est exactement ce qu'on obtient en convertissant un rectangle
+    // ombré en triangle, donc le cas résiduel qui compte. Un interrupteur grisé au-dessus de quatre
+    // contrôles actifs n'aurait rien empêché.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card");
+      const découpée = descriptorFor(kind).clipped;
+      expect(`${kind} note : ${html.includes('data-testid="shape-shadow-none"')}`).toBe(`${kind} note : ${découpée}`);
+      expect(`${kind} champs : ${html.includes('value="#ABCDEF"')}`).toBe(`${kind} champs : ${!découpée}`);
+      expect(`${kind} flou : ${html.includes('value="9"')}`).toBe(`${kind} flou : ${!découpée}`);
+    }
+  });
+
+  it("la note dit POURQUOI, nomme la forme, et ne se contente pas d'« indisponible »", () => {
+    // Le précédent de U2 : expliquer la raison. La recherche du libellé se fait DANS la note (revue de
+    // la Tâche 3, Medium 3 : chercher « Étoile » dans tout le HTML se satisferait d'une note voisine
+    // qui nomme la même forme — les trois notes de forme coexistent dans ce panneau).
+    const html = render([shapeOf("star", { shadow: { ...OMBRE } })], "s1", "recap_card");
+    const note = /<p[^>]*data-testid="shape-shadow-none"[^>]*>([\s\S]*?)<\/p>/.exec(html);
+    expect(note).not.toBeNull();
+    expect(note![1]).toContain("Étoile");
+    expect(note![1].length).toBeGreaterThan(40);
+    expect(note![1]).not.toMatch(/^[a-z_.]+$/); // une phrase, pas une clé
+    expect(render([shapeOf("rect")], "s1", "recap_card")).not.toContain('data-testid="shape-shadow-none"');
+  });
+
+  it("une ombre déjà réglée SURVIT sur le calque — le panneau n'écrit rien en la masquant", () => {
+    // Même garantie que le rayon d'une ellipse et que la bordure d'un triangle : convertir un
+    // rectangle ombré en étoile puis revenir doit rendre l'ombre intacte. Aucun patch
+    // « shadow: undefined » caché.
+    const layer = shapeOf("star", { shadow: { ...OMBRE } });
+    render([layer], "s1", "recap_card");
+    if (layer.type === "shape") expect(layer.shadow).toEqual({ ...OMBRE });
+    // Et l'interrupteur montre bien cette valeur STOCKÉE (coché), grisé — le même choix d'affichage
+    // que « Rotation (°) », qui montre 30 grisé plutôt que 0.
+    expect(shadowSwitchTag(render([layer], "s1", "recap_card"))).toContain('aria-checked="true"');
+  });
+
+  it("la section Ombre d'une FORME et celle d'un TEXTE sont deux sections distinctes", () => {
+    // Elles partagent le libellé « Ombre » : c'est exactement le cas que le préfixe par type
+    // (`${layerType}.${sectionId}`) doit couvrir — replier l'une ne doit pas replier l'autre.
+    const prefs = { "text.ombre": false };
+    const texte = render([textLayer], "t", "social_post", [], prefs);
+    const forme = render([shapeOf("rect", { shadow: { ...OMBRE } })], "s1", "recap_card", [], prefs);
+    expect(sectionIsOpen(texte, "ombre")).toBe(false);
+    expect(sectionIsOpen(forme, "ombre")).toBe(true);
+    // Et l'inverse, sans quoi la moitié de la biconditionnelle manquerait.
+    const inverse = { "shape.ombre": false };
+    expect(sectionIsOpen(render([textLayer], "t", "social_post", [], inverse), "ombre")).toBe(true);
+    expect(sectionIsOpen(render([shapeOf("rect")], "s1", "recap_card", [], inverse), "ombre")).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 4 — LE RAYON PAR COIN EST DÉCOUVRABLE.
+//
+// Le modèle acceptait déjà « 8px 24px 8px 24px » depuis la Tâche 2, et les deux chemins de rendu le
+// transportaient déjà : la fonctionnalité existait sans qu'AUCUN texte de l'interface ne l'annonce
+// (le champ disait « Un nombre de pixels (« 12 ») ou une longueur CSS (« 50% ») »). Une capacité que
+// rien n'annonce n'existe pas pour le designer — et l'ORDRE des quatre coins, lui, est mesuré en
+// pixels (tests/studio-shape-render.test.ts, « le rayon PAR COIN »), pas supposé.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — le rayon par coin est annoncé par le champ (U3 Tâche 4)", () => {
+  function aide(html: string): string {
+    // DANS l'élément d'aide, jamais dans tout le HTML du panneau : la leçon de la revue de la Tâche 3
+    // (Medium 3) — une note voisine peut contenir les mêmes mots (« rayon », « coins ») et rendre
+    // l'assertion vraie sans que le texte cherché soit au bon endroit.
+    return elementWith(html, "data-testid", "shape-radius-help");
+  }
+
+  it("le champ annonce la forme à quatre longueurs ET l'ordre des coins", () => {
+    const html = render([shapeLayerSolid], "s1", "recap_card");
+    const texte = aide(html);
+    // Un exemple à quatre longueurs, littéral : c'est ce qu'un designer peut copier.
+    expect(texte).toContain("8px 24px");
+    // …et l'ordre, en français, dans le même élément. Les quatre coins nommés dans l'ordre CSS.
+    for (const coin of ["haut-gauche", "haut-droit", "bas-droit", "bas-gauche"]) {
+      expect(`aide contient « ${coin} » : ${texte.includes(coin)}`).toBe(`aide contient « ${coin} » : true`);
+    }
+    // L'ordre d'apparition compte autant que la présence : « bas-gauche, haut-droit… » serait FAUX
+    // (mesuré en pixels : satori honore l'ordre CSS haut-gauche, haut-droit, bas-droit, bas-gauche).
+    const positions = ["haut-gauche", "haut-droit", "bas-droit", "bas-gauche"].map((c) => texte.indexOf(c));
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
+  it("le champ reste utilisable pour les deux formes historiques du rayon", () => {
+    // La migration n'enlève rien : le texte d'aide doit continuer d'annoncer le nombre de pixels et la
+    // longueur unique, sinon un designer croirait devoir écrire quatre valeurs.
+    const texte = aide(render([shapeLayerSolid], "s1", "recap_card"));
+    expect(texte).toContain("12");
+    expect(texte).toContain("50%");
+  });
+
+  it("l'aide accompagne le CHAMP : elle disparaît là où le champ disparaît", () => {
+    // Sinon une note d'aide orpheline expliquerait comment écrire un rayon à côté d'une note disant
+    // que le rayon ne s'applique pas.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      const applique = descriptorFor(kind).radiusApplies;
+      expect(`${kind} aide : ${html.includes('data-testid="shape-radius-help"')}`).toBe(`${kind} aide : ${applique}`);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 — CHANGER LA FORME D'UN CALQUE depuis le panneau.
+// shape-gallery.ts promettait déjà, en commentaire, qu'« un designer peut ensuite modifier sa forme
+// depuis le panneau de propriétés » : avec huit formes, l'absence de ce contrôle rendait cette phrase
+// fausse et obligeait à supprimer/réinsérer un calque pour changer d'avis.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("PropertyPanel — le sélecteur de forme", () => {
+  // PORTÉE DE CETTE PREUVE, dite plutôt que sous-entendue : le contenu déroulant d'un `Select` Base UI
+  // n'est pas monté tant qu'il est fermé (même `keepMounted={false}` que le `Collapsible.Panel`
+  // documenté en tête de ce fichier), donc le HTML sérialisé ne contient QUE l'option courante — pas
+  // les huit. La liste complète est donc épinglée sur SA SOURCE (`SHAPE_OPTIONS`, lib/studio/shapes.ts,
+  // le tableau que le composant passe littéralement au sélecteur), et le HTML sert à prouver l'autre
+  // moitié : que la forme COURANTE s'affiche sous son libellé français.
+  it("la source des options EST le catalogue de formes, dans l'ordre du schéma, sans doublon", () => {
+    expect(SHAPE_OPTIONS.map((o) => o.value)).toEqual([...SHAPE_KINDS]);
+    expect(SHAPE_OPTIONS.map((o) => o.label)).toEqual(SHAPE_KINDS.map((k) => shapeLabel(k)));
+    expect(new Set(SHAPE_OPTIONS.map((o) => o.label)).size).toBe(SHAPE_OPTIONS.length);
+  });
+
+  it("le sélecteur affiche la forme courante sous son libellé FRANÇAIS, jamais sa clé technique", () => {
+    // Mutation qui rougit : retirer le mappeur `<SelectValue>{(v) => …}</SelectValue>` de SelectField —
+    // Base UI afficherait alors la valeur brute (« star »), le piège déjà corrigé une fois dans ce
+    // panneau et une fois dans preview-pane.tsx.
+    //
+    // CE TEST ÉTAIT VACANT POUR SIX DES HUIT FORMES (revue de la Tâche 3, Medium 3). Sa seule preuve
+    // du libellé était `html.includes(shapeLabel(kind))`, sur TOUT le panneau — or les notes
+    // `shape-radius-ignored` et `shape-rotation-none` NOMMENT la forme concernée dans leur phrase
+    // (« La forme « Étoile » est dessinée par un découpage… »), et « Étoile » apparaît 3 fois dans ce
+    // panneau. Mesuré, mappeur retiré : le libellé restait présent pour ellipse, triangle, star,
+    // hexagon, arrow et bubble ; seuls `rect` et `line` — les deux formes SANS note — faisaient
+    // rougir. Le libellé est donc désormais cherché DANS le déclencheur du sélecteur lui-même, qui ne
+    // contient que lui et un chevron.
+    for (const kind of SHAPE_KINDS) {
+      const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
+      expect(`${kind} : ${html.includes(shapeLabel(kind))}`).toBe(`${kind} : true`);
+      // Le panneau d'une forme n'a QU'UN sélecteur : l'extraction est donc sans ambiguïté (et si un
+      // second en apparaissait un jour, ce compte le dirait plutôt que de laisser l'extraction viser
+      // le mauvais).
+      expect(`${kind} : ${countOf(html, 'role="combobox"')}`).toBe(`${kind} : 1`);
+      // Et le libellé de la forme est bien celui du sélecteur, pas seulement le nom du calque
+      // (`shapeLayerSolid` s'appelle « Fond ») ni celui d'une note voisine.
+      const trigger = elementWith(html, "role", "combobox");
+      expect(`${kind} déclencheur : ${trigger.includes(shapeLabel(kind))}`).toBe(`${kind} déclencheur : true`);
+      // L'autre moitié, explicite : la CLÉ TECHNIQUE n'y est jamais — c'est exactement ce que Base UI
+      // affiche à la place du libellé quand le mappeur manque.
+      expect(`${kind} clé brute : ${trigger.includes(`>${kind}<`)}`).toBe(`${kind} clé brute : false`);
+    }
+  });
+});
+
 describe("PropertyPanel — calque QR", () => {
   it("rend les champs slot/fg/bg/margin", () => {
     const html = render([qrLayer], "q", "social_post");
@@ -498,11 +1121,15 @@ describe("PropertyPanel — sections repliables, mémorisées par type de calque
     const sectionsOpen = { "text.ombre": false };
     const textHtml = render([textLayer], "t", "social_post", [], sectionsOpen);
     expect(sectionIsOpen(textHtml, "ombre")).toBe(false);
-    // Un calque forme n'a pas de section "ombre" du tout ; sa section "bordure" à elle, jamais visée
-    // par ces prefs, doit rester ouverte — la clé plate "ombre" ne doit influencer AUCUNE section
-    // d'un type qui ne la porte même pas.
+    // Sa section "bordure", jamais visée par ces prefs, doit rester ouverte — la clé plate "ombre" ne
+    // doit influencer aucune AUTRE section.
     const shapeHtml = render([shapeLayerSolid], "s1", "recap_card", [], sectionsOpen);
     expect(sectionIsOpen(shapeHtml, "bordure")).toBe(true);
+    // U3 Tâche 4 : un calque FORME porte désormais lui aussi une section "Ombre" — le cas exact que le
+    // préfixe par type existe pour couvrir, comme "Apparence" entre texte et image. Replier celle du
+    // TEXTE ne doit pas replier celle de la FORME. (Le test dédié, dans « l'ombre d'une forme »,
+    // vérifie aussi le sens inverse.)
+    expect(sectionIsOpen(shapeHtml, "ombre")).toBe(true);
   });
 
   it("replier une section n'appelle JAMAIS dispatch — c'est un changement d'affichage pur, jamais une mutation de calque", () => {

@@ -117,6 +117,11 @@ function usesInLayer(layer: Layer): TokenUse[] {
     case "shape": {
       const colors = typeof layer.fill === "string" ? [layer.fill] : layer.fill.stops.map((s) => s.color);
       if (layer.border) colors.push(layer.border.color);
+      // Scan shapeLayer.shadow.color (U3 Tâche 4) — une couleur comme les autres. Sans cette ligne, un
+      // jeton posé dans l'ombre d'une forme échapperait à validateScene (donc « jeton inconnu » ne
+      // serait jamais dit) ET à resolveTokens, qui substitue EXACTEMENT les champs scannés ici :
+      // « {{category.color}} » arriverait tel quel à satori, où il ne peint rien du tout.
+      if (layer.shadow) colors.push(layer.shadow.color);
       uses.push(...colors.flatMap((c) => tokensInString(c).map((t) => ({ token: t, expected: "color" as const, where }))));
       break;
     }

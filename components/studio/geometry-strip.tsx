@@ -14,6 +14,9 @@ import {
   type AlignMode, type DistributeAxis,
 } from "@/lib/studio/align";
 import { setFrames, type EditorAction } from "@/lib/studio/editor-state";
+// U3 Tâche 3 : la rotation d'une forme est une propriété de sa DESCRIPTION (arbitrage A) — ce
+// composant la demande, il ne la déduit ni d'une liste de noms ni du type de calque.
+import { layerRotation, layerSupportsRotation, shapeLabel } from "@/lib/studio/shapes";
 import { NumberField, type Patch } from "./property-fields";
 
 // components/studio/geometry-strip.tsx — Tâche 6 (U1, spec §6) : les six champs de cadre (X, Y,
@@ -46,6 +49,9 @@ export interface GeometryStripProps {
 // la sélection multiple disponible ») est désormais occupée par `AlignRow`, en TROISIÈME rangée. Reste
 // à venir, et toujours pas construit par anticipation : U5 y ajoutera le widget d'ancrage par côté.
 export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: GeometryStripProps) {
+  // U3 Tâche 3 : la rotation est-elle PEINTE pour ce calque ? Faux uniquement pour une forme découpée
+  // (arbitrage A) — un texte, une image, un QR, un rectangle, une ellipse ou une ligne tournent tous.
+  const tourne = layerSupportsRotation(layer);
   return (
     <div className="space-y-2 border-b p-3" data-testid="geometry-strip">
       <div className="grid grid-cols-4 gap-2">
@@ -61,7 +67,16 @@ export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: Ge
         />
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <NumberField label="Rotation (°)" value={layer.rotation ?? 0} dataField="rotation" onCommit={(v) => patch({ rotation: v || undefined })} />
+        {/* U3 Tâche 3 (arbitrage A) : une forme DÉCOUPÉE ne tourne pas — satori tourne le remplissage
+            mais pas le masque (réserve 2 de la sonde, mesurée en pixels), et les deux chemins de rendu
+            suppriment donc la `transform` (lib/studio/shapes.ts#layerRotation). Le contrôle est grisé
+            plutôt que laissé actif-sans-effet, avec la note ci-dessous : « interdire en le disant vaut
+            mieux qu'autoriser sans effet », le verdict qu'a déjà rendu la revue de U2 deux fois. La
+            question est posée à la DESCRIPTION de la forme, jamais à une liste de noms en dur. */}
+        <NumberField
+          label="Rotation (°)" value={layer.rotation ?? 0} dataField="rotation" disabled={!tourne}
+          onCommit={(v) => patch({ rotation: v || undefined })}
+        />
         <NumberField
           label="Opacité (0–1)" value={layer.opacity ?? 1} step={0.05} min={0} max={1} dataField="opacity"
           onCommit={(v) => patch({ opacity: Math.min(1, Math.max(0, v)) })}
@@ -80,7 +95,30 @@ export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: Ge
           référent dès que le calque tourne), et pendant un DÉPLACEMENT il fonctionne mais les guides
           marquent le cadre non pivoté, pas le contour visible (mesuré : 6,82 px d'écart à 45° sur un
           calque 200×150). */}
-      {(layer.rotation ?? 0) !== 0 && (
+      {/* U3 Tâche 3 — la note qui accompagne le contrôle grisé. Elle NOMME la forme (le libellé
+          français de sa description, jamais sa clé technique) et dit la raison, pas seulement
+          « indisponible » : c'est le format des deux précédents de U2 (`snap-rotation-note` juste en
+          dessous, `safe-areas-none` dans canvas-chrome.tsx). Elle n'apparaît que pour les formes
+          concernées — un avertissement permanent ne serait plus lu. */}
+      {!tourne && layer.type === "shape" && (
+        <p className="text-[11px] text-muted-foreground" data-testid="shape-rotation-none">
+          La forme «&nbsp;{shapeLabel(layer.shape)}&nbsp;» est dessinée par un découpage
+          (<code>clip-path</code>) : le moteur d&rsquo;export ne fait pas tourner un découpage, donc la
+          rotation est désactivée ici plutôt qu&rsquo;appliquée à l&rsquo;écran sans se retrouver dans
+          l&rsquo;image exportée. Un rectangle, une ellipse ou une ligne tournent, eux.
+        </p>
+      )}
+      {/* `tourne &&` (U3 Tâche 3) : sur une forme découpée portant un `rotation` résiduel — scène
+          écrite avant cette tâche, import, ou conversion depuis un rectangle pivoté — cette note
+          serait fausse deux fois (le calque n'est pas pivoté à l'écran, et l'accrochage n'est pas
+          désactivé). C'est la note ci-dessus qui s'affiche alors.
+          LA SECONDE MOITIÉ EST DÉSORMAIS VRAIE, ET TESTÉE (revue de la Tâche 3, Important 1) : quand
+          elle a été écrite, elle ne l'était pas — `begin()` (hooks/use-layer-drag.ts) lisait encore
+          `layer.rotation` brut, et `snapResize` renonce dès que `rotationDeg !== 0`
+          (lib/studio/snap.ts). Le geste lit maintenant `layerRotation(layer)`, la rotation PEINTE, et
+          tests/studio-property-panel.test.ts (« la PRÉMISSE du masquage est vraie ») relie cette note
+          au comportement réel du moteur de geste, dans les deux sens. */}
+      {tourne && (layer.rotation ?? 0) !== 0 && (
         <p className="text-[11px] text-muted-foreground" data-testid="snap-rotation-note">
           Calque pivoté : l&rsquo;accrochage est désactivé pendant un redimensionnement ; pendant un
           déplacement, les guides marquent le cadre non pivoté (X, Y, largeur, hauteur), pas le
@@ -143,7 +181,16 @@ export function AlignRow({ scene, selectedIds, dispatch, className }: AlignRowPr
   const reference = participants.length === 1 ? "par rapport au plan de travail" : "par rapport à la sélection";
   // « say so in the UI's tooltip if it matters » (plan) : la note n'apparaît que si un participant est
   // RÉELLEMENT pivoté — un avertissement permanent ne serait plus lu par personne.
-  const hasRotated = participants.some((l) => (l.rotation ?? 0) !== 0);
+  //
+  // `layerRotation()`, PAS `layer.rotation` (revue finale U3, Important 1 — CINQUIÈME instance du §0,
+  // et elle vivait soixante lignes sous la correction de sa sœur `snap-rotation-note`) : sur une forme
+  // DÉCOUPÉE la rotation stockée n'est peinte NULLE PART (lib/studio/shapes.ts#layerRotation, les deux
+  // chemins de rendu la suppriment), donc le cadre non pivoté EST la boîte visible à l'écran et cette
+  // note dirait le contraire. Pire, le champ « Rotation (°) » est alors GRISÉ avec la valeur résiduelle
+  // affichée : l'utilisateur ne pourrait même pas effacer la rotation pour faire taire l'avertissement
+  // — un cul-de-sac doublé d'une explication fausse. La question est posée à la rotation PEINTE, comme
+  // partout ailleurs depuis la Tâche 3.
+  const hasRotated = participants.some((l) => layerRotation(l) !== 0);
 
   return (
     <div className={cn("space-y-1", className)} data-testid="align-row">

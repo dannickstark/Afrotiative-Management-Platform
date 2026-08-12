@@ -11,6 +11,25 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
+// Import de VALEUR (U3 Tâche 3) : la grammaire du rayon vit dans le schéma, et ce panneau la DEMANDE
+// plutôt que d'en écrire une seconde qui pourrait dériver. scene.ts est un module de schéma pur : ses
+// deux SEULS imports sont `zod` et sa locale française, donc il n'atteint ni `@/db` ni aucun code
+// serveur — vérifiable en deux lignes en tête du fichier.
+//
+// CETTE LIGNE CITAIT tests/studio-no-r2.test.ts (revue de la Tâche 3, Medium 2). C'ÉTAIT FAUX : ce
+// fichier teste les messages français de repli quand R2 n'est pas configuré, et ne dit RIEN des
+// imports de valeur d'un composant client. AUCUN test de ce dépôt ne garde cette frontière : elle est
+// tenue par la RELECTURE et par un traçage d'imports fait à la main à chaque tâche qui y touche (U2 a
+// mesuré 31 chemins « client -> @/db » repo-wide, 7 dans le studio, 0 violation réelle ; la revue de
+// cette tâche a retracé les cinq fichiers `"use client"` du studio et retrouvé 0 chemin). Le dire est
+// utile ; le faire dire à un test qui ne le fait pas est pire que de ne rien citer — une fausse
+// citation se relit comme une garantie. `bun run build` n'en est pas une non plus (contrainte
+// explicite du plan U3).
+import { formatRadius, parseRadiusInput } from "@/lib/studio/scene";
+// U3 Tâche 3 : LA description d'une forme — celle que les deux chemins de rendu consultent. Ce panneau
+// lui demande sa liste d'options et ses deux verdicts (le rayon a-t-il un sens ? la forme est-elle
+// découpée ?) au lieu d'en tenir une seconde version.
+import { descriptorFor, SHAPE_OPTIONS, supportsShadow } from "@/lib/studio/shapes";
 import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
@@ -170,20 +189,104 @@ function ColorField({
 }
 
 // Booléen : pas de tampon — un bascule est un geste unique, pas une frappe à amortir.
-function SwitchField({ label, checked, onCommit }: { label: string; checked: boolean; onCommit: (v: boolean) => void }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// LE RAYON DES COINS (U3 Tâche 3, dette 1 du « PIÈGE POUR LA TÂCHE 3 »).
+//
+// Avant cette tâche, ce contrôle était un `NumberField` : il affichait `0` pour un rayon en CHAÎNE
+// (« 50% », que le schéma accepte depuis la Tâche 2, arbitrage C) et l'ÉCRASAIT au premier commit.
+// Inatteignable tant que `rect` était la seule forme ; vivant à l'instant où l'ellipse est livrée.
+//
+// `radiusPatch` est EXPORTÉE et pure — même idiome que elements-panel.tsx#insertShapeTile : ce dépôt
+// n'a pas de DOM sous `bun test`, donc la seule façon de tester ce qu'un commit ÉCRIT est d'extraire
+// la décision. Elle renvoie `null` pour « ne rien écrire » : saisie refusée (la valeur stockée
+// survit — c'est la moitié « ne rien écraser » du correctif) ou valeur inchangée (pas d'entrée
+// d'historique pour un aller-retour dans le champ).
+export function radiusPatch(
+  text: string,
+  stored: number | string | undefined,
+): Record<string, unknown> | null {
+  const parsed = parseRadiusInput(text);
+  if (parsed === null) return null;
+  if (parsed === stored) return null;
+  return { radius: parsed };
+}
+
+function RadiusField({ value, onCommit }: { value: number | string | undefined; onCommit: Patch }) {
+  const shown = formatRadius(value);
+  const { local, setLocal, editing, setEditing } = useCommitBuffer(shown);
+  function commit() {
+    setEditing(false);
+    const p = radiusPatch(local, value);
+    // Rien à écrire : on RENORMALISE l'affichage sur la valeur stockée. C'est ce qui fait revenir le
+    // champ à « 50% » après une saisie refusée, au lieu de laisser un texte invalide à l'écran.
+    if (!p) { setLocal(shown); return; }
+    onCommit(p);
+  }
+  return (
+    <FieldRow label="Rayon des coins">
+      <Input
+        value={local}
+        inputMode="text"
+        data-field="radius"
+        placeholder="ex. 12 ou 50%"
+        onFocus={() => setEditing(true)}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "Escape") { setLocal(shown); setEditing(false); e.currentTarget.blur(); }
+        }}
+      />
+      {/* U3 Tâche 4 — LE RAYON PAR COIN EST DÉCOUVRABLE. Le modèle l'acceptait depuis la Tâche 2
+          (« une à quatre longueurs », scene.ts#RADIUS_LENGTH_RE) et les deux chemins de rendu le
+          transportaient déjà : il ne manquait QUE de le dire. Une capacité que rien n'annonce n'existe
+          pas pour le designer. L'ORDRE des quatre coins n'est pas repris de la spécification CSS de
+          mémoire : il est MESURÉ EN PIXELS à travers renderScene() (tests/studio-shape-render.test.ts,
+          « le rayon PAR COIN ») — satori honore bien haut-gauche, haut-droit, bas-droit, bas-gauche,
+          la forme à deux valeurs et les pourcentages. */}
+      <p className="text-[11px] text-muted-foreground" data-testid="shape-radius-help">
+        Un nombre de pixels (« 12 »), une longueur CSS (« 50% »), ou jusqu&rsquo;à quatre longueurs pour
+        régler chaque coin séparément (« 8px 24px 8px 24px » : haut-gauche, haut-droit, bas-droit,
+        bas-gauche). Vide pour aucun arrondi.
+      </p>
+    </FieldRow>
+  );
+}
+
+function SwitchField({
+  label, checked, onCommit, disabled, dataField,
+}: {
+  label: string; checked: boolean; onCommit: (v: boolean) => void;
+  /** U3 Tâche 3 (revue, Medium 4) — grise l'interrupteur, et pas seulement visuellement. VÉRIFIÉ dans
+   * la source du composant plutôt que supposé (node_modules/@base-ui/react/switch/root/SwitchRoot.js) :
+   * `Switch.Root` ne rend PAS un `<button disabled>` mais un `<span role="switch">` portant
+   * `aria-disabled="true"`, `data-disabled` et `tabindex="-1"` — son `onClick` commence par
+   * `if (readOnly || disabled) return;` et l'`<input type="checkbox">` caché qu'il pilote porte, lui,
+   * le `disabled` natif. Aucun clic ni aucune touche ne peut donc en sortir un changement. Un test qui
+   * chercherait l'attribut `disabled` sur cet élément passerait donc toujours à côté : c'est
+   * `aria-disabled` qu'il faut lire (voir tests/studio-property-panel.test.ts). */
+  disabled?: boolean;
+  /** Pose `data-field` sur l'interrupteur, pour qu'un test puisse lire SES attributs plutôt que de
+   * chercher une sous-chaîne dans tout le HTML du panneau (leçon des pièges `disabled:` de U1/U2). */
+  dataField?: string;
+}) {
   return (
     <div className="flex items-center justify-between gap-2">
       <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
-      <Switch checked={checked} onCheckedChange={(v) => onCommit(!!v)} />
+      <Switch checked={checked} disabled={disabled} data-field={dataField} onCheckedChange={(v) => onCommit(!!v)} />
     </div>
   );
 }
 
 function SelectField({
-  label, value, options, onCommit, placeholder,
+  label, value, options, onCommit, placeholder, optionDataAttr,
 }: {
   label: string; value: string; options: { value: string; label: string }[]; onCommit: (v: string) => void;
   placeholder?: string;
+  /** U3 Tâche 3 : pose `<attr>="<valeur d'option>"` sur chaque option, pour qu'un test puisse COMPTER
+   * les options rendues au lieu de se contenter de chercher leurs libellés dans tout le HTML (un
+   * sélecteur qui rendrait deux fois la même option passerait une simple recherche de sous-chaîne). */
+  optionDataAttr?: string;
 }) {
   return (
     <FieldRow label={label}>
@@ -200,7 +303,11 @@ function SelectField({
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value} {...(optionDataAttr ? { [optionDataAttr]: o.value } : {})}>
+              {o.label}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
     </FieldRow>
@@ -569,6 +676,9 @@ function ShapeFields({
 }) {
   const isGradient = typeof layer.fill !== "string";
   const sides = layer.border?.sides ?? SIDES;
+  // LA description de la forme — la même que consultent les deux chemins de rendu. Ce panneau ne
+  // décide rien lui-même sur la géométrie (U3 §0) : il demande, et affiche en conséquence.
+  const descriptor = descriptorFor(layer.shape);
   return (
     <>
       <TypeSection title="Remplissage" sectionId="remplissage" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
@@ -595,16 +705,68 @@ function ShapeFields({
       </TypeSection>
 
       <TypeSection title="Forme" sectionId="forme" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
-        <NumberField label="Rayon des coins" value={layer.radius ?? 0} min={0} onCommit={(v) => patch({ radius: v || undefined })} />
+        {/* U3 Tâche 3 — CHANGER de forme sans supprimer/réinsérer le calque. shape-gallery.ts
+            promettait déjà cette possibilité en commentaire (« un designer peut ensuite modifier sa
+            forme … depuis le panneau de propriétés ») ; avec huit formes, l'absence de contrôle rendait
+            la phrase fausse. Les options sont dérivées de SHAPE_KINDS (le schéma lui-même) et
+            libellées par la DESCRIPTION de chaque forme — jamais une liste recopiée qui pourrait
+            dériver, comme SHAPE_TILES le faisait avant la Tâche 2. */}
+        <SelectField
+          label="Forme"
+          value={layer.shape}
+          options={SHAPE_OPTIONS.map((o) => ({ value: o.value as string, label: o.label }))}
+          optionDataAttr="data-shape-option"
+          onCommit={(v) => patch({ shape: v })}
+        />
+        {/* Le rayon N'EST OFFERT que là où il veut dire quelque chose (lib/studio/shapes.ts,
+            `radiusApplies`) : sur une ellipse il la transformerait en stade, sur une forme découpée il
+            arrondirait les coins du CADRE et pas les sommets du polygone — « aucun effet » pour une
+            étoile, « rabote la base » pour un triangle. Le brief demande qu'il soit IGNORÉ, pas mal
+            appliqué : le champ disparaît donc derrière une note qui dit pourquoi, et RIEN n'est écrit
+            (un rayon déjà stocké survit intact et réapparaît si la forme redevient un rectangle). */}
+        {descriptor.radiusApplies ? (
+          <RadiusField value={layer.radius} onCommit={patch} />
+        ) : (
+          <p className="text-[11px] text-muted-foreground" data-testid="shape-radius-ignored">
+            Le rayon des coins ne s&rsquo;applique pas à la forme «&nbsp;{descriptor.label}&nbsp;» :
+            {descriptor.clipped
+              ? " un découpage arrondirait les coins du cadre, pas les sommets de la forme."
+              : " sa géométrie EST un arrondi (« border-radius: 50% »), qu'un rayon en pixels remplacerait par un stade."}
+            {" "}Il reste conservé tel quel si vous revenez à un rectangle.
+          </p>
+        )}
       </TypeSection>
 
       <TypeSection title="Bordure" sectionId="bordure" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+        {/* U3 Tâche 3, REVUE (Medium 4) — RÉSERVE 3 DE LA SONDE, TRANCHÉE ICI PLUTÔT QUE REPORTÉE.
+            La bordure ÉCHAPPE au découpage dans satori (contour rectangulaire autour d'un remplissage
+            triangulaire) et pas dans le navigateur (qui clippe l'élément entier, bordure comprise) :
+            l'offrir sur une forme découpée, c'est offrir un contrôle dont le résultat DIFFÈRE entre
+            l'éditeur et l'image livrée — le §0 de ce sous-projet. L'arbitrage F l'avait reporté à la
+            Tâche 4 au motif qu'aucune forme n'en porte par défaut ; c'est vrai de l'INSERTION, mais
+            cette tâche a livré le sélecteur de forme, donc « rectangle bordé » -> « Triangle » se fait
+            en deux clics. Le contrôle est donc grisé, avec sa note — et la bordure est ÉGALEMENT
+            supprimée des deux chemins de rendu (lib/studio/shapes.ts#layerBorder), sans quoi un
+            `border` déjà stocké continuerait de diverger et la note serait fausse : exactement ce que
+            la Tâche 3 avait dû faire pour la rotation. Piloté par `descriptor.clipped`, jamais par une
+            liste de noms. */}
         <SwitchField
           label="Activer la bordure"
           checked={!!layer.border}
+          disabled={descriptor.clipped}
+          dataField="border-enabled"
           onCommit={(v) => patch({ border: v ? { width: 2, color: "#000000", sides: [...SIDES] } : undefined })}
         />
-        {layer.border && (
+        {descriptor.clipped && (
+          <p className="text-[11px] text-muted-foreground" data-testid="shape-border-none">
+            La bordure n&rsquo;est pas disponible sur la forme «&nbsp;{descriptor.label}&nbsp;» : le
+            moteur d&rsquo;export laisserait le contour RECTANGULAIRE autour du remplissage découpé,
+            alors que le navigateur le découperait comme le reste — l&rsquo;écran et l&rsquo;image
+            livrée ne montreraient pas la même chose. Elle n&rsquo;est donc peinte nulle part ici, et
+            une bordure déjà réglée reste conservée telle quelle si vous revenez à un rectangle.
+          </p>
+        )}
+        {!descriptor.clipped && layer.border && (
           <>
             <NumberField
               label="Épaisseur" value={layer.border.width} min={0.1}
@@ -627,6 +789,51 @@ function ShapeFields({
                 />
               ))}
             </div>
+          </>
+        )}
+      </TypeSection>
+
+      <TypeSection title="Ombre" sectionId="ombre" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+        {/* U3 Tâche 4 — L'OMBRE PORTÉE D'UNE FORME, et le cas des formes découpées.
+            MESURÉ EN PIXELS AVANT D'ÉCRIRE CE CONTRÔLE (tests/studio-render-clippath.test.ts,
+            « RÉSERVE 4 ») : sur une forme découpée, satori ne peint AUCUNE ombre, et le navigateur non
+            plus — `clip-path` découpe le rendu ENTIER d'un élément, ombre portée comprise. Offrir le
+            contrôle là serait offrir un contrôle sans effet : le défaut que U2 a tranché deux fois
+            (`snap-rotation-note`, `safe-areas-none`) et la Tâche 3 deux fois de plus. Il est donc grisé
+            avec sa note — ET l'ombre est supprimée des DEUX chemins de rendu
+            (lib/studio/shapes.ts#layerBoxShadow), pour que l'accord entre l'écran et l'export soit
+            structurel plutôt qu'un accident d'implémentation de satori qu'un correctif amont pourrait
+            défaire. Sur les formes non découpées, l'ombre SUIT le `border-radius` dans les deux moteurs
+            (mesuré) : une ellipse ombrée est une ellipse ombrée. Piloté par la description, jamais par
+            une liste de noms. Mêmes quatre champs que l'ombre d'un texte, puisque c'est le même réglage
+            et — depuis cette tâche — la même définition de schéma. */}
+        <SwitchField
+          label="Activer l'ombre"
+          checked={!!layer.shadow}
+          disabled={!supportsShadow(layer.shape)}
+          dataField="shadow-enabled"
+          onCommit={(v) => patch({ shadow: v ? { x: 0, y: 2, blur: 4, color: "#000000" } : undefined })}
+        />
+        {!supportsShadow(layer.shape) && (
+          <p className="text-[11px] text-muted-foreground" data-testid="shape-shadow-none">
+            L&rsquo;ombre n&rsquo;est pas disponible sur la forme «&nbsp;{descriptor.label}&nbsp;» : une
+            ombre portée se peint AUTOUR de la boîte du calque, et une forme découpée n&rsquo;en montre
+            rien — ni sur le canevas, ni dans l&rsquo;image exportée. Vérifié en pixels sur les deux.
+            Elle n&rsquo;est donc peinte nulle part ici, et une ombre déjà réglée reste conservée telle
+            quelle si vous revenez à une forme pleine.
+          </p>
+        )}
+        {supportsShadow(layer.shape) && layer.shadow && (
+          <>
+            <div className="grid grid-cols-3 gap-2">
+              <NumberField label="X" value={layer.shadow.x} onCommit={(v) => patch({ shadow: { ...layer.shadow, x: v } })} />
+              <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
+              <NumberField label="Flou" value={layer.shadow.blur} min={0} onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })} />
+            </div>
+            <ColorField
+              label="Couleur de l'ombre" value={layer.shadow.color} context={context}
+              onCommit={(v) => patch({ shadow: { ...layer.shadow, color: v } })}
+            />
           </>
         )}
       </TypeSection>

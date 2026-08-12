@@ -48,6 +48,24 @@ const imageLayer = z.object({
   overlay: hexColor.optional(),
 });
 
+/**
+ * UNE ombre, pour un texte comme pour une forme (U3 Tâche 4).
+ *
+ * Extraite de `textLayer` où elle vivait en ligne, et partagée : `textLayer.shadow` devient une
+ * `text-shadow` (element.ts#textStyleFor), `shapeLayer.shadow` une `box-shadow`
+ * (shapes.ts#layerBoxShadow), mais ce qu'un designer RÈGLE est la même chose — un décalage, un flou,
+ * une couleur — et le panneau de propriétés offre les mêmes quatre champs dans les deux cas. Deux
+ * définitions jumelles auraient pu dériver (durcir l'une sans l'autre) ; tests/studio-scene.test.ts
+ * épingle l'équivalence des acceptations ET des refus dans les deux sens.
+ *
+ * `blur` est `nonnegative()` — un flou négatif n'a pas de sens ; `x` et `y` sont signés, une ombre
+ * peut porter en haut à gauche. La COULEUR passe par `hexColor`, donc un jeton `{{…}}` y est légal :
+ * tokens.ts le scanne et values.ts le résout, pour la forme comme pour le texte.
+ */
+const layerShadow = z.object({
+  x: z.number(), y: z.number(), blur: z.number().nonnegative(), color: hexColor,
+});
+
 const textLayer = z.object({
   ...layerBase,
   type: z.literal("text"),
@@ -66,7 +84,7 @@ const textLayer = z.object({
   letterSpacing: z.number().optional(),
   maxLines: z.number().int().positive().optional(),
   autoFit: z.boolean().optional(),
-  shadow: z.object({ x: z.number(), y: z.number(), blur: z.number().nonnegative(), color: hexColor }).optional(),
+  shadow: layerShadow.optional(),
   stroke: z.object({ width: z.number().positive(), color: hexColor }).optional(),
 });
 
@@ -81,14 +99,108 @@ const gradient = z.object({
 // tests/studio-shape-gallery.test.ts plutôt que de laisser un designer sans moyen de l'insérer
 // (revue Tâche 4, Important 1 : le garde-fou d'origine comparait deux copies manuscrites qui
 // pouvaient dériver ensemble sans qu'aucun test ne le remarque).
-export const SHAPE_KINDS = ["rect"] as const;
+//
+// U3 Tâche 3 — la liste passe d'une forme à HUIT. L'ordre est celui de la galerie d'insertion : les
+// deux formes « pleines » (rect, ellipse), le trait, puis la famille polygonale. Chaque entrée
+// ajoutée ici doit, sous peine de test rouge (jamais de revue) :
+//   — porter une description dans lib/studio/shapes.ts (Record<ShapeKind, …> : sinon `tsc` refuse,
+//     et tests/studio-shapes.test.ts refuse aussi à l'exécution) ;
+//   — porter une tuile dans lib/studio/shape-gallery.ts (garde de complétude, U1 Tâche 4) ;
+//   — porter une preuve EN PIXELS dans tests/studio-shape-render.test.ts (table Record<ShapeKind, …>).
+// Aucune scène déjà écrite ne change : ce n'est qu'un élargissement du z.enum.
+export const SHAPE_KINDS = ["rect", "ellipse", "line", "triangle", "star", "hexagon", "arrow", "bubble"] as const;
+
+/** LA forme d'un calque forme — le type que lib/studio/shapes.ts décrit et que les deux chemins de
+ * rendu consomment. Dérivé de SHAPE_KINDS, jamais recopié. */
+export type ShapeKind = (typeof SHAPE_KINDS)[number];
+
+// Le rayon des coins d'une forme (U3 Tâche 2, arbitrage C — douzième défaut de plan du programme).
+//
+// HISTORIQUE, INCHANGÉ : un NOMBRE, en pixels. Toute scène déjà écrite se relit exactement pareil.
+// NOUVEAU : une CHAÎNE CSS de une à quatre longueurs en « px » ou « % ». Parce qu'un nombre NE PEUT
+// PAS exprimer une ellipse : la sonde (Tâche 1) l'a mesuré en pixels À TRAVERS renderScene() — sur
+// un cadre 800×400, `radius: 200` (le plus grand rayon utile) donne un STADE, deux demi-cercles
+// reliés par un rectangle, pas une ellipse. Seul `"50%"` en donne une. La Tâche 3 (ellipse) et la
+// Tâche 4 (rayon par coin, « 8px 24px 8px 24px ») en dépendent toutes les deux.
+//
+// `z.custom` plutôt qu'un `z.union` : une union fait remonter à parseScene un `invalid_union`
+// générique (« Entrée invalide ») qui n'apprend rien à un rédacteur, alors qu'un `custom` porte le
+// code que parseScene sait afficher tel quel — un seul message français qui dit les DEUX formes
+// acceptées.
+const RADIUS_LENGTH_RE = /^\d+(?:\.\d+)?(?:px|%)(?: \d+(?:\.\d+)?(?:px|%)){0,3}$/;
+
+/**
+ * LE prédicat du rayon — celui que le schéma applique, exporté pour que l'interface le DEMANDE au
+ * lieu d'en écrire une seconde version (U3 Tâche 3). Une deuxième grammaire du rayon dans un
+ * composant pourrait se desserrer sans que le schéma suive : le panneau écrirait alors une scène que
+ * sa propre relecture refuserait. tests/studio-scene.test.ts vérifie l'équivalence DANS LES DEUX
+ * SENS avec parseScene.
+ */
+export function isCssRadius(value: unknown): boolean {
+  return typeof value === "number"
+    ? Number.isFinite(value) && value >= 0
+    : typeof value === "string" && RADIUS_LENGTH_RE.test(value);
+}
+
+const cssRadius = z.custom<number | string>(
+  (v) => isCssRadius(v),
+  { message: "Rayon invalide (attendu un nombre de pixels ≥ 0, ou 1 à 4 longueurs en « px » ou « % » séparées par une espace, ex. « 50% »)" },
+);
+
+// Chiffres NUS (« 12 », « 12.5 ») : la forme HISTORIQUE du rayon, un nombre de pixels. Le schéma
+// refuse la CHAÎNE « 12 » (RADIUS_LENGTH_RE exige une unité) — c'est donc en nombre qu'une telle
+// saisie doit être stockée, et non telle quelle.
+const BARE_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
+/**
+ * Le texte qu'un champ de rayon AFFICHE pour la valeur stockée (U3 Tâche 3, dette 1 du piège de la
+ * Tâche 2). La valeur est montrée TELLE QU'ELLE EST : l'ancien champ numérique affichait « 0 » pour
+ * un rayon « 50% », et l'écrasait au premier commit.
+ */
+export function formatRadius(radius: number | string | undefined): string {
+  return radius === undefined ? "" : String(radius);
+}
+
+/**
+ * Le rayon à STOCKER pour un texte saisi — ou `null` quand ce texte n'est pas un rayon, auquel cas
+ * l'appelant ne doit RIEN écrire (le champ revient à la valeur stockée). Un repli silencieux sur 0
+ * détruirait un « 50% » à la première frappe malheureuse : c'est exactement le défaut corrigé ici.
+ *
+ *   ""  /  "   "  /  "0"      -> `undefined` : aucun rayon (les deux chemins de rendu n'émettent
+ *                                rien pour 0 comme pour l'absence — voir lib/studio/shapes.ts)
+ *   "12" / "12.5"             -> 12 / 12.5, en PIXELS (forme historique)
+ *   "50%" / "8px 24px"        -> la chaîne, intacte
+ *   tout le reste             -> `null`, refusé
+ */
+export function parseRadiusInput(text: string): number | string | undefined | null {
+  const trimmed = text.trim();
+  if (trimmed === "") return undefined;
+  if (BARE_NUMBER_RE.test(trimmed)) {
+    const n = Number(trimmed);
+    if (!isCssRadius(n)) return null;
+    // `0` et l'absence de rayon sont la MÊME chose pour les deux chemins de rendu (« un rayon de 0
+    // n'arrondit rien, donc il n'émet rien », shapes.ts) — on stocke donc la forme canonique.
+    return n === 0 ? undefined : n;
+  }
+  return isCssRadius(trimmed) ? trimmed : null;
+}
 
 const shapeLayer = z.object({
   ...layerBase,
   type: z.literal("shape"),
   shape: z.enum(SHAPE_KINDS),
   fill: z.union([hexColor, gradient]),
-  radius: z.number().nonnegative().optional(),
+  radius: cssRadius.optional(),
+  // L'OMBRE PORTÉE d'une forme (U3 Tâche 4). MIGRATION : champ NOUVEAU et OPTIONNEL, donc toute scène
+  // déjà écrite se relit à l'identique — et une scène sans ombre ne se met pas à porter la clé (zod
+  // n'invente pas `shadow: undefined`, épinglé dans tests/studio-scene.test.ts, ce qui compte pour
+  // l'autosave qui compare des JSON).
+  //
+  // Elle n'est PAS peinte sur les formes découpées : mesuré en pixels avant d'écrire ce champ (satori
+  // n'en peint aucune, le navigateur non plus — tests/studio-render-clippath.test.ts « RÉSERVE 4 »).
+  // La décision vit dans lib/studio/shapes.ts#layerBoxShadow, que les DEUX chemins de rendu
+  // interrogent ; la valeur stockée, elle, survit intacte à un aller-retour par une forme découpée.
+  shadow: layerShadow.optional(),
   border: z.object({
     width: z.number().positive(),
     color: hexColor,

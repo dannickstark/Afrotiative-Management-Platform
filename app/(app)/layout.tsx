@@ -27,7 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <SidebarProvider defaultOpen={defaultOpen}>
       <AppSidebar role={user.role} pendingCount={pending} user={user} />
-      <SidebarInset>
+      <SidebarInset className="flex flex-1 flex-col overflow-hidden">
         <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 data-vertical:h-4 data-vertical:self-auto" />
@@ -38,7 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </div>
           )}
         </header>
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <main className="flex-1 overflow-hidden p-6 w-full max-w-full">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );

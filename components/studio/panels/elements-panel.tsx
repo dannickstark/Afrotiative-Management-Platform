@@ -1,9 +1,10 @@
 "use client";
 
 import type { Dispatch } from "react";
-import { Square, QrCode } from "lucide-react";
+import { Square, Circle, Minus, Triangle, Star, Hexagon, ArrowRight, MessageCircle, QrCode } from "lucide-react";
 import { addLayer, type EditorAction } from "@/lib/studio/editor-state";
 import { shapeTilesFor, buildShapeLayer, recentTilesFor, type ShapeTile, type ShapeTileRow } from "@/lib/studio/shape-gallery";
+import type { ShapeKind } from "@/lib/studio/scene";
 import type { TemplateContext } from "@/lib/studio/tokens";
 
 // components/studio/panels/elements-panel.tsx — Tâche 4 (U1, spec §3) : le contenu de la catégorie
@@ -11,11 +12,12 @@ import type { TemplateContext } from "@/lib/studio/tokens";
 // AUCUNE action primaire (le tableau spec §3 liste « — » pour cette catégorie, contrairement à
 // Modèles/Texte/Images) : la seule façon d'insérer ici est de cliquer une tuile.
 //
-// Contrainte centrale de la tâche : ce panneau n'affiche QUE ce que lib/studio/scene.ts accepte
-// AUJOURD'HUI (rectangle + QR) — voir shape-gallery.ts pour SHAPE_TILES et le garde-fou de
-// complétude testé dans tests/studio-shape-gallery.test.ts. AUCUNE tuile désactivée pour
-// ellipse/ligne/polygone : quand U3 étendra le schéma, il lui suffira d'ajouter des entrées à
-// SHAPE_TILES — ce composant énumère déjà ce tableau sans rien coder en dur par forme.
+// Contrainte centrale de la tâche : ce panneau n'affiche QUE ce que lib/studio/scene.ts accepte —
+// voir shape-gallery.ts pour SHAPE_TILES et le garde-fou de complétude testé dans
+// tests/studio-shape-gallery.test.ts. AUCUNE tuile désactivée pour une forme que le schéma refuse.
+// U3 Tâche 3 : le schéma en accepte désormais HUIT (plus le QR), et il a suffi d'ajouter des entrées
+// à SHAPE_TILES — ce composant énumérait déjà ce tableau. Seule l'ICÔNE était codée par TYPE de tuile
+// et non par forme ; voir SHAPE_ICON plus bas.
 //
 // Revue Tâche 4, Important 2 — corrigé : `context` (déjà porté par editor-shell.tsx, déjà threadé
 // dans <TextePanel>) permet à shape-gallery.ts#shapeTilesFor de griser la tuile QR quand son jeton
@@ -62,10 +64,53 @@ export function insertShapeTile(
   onShapeInserted(row.id);
 }
 
-const TILE_ICON: Record<ShapeTile["kind"], typeof Square> = { shape: Square, qr: QrCode };
+// U3 Tâche 3 — UNE ICÔNE PAR FORME, et le typeur l'exige.
+//
+// L'icône était choisie par le TYPE de tuile (`shape` | `qr`). Avec une seule forme au schéma, ça ne
+// se voyait pas ; avec huit, la section « Formes » alignait HUIT CARRÉS IDENTIQUES, distinguables
+// seulement en lisant les libellés. Ce n'est pas de la décoration : la galerie est le seul moyen
+// d'insérer une forme, et une grille d'icônes identiques annule l'intérêt d'une grille.
+//
+// `Record<ShapeKind, …>` et non un objet indexé avec repli : c'est le typeur qui refuse alors une
+// forme non iconifiée, exactement comme il refuse une forme sans description (`SHAPE_DESCRIPTORS`,
+// Tâche 2). Un repli `?? Square` aurait redonné en silence un carré à la prochaine forme — le défaut
+// que ce fichier vient de corriger, réintroduit à l'endroit même du correctif.
+const SHAPE_ICON: Record<ShapeKind, typeof Square> = {
+  rect: Square,
+  ellipse: Circle,
+  line: Minus,
+  triangle: Triangle,
+  star: Star,
+  hexagon: Hexagon,
+  arrow: ArrowRight,
+  bubble: MessageCircle,
+};
+
+// `row.shape` est présent si et seulement si `kind === "shape"` (voir ShapeTile) : la tuile QR n'est
+// pas une forme du schéma et garde donc la sienne.
+//
+// UNE TUILE `kind: "shape"` SANS `shape` LÈVE — corrigé par la revue de la Tâche 3 (Low). Le repli
+// silencieux d'avant rendait un `QrCode` à une tuile de FORME mal formée : une icône fausse, sans un
+// mot, exactement la famille du défaut que le `Record<ShapeKind, …>` ci-dessus vient de corriger (huit
+// carrés identiques). SYMÉTRIE VOULUE avec `descriptorFor` (lib/studio/shapes.ts), qui lève au lieu de
+// se rabattre sur un rectangle, et avec `buildShapeLayer` (shape-gallery.ts), qui lève sur exactement
+// la même tuile invalide. Inatteignable aujourd'hui (le garde-fou de complétude de
+// tests/studio-shape-gallery.test.ts lie SHAPE_TILES au schéma), mais ce fichier a plaidé lui-même
+// contre les replis silencieux deux paragraphes plus haut : il n'en garde donc aucun.
+//
+// EXPORTÉE pour son test, même idiome et même raison que `insertShapeTile` ci-dessus : sans jsdom ni
+// React Testing Library sous `bun test`, une branche qui LÈVE ne peut être exercée qu'en appelant la
+// fonction.
+export function iconFor(row: ShapeTileRow): typeof Square {
+  if (row.kind !== "shape") return QrCode;
+  if (!row.shape) {
+    throw new Error(`elements-panel.tsx : la tuile « ${row.id} » est de type "shape" mais ne porte pas de champ shape.`);
+  }
+  return SHAPE_ICON[row.shape];
+}
 
 function ShapeTileButton({ row, onClick }: { row: ShapeTileRow; onClick: () => void }) {
-  const Icon = TILE_ICON[row.kind];
+  const Icon = iconFor(row);
   return (
     <button
       type="button"

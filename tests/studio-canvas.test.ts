@@ -855,3 +855,56 @@ describe("CanvasChrome — un format SANS zones sûres établies le DIT, au lieu
     expect(openTag(renderComposed(OFF, "story"), 'data-action="toggle-safe-areas"')).toContain("publicitaires");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+// U3 Tâche 3 (arbitrage A) — LA POIGNÉE DE ROTATION D'UNE FORME DÉCOUPÉE.
+//
+// Les deux chemins de rendu suppriment la `transform` de rotation pour une forme découpée
+// (lib/studio/shapes.ts#layerRotation, prouvé en pixels dans tests/studio-shape-render.test.ts). Le
+// canevas doit suivre, pour deux raisons distinctes :
+//   — la poignée n'a plus rien à faire tourner : la garder, c'est offrir un geste qui n'a AUCUN effet
+//     visible (le défaut « la fonctionnalité meurt en silence » que U2 a déjà tranché deux fois) ;
+//   — le CONTOUR de sélection, lui, tournait bien : un cadre penché autour d'un triangle droit aurait
+//     annoncé une rotation qui n'existe pas.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────
+describe("Canvas — une forme découpée n'offre pas de rotation (U3 Tâche 3)", () => {
+  function sceneWithShapes(): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 800, height: 400, background: "#000000" },
+      layers: [
+        { id: "tri", name: "Triangle", visible: true, locked: false, frame: { x: 0, y: 0, w: 400, h: 200 },
+          rotation: 30, type: "shape", shape: "triangle", fill: "#FF0000" },
+        { id: "rec", name: "Rect", visible: true, locked: false, frame: { x: 0, y: 200, w: 400, h: 200 },
+          rotation: 30, type: "shape", shape: "rect", fill: "#00FF00" },
+      ],
+    };
+  }
+  function renderSel(id: string) {
+    return renderToStaticMarkup(
+      React.createElement(Canvas, { scene: sceneWithShapes(), selectedIds: [id], dispatch: () => {}, scale: 1 }),
+    );
+  }
+
+  it("le triangle sélectionné garde ses poignées de redimensionnement mais PERD celle de rotation", () => {
+    const html = renderSel("tri");
+    expect(html).toContain('data-handle="se"');   // témoin : les autres poignées sont bien là
+    expect(html).not.toContain('data-handle="rotate"');
+  });
+
+  it("TÉMOIN : le rectangle sélectionné, lui, garde la poignée de rotation", () => {
+    // Sans ce témoin, l'assertion ci-dessus passerait aussi si la poignée avait disparu pour TOUT LE
+    // MONDE — ce qui supprimerait la rotation de l'éditeur entier sans qu'aucun test ne le dise.
+    expect(renderSel("rec")).toContain('data-handle="rotate"');
+  });
+
+  it("ni le calque ni son contour de sélection ne penchent pour une forme découpée", () => {
+    // `rotation: 30` est POSÉ sur les deux calques : c'est le cas d'une scène écrite avant cette
+    // tâche, ou convertie depuis un rectangle pivoté.
+    expect(styleAttr(renderSel("tri"), 'data-layer-id="tri"')).not.toContain("rotate(");
+    expect(styleAttr(renderSel("tri"), 'data-testid="handles-overlay"')).not.toContain("rotate(");
+    // Les deux mêmes lectures sur le rectangle : la rotation y est bien PEINTE des deux côtés.
+    expect(styleAttr(renderSel("rec"), 'data-layer-id="rec"')).toContain("rotate(30deg)");
+    expect(styleAttr(renderSel("rec"), 'data-testid="handles-overlay"')).toContain("rotate(30deg)");
+  });
+});

@@ -1,4 +1,5 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
+import { layerBorder, layerBoxShadow, layerRotation, shapeCssFor } from "./shapes";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
 // code de bibliothèque.
@@ -15,7 +16,14 @@ export function gradientCss(g: Gradient): string {
 
 function frameStyle(layer: Layer): Record<string, unknown> {
   const transforms: string[] = [];
-  if (layer.rotation) transforms.push(`rotate(${layer.rotation}deg)`);
+  // `layerRotation` et NON `layer.rotation` (U3 Tâche 3, arbitrage A) : une forme DÉCOUPÉE ne tourne
+  // pas, et il faut que ce soit vrai ICI autant que dans l'éditeur. Satori tourne le remplissage mais
+  // pas le masque (`<g clip-path>` exprimé dans le repère du parent, réserve 2 de la sonde) : laisser
+  // passer la rotation d'un triangle n'aurait pas fait « rien », ça aurait abîmé l'export sur tout
+  // cadre non carré — et le navigateur, lui, aurait tourné la découpe. Exactement le désaccord
+  // éditeur/export que §0 décrit. lib/studio/shapes.ts porte la décision, les deux chemins la posent.
+  const rotation = layerRotation(layer);
+  if (rotation) transforms.push(`rotate(${rotation}deg)`);
   return {
     position: "absolute",
     left: layer.frame.x,
@@ -81,14 +89,27 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
     ? (layer.fill === "transparent" ? {} : { backgroundColor: layer.fill })
     : { backgroundImage: gradientCss(layer.fill) };
 
+  // `layerBorder` et NON `layer.border` (revue U3 Tâche 3, Medium 4) : la bordure ÉCHAPPE au
+  // découpage ici — satori peint un contour RECTANGULAIRE autour d'un remplissage triangulaire
+  // (réserve 3 de la sonde) — là où le navigateur clippe l'élément entier, bordure comprise. Même
+  // divergence, même remède que la rotation : la description tranche, les deux chemins la posent.
+  const painted = layerBorder(layer);
   const border: Record<string, unknown> = {};
-  if (layer.border) {
-    const sides = layer.border.sides ?? ["top", "right", "bottom", "left"];
-    const css = `${layer.border.width}px solid ${layer.border.color}`;
+  if (painted) {
+    const sides = painted.sides ?? ["top", "right", "bottom", "left"];
+    const css = `${painted.width}px solid ${painted.color}`;
     for (const s of sides) {
       border[`border${s[0].toUpperCase()}${s.slice(1)}`] = css;
     }
   }
+
+  // `layerBoxShadow` et NON `layer.shadow` (U3 Tâche 4) : sur une forme découpée, satori ne peint
+  // AUCUNE ombre — son masque d'ombre vaut « tout le canevas MOINS la forme découpée » et son contenu
+  // est cette même forme, donc l'intersection est vide (mesuré, réserve 4 de la sonde). Le navigateur
+  // n'en peint pas davantage. Les deux chemins sont d'accord, mais par deux mécanismes indépendants :
+  // la description tranche pour que cet accord soit structurel, et les deux chemins la posent — même
+  // discipline que la rotation et la bordure ci-dessus.
+  const shadow = layerBoxShadow(layer);
 
   return {
     type: "div",
@@ -98,13 +119,27 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
         ...frameStyle(layer),
         ...fill,
         ...border,
-        ...(layer.radius ? { borderRadius: layer.radius } : {}),
+        ...(shadow ? { boxShadow: shadow } : {}),
+        // LA géométrie de la forme vient de lib/studio/shapes.ts — jamais d'un `switch` local. Ce
+        // fichier ne sait PAS ce qu'est un rectangle ou une ellipse : il demande. C'est ce qui
+        // garantit que le PNG exporté et le canevas de l'éditeur (layer-view.tsx, qui demande à la
+        // MÊME description) peignent la même chose, plan U3 §0.
+        ...shapeCssFor(layer),
       },
     },
   };
 }
 
 function imageNode(layer: Layer, uri: string): SatoriNode {
+  // ATTENTION, DEUX CHAMPS `radius` DE TYPES DIFFÉRENTS (revue finale U3, Minor 3 — un piège que U3 a
+  // créé lui-même) : celui-ci est `imageLayer.radius`, un `z.number()` (lib/studio/scene.ts:46) laissé
+  // NUMÉRIQUE délibérément — le migrer achèterait des masques d'image elliptiques, une fonctionnalité,
+  // pas un refactor. Son homonyme `shapeLayer.radius` (scene.ts, `cssRadius`) est `number | string`
+  // depuis l'arbitrage C, parce qu'une ellipse EXIGE « 50% ». Ne jamais faire passer l'un pour l'autre.
+  // La garde `layer.type === "image"` ci-dessous est ce qui les tient à l'écart ICI (`imageNode` est
+  // appelé pour les calques image ET qr, et un qr n'a pas de rayon) : la retirer ne COMPILE PAS —
+  // vérifié, `layer.radius` sur l'union `Layer` est TS2339. Le versant observable de la séparation est
+  // testé dans tests/studio-shapes.test.ts, « les DEUX champs `radius` du schéma restent SÉPARÉS ».
   const radius = layer.type === "image" && layer.radius ? { borderRadius: layer.radius } : {};
   const fit = layer.type === "image" ? layer.fit : "contain";
   return {
