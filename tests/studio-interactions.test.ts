@@ -904,6 +904,139 @@ describe("Canvas — tirer un calque d'une sélection multiple déplace TOUT LE 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 5 — GROUPER/DÉGROUPER au canevas, à travers de VRAIS événements pointeur DOM.
+// tests/studio-groups.test.ts prouve `expandSelectionToGroups` en pur ; ce fichier-ci prouve que
+// canvas.tsx l'appelle RÉELLEMENT au clic (une mutation qui laisserait `dispatch(select(layer.id))`
+// inconditionnel dans le chemin « pas déjà sélectionné » laisserait ce bloc rouge) — et que le
+// glisser de groupe (déjà prouvé ci-dessus pour une sélection Maj-cliquée) fonctionne IDENTIQUEMENT
+// pour une sélection issue d'un clic sur un membre de groupe, SANS mécanisme de glisser séparé.
+function sceneWithGroupedPair(): Scene {
+  const scene = sceneWithThreeShapesOnCanvas();
+  scene.layers = [
+    { ...scene.layers[0], groupId: "g1" }, // "a"
+    { ...scene.layers[1], groupId: "g1" }, // "b"
+    scene.layers[2],                       // "c", hors groupe
+  ];
+  return scene;
+}
+
+describe("Canvas — un clic sur un MEMBRE de groupe sélectionne TOUT LE GROUPE (chantier B, Tâche 5)", () => {
+  it("clic sur un membre HORS sélection sélectionne LUI ET tous ses co-membres, jamais lui seul", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+    expect(layerEl(container, "a").getAttribute("data-selected")).toBe("true");
+    expect(layerEl(container, "b").getAttribute("data-selected")).toBe("true");
+    // Le troisième calque, HORS groupe, n'est pas entraîné dans la sélection.
+    expect(layerEl(container, "c").getAttribute("data-selected")).toBeNull();
+
+    unmount();
+  });
+
+  it("clic sur L'AUTRE membre du même groupe sélectionne le MÊME ensemble — peu importe lequel est cliqué", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+
+    await pointer(layerEl(container, "b"), "pointerdown", { clientX: 250, clientY: 250, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    unmount();
+  });
+
+  it("clic sur un calque SANS groupe ne sélectionne QUE lui-même — comportement d'avant intact", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+
+    await pointer(layerEl(container, "c"), "pointerdown", { clientX: 520, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["c"]);
+
+    unmount();
+  });
+
+  it("clic sur un membre REMPLACE une sélection PRÉCÉDENTE (sur un autre calque) par le groupe ENTIER, jamais un mélange", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), ["c"]);
+
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    unmount();
+  });
+
+  // ANTI-VACUITÉ (brief, Step 4) : « expandSelectionToGroups returning only the clicked id reddens
+  // this test ». Une régression qui repasserait à `dispatch(select(layer.id))` (remplacement par UN
+  // seul id) laisserait "b" hors sélection ici — c'est exactement ce que ce test surveille.
+  it("anti-vacuité : la sélection après clic est PLUS GRANDE qu'un seul id pour un membre de groupe", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+    expect(box.state.selectedIds.length).toBeGreaterThan(1);
+  });
+});
+
+// Canevas et cadres DÉDIÉS à ce test (2000×2000, coordonnées à trois chiffres bien espacées) —
+// PAS `sceneWithGroupedPair()`/`sceneWithThreeShapesOnCanvas()` : ce dernier a été calibré pour un
+// glisser qui déplace les TROIS calques (aucune référence d'accrochage ne reste sur place, voir son
+// commentaire). Ici « c » reste délibérément HORS du groupe et HORS sélection — donc candidat
+// d'accrochage RÉEL (lib/studio/snap.ts, décision 2) — et les marges ci-dessous (>50px de tout bord/
+// centre de « c » et de tout tiers/bord/centre du plan de travail) sont volontairement larges pour
+// que le test affirme la TRANSLATION BRUTE du geste, sans que l'accrochage n'y ajoute un pixel.
+function sceneWithGroupedPairFarFromGuides(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 2000, height: 2000, background: "#000000" },
+    layers: [
+      {
+        id: "a", name: "Calque A", visible: true, locked: false, groupId: "g1",
+        frame: { x: 10, y: 10, w: 50, h: 50 },
+        type: "shape", shape: "rect", fill: "#AAAAAA",
+      },
+      {
+        id: "b", name: "Calque B", visible: true, locked: false, groupId: "g1",
+        frame: { x: 200, y: 200, w: 50, h: 50 },
+        type: "shape", shape: "rect", fill: "#BBBBBB",
+      },
+      {
+        id: "c", name: "Calque C", visible: true, locked: false,
+        frame: { x: 900, y: 900, w: 50, h: 50 },
+        type: "shape", shape: "rect", fill: "#CCCCCC",
+      },
+    ],
+  };
+}
+
+describe("Canvas — tirer un membre de groupe DÉJÀ sélectionné (par clic groupe) déplace TOUT LE GROUPE (chantier B, Tâche 5)", () => {
+  it("le glisser de groupe, réutilisé SANS mécanisme séparé, déplace « a » et « b » ensemble et laisse « c » sur place", async () => {
+    const scene = sceneWithGroupedPairFarFromGuides();
+    // La sélection ["a","b"] simule ICI l'état obtenu APRÈS le clic qui sélectionne le groupe (bloc
+    // précédent) — ce test-ci prouve le glisser d'un SECOND geste sur cette sélection déjà groupée,
+    // exactement comme le fait déjà « Canvas — tirer un calque d'une sélection multiple » plus haut
+    // pour une sélection construite par Maj-clic : le MÊME mécanisme de glisser, aucun code neuf.
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, ["a", "b"]);
+    const a = layerEl(container, "a");
+
+    await pointer(a, "pointerdown", { clientX: 30, clientY: 30, button: 0 });
+    // Le pointerdown ne re-sélectionne pas : la sélection groupe survit intacte au début du geste.
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    await pointer(a, "pointermove", { clientX: 130, clientY: 130 });
+    await pointer(a, "pointerup", { clientX: 130, clientY: 130 });
+
+    expect(box.state.scene.layers.map((l) => l.frame)).toEqual([
+      { x: 110, y: 110, w: 50, h: 50 },  // "a" : +100, +100
+      { x: 300, y: 300, w: 50, h: 50 },  // "b" : +100, +100 aussi — le groupe entier a suivi
+      { x: 900, y: 900, w: 50, h: 50 },  // "c" : hors groupe ET hors sélection, INTACT
+    ]);
+    // UNE seule entrée d'historique pour tout le geste — même garantie que le glisser Maj-cliqué.
+    expect(box.state.past).toHaveLength(1);
+    expect(box.actions.filter((a) => a.type === "setFrames")).toHaveLength(1);
+
+    unmount();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tâche 3, M4 (revue finale U0+U2) — LA GARDE DE BOUTON AVANT LES EFFETS DE BORD.
 //
 // Le gestionnaire du corps d'un calque appelait `stopPropagation()`/`preventDefault()` AVANT de tester
@@ -1816,6 +1949,113 @@ describe("EditorShell — le presse-papiers en session câble ⌘C/⌘V/⌘D sur
 
       // Toujours DEUX calques (« t », « u ») — aucun ajout, la garde a bloqué les trois raccourcis.
       expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 5 — grouper/dégrouper (⌘G/⌘⇧G), câblé à travers le VRAI EditorShell (même
+// discipline que le bloc ⌘Z/⌘A/Échap/Suppr/flèches et le bloc presse-papiers ci-dessus : un VRAI
+// KeyboardEvent sur `window`, un VRAI réducteur derrière, jusqu'au panneau des calques RÉEL —
+// tests/studio-keymap.test.ts (resolveShortcut, en pur) et tests/studio-editor-state.test.ts
+// (setGroup, en pur) ne peuvent pas prouver à eux seuls que hooks/use-editor-keymap.ts résout
+// RÉELLEMENT la sélection courante, appelle RÉELLEMENT `nextGroupId()`, et dispatche RÉELLEMENT
+// `setGroup` — jusqu'au nœud groupe RENDU par le VRAI LayerPanel.
+//
+// Panneau « calques » ouvert au montage (même recette que la garde de focus du bloc ⌘Z/⌘A) : seul
+// chemin non interactif pour observer `data-group-row-id` sans dépendre d'un clic supplémentaire sur
+// l'onglet du panneau.
+describe("EditorShell — le keymap central câble ⌘G/⌘⇧G sur `window` (Chantier B, Tâche 5)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  function openLayerPanel() {
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+  }
+
+  it("⌘G RÉEL sur DEUX calques Maj-cliqués les fusionne en un nœud groupe DANS LE VRAI LayerPanel", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, shiftKey: true, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+      expect(container.querySelector("[data-group-row-id]")).toBeNull();
+
+      await pressKey({ key: "g", metaKey: true });
+
+      const groupNode = container.querySelector("[data-group-row-id]");
+      expect(groupNode).not.toBeNull();
+      expect(groupNode!.textContent).toContain("Groupe (2)");
+      expect(container.querySelector('[data-layer-row-id="t"]')).not.toBeNull();
+      expect(container.querySelector('[data-layer-row-id="u"]')).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘⇧G RÉEL après ⌘G dégroupe — le nœud groupe DISPARAÎT, les deux lignes redeviennent ordinaires", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, shiftKey: true, button: 0 });
+      await pressKey({ key: "g", metaKey: true });
+      expect(container.querySelector("[data-group-row-id]")).not.toBeNull();
+
+      await pressKey({ key: "g", metaKey: true, shiftKey: true });
+
+      expect(container.querySelector("[data-group-row-id]")).toBeNull();
+      expect(container.querySelector('[data-layer-row-id="t"]')).not.toBeNull();
+      expect(container.querySelector('[data-layer-row-id="u"]')).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘G RÉEL SANS au moins deux calques sélectionnés est un no-op — aucun nœud groupe n'apparaît", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "g", metaKey: true });
+
+      expect(container.querySelector("[data-group-row-id]")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Un clic sur UN des deux calques désormais groupés sélectionne les DEUX — la même intégration
+  // que tests/studio-groups.test.ts (pur) et le bloc canvas plus haut (Canvas seul + réducteur nu),
+  // mais ici à travers le VRAI EditorShell, VRAI LayerPanel compris. Échap (déjà câblé, Tâche 1) sert
+  // à repartir d'une sélection VIDE sans dépendre d'un clic « canevas vide » dont la géométrie réelle
+  // (échelle d'ajustement mesurée par ResizeObserver) n'est pas fiable sous jsdom.
+  it("après ⌘G, cliquer sur UN SEUL des deux calques désormais groupés les sélectionne TOUS LES DEUX", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, shiftKey: true, button: 0 });
+      await pressKey({ key: "g", metaKey: true });
+
+      await pressKey({ key: "Escape" });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBeNull();
+
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, button: 0 });
+
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
     } finally {
       cleanup();
     }

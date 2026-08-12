@@ -4,8 +4,12 @@ import { useRef } from "react";
 import type { Dispatch, CSSProperties, PointerEvent } from "react";
 import type { Layer, Scene } from "@/lib/studio/scene";
 import {
-  type EditorAction, select, toggleSelection, clearSelection, singleSelectedId,
+  type EditorAction, selectMany, toggleSelection, clearSelection, singleSelectedId,
 } from "@/lib/studio/editor-state";
+// Chantier B, Tâche 5 — un clic sur un MEMBRE de groupe sélectionne le GROUPE ENTIER (spec §6). Voir
+// son commentaire en tête de module pour le modèle FLAT — cette fonction dérive les membres à la
+// volée, aucune donnée « groupe » n'est stockée à part.
+import { expandSelectionToGroups } from "@/lib/studio/groups";
 import { useLayerDrag, HANDLES, type HandleId } from "@/hooks/use-layer-drag";
 // U3 Tâche 3 (arbitrage A) : LA MÊME question que les deux chemins de rendu posent — cette forme
 // tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
@@ -302,7 +306,12 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
                 // (voir `beginMove`), et les calques MASQUÉS suivent le groupe — décision et motif dans
                 // hooks/use-layer-drag.ts.
                 const déjàSélectionné = selectedIds.includes(layer.id);
-                if (!déjàSélectionné) dispatch(select(layer.id));
+                // Chantier B, Tâche 5 — un clic qui SÉLECTIONNE (pas déjà dans la sélection) étend
+                // TOUJOURS à tout le groupe du calque cliqué : `expandSelectionToGroups` renvoie
+                // `[layer.id]` seul pour un calque SANS `groupId` (le comportement d'avant, intact),
+                // et TOUS les co-membres pour un calque groupé. `select(layer.id)` (remplacement par
+                // UN seul id) ne suffirait plus depuis cette tâche — `selectMany` porte l'ensemble.
+                if (!déjàSélectionné) dispatch(selectMany(expandSelectionToGroups([layer.id], scene)));
                 const groupe = déjàSélectionné && selectedIds.length > 1
                   ? scene.layers.filter((l) => selectedIds.includes(l.id))
                   : undefined;

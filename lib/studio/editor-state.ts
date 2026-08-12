@@ -134,6 +134,13 @@ export type EditorAction =
   | { type: "reorderLayer"; id: string; toIndex: number }
   | { type: "toggleVisible"; id: string }
   | { type: "toggleLocked"; id: string }
+  // Chantier B, Tâche 5 — grouper/dégrouper, modèle FLAT (lib/studio/groups.ts). Sur le modèle de
+  // `setLayerProps`/`setFrames` ci-dessus : un LOT d'ids, UNE SEULE entrée d'historique. `groupId:
+  // string` GROUPE `ids` (leur assigne ce `groupId` partagé, neuf — voir `groups.ts#nextGroupId`) ;
+  // `groupId: null` DÉGROUPE (efface la clé `groupId` de chacun). Voir son cas dans le réducteur pour
+  // l'invariant CONSTRAINTS-INTACTES (chantier D) : cette action ne lit ni n'écrit JAMAIS
+  // `layer.constraints`.
+  | { type: "setGroup"; ids: readonly string[]; groupId: string | null }
   | { type: "undo" }
   | { type: "redo" };
 
@@ -267,6 +274,10 @@ export function toggleVisible(id: string): EditorAction {
 export function toggleLocked(id: string): EditorAction {
   return { type: "toggleLocked", id };
 }
+// Chantier B, Tâche 5 : voir le commentaire de `"setGroup"` sur `EditorAction` ci-dessus.
+export function setGroup(ids: string[], groupId: string | null): EditorAction {
+  return { type: "setGroup", ids: [...ids], groupId };
+}
 export function undo(): EditorAction {
   return { type: "undo" };
 }
@@ -285,6 +296,19 @@ function replaceAt<T>(arr: readonly T[], index: number, value: T): T[] {
   const copy = arr.slice();
   copy[index] = value;
   return copy;
+}
+
+// Chantier B, Tâche 5 — écrit OU RETIRE `groupId`, et RIEN d'autre du calque (voir l'invariant
+// CONSTRAINTS-INTACTES sur le cas "setGroup" plus bas). `null` retire vraiment la CLÉ (déstructuration)
+// plutôt que de la poser à `undefined` : un calque dégroupé redevient bit-pour-bit un calque qui n'a
+// jamais eu de `groupId`, comme `constraintsOf`/`colorFieldPaths` (scene.ts) l'attendent déjà d'un
+// champ optionnel absent.
+function withGroupId(layer: Layer, groupId: string | null): Layer {
+  if (groupId === null) {
+    const { groupId: _drop, ...rest } = layer as Layer & { groupId?: string };
+    return rest as Layer;
+  }
+  return { ...layer, groupId };
 }
 
 function pushHistory(past: readonly HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
@@ -581,6 +605,34 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...state.scene,
         layers: replaceAt(state.scene.layers, index, { ...layer, locked: !layer.locked }),
       });
+    }
+
+    // Chantier B, Tâche 5 — grouper/dégrouper. Sur le modèle EXACT de "setLayerProps"/"setFrames" :
+    // un LOT d'ids, UNE SEULE entrée d'historique, ligne à ligne TOLÉRANT (un id absent est
+    // simplement sauté), AUCUNE ENTRÉE FANTÔME si rien ne change réellement.
+    //
+    // `action.groupId === null` DÉGROUPE : la clé `groupId` est RETIRÉE (déstructuration, pas mise à
+    // `undefined`) — exactement ce que `constraintsOf` et `colorFieldPaths` (scene.ts) attendent déjà
+    // d'un champ optionnel absent, et ce que `parseScene` valide de toute façon en dernier ressort.
+    //
+    // INVARIANT CONSTRAINTS-INTACTES (chantier D, revue de la brief T5) : cette action ne lit ni
+    // n'écrit JAMAIS `layer.constraints` — `withGroupId` ci-dessus ne touche QUE `groupId`, tout le
+    // reste du calque (donc `constraints`, présent ou absent) traverse par la copie superficielle
+    // `{ ...layer }`. tests/studio-editor-state.test.ts épingle `constraints` identique avant/après.
+    case "setGroup": {
+      let layers = state.scene.layers;
+      let touched = false;
+      for (const id of action.ids) {
+        const index = layers.findIndex((l) => l.id === id);
+        if (index === -1) continue;
+        const layer = layers[index];
+        const current = layer.groupId ?? null;
+        if (current === action.groupId) continue; // déjà à cette valeur : rien à faire pour ce calque.
+        layers = replaceAt(layers, index, withGroupId(layer, action.groupId));
+        touched = true;
+      }
+      if (!touched) return state;
+      return commit(state, { ...state.scene, layers });
     }
 
     // undo/redo restaurent la SCÈNE **et** la SÉLECTION portées par l'entrée dépilée, et empilent

@@ -142,6 +142,38 @@ describe("resolveShortcut — ⇧0/⇧1/⇧2, le VRAI zoom (chantier B, tâche 3
   });
 });
 
+// Chantier B, Tâche 5 — grouper/dégrouper : ⌘G / ⌘⇧G.
+describe("resolveShortcut — ⌘G/⌘⇧G, grouper/dégrouper (chantier B, tâche 5)", () => {
+  it("⌘G -> group, UNIQUEMENT avec une sélection (même garde que ⌘C/⌘D)", () => {
+    expect(resolveShortcut({ key: "g", metaKey: true }, SEL)).toEqual({ kind: "group" });
+    expect(resolveShortcut({ key: "g", metaKey: true }, NO_SEL)).toBeNull();
+  });
+
+  it("Ctrl+G (hors macOS) -> group aussi", () => {
+    expect(resolveShortcut({ key: "g", ctrlKey: true }, SEL)).toEqual({ kind: "group" });
+  });
+
+  it("⌘⇧G -> ungroup, UNIQUEMENT avec une sélection", () => {
+    expect(resolveShortcut({ key: "g", metaKey: true, shiftKey: true }, SEL)).toEqual({ kind: "ungroup" });
+    expect(resolveShortcut({ key: "g", metaKey: true, shiftKey: true }, NO_SEL)).toBeNull();
+  });
+
+  // ANTI-VACUITÉ : ⌘G et ⌘⇧G sont deux chords DISTINCTS — jamais un alias l'un de l'autre, exactement
+  // comme ⌘Z/⌘⇧Z (undo/redo) le sont déjà.
+  it("anti-vacuité : ⌘G et ⌘⇧G produisent deux commandes DISTINCTES, jamais confondues", () => {
+    const group = resolveShortcut({ key: "g", metaKey: true }, SEL);
+    const ungroup = resolveShortcut({ key: "g", metaKey: true, shiftKey: true }, SEL);
+    expect(group).toEqual({ kind: "group" });
+    expect(ungroup).toEqual({ kind: "ungroup" });
+    expect(group).not.toEqual(ungroup);
+  });
+
+  it("« g » nu (sans ⌘/Ctrl) ne produit AUCUNE commande", () => {
+    expect(resolveShortcut({ key: "g" }, SEL)).toBeNull();
+    expect(resolveShortcut({ key: "g", shiftKey: true }, SEL)).toBeNull();
+  });
+});
+
 describe("resolveShortcut — LA GARDE DE FOCUS s'applique aussi à ⌘C/⌘V/⌘D (pas d'exception chord par chord)", () => {
   it("⌘C/⌘V/⌘D pendant l'édition d'un champ texte -> null (le navigateur doit garder la main)", () => {
     expect(resolveShortcut({ key: "c", metaKey: true }, EDITING)).toBeNull();
@@ -186,6 +218,8 @@ describe("resolveShortcut — LA GARDE DE FOCUS (ctx.isEditingText) coupe TOUT r
     { nom: "Échap", event: { key: "Escape" } },
     { nom: "Suppr", event: { key: "Delete" } },
     { nom: "flèche", event: { key: "ArrowLeft" } },
+    { nom: "⌘G", event: { key: "g", metaKey: true } },
+    { nom: "⌘⇧G", event: { key: "g", metaKey: true, shiftKey: true } },
   ];
 
   for (const { nom, event } of CHORDS) {
@@ -212,6 +246,8 @@ describe("resolveShortcut — LA GARDE DE POPUP (ctx.isPopupOpen) coupe TOUT rac
     { nom: "Échap", event: { key: "Escape" } },
     { nom: "Suppr", event: { key: "Delete" } },
     { nom: "flèche", event: { key: "ArrowLeft" } },
+    { nom: "⌘G", event: { key: "g", metaKey: true } },
+    { nom: "⌘⇧G", event: { key: "g", metaKey: true, shiftKey: true } },
   ];
 
   for (const { nom, event } of CHORDS) {
@@ -284,7 +320,7 @@ describe("isPopupOpen — signal DOM `data-open`/`role=\"listbox\"`/`role=\"menu
 
 // Garde-fou de complétude du littéral `EditorCommand` — si une future tâche ajoute un membre à
 // l'union sans mettre à jour ce test, TypeScript le signale ici plutôt qu'en silence à l'usage.
-describe("EditorCommand — les douze variantes actuelles restent assignables", () => {
+describe("EditorCommand — les quatorze variantes actuelles restent assignables", () => {
   it("littéraux de contrôle", () => {
     const all: EditorCommand[] = [
       { kind: "undo" },
@@ -299,7 +335,9 @@ describe("EditorCommand — les douze variantes actuelles restent assignables", 
       { kind: "zoom100" },
       { kind: "zoomFit" },
       { kind: "zoomSelection" },
+      { kind: "group" },
+      { kind: "ungroup" },
     ];
-    expect(all).toHaveLength(12);
+    expect(all).toHaveLength(14);
   });
 });

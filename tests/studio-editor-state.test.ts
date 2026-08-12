@@ -24,6 +24,7 @@ import {
   setFrames,
   setFrameOverride,
   frameEditAction,
+  setGroup,
   undo,
   redo,
   toCanvasCoords,
@@ -342,6 +343,101 @@ describe("addLayers — le LOT d'ajout, UNE entrée d'historique (chantier B, t�
     // exactement comme setLayerProp qui créerait un doublon (voir « garde-fou scène invalide »).
     const next = editorReducer(state, addLayers([extra("title")]));
     expect(next).toBe(state);
+  });
+});
+
+// ── Chantier B, Tâche 5 — `setGroup` : grouper/dégrouper, modèle FLAT (lib/studio/groups.ts). Sur le
+// modèle EXACT de `setFrames`/`setLayerProps`/`addLayers` ci-dessus : un LOT d'ids, UNE SEULE entrée
+// d'historique, AUCUNE ENTRÉE FANTÔME si rien ne change réellement.
+describe("setGroup — grouper/dégrouper, UNE entrée d'historique (chantier B, Tâche 5)", () => {
+  it("assigne le MÊME groupId à tous les ids donnés, en UNE SEULE entrée d'historique", () => {
+    const state = makeState();
+    const next = editorReducer(state, setGroup(["title", "badge", "qr1"], "g1"));
+    expect(find(next, "title").groupId).toBe("g1");
+    expect(find(next, "badge").groupId).toBe("g1");
+    expect(find(next, "qr1").groupId).toBe("g1");
+    // Les calques HORS du lot restent intacts, y compris SANS groupId.
+    expect("groupId" in find(next, "bg")).toBe(false);
+    expect(next.past).toHaveLength(1);
+  });
+
+  it("groupId: null DÉGROUPE — retire la clé (pas une valeur undefined) de chaque membre du lot", () => {
+    const grouped = editorReducer(makeState(), setGroup(["title", "badge"], "g1"));
+    const ungrouped = editorReducer(grouped, setGroup(["title", "badge"], null));
+    expect("groupId" in find(ungrouped, "title")).toBe(false);
+    expect("groupId" in find(ungrouped, "badge")).toBe(false);
+    expect(ungrouped.past).toHaveLength(2); // grouper PUIS dégrouper : deux gestes, deux entrées.
+  });
+
+  // ANTI-VACUITÉ (brief, Step 4) : « dropping one-history-entry on setGroup reddens the undo test » —
+  // ce test EST ce garde-fou. Une implémentation qui empilerait une entrée PAR calque (une boucle sur
+  // une action à un seul id) laisserait `past` à 3, pas 1, et UN SEUL undo ne suffirait pas à tout
+  // annuler.
+  it("UN SEUL undo annule TOUT le lot, quel que soit son nombre de membres", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
+    const next = editorReducer(state, setGroup(["title", "badge", "qr1"], "g1"));
+    expect(next.past).toHaveLength(1);
+
+    const afterUndo = editorReducer(next, undo());
+    expect("groupId" in find(afterUndo, "title")).toBe(false);
+    expect("groupId" in find(afterUndo, "badge")).toBe(false);
+    expect("groupId" in find(afterUndo, "qr1")).toBe(false);
+    expect(afterUndo.selectedIds).toEqual(["title"]); // la sélection D'AVANT le geste est restaurée.
+
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(find(afterRedo, "title").groupId).toBe("g1");
+    expect(find(afterRedo, "badge").groupId).toBe("g1");
+    expect(find(afterRedo, "qr1").groupId).toBe("g1");
+  });
+
+  it("un lot VIDE est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setGroup([], "g1"))).toBe(state);
+  });
+
+  it("réassigner le MÊME groupId ne produit AUCUNE entrée fantôme — état inchangé, même référence", () => {
+    const grouped = editorReducer(makeState(), setGroup(["title", "badge"], "g1"));
+    const again = editorReducer(grouped, setGroup(["title", "badge"], "g1"));
+    expect(again).toBe(grouped);
+  });
+
+  it("dégrouper des calques SANS groupId est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setGroup(["title", "badge"], null))).toBe(state);
+  });
+
+  it("un id absent de la scène est sauté ligne à ligne — les autres du lot sont quand même groupés", () => {
+    const state = makeState();
+    const next = editorReducer(state, setGroup(["title", "inexistant", "badge"], "g1"));
+    expect(find(next, "title").groupId).toBe("g1");
+    expect(find(next, "badge").groupId).toBe("g1");
+    expect(next.past).toHaveLength(1);
+  });
+
+  // INVARIANT CONSTRAINTS-INTACTES (chantier D) — voir le commentaire du cas "setGroup" dans
+  // editor-state.ts : grouper/dégrouper ne doit JAMAIS toucher `layer.constraints`, présent ou absent.
+  it("CONSTRAINTS-INTACTES : grouper/dégrouper ne change JAMAIS layer.constraints", () => {
+    const scene = makeScene();
+    scene.layers = scene.layers.map((l) =>
+      l.id === "title" ? { ...l, constraints: { h: "leftRight" as const, v: "center" as const } } : l);
+    const state = initEditorState(scene);
+    const before = constraintsOf(find(state, "title"));
+
+    const grouped = editorReducer(state, setGroup(["title", "badge"], "g1"));
+    expect(constraintsOf(find(grouped, "title"))).toEqual(before);
+    // "badge" n'avait pas de constraints avant grouper — il n'en gagne pas une au passage.
+    expect("constraints" in find(grouped, "badge")).toBe(false);
+
+    const ungrouped = editorReducer(grouped, setGroup(["title", "badge"], null));
+    expect(constraintsOf(find(ungrouped, "title"))).toEqual(before);
+    expect("constraints" in find(ungrouped, "badge")).toBe(false);
+  });
+
+  it("un calque VERROUILLÉ peut quand même être groupé — le verrou protège la position/taille, pas l'appartenance à un groupe", () => {
+    const state = makeState();
+    const next = editorReducer(state, setGroup(["locked1", "badge"], "g1"));
+    expect(find(next, "locked1").groupId).toBe("g1");
+    expect(find(next, "locked1").locked).toBe(true);
   });
 });
 

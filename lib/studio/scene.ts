@@ -67,6 +67,15 @@ const layerBase = {
   // LÉGALE — `constraintsOf` ci-dessous retombe alors sur { h: "left", v: "top" }, le comportement
   // d'aujourd'hui (un calque garde sa position/taille en pixels, ancré en haut à gauche).
   constraints: layerConstraints.optional(),
+  // Chantier B, Tâche 5 — GROUPER/DÉGROUPER, modèle FLAT (spec §6). NOUVEAU et OPTIONNEL : MIGRATION
+  // NO-OP, exactement comme `constraints` ci-dessus — un calque déjà écrit n'a pas cette clé, et son
+  // absence EST le comportement d'aujourd'hui (un calque hors de tout groupe). Aucun calque « groupe »
+  // récursif, aucune imbrication : deux calques ou plus qui partagent la MÊME chaîne `groupId` FORMENT
+  // le groupe — lib/studio/groups.ts#expandSelectionToGroups en tire la liste des membres à la volée,
+  // il n'existe nulle part de nœud « groupe » séparé dans `scene.layers`. Ne change JAMAIS
+  // `constraints` (invariant chantier D, voir editor-state.ts#setGroup) : grouper/dégrouper ne
+  // touche que CE champ.
+  groupId: z.string().optional(),
 };
 
 const imageSource = z.discriminatedUnion("kind", [

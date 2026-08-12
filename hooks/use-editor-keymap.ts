@@ -5,10 +5,16 @@ import type { Dispatch } from "react";
 import { resolveShortcut, isEditingText, isPopupOpen } from "@/lib/studio/keymap";
 import {
   type EditorAction, type EditorState,
-  undo, redo, selectMany, clearSelection, deleteLayer, moveLayer, singleSelectedId, addLayers,
+  undo, redo, selectMany, clearSelection, deleteLayer, moveLayer, singleSelectedId, addLayers, setGroup,
 } from "@/lib/studio/editor-state";
 import { cloneLayersWithNewIds, copyToClipboard, readClipboard, PASTE_OFFSET } from "@/lib/studio/clipboard";
 import { unionBounds, zoomPresetScale, type ZoomViewport } from "@/lib/studio/zoom";
+// Chantier B, Tâche 5 — grouper/dégrouper (⌘G/⌘⇧G), modèle FLAT. Voir lib/studio/groups.ts en tête
+// pour le modèle : `nextGroupId` est LA source d'id de groupe (même schéma que `crypto.randomUUID()`
+// utilisé partout ailleurs pour un id de calque, jamais un second schéma) ; `expandSelectionToGroups`
+// résout « dégrouper » sur le GROUPE ENTIER du membre sélectionné, pas seulement le sous-ensemble
+// actuellement dans `selectedIds` (voir son cas ci-dessous).
+import { nextGroupId, expandSelectionToGroups } from "@/lib/studio/groups";
 import type { Layer } from "@/lib/studio/scene";
 
 // hooks/use-editor-keymap.ts — Chantier B, Tâche 1 : le pont navigateur pour
@@ -204,6 +210,32 @@ export function useEditorKeymap(
           if (!bounds || !viewport) return;
           e.preventDefault();
           zoomRef.current.setZoom(zoomPresetScale("selection", zoomRef.current.fitScale, bounds, viewport));
+          return;
+        }
+        // Chantier B, Tâche 5 — ⌘G : `resolveShortcut` a déjà tranché `ctx.hasSelection` ; ce que LUI
+        // ne peut pas savoir (comme pour copy/duplicate/zoomSelection ci-dessus), c'est si la
+        // sélection compte au moins DEUX calques RÉELS de la scène courante — « needs ≥2 to be
+        // meaningful » du brief. En dessous, no-op silencieux : AUCUN dispatch, donc `setGroup`
+        // n'empile même pas l'entrée fantôme qu'un lot de longueur 1 (avec un `groupId` neuf) aurait
+        // sinon produite.
+        case "group": {
+          const layers = selectedLayers(current);
+          if (layers.length < 2) return;
+          e.preventDefault();
+          dispatch(setGroup(layers.map((l) => l.id), nextGroupId()));
+          return;
+        }
+        // Chantier B, Tâche 5 — ⌘⇧G : dégroupe le GROUPE ENTIER des membres sélectionnés, pas
+        // seulement `current.selectedIds` tel quel — un clic sur un membre l'étend déjà à tout le
+        // groupe (canvas.tsx), mais cette commande reste correcte même si `selectedIds` ne portait
+        // qu'un SOUS-ENSEMBLE d'un groupe (ex. sélection construite par ⌘A). Aucune garde de compte
+        // ici : `setGroup(…, null)` sur une sélection SANS aucun `groupId` est déjà un no-op côté
+        // réducteur (aucun calque « touched »), donc rien à dupliquer ici.
+        case "ungroup": {
+          const ids = expandSelectionToGroups(current.selectedIds, current.scene);
+          if (ids.length === 0) return;
+          e.preventDefault();
+          dispatch(setGroup(ids, null));
           return;
         }
       }

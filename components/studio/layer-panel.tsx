@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useState, type Dispatch } from "react";
-import { Eye, EyeOff, Lock, Unlock, Trash2, ChevronUp, ChevronDown, Type, Image as ImageIcon, Square, QrCode } from "lucide-react";
+import {
+  Eye, EyeOff, Lock, Unlock, Trash2, ChevronUp, ChevronDown, Type, Image as ImageIcon, Square, QrCode,
+  Group as GroupIcon, Ungroup as UngroupIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene } from "@/lib/studio/scene";
 import {
   type EditorAction, select, toggleVisible, toggleLocked, deleteLayer, reorderLayer, addLayer, setLayerProp,
+  setGroup,
 } from "@/lib/studio/editor-state";
 
 export interface LayerPanelProps {
@@ -41,6 +46,35 @@ export function layersTopFirst(layers: readonly Layer[]): Layer[] {
 // le résultat à [0, length-1], donc pas besoin de clamp ici.
 export function nextIndexForMove(currentIndex: number, direction: "up" | "down"): number {
   return direction === "up" ? currentIndex + 1 : currentIndex - 1;
+}
+
+interface Entry {
+  layer: Layer;
+  index: number;
+}
+
+// Chantier B, Tâche 5 — LA VUE GROUPÉE du panneau : les entrées TOP-FIRST (voir `layersTopFirst`),
+// avec chaque famille de calques co-`groupId` fusionnée en UNE seule ligne « groupe » à la position
+// de son PREMIER membre rencontré (le plus haut dans l'ordre de peinture) — les occurrences
+// suivantes du même groupe sont sautées, elles sont rendues NICHÉES sous ce nœud, pas une seconde
+// fois au niveau racine. Un calque SANS `groupId` reste une ligne ordinaire, comportement d'avant
+// intact au pixel près (aucune scène sans groupe ne change de rendu par cette fonction).
+type Row = { kind: "layer"; entry: Entry } | { kind: "group"; groupId: string; members: Entry[] };
+
+function rowsGrouped(entries: Entry[]): Row[] {
+  const rows: Row[] = [];
+  const seenGroups = new Set<string>();
+  for (const entry of entries) {
+    const groupId = entry.layer.groupId;
+    if (!groupId) {
+      rows.push({ kind: "layer", entry });
+      continue;
+    }
+    if (seenGroups.has(groupId)) continue;
+    seenGroups.add(groupId);
+    rows.push({ kind: "group", groupId, members: entries.filter((e) => e.layer.groupId === groupId) });
+  }
+  return rows;
 }
 
 function TypeIcon({ layer }: { layer: Layer }) {
@@ -84,12 +118,156 @@ function RenameField({ layer, dispatch }: { layer: Layer; dispatch: Dispatch<Edi
   );
 }
 
+// Extrait pour être réutilisé à l'identique par une ligne ordinaire ET par un membre de groupe
+// (chantier B, Tâche 5) — rename/visibilité/verrou/réordonner/supprimer restent les MÊMES contrôles
+// dans les deux cas, `atTop`/`atBottom` étant calculés sur `scene.layers` (l'index RÉEL), pas sur la
+// position dans le panneau imbriqué.
+function LayerRow({
+  layer, index, atTop, atBottom, selected, dispatch,
+}: {
+  layer: Layer; index: number; atTop: boolean; atBottom: boolean; selected: boolean;
+  dispatch: Dispatch<EditorAction>;
+}) {
+  return (
+    <li
+      data-layer-row-id={layer.id}
+      className="flex items-center gap-1 rounded-lg border border-transparent px-1.5 py-1 aria-selected:border-border aria-selected:bg-muted"
+      aria-selected={selected}
+      draggable
+      onDragStart={(e) => e.dataTransfer.setData("text/layer-id", layer.id)}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer.getData("text/layer-id");
+        if (!draggedId || draggedId === layer.id) return;
+        dispatch(reorderLayer(draggedId, index));
+      }}
+    >
+      <Button
+        type="button" variant="ghost" size="icon-sm"
+        data-action="toggle-visible" data-layer-id={layer.id}
+        aria-pressed={layer.visible}
+        aria-label={layer.visible ? "Masquer le calque" : "Afficher le calque"}
+        onClick={() => dispatch(toggleVisible(layer.id))}
+      >
+        {layer.visible ? <Eye /> : <EyeOff />}
+      </Button>
+
+      <Button
+        type="button" variant="ghost" size="icon-sm"
+        data-action="toggle-locked" data-layer-id={layer.id}
+        aria-pressed={layer.locked}
+        aria-label={layer.locked ? "Déverrouiller le calque" : "Verrouiller le calque"}
+        onClick={() => dispatch(toggleLocked(layer.id))}
+      >
+        {layer.locked ? <Lock /> : <Unlock />}
+      </Button>
+
+      <span
+        className="text-muted-foreground"
+        title={TYPE_LABEL[layer.type]}
+        aria-hidden="true"
+      >
+        <TypeIcon layer={layer} />
+      </span>
+
+      <RenameField layer={layer} dispatch={dispatch} />
+
+      <Button
+        type="button" variant="ghost" size="icon-sm"
+        data-action="move-up" data-layer-id={layer.id}
+        aria-label="Monter le calque"
+        disabled={atTop}
+        onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "up")))}
+      >
+        <ChevronUp />
+      </Button>
+      <Button
+        type="button" variant="ghost" size="icon-sm"
+        data-action="move-down" data-layer-id={layer.id}
+        aria-label="Descendre le calque"
+        disabled={atBottom}
+        onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "down")))}
+      >
+        <ChevronDown />
+      </Button>
+
+      <Button
+        type="button" variant="ghost" size="icon-sm"
+        data-action="delete" data-layer-id={layer.id}
+        aria-label="Supprimer le calque"
+        disabled={layer.locked}
+        onClick={() => dispatch(deleteLayer(layer.id))}
+      >
+        <Trash2 />
+      </Button>
+    </li>
+  );
+}
+
+// Chantier B, Tâche 5 — LE NŒUD GROUPE : un `Collapsible` (components/ui/collapsible.tsx, même
+// préréglage base-ui que property-panel.tsx#TypeSection) qui niche ses membres dans
+// `CollapsibleContent`. `defaultOpen` (NON contrôlé, contrairement à TypeSection) : un groupe frais
+// n'a pas de préférence enregistrée à restaurer — s'ouvrir par défaut évite qu'un designer qui vient
+// de grouper trois calques les voie disparaître derrière un triangle fermé.
+function GroupNode({
+  groupId, members, lastIndex, selectedIds, dispatch,
+}: {
+  groupId: string; members: Entry[]; lastIndex: number; selectedIds: string[]; dispatch: Dispatch<EditorAction>;
+}) {
+  return (
+    <li data-group-row-id={groupId} className="flex flex-col gap-1">
+      <Collapsible defaultOpen data-testid="layer-group" data-group-id={groupId}>
+        <div className="flex items-center gap-1 rounded-lg px-1.5 py-1">
+          <CollapsibleTrigger
+            type="button"
+            data-action="toggle-group"
+            data-group-id={groupId}
+            className="group flex flex-1 items-center gap-1.5 text-left text-xs font-medium"
+          >
+            <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-180" />
+            <GroupIcon aria-hidden="true" className="size-3.5 text-muted-foreground" />
+            <span>Groupe ({members.length})</span>
+          </CollapsibleTrigger>
+          <Button
+            type="button" variant="ghost" size="icon-sm"
+            data-action="ungroup" data-group-id={groupId}
+            aria-label="Dégrouper"
+            onClick={() => dispatch(setGroup(members.map((m) => m.layer.id), null))}
+          >
+            <UngroupIcon />
+          </Button>
+        </div>
+        <CollapsibleContent>
+          <ul className="flex flex-col gap-1 pl-4">
+            {members.map(({ layer, index }) => (
+              <LayerRow
+                key={layer.id}
+                layer={layer}
+                index={index}
+                // Bornes calculées sur L'INDEX RÉEL (`scene.layers`, via `lastIndex` global), PAS sur
+                // la position DANS le groupe : un membre qui se trouve être le calque le plus haut/bas
+                // de TOUTE la scène doit encore désactiver son bouton monter/descendre, même niché.
+                atTop={index === lastIndex}
+                atBottom={index === 0}
+                selected={selectedIds.includes(layer.id)}
+                dispatch={dispatch}
+              />
+            ))}
+          </ul>
+        </CollapsibleContent>
+      </Collapsible>
+    </li>
+  );
+}
+
 export function LayerPanel({ scene, selectedIds, dispatch }: LayerPanelProps) {
   const entries = layersTopFirst(scene.layers).map((layer) => ({
     layer,
     index: scene.layers.findIndex((l) => l.id === layer.id),
   }));
   const lastIndex = scene.layers.length - 1;
+  const rows = rowsGrouped(entries);
 
   return (
     <div className="flex flex-col gap-2" data-testid="layer-panel">
@@ -118,84 +296,30 @@ export function LayerPanel({ scene, selectedIds, dispatch }: LayerPanelProps) {
       </div>
 
       <ul className="flex flex-col gap-1">
-        {entries.map(({ layer, index }) => {
-          const atTop = index === lastIndex;
-          const atBottom = index === 0;
+        {rows.map((row) => {
+          if (row.kind === "layer") {
+            const { layer, index } = row.entry;
+            return (
+              <LayerRow
+                key={layer.id}
+                layer={layer}
+                index={index}
+                atTop={index === lastIndex}
+                atBottom={index === 0}
+                selected={selectedIds.includes(layer.id)}
+                dispatch={dispatch}
+              />
+            );
+          }
           return (
-            <li
-              key={layer.id}
-              data-layer-row-id={layer.id}
-              className="flex items-center gap-1 rounded-lg border border-transparent px-1.5 py-1 aria-selected:border-border aria-selected:bg-muted"
-              aria-selected={selectedIds.includes(layer.id)}
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData("text/layer-id", layer.id)}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                const draggedId = e.dataTransfer.getData("text/layer-id");
-                if (!draggedId || draggedId === layer.id) return;
-                dispatch(reorderLayer(draggedId, index));
-              }}
-            >
-              <Button
-                type="button" variant="ghost" size="icon-sm"
-                data-action="toggle-visible" data-layer-id={layer.id}
-                aria-pressed={layer.visible}
-                aria-label={layer.visible ? "Masquer le calque" : "Afficher le calque"}
-                onClick={() => dispatch(toggleVisible(layer.id))}
-              >
-                {layer.visible ? <Eye /> : <EyeOff />}
-              </Button>
-
-              <Button
-                type="button" variant="ghost" size="icon-sm"
-                data-action="toggle-locked" data-layer-id={layer.id}
-                aria-pressed={layer.locked}
-                aria-label={layer.locked ? "Déverrouiller le calque" : "Verrouiller le calque"}
-                onClick={() => dispatch(toggleLocked(layer.id))}
-              >
-                {layer.locked ? <Lock /> : <Unlock />}
-              </Button>
-
-              <span
-                className="text-muted-foreground"
-                title={TYPE_LABEL[layer.type]}
-                aria-hidden="true"
-              >
-                <TypeIcon layer={layer} />
-              </span>
-
-              <RenameField layer={layer} dispatch={dispatch} />
-
-              <Button
-                type="button" variant="ghost" size="icon-sm"
-                data-action="move-up" data-layer-id={layer.id}
-                aria-label="Monter le calque"
-                disabled={atTop}
-                onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "up")))}
-              >
-                <ChevronUp />
-              </Button>
-              <Button
-                type="button" variant="ghost" size="icon-sm"
-                data-action="move-down" data-layer-id={layer.id}
-                aria-label="Descendre le calque"
-                disabled={atBottom}
-                onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "down")))}
-              >
-                <ChevronDown />
-              </Button>
-
-              <Button
-                type="button" variant="ghost" size="icon-sm"
-                data-action="delete" data-layer-id={layer.id}
-                aria-label="Supprimer le calque"
-                disabled={layer.locked}
-                onClick={() => dispatch(deleteLayer(layer.id))}
-              >
-                <Trash2 />
-              </Button>
-            </li>
+            <GroupNode
+              key={row.groupId}
+              groupId={row.groupId}
+              members={row.members}
+              lastIndex={lastIndex}
+              selectedIds={selectedIds}
+              dispatch={dispatch}
+            />
           );
         })}
       </ul>

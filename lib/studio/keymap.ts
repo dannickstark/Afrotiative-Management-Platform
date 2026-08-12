@@ -64,7 +64,19 @@ export type EditorCommand =
   // cadrer ; `zoom100`/`zoomFit` n'en ont pas besoin, comme `paste`.
   | { kind: "zoom100" }
   | { kind: "zoomFit" }
-  | { kind: "zoomSelection" };
+  | { kind: "zoomSelection" }
+  // Chantier B, Tâche 5 — grouper/dégrouper (⌘G / ⌘⇧G), modèle FLAT (lib/studio/groups.ts). MÊME
+  // garde que `copy`/`duplicate`/`zoomSelection` (`ctx.hasSelection`) : ce module ne connaît que « y
+  // a-t-il une sélection », un booléen — il ne sait PAS si `⌘G` a un sens PRODUIT (au moins deux
+  // calques réels, voir « needs ≥2 to be meaningful » du brief) ni si `⌘⇧G` a quelque chose à
+  // dégrouper (la sélection désigne-t-elle seulement des calques SANS groupe ?). Ces deux questions
+  // dépendent de la SCÈNE, pas de l'événement clavier — exactement la même séparation que
+  // hooks/use-editor-keymap.ts documente déjà pour `copy`/`duplicate`/`zoomSelection` (« CE QUE CE
+  // HOOK DÉCIDE QUE resolveShortcut NE PEUT PAS DÉCIDER ») : c'est LUI qui filtre `layers.length < 2`
+  // avant de dispatcher `group`, et `setGroup` lui-même qui, côté réducteur, ne produit aucune entrée
+  // fantôme si `ungroup` ne change rien (aucun membre n'avait de `groupId`).
+  | { kind: "group" }
+  | { kind: "ungroup" };
 
 export interface ShortcutEvent {
   key: string;
@@ -151,6 +163,15 @@ export function resolveShortcut(e: ShortcutEvent, ctx: ShortcutContext): EditorC
   }
   if (!mod && e.shiftKey && key === "2") {
     return ctx.hasSelection ? { kind: "zoomSelection" } : null;
+  }
+  // Chantier B, Tâche 5 — ⌘G/⌘⇧G : MÊME discrimination par `e.shiftKey` que ⌘Z/⌘⇧Z (undo/redo) plus
+  // haut — deux chords MOD distincts, jamais un alias l'un de l'autre. Gardés par `ctx.hasSelection`
+  // (voir le commentaire de `"group"`/`"ungroup"` sur `EditorCommand` ci-dessus pour ce que cette
+  // garde NE couvre PAS).
+  if (mod && key.toLowerCase() === "g") {
+    return e.shiftKey
+      ? (ctx.hasSelection ? { kind: "ungroup" } : null)
+      : (ctx.hasSelection ? { kind: "group" } : null);
   }
   if (!mod && key === "Escape") {
     return { kind: "deselect" };
