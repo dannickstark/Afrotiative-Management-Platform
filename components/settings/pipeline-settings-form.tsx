@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ScheduleField } from "@/components/settings/schedule-field";
+import { PageHeader } from "@/components/shell/page-header";
 import { updatePipelineSettings } from "@/lib/actions/pipeline-settings-actions";
 import { pipelineSettingsSchema } from "@/lib/validation";
 import type { PipelineSettings } from "@/lib/queries/settings";
@@ -84,8 +85,8 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
   }
 
   return (
-    <div className="max-w-2xl space-y-4">
-      <h1 className="text-xl font-semibold">Pipeline</h1>
+    <div className="max-w-2xl space-y-6">
+      <PageHeader title="Pipeline" />
 
       <Card>
         <CardHeader>

@@ -44,7 +44,7 @@ const PURE_FILES = new Set<string>([
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
   "embeddings.test.ts", "extract-chain.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
   "interval-picker.test.ts", "live-panel.test.ts",
-  "mock-llm.test.ts", "nav-sections.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
+  "mock-llm.test.ts", "nav-sections.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
   "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "resend.test.ts", "rss-parse.test.ts",
   "run-detail.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
   "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts",

@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardDescription, CardAction } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/shell/page-header";
 import type { Channel } from "@/lib/studio";
 
 const ENABLED_STYLE = "bg-[var(--status-approved)]/15 text-[var(--status-approved)] border-[var(--status-approved)]/30";
@@ -36,14 +37,11 @@ export function formatAutoSummary(s: Pick<SocialChannelSummary, "autoEnabled" | 
 
 export function SocialChannelsList({ items }: { items: SocialChannelSummary[] }) {
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Réseaux sociaux</h1>
-        <p className="text-sm text-muted-foreground">
-          Un canal par réseau. Chacun a sa propre limite de légende, son prompt éventuel et son
-          bloc de publication automatique — configurez-le en ouvrant le canal.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Réseaux sociaux"
+        description="Un canal par réseau. Chacun a sa propre limite de légende, son prompt éventuel et son bloc de publication automatique — configurez-le en ouvrant le canal."
+      />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((item) => (
           <Link key={item.channel} href={`/settings/social/${item.channel}`} className="block">

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PageHeader } from "@/components/shell/page-header";
 import { AddMemberDialog } from "./add-member-dialog";
 import { setMemberRole, disableMember, enableMember } from "@/lib/actions/team-actions";
 import { ROLE_LABEL } from "@/lib/rbac";
@@ -28,11 +29,8 @@ const STATUS_STYLE = {
 // wrapper stays a thin server component (its own requireUser/requirePermission gate + data fetch).
 export function MembersTable({ members, currentUserId }: { members: Member[]; currentUserId: string }) {
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Équipe</h1>
-        <AddMemberDialog />
-      </div>
+    <div className="space-y-6">
+      <PageHeader title="Équipe" actions={<AddMemberDialog />} />
 
       <div className="rounded-lg border">
         <Table>

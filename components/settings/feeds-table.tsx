@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PageHeader } from "@/components/shell/page-header";
 import { FeedSheet } from "./feed-sheet";
 import { toggleFeed, deleteFeed, testFeed } from "@/lib/actions/feed-actions";
 import { relativeDate } from "@/lib/format";
@@ -63,13 +64,15 @@ export function FeedsTable({ feeds }: { feeds: Feed[] }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Sources RSS</h1>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden /> Ajouter une source
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Sources RSS"
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden /> Ajouter une source
+          </Button>
+        }
+      />
 
       {feeds.length > 0 && <HealthSummary feeds={feeds} />}
 

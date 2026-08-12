@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LiveRunPanel } from "@/components/pipeline/live-run-panel";
 import { RunDetailSheet } from "@/components/pipeline/run-detail-sheet";
 import { RunTrends } from "@/components/pipeline/run-trends";
+import { PageHeader } from "@/components/shell/page-header";
 import {
   formatDate, formatRunDuration, pipelineStatusLabel, PIPELINE_STATUS_LABEL, type PipelineStatus,
 } from "@/lib/format";
@@ -92,10 +93,8 @@ export function RunsView({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Exécutions du pipeline</h1>
-      </div>
+    <div className="space-y-6">
+      <PageHeader title="Exécutions du pipeline" />
 
       <LiveRunPanel initialActive={initialActive} lastRun={runs[0] ?? null} />
 
