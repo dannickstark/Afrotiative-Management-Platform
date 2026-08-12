@@ -47,6 +47,11 @@
 //     `select`/`toggleSelection` continuent de NE PAS s'empiler : changer de sélection n'est pas une
 //     modification annulable, seulement une modification de la scène l'est.
 import { parseScene, SceneError, type Scene, type Layer, type Frame } from "./scene";
+// Chantier D, Tâche 5 — `FormatKey` (la clé externe de `scene.formatOverrides`, voir Tâche 1) vient
+// de formats.ts, la SEULE source de vérité des clés de format (`FORMAT_PRESETS`) : la réutiliser ici
+// plutôt que d'accepter une `string` nue évite qu'un appelant écrive `setFrameOverride("storry", …)`
+// sans que le compilateur ne le voie.
+import type { FormatKey } from "./formats";
 // Tâche 4 (U2) : `FrameChange` et `sameFrame` viennent du module d'alignement — une FEUILLE pure
 // (aucun import de valeur, voir son en-tête), donc l'importer ici n'ajoute rien au graphe d'exécution
 // des composants client. Les réutiliser plutôt que de redéclarer une paire {id, frame} et une
@@ -102,6 +107,12 @@ export type EditorAction =
   // Tâche 4 (U2, spec §4) : UN lot de cadres, UNE entrée d'historique — voir son cas dans le
   // réducteur et le commentaire de `setFrames` plus bas.
   | { type: "setFrames"; changes: readonly FrameChange[] }
+  // Chantier D, Tâche 5 — l'échappatoire manuelle par format : écrit
+  // `scene.formatOverrides[format][layerId]`, JAMAIS `layer.frame` (voir son cas dans le réducteur
+  // et le commentaire de `setFrameOverride`/`frameEditAction` plus bas). C'est l'action que doit
+  // recevoir un geste d'édition de cadre exécuté pendant qu'un format NON-accueil est prévisualisé —
+  // `resizeLayer`/`setFrames` ci-dessus restent, eux, les actions du format d'accueil.
+  | { type: "setFrameOverride"; format: FormatKey; layerId: string; frame: Frame }
   | { type: "rotateLayer"; id: string; deg: number }
   | { type: "setLayerProp"; id: string; patch: LayerPatch }
   // Chantier D, Tâche 4 — le pendant PLURIEL de `setLayerProp` : le MÊME correctif superficiel
@@ -159,6 +170,39 @@ export function resizeLayer(id: string, frame: Frame): EditorAction {
 // mieux l'intention et sont déjà couverts.
 export function setFrames(changes: readonly FrameChange[]): EditorAction {
   return { type: "setFrames", changes };
+}
+// Chantier D, Tâche 5 : voir le commentaire de `"setFrameOverride"` sur `EditorAction` ci-dessus —
+// écrit une surcharge de cadre pour CE calque, à CE format, sans toucher `layer.frame`.
+export function setFrameOverride(format: FormatKey, layerId: string, frame: Frame): EditorAction {
+  return { type: "setFrameOverride", format, layerId, frame };
+}
+
+// Chantier D, Tâche 5 — LE routeur home-vs-surcharge, l'invariant que réclame le plan (« editing a
+// frame at the HOME format still edits layer.frame ; overrides only for non-home formats »).
+//
+// SEAM CONNU, documenté honnêtement plutôt que masqué (même posture que la Tâche 3 pour sa note) :
+// aucune surface d'édition non-accueil n'existe ENCORE dans l'interface. Le mode Montage n'édite
+// toujours QUE le format d'accueil (`layer.frame`, via resizeLayer/setFrames) ; le mode Rendu
+// (render-mode.tsx) n'affiche les autres formats qu'en APERÇU lecture seule — `sceneForFormat` y
+// substitue juste les dimensions de canevas pour le rendu, sans jamais déclencher la moindre action
+// du réducteur (voir son commentaire d'en-tête : « aucune affordance adapter/réagencer n'apparaît
+// nulle part »). Câbler CE routeur sur un geste réel de canevas exigerait donc d'inventer une surface
+// éditable qui n'existe pas — précisément ce que le brief demande de NE PAS fabriquer.
+//
+// Cette fonction est donc, pour l'instant, la SEULE consommatrice testée de l'invariant — exercée
+// directement par tests/studio-editor-state.test.ts. Le jour où une tâche future rend un format
+// non-accueil éditable (ex. un canevas Montage qui suit `view.selectedId` comme render-mode.tsx le
+// fait déjà pour l'aperçu), c'est CETTE fonction qu'elle appellera pour décider quelle action
+// dispatcher — elle n'aura pas à être réécrite, seulement branchée sur un `onFrameChange` réel.
+export function frameEditAction(
+  homeFormat: FormatKey,
+  activeFormat: FormatKey,
+  layerId: string,
+  frame: Frame,
+): EditorAction {
+  return activeFormat === homeFormat
+    ? resizeLayer(layerId, frame)
+    : setFrameOverride(activeFormat, layerId, frame);
 }
 export function rotateLayer(id: string, deg: number): EditorAction {
   return { type: "rotateLayer", id, deg };
@@ -373,6 +417,29 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }
       if (!touched) return state;
       return commit(state, { ...state.scene, layers });
+    }
+
+    // Chantier D, Tâche 5 — l'échappatoire manuelle : écrit
+    // `scene.formatOverrides[format][layerId] = frame`, IMMUABLEMENT (deux niveaux d'objet neufs,
+    // jamais de mutation en place de la carte existante), et NE TOUCHE PAS `layers` — c'est ce qui
+    // garantit `layer.frame` intact pour le calque édité, l'invariant central de cette tâche.
+    //
+    // Le calque doit exister dans la scène (même garde que `setLayerProp` : un id absent est un
+    // no-op, pas une erreur). PAS de garde de verrou ici, délibérément : comme `setLayerProp`/
+    // `toggleVisible` (voir le commentaire d'en-tête du module), c'est une édition EXPLICITE — pas un
+    // geste souris sur le canevas — et le verrou protège spécifiquement contre le second.
+    //
+    // AUCUN code de nettoyage dédié pour l'annulation : `commit()` empile l'entrée d'historique
+    // habituelle, et l'`undo` générique (cas "undo" plus bas) restaure la scène ENTIÈRE d'avant CETTE
+    // action — surcharge y compris. Une surcharge ajoutée puis annulée ne laisse donc jamais
+    // d'entrée orpheline dans `formatOverrides` : il n'y a simplement rien de spécifique à nettoyer,
+    // le mécanisme générique suffit (voir tests/studio-editor-state.test.ts, « SANS ORPHELIN »).
+    case "setFrameOverride": {
+      const index = layerIndex(state.scene, action.layerId);
+      if (index === -1) return state;
+      const forFormat = { ...(state.scene.formatOverrides?.[action.format] ?? {}), [action.layerId]: { ...action.frame } };
+      const formatOverrides = { ...(state.scene.formatOverrides ?? {}), [action.format]: forFormat };
+      return commit(state, { ...state.scene, formatOverrides });
     }
 
     case "rotateLayer":

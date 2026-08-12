@@ -1,5 +1,8 @@
 import { describe, it, expect } from "bun:test";
 import type { Scene, Layer } from "@/lib/studio/scene";
+import { constraintsOf } from "@/lib/studio/scene";
+import { relayoutToFormat, relayoutFrame } from "@/lib/studio/relayout";
+import { FORMAT_PRESETS } from "@/lib/studio/formats";
 import {
   editorReducer,
   initEditorState,
@@ -18,6 +21,8 @@ import {
   toggleVisible,
   toggleLocked,
   setFrames,
+  setFrameOverride,
+  frameEditAction,
   undo,
   redo,
   toCanvasCoords,
@@ -419,6 +424,128 @@ describe("setFrames — un lot de cadres, UNE entrée d'historique", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 5 — `setFrameOverride` : l'échappatoire manuelle pour un format NON-accueil.
+// Éditer un cadre pendant qu'un format non-accueil est prévisualisé écrit
+// `scene.formatOverrides[format][layerId]`, JAMAIS `layer.frame` (le format d'accueil) — c'est la
+// différence structurelle avec `setFrames`/`resizeLayer` ci-dessus, qui éditent tous deux
+// `layer.frame`. Réutilise `commit()` (donc `parseScene`, l'historique, le plafond) sans code
+// spécifique : un `undo` restaure la scène ENTIÈRE d'avant, surcharge comprise — voir le test
+// « aucun orphelin » plus bas, qui épingle précisément cette propriété.
+describe("setFrameOverride — l'échappatoire manuelle pour un format non-accueil (chantier D, tâche 5)", () => {
+  const overrideFrame = { x: 9, y: 9, w: 42, h: 42 };
+
+  it("écrit scene.formatOverrides[format][layerId] et laisse layer.frame (accueil) INTACT", () => {
+    const state = makeState();
+    const homeFrameBefore = { ...find(state, "badge").frame };
+
+    const next = editorReducer(state, setFrameOverride("story", "badge", overrideFrame));
+
+    expect(next.scene.formatOverrides?.story?.badge).toEqual(overrideFrame);
+    // LE cœur de l'invariant : le cadre d'accueil du calque n'a PAS bougé.
+    expect(find(next, "badge").frame).toEqual(homeFrameBefore);
+    expect(next.past).toHaveLength(1);
+    expect(next.future).toEqual([]);
+  });
+
+  it("relayoutToFormat(scene, 'story') utilise la surcharge pour badge — et LA CONTRAINTE pour title (anti-vacuité)", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrameOverride("story", "badge", overrideFrame));
+    const relayouted = relayoutToFormat(next.scene, "story");
+
+    const badgeFrame = relayouted.layers.find((l) => l.id === "badge")!.frame;
+    expect(badgeFrame).toEqual(overrideFrame);
+
+    // `title` n'a AUCUNE surcharge pour "story" : il doit continuer à passer par relayoutFrame/sa
+    // contrainte — la preuve que le chemin « contrainte » est bien emprunté à côté du chemin
+    // « surcharge », pas seulement quand la carte de surcharges est totalement vide.
+    const title = find(next, "title");
+    const titleFrame = relayouted.layers.find((l) => l.id === "title")!.frame;
+    const expectedTitleFrame = relayoutFrame(
+      title.frame,
+      constraintsOf(title),
+      { w: next.scene.canvas.width, h: next.scene.canvas.height },
+      { w: FORMAT_PRESETS.story.width, h: FORMAT_PRESETS.story.height },
+    );
+    expect(titleFrame).toEqual(expectedTitleFrame);
+  });
+
+  it("un format DIFFÉRENT de celui surchargé continue d'utiliser la contrainte (anti-vacuité)", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrameOverride("story", "badge", overrideFrame));
+    const relayoutedOther = relayoutToFormat(next.scene, "ig_square");
+    const badgeFrame = relayoutedOther.layers.find((l) => l.id === "badge")!.frame;
+    expect(badgeFrame).not.toEqual(overrideFrame);
+  });
+
+  it("UN SEUL undo retire la surcharge — SANS ORPHELIN — et redo la rétablit", () => {
+    const state = makeState();
+    const next = editorReducer(state, setFrameOverride("story", "badge", overrideFrame));
+
+    const afterUndo = editorReducer(next, undo());
+    expect(afterUndo.scene.formatOverrides?.story?.badge).toBeUndefined();
+    expect(afterUndo.scene).toEqual(state.scene);
+    expect(afterUndo.past).toEqual([]);
+    expect(afterUndo.future).toHaveLength(1);
+
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(afterRedo.scene).toEqual(next.scene);
+    expect(afterRedo.scene.formatOverrides?.story?.badge).toEqual(overrideFrame);
+  });
+
+  it("un id absent de la scène est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setFrameOverride("story", "fantôme", overrideFrame))).toBe(state);
+  });
+
+  it("recopie le cadre fourni au lieu de le référencer", () => {
+    const state = makeState();
+    const frame = { x: 1, y: 2, w: 3, h: 4 };
+    const next = editorReducer(state, setFrameOverride("story", "badge", frame));
+    frame.x = -1;
+    expect(next.scene.formatOverrides?.story?.badge.x).toBe(1);
+  });
+
+  it("une surcharge existante pour UN AUTRE calque ou UN AUTRE format n'est pas touchée", () => {
+    const state = makeState();
+    const withFirst = editorReducer(state, setFrameOverride("story", "badge", overrideFrame));
+    const withSecond = editorReducer(withFirst, setFrameOverride("ig_square", "title", { x: 1, y: 1, w: 5, h: 5 }));
+    expect(withSecond.scene.formatOverrides?.story?.badge).toEqual(overrideFrame);
+    expect(withSecond.scene.formatOverrides?.ig_square?.title).toEqual({ x: 1, y: 1, w: 5, h: 5 });
+  });
+});
+
+// `frameEditAction` — le routeur home-vs-surcharge (chantier D, tâche 5). Aucune surface d'édition
+// non-accueil n'existe encore dans l'interface (render-mode.tsx#sceneForFormat n'est qu'un APERÇU
+// lecture seule — voir son commentaire d'en-tête) : cette fonction est donc, pour l'instant, la
+// SEULE consommation de l'invariant « éditer au format d'accueil édite toujours layer.frame », ici
+// exercée directement par le test plutôt que par un composant qui n'a pas encore de raison d'exister.
+describe("frameEditAction — édite layer.frame au format d'accueil, une surcharge sinon", () => {
+  it("au format D'ACCUEIL, produit la MÊME action que resizeLayer (édite layer.frame)", () => {
+    const action = frameEditAction("website_featured", "website_featured", "badge", { x: 1, y: 1, w: 2, h: 2 });
+    expect(action).toEqual(resizeLayer("badge", { x: 1, y: 1, w: 2, h: 2 }));
+  });
+
+  it("à un format NON-ACCUEIL, produit setFrameOverride (édite la surcharge, pas layer.frame)", () => {
+    const action = frameEditAction("website_featured", "story", "badge", { x: 1, y: 1, w: 2, h: 2 });
+    expect(action).toEqual(setFrameOverride("story", "badge", { x: 1, y: 1, w: 2, h: 2 }));
+  });
+
+  it("appliqué au réducteur : le format d'accueil édite layer.frame, un autre format écrit la surcharge", () => {
+    const state = makeState();
+    const homeFrameBefore = { ...find(state, "badge").frame };
+    const otherFrame = { x: 9, y: 9, w: 42, h: 42 };
+
+    const atHome = editorReducer(state, frameEditAction("website_featured", "website_featured", "badge", { x: 7, y: 7, w: 20, h: 20 }));
+    expect(find(atHome, "badge").frame).toEqual({ x: 7, y: 7, w: 20, h: 20 });
+    expect(atHome.scene.formatOverrides).toBeUndefined();
+
+    const atOther = editorReducer(state, frameEditAction("website_featured", "story", "badge", otherFrame));
+    expect(find(atOther, "badge").frame).toEqual(homeFrameBefore);
+    expect(atOther.scene.formatOverrides?.story?.badge).toEqual(otherFrame);
+  });
+});
+
 describe("reorderLayer", () => {
   it("déplace un calque à un nouvel index — l'ordre du tableau EST l'ordre de peinture", () => {
     const state = makeState();
@@ -636,6 +763,7 @@ describe("absence de mutation", () => {
       { id: "badge", frame: { x: 1, y: 2, w: 3, h: 4 } },
       { id: "title", frame: { x: 5, y: 6, w: 7, h: 8 } },
     ]));
+    editorReducer(initial, setFrameOverride("story", "badge", { x: 9, y: 9, w: 42, h: 42 }));
     editorReducer(initial, toggleVisible("badge"));
     editorReducer(initial, toggleLocked("locked1"));
     editorReducer(initial, select("title"));
