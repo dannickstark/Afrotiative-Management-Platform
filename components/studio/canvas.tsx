@@ -15,11 +15,16 @@ import { resolveDisplayColor } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 // U4 Tâche 6 (spec §5) : « voir les liaisons » — `usesInLayer` est la MÊME fonction que
 // lib/studio/tokens.ts#extractTokens appelle déjà pour valider la scène entière (jamais une copie
-// parallèle du repérage de jetons), et `TOKEN_LABELS` la MÊME table que le sélecteur de jetons du
-// panneau de propriétés (components/studio/token-picker.tsx) — une seule source pour « comment un
-// jeton s'appelle en français », partout où l'éditeur l'affiche.
+// parallèle du repérage de jetons). `TOKEN_LABELS` vient de lib/studio/token-labels.ts — PAS de
+// components/studio/token-picker.tsx, qui RÉ-EXPORTE la même table mais importe aussi
+// Popover/PopoverContent/PopoverTrigger (base-ui) pour le sélecteur lui-même : importer la table
+// DEPUIS ce composant aurait tiré tout l'arbre Popover dans Canvas, statiquement, pour un seul
+// `Record<TokenId,string>` qui n'en a besoin d'aucun — correctif de revue après un incident constaté
+// (tests/studio-layer-view.test.ts perdait son test réel de clic Popover, gelé par
+// `useIsoLayoutEffect`, dès que Canvas importait Popover en amont dans le même process `bun test`
+// sans `--isolate` — voir le commentaire de tête de token-labels.ts).
 import { usesInLayer, type TokenId } from "@/lib/studio/tokens";
-import { TOKEN_LABELS } from "./token-picker";
+import { TOKEN_LABELS } from "@/lib/studio/token-labels";
 import { LayerView } from "./layer-view";
 
 // Le canevas est du DOM, pas un `<canvas>` (spec §2) : chaque calque est une `div` positionnée en

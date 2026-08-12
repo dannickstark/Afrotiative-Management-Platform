@@ -8,30 +8,17 @@ import {
   CONTEXT_TOKENS, TOKEN_KINDS, TOKEN_IDS, type TokenId, type TokenKind, type TemplateContext,
 } from "@/lib/studio/tokens";
 
-// Étiquettes FRANÇAISES de chaque jeton (spec Tâche 8 : « chaque jeton montre son étiquette
-// française »). Couvre la totalité de TOKEN_KINDS — tests/studio-token-picker.test.ts vérifie
-// l'exhaustivité (un jeton sans étiquette se retrouverait affiché sous sa forme technique brute,
-// {{article.byline}}, plutôt qu'en français, dans le sélecteur).
-export const TOKEN_LABELS: Record<TokenId, string> = {
-  "article.title": "Titre de l'article",
-  "article.excerpt": "Extrait de l'article",
-  "article.date": "Date de l'article",
-  "article.byline": "Signature",
-  "article.image": "Image de l'article",
-  "article.url": "URL de l'article",
-  "category.name": "Nom de la catégorie",
-  "category.color": "Couleur de la catégorie",
-  "source.names": "Sources",
-  "brand.logo": "Logo de la marque",
-  "quote.text": "Texte de la citation",
-  "quote.attribution": "Attribution de la citation",
-  "edition.title": "Titre de l'édition",
-  "edition.date": "Date de l'édition",
-  "recap.title": "Titre du récap",
-  "recap.item1": "Élément 1 du récap",
-  "recap.item2": "Élément 2 du récap",
-  "recap.item3": "Élément 3 du récap",
-};
+// IMPORTÉE puis RÉ-EXPORTÉE (correctif revue, U4 Tâche 6) — la table elle-même vit désormais dans
+// lib/studio/token-labels.ts, un module PUR sans JSX/Popover, pour que components/studio/canvas.tsx
+// (qui n'a besoin QUE de cette table, jamais du sélecteur ni de Popover) puisse la consommer sans
+// importer statiquement tout l'arbre Popover de CE fichier — voir le commentaire de tête de
+// token-labels.ts pour l'incident que ce déplacement corrige. IMPORTÉE ici (pas seulement
+// réexportée depuis "@/lib/studio/token-labels") parce que `pickerRowsFor` plus bas, DANS ce même
+// module, s'en sert aussi — un `export … from` ne lie PAS le nom localement, seulement au module
+// consommateur. Ré-exportée (jamais dupliquée) pour que les consommateurs existants de CE module
+// (manual-generate.tsx, panels/images-panel.tsx) n'aient rien à changer.
+import { TOKEN_LABELS } from "@/lib/studio/token-labels";
+export { TOKEN_LABELS };
 
 // PURE — LA règle testée par tests/studio-token-picker.test.ts : tous les jetons du contexte du
 // gabarit (CONTEXT_TOKENS), filtrés par le TokenKind attendu par le champ courant (TOKEN_KINDS).
