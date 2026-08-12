@@ -16,7 +16,7 @@ import {
 import { setFrames, type EditorAction } from "@/lib/studio/editor-state";
 // U3 Tâche 3 : la rotation d'une forme est une propriété de sa DESCRIPTION (arbitrage A) — ce
 // composant la demande, il ne la déduit ni d'une liste de noms ni du type de calque.
-import { layerSupportsRotation, shapeLabel } from "@/lib/studio/shapes";
+import { layerRotation, layerSupportsRotation, shapeLabel } from "@/lib/studio/shapes";
 import { NumberField, type Patch } from "./property-fields";
 
 // components/studio/geometry-strip.tsx — Tâche 6 (U1, spec §6) : les six champs de cadre (X, Y,
@@ -181,7 +181,16 @@ export function AlignRow({ scene, selectedIds, dispatch, className }: AlignRowPr
   const reference = participants.length === 1 ? "par rapport au plan de travail" : "par rapport à la sélection";
   // « say so in the UI's tooltip if it matters » (plan) : la note n'apparaît que si un participant est
   // RÉELLEMENT pivoté — un avertissement permanent ne serait plus lu par personne.
-  const hasRotated = participants.some((l) => (l.rotation ?? 0) !== 0);
+  //
+  // `layerRotation()`, PAS `layer.rotation` (revue finale U3, Important 1 — CINQUIÈME instance du §0,
+  // et elle vivait soixante lignes sous la correction de sa sœur `snap-rotation-note`) : sur une forme
+  // DÉCOUPÉE la rotation stockée n'est peinte NULLE PART (lib/studio/shapes.ts#layerRotation, les deux
+  // chemins de rendu la suppriment), donc le cadre non pivoté EST la boîte visible à l'écran et cette
+  // note dirait le contraire. Pire, le champ « Rotation (°) » est alors GRISÉ avec la valeur résiduelle
+  // affichée : l'utilisateur ne pourrait même pas effacer la rotation pour faire taire l'avertissement
+  // — un cul-de-sac doublé d'une explication fausse. La question est posée à la rotation PEINTE, comme
+  // partout ailleurs depuis la Tâche 3.
+  const hasRotated = participants.some((l) => layerRotation(l) !== 0);
 
   return (
     <div className={cn("space-y-1", className)} data-testid="align-row">

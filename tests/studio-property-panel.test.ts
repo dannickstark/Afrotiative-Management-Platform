@@ -317,6 +317,57 @@ describe("PropertyPanel — rangée aligner/répartir (Tâche 4)", () => {
     expect(straight).not.toContain('data-testid="align-rotation-note"');
   });
 
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE FINALE U3, IMPORTANT 1 — LA CINQUIÈME INSTANCE DU §0, ET LE TEST QUI L'AURAIT ATTRAPÉE.
+  //
+  // `align-rotation-note` lisait `layer.rotation` BRUT là où sa sœur `snap-rotation-note`, soixante
+  // lignes plus haut dans le même fichier, avait déjà reçu la garde correspondante. Sur une forme
+  // DÉCOUPÉE, la rotation stockée n'est peinte NULLE PART (lib/studio/shapes.ts#layerRotation) : le
+  // cadre non pivoté EST la boîte visible à l'écran, et la note affirmait le contraire. Et le champ
+  // « Rotation (°) » étant GRISÉ sur sa valeur résiduelle, l'utilisateur ne pouvait pas faire taire
+  // l'avertissement — un cul-de-sac avec une explication fausse.
+  //
+  // Rien ne rougissait : la correction `layerRotation(l) !== 0` passait 174 tests inchangés. Ce test
+  // est ce qui manquait. MUTATION QUI LE FAIT ROUGIR : rétablir `(l.rotation ?? 0) !== 0` dans
+  // geometry-strip.tsx#AlignRow (le camp découpé échoue) ; et `hasRotated = false` en dur, ou
+  // `layerRotation(l) === 0`, fait échouer le camp témoin.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("la note d'alignement lit la rotation PEINTE : absente sur une forme découpée pivotée, présente sur une forme qui tourne (revue finale, Important 1)", () => {
+    function shapeOf(kind: string): Layer {
+      return {
+        id: "s1", name: "Forme", visible: true, locked: false,
+        frame: { x: 10, y: 20, w: 200, h: 150 }, rotation: 30,
+        type: "shape", shape: kind, fill: "#123456",
+      } as Layer;
+    }
+    const découpées = SHAPE_KINDS.filter((k) => descriptorFor(k).clipped);
+    const libres = SHAPE_KINDS.filter((k) => !descriptorFor(k).clipped);
+    expect(découpées.length).toBeGreaterThan(0); // anti-vacuité des deux boucles
+    expect(libres.length).toBeGreaterThan(0);
+
+    // CAMP DÉCOUPÉ : `rotation: 30` stocké, rotation peinte 0 -> la note serait FAUSSE, elle est absente.
+    for (const kind of découpées) {
+      const html = render([shapeOf(kind)], "s1", "recap_card");
+      expect(`${kind} note d'alignement : ${html.includes('data-testid="align-rotation-note"')}`)
+        .toBe(`${kind} note d'alignement : false`);
+      // LE CUL-DE-SAC, épinglé lui aussi : le champ de rotation est grisé SUR la valeur résiduelle,
+      // donc l'utilisateur ne pourrait pas l'effacer pour faire disparaître un tel avertissement.
+      const rotation = openingTag(html, "data-field", "rotation");
+      expect(rotation).toContain('value="30"');
+      expect(/\sdisabled(?:=|>|\s|\/)/.test(rotation)).toBe(true);
+    }
+
+    // CAMP TÉMOIN, au MÊME point : la même rotation sur une forme qui tourne affiche bien la note, et
+    // elle dit ce qu'elle prétend dire. Sans lui, une note jamais rendue passerait la boucle ci-dessus.
+    for (const kind of libres) {
+      const html = render([shapeOf(kind)], "s1", "recap_card");
+      expect(`${kind} note d'alignement : ${html.includes('data-testid="align-rotation-note"')}`)
+        .toBe(`${kind} note d'alignement : true`);
+      const note = elementWith(html, "data-testid", "align-rotation-note");
+      expect(note).toContain("boîte visible");
+    }
+  });
+
   // ── Tâche 5 (U2) : la même discipline pour la LIMITE D'ACCROCHAGE d'un calque pivoté ────────────
   it("prévient qu'un calque PIVOTÉ s'accroche différemment — et seulement s'il l'est vraiment", () => {
     // La revue de la Tâche 5 a tranché : la limite ne doit pas mourir en silence (la Tâche 4 avait
