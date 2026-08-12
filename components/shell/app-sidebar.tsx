@@ -63,7 +63,7 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<Link href="/dashboard" />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-[var(--accent-brand)] text-sm font-semibold text-[var(--accent-brand-foreground)]">
+              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-accent-brand text-sm font-semibold text-accent-brand-foreground">
                 A
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">

@@ -37,7 +37,7 @@ Drizzle query builder (no raw SQL from input); server actions begin with `requir
 | 006 | Security hardening bundle (cron compare, font proxy, stale comment) | security | P1 | S | none | DONE |
 | 007 | Wire the editorial serif + define a type scale | ui | P1 | S | none | DONE |
 | 008 | Shared `PageHeader` adopted across all pages | ui | P1 | M | 007 | DONE |
-| 009 | Brand accent as a real default utility | ui | P1 | S | none | TODO |
+| 009 | Brand accent as a real default utility | ui | P1 | S | none | DONE |
 | 010 | Shared `StatCard`/`Metric` + dashboard hierarchy | ui | P1 | M | 007 | TODO |
 | 011 | States & feedback (EmptyState, loading skeletons, responsive tables, a11y) | ui/a11y | P1 | M | none | TODO |
 | 012 | Brand identity & editorial login (monogram, wordmark, split-screen) | ui/design | P1 | M | 007,009 | TODO |

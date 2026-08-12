@@ -47,7 +47,7 @@ export function LoginForm() {
           </div>
           {error && <p className="text-sm text-[var(--status-rejected)]" role="alert">{error}</p>}
           <Button type="submit" disabled={loading}
-            className="w-full bg-[var(--accent-brand)] text-[var(--accent-brand-foreground)]">
+            className="w-full bg-accent-brand text-accent-brand-foreground">
             {loading ? "Connexion…" : "Se connecter"}
           </Button>
         </form>

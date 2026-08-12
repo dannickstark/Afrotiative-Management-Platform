@@ -24,7 +24,7 @@ export function PendingList({ items }: { items: PendingItem[] }) {
               return (
                 <li key={a.id} className="py-2">
                   <Link href={`/article/${a.id}`} className="flex items-center gap-2 hover:underline">
-                    {low && <span title="Faible confiance IA" className="size-2 rounded-full bg-[var(--accent-brand)]" />}
+                    {low && <span title="Faible confiance IA" className="size-2 rounded-full bg-accent-brand" />}
                     <span className="flex-1 truncate">{a.title}</span>
                     <span className="text-xs text-muted-foreground">{relativeDate(a.generatedAt)}</span>
                     <StatusBadge status={a.status} />

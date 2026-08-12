@@ -37,7 +37,13 @@ export function NavMain({ items, pendingCount }: { items: NavItem[]; pendingCoun
               render={<SidebarMenuItem />}
             >
               <CollapsibleTrigger
-                render={<SidebarMenuButton isActive={childActive} tooltip={item.label} />}
+                render={
+                  <SidebarMenuButton
+                    isActive={childActive}
+                    tooltip={item.label}
+                    className="data-active:text-accent-brand"
+                  />
+                }
               >
                 <Icon />
                 <span>{item.label}</span>
@@ -50,6 +56,7 @@ export function NavMain({ items, pendingCount }: { items: NavItem[]; pendingCoun
                       <SidebarMenuSubButton
                         isActive={pathname.startsWith(child.href)}
                         render={<Link href={child.href} />}
+                        className="data-active:text-accent-brand"
                       >
                         <span>{child.label}</span>
                       </SidebarMenuSubButton>
@@ -67,12 +74,13 @@ export function NavMain({ items, pendingCount }: { items: NavItem[]; pendingCoun
               isActive={pathname.startsWith(item.href)}
               tooltip={item.label}
               render={<Link href={item.href} />}
+              className="data-active:text-accent-brand"
             >
               <Icon />
               <span>{item.label}</span>
             </SidebarMenuButton>
             {item.badgeKey === "pending" && pendingCount > 0 && (
-              <SidebarMenuBadge className="rounded-full bg-[var(--accent-brand)] px-1.5 text-[var(--accent-brand-foreground)]">
+              <SidebarMenuBadge className="rounded-full bg-accent-brand px-1.5 text-accent-brand-foreground">
                 {pendingCount}
               </SidebarMenuBadge>
             )}

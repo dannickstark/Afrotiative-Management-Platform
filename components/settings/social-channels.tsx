@@ -45,7 +45,7 @@ export function SocialChannelsList({ items }: { items: SocialChannelSummary[] })
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((item) => (
           <Link key={item.channel} href={`/settings/social/${item.channel}`} className="block">
-            <Card className="transition-colors hover:border-[var(--accent-brand)]">
+            <Card className="transition-colors hover:border-accent-brand">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   {item.label}

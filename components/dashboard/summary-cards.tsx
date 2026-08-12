@@ -14,7 +14,7 @@ export function SummaryCards({ d }: { d: Awaited<ReturnType<typeof import("@/lib
         <Card key={c.label}>
           <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">{c.label}</CardTitle></CardHeader>
           <CardContent>
-            <div className={`text-2xl font-semibold ${c.alert ? "text-[var(--status-error)]" : c.accent ? "text-[var(--accent-brand)]" : ""}`}>{c.value}</div>
+            <div className={`text-2xl font-semibold ${c.alert ? "text-[var(--status-error)]" : c.accent ? "text-accent-brand" : ""}`}>{c.value}</div>
             {c.sub && <p className="text-xs text-muted-foreground mt-1">{c.sub}</p>}
           </CardContent>
         </Card>
