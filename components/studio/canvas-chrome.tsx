@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties, ReactNode } from "react";
-import { Ruler, Grid3x3, ShieldHalf } from "lucide-react";
+import { Ruler, Grid3x3, ShieldHalf, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
 import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
@@ -36,10 +36,15 @@ export interface CanvasChromeProps {
    * qu'elles restent alignées sur le VRAI rendu de Canvas (même calcul `preset.width * zoom` /
    * `preset.height * zoom` que le conteneur extérieur de canvas.tsx). */
   zoom: number;
-  prefs: Pick<EditorPrefs, "rulers" | "grid" | "safeAreas">;
+  prefs: Pick<EditorPrefs, "rulers" | "grid" | "safeAreas" | "showBindings">;
   onToggleRulers?: () => void;
   onToggleGrid?: () => void;
   onToggleSafeAreas?: () => void;
+  /** Tâche 6 (U4, spec §5) : « voir les liaisons » — MÊME idiome que les trois bascules ci-dessus.
+   * Le TOGGLE lui-même est de U1/CanvasChrome ; le CONTOUR + l'ÉTIQUETTE qu'il commande sont dessinés
+   * par components/studio/canvas.tsx (le vrai `<Canvas>`, passé en `children` — voir son commentaire),
+   * jamais ici : ce fichier ne connaît toujours aucun calque, seulement l'état du bouton. */
+  onToggleBindings?: () => void;
   /** Le VRAI <Canvas> (components/studio/canvas.tsx) en composition normale — ce composant ne sait
    * rien de la scène ni des calques, il ne fait qu'encadrer ce qu'on lui passe. */
   children?: ReactNode;
@@ -131,6 +136,7 @@ export function CanvasChrome({
   onToggleRulers,
   onToggleGrid,
   onToggleSafeAreas,
+  onToggleBindings,
   children,
 }: CanvasChromeProps) {
   const preset = FORMAT_PRESETS[format];
@@ -215,6 +221,19 @@ export function CanvasChrome({
           onClick={onToggleSafeAreas}
         >
           <ShieldHalf />
+        </Button>
+        <Button
+          type="button"
+          variant={prefs.showBindings ? "secondary" : "ghost"}
+          size="icon-sm"
+          data-action="toggle-bindings"
+          aria-label="Afficher les liaisons"
+          aria-pressed={prefs.showBindings}
+          title="Voir les liaisons"
+          className="pointer-events-auto"
+          onClick={onToggleBindings}
+        >
+          <Link2 />
         </Button>
       </div>
 

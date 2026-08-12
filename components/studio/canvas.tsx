@@ -11,6 +11,20 @@ import { useLayerDrag, HANDLES, nudgeDelta, type HandleId } from "@/hooks/use-la
 // tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
 // que le rendu ne fera pas.
 import { layerSupportsRotation } from "@/lib/studio/shapes";
+import { resolveDisplayColor } from "@/lib/studio/values";
+import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
+// U4 Tâche 6 (spec §5) : « voir les liaisons » — `usesInLayer` est la MÊME fonction que
+// lib/studio/tokens.ts#extractTokens appelle déjà pour valider la scène entière (jamais une copie
+// parallèle du repérage de jetons). `TOKEN_LABELS` vient de lib/studio/token-labels.ts — PAS de
+// components/studio/token-picker.tsx, qui RÉ-EXPORTE la même table mais importe aussi
+// Popover/PopoverContent/PopoverTrigger (base-ui) pour le sélecteur lui-même : importer la table
+// DEPUIS ce composant aurait tiré tout l'arbre Popover dans Canvas, statiquement, pour un seul
+// `Record<TokenId,string>` qui n'en a besoin d'aucun — correctif de revue après un incident constaté
+// (tests/studio-layer-view.test.ts perdait son test réel de clic Popover, gelé par
+// `useIsoLayoutEffect`, dès que Canvas importait Popover en amont dans le même process `bun test`
+// sans `--isolate` — voir le commentaire de tête de token-labels.ts).
+import { usesInLayer, type TokenId } from "@/lib/studio/tokens";
+import { TOKEN_LABELS } from "@/lib/studio/token-labels";
 import { LayerView } from "./layer-view";
 
 // Le canevas est du DOM, pas un `<canvas>` (spec §2) : chaque calque est une `div` positionnée en
@@ -31,6 +45,12 @@ export interface CanvasProps {
    * Lot 3). Un calque `image` à jeton (`{{slot}}`) n'y figure jamais : l'éditeur n'a pas de valeur
    * de jeton, quoi qu'il arrive (voir layer-view.tsx). */
   images?: Map<string, string>;
+  /** U4 Tâche 6 (spec §5) : « voir les liaisons » — dessine un contour d'accent + une étiquette de
+   * jeton sur chaque calque VISIBLE portant au moins un `{{jeton}}` (texte, image en slot, QR, ou
+   * n'importe quel champ couleur). Défaut `false` (même idiome que rulers/grid, EditorPrefs) : un
+   * canevas neuf n'a rien à signaler avant qu'un jeton n'y soit posé, et cette surcouche resterait
+   * un bruit permanent pour qui n'édite jamais de gabarit lié. */
+  showBindings?: boolean;
 }
 
 const HANDLE_CURSOR: Record<HandleId, string> = {
@@ -57,6 +77,13 @@ const HANDLE_CURSOR: Record<HandleId, string> = {
 // relation TEMPORAIRE avec autre chose, et les outils de référence les distinguent tous par la
 // couleur. Le rose/rouge est le choix le plus répandu pour ce rôle.
 const GUIDE_COLOR = "#e11d48";
+
+// Couleur du contour « liaisons » (Tâche 6, U4). DÉLIBÉRÉMENT différente des trois autres surcouches
+// déjà posées sur ce canevas : le bleu de sélection (#2563eb), le rose des guides d'accrochage
+// (#e11d48, Tâche 5), et l'ambre des zones sûres (canvas-chrome.tsx, rgba(245,158,11,…)) — un calque
+// LIÉ n'est ni une sélection, ni une relation temporaire de geste, ni une contrainte de format : le
+// violet reste le seul des quatre rôles à ne porter aucune de ces trois couleurs.
+const BINDING_COLOR = "#7c3aed";
 
 const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
   n: { top: 0, left: "50%" }, s: { bottom: 0, left: "50%" },
@@ -86,7 +113,7 @@ const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
 // ⌘/Ctrl-clic a été écarté comme alternative : ⌘ porte déjà ⌘/ (replier le panneau accosté,
 // editor-shell.tsx) et macOS synthétise Ctrl-clic en clic DROIT, ce qui rendrait le geste
 // inatteignable pour la moitié du parc.
-export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasProps) {
+export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindings = false }: CanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Tâche 5 (U2, spec §5) — le contexte d'accrochage : la scène ENTIÈRE plus les dimensions du plan de
   // travail. Le moteur en retire lui-même TOUS les calques que le geste déplace (le calque tiré, et les
@@ -110,6 +137,12 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
   // entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
+
+  // U4 Tâche 3 — le fond du canevas, résolu pour l'AFFICHAGE (même discipline que LayerView) : un
+  // fond lié à `{{jeton}}` montre l'échantillon plutôt qu'une chaîne CSS invalide silencieusement
+  // abandonnée par le navigateur (le §0 du plan U4). `scene.canvas.background` lui-même n'est jamais
+  // touché — `resolveDisplayColor` est pure, comme `resolveTokens`.
+  const displayBackground = resolveDisplayColor(scene.canvas.background, SAMPLE_VALUES);
 
   // GLISSER DE GROUPE (revue finale U0+U2, Important 1) : l'aperçu peut porter le cadre de PLUSIEURS
   // calques (`preview.frames`), pas seulement celui qu'on tire. On regarde donc le lot d'abord — il
@@ -211,7 +244,7 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
           height: scene.canvas.height,
           transform: `scale(${scale})`,
           transformOrigin: "top left",
-          background: scene.canvas.background === "transparent" ? undefined : scene.canvas.background,
+          background: displayBackground === "transparent" ? undefined : displayBackground,
         }}
       >
         {scene.layers.map((layer) => {
@@ -372,6 +405,79 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images }: CanvasPr
             }}
           />
         ))}
+
+        {/* « Voir les liaisons » (Tâche 6, U4, spec §5) — SIBLING des guides d'accrochage juste
+            au-dessus, à l'intérieur du MÊME conteneur mis à l'échelle (jamais un conteneur à côté de
+            l'artboard : la leçon de la grille de U1, « present-in-markup ≠ visible »). Rendu EN
+            DERNIER, comme les guides : sans z-index, l'ordre du DOM est l'ordre de peinture entre
+            enfants `z-index: auto`, et une étiquette de liaison doit rester lisible par-dessus un
+            calque, le contour de sélection ou un guide de glisser.
+
+            `frameFor`/`rotationFor` — PAS `layer.frame`/`layer.rotation` directement — pour la MÊME
+            raison que le contour de sélection plus haut : ce sont les valeurs RÉELLEMENT PEINTES
+            (l'aperçu d'un geste en cours si ce calque y participe, et — décisif ici — `rotationFor`
+            retombe sur 0 pour une forme découpée même quand `layer.rotation` brut est non nul,
+            puisqu'AUCUN des deux chemins de rendu ne fait tourner une découpe, U3 Tâche 3). Un
+            contour qui pivoterait sur la rotation BRUTE d'un triangle annoncerait une orientation que
+            le calque n'a, à l'écran, jamais eue — le même désaccord pixel/geste que §0 du plan U3,
+            version « affichage d'aide » plutôt que « rendu ».
+
+            Épaisseur de trait et taille de police en `1 / scale` : même idiome que les guides et les
+            poignées ci-dessus, pour une taille ÉCRAN constante quel que soit le zoom. */}
+        {showBindings && scene.layers.map((layer) => {
+          if (!layer.visible) return null;
+          const uses = usesInLayer(layer);
+          if (uses.length === 0) return null;
+
+          const frame = frameFor(layer);
+          const rotation = rotationFor(layer);
+          // Jetons UNIQUES de ce calque, dans l'ordre où `usesInLayer` les a trouvés — un calque texte
+          // à deux jetons différents (ou un calque dont plusieurs champs couleur pointent le même
+          // jeton) obtient UNE étiquette qui les nomme tous, jamais une par occurrence : c'est le
+          // CALQUE qui est lié, pas chacun de ses champs séparément.
+          const tokenIds = Array.from(new Set(uses.map((u) => u.token)));
+          const label = tokenIds.map((id) => TOKEN_LABELS[id as TokenId] ?? id).join(" · ");
+
+          return (
+            <div
+              key={`binding:${layer.id}`}
+              data-testid="binding-outline"
+              data-layer-id={layer.id}
+              data-token={tokenIds.join(",")}
+              style={{
+                position: "absolute",
+                left: frame.x, top: frame.y, width: frame.w, height: frame.h,
+                transform: rotation ? `rotate(${rotation}deg)` : undefined,
+                border: `${2 / scale}px solid ${BINDING_COLOR}`,
+                boxSizing: "border-box",
+                pointerEvents: "none",
+              }}
+            >
+              {/* Ancrée au coin haut-gauche du cadre (0,0 DANS ce conteneur déjà positionné à
+                  frame.x/frame.y), jamais recalée selon la position du calque sur le canevas — un
+                  ancrage qui « choisirait un coin » selon la proximité d'un bord introduirait un SAUT
+                  (une discontinuité) au moment où le calque franchit ce seuil, exactement ce qu'un
+                  déplacement continu du calque ne doit jamais produire dans l'étiquette qui le suit. */}
+              <span
+                data-testid="binding-label"
+                style={{
+                  position: "absolute",
+                  top: 0, left: 0,
+                  transform: `translateY(-100%) translateY(${-4 / scale}px)`,
+                  fontSize: 10 / scale,
+                  lineHeight: 1.4,
+                  padding: `${2 / scale}px ${5 / scale}px`,
+                  borderRadius: 3 / scale,
+                  background: BINDING_COLOR,
+                  color: "#fff",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {label}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

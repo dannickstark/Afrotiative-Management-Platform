@@ -12,10 +12,28 @@ const frenchZodMessages = frLocale().localeError;
 // #RGB, #RRGGBB ou #RRGGBBAA. Les jetons ({{category.color}}) sont autorisés partout où une
 // couleur est attendue — c'est tokens.ts qui vérifiera qu'ils sont légaux dans ce contexte.
 const TOKEN_RE = /^\{\{\s*[a-zA-Z][\w.]*\s*\}\}$/;
+
+// U4 Tâche 1 (spike) — LE registre des nœuds « couleur » du schéma. `hexColor` est le SEUL nœud
+// couleur ; toute couleur de la scène est CE nœud partagé (overlay, ombre, texte, contour, arrêts de
+// dégradé, remplissage, bordure, fg/bg d'un QR, fond du canevas). Le marquer une fois ici suffit :
+// le registre de Zod v4 indexe par IDENTITÉ de nœud, et cette identité survit aux ENVELOPPES que le
+// schéma pose par-dessus (`.optional()` → def.innerType, `z.array` → def.element, `z.union` /
+// `z.discriminatedUnion` → def.options, `z.object` → def.shape) — c'est ce que la sonde a prouvé.
+//
+// ⚠️ ORDRE CRITIQUE — `.register()` DOIT être le DERNIER appel de la chaîne, après TOUS les
+// `.refine()`/`.check()`. En Zod v4, `.refine()`/`.check()` ne mutent pas : ils CLONENT le nœud
+// (`this.clone(def)` → `new inst._zod.constr(def)`, cf. core/util.js + classic/schemas.js), donc
+// `z.string() !== z.string().refine(…)`. Le registre étant indexé par identité, un marqueur posé
+// AVANT un `.refine()` est laissé sur l'ANCIEN objet et DISPARAÎT silencieusement du clone final :
+// `colorFieldPaths` sous-compterait alors sans lever d'erreur (un chemin couleur manquant, muet).
+// Ici l'ordre est correct : `.register()` s'applique à l'objet FINAL, celui que le schéma référence.
+// Quiconque ajoute un champ marqué doit garder `.register()` en dernier. lib/studio reste sans base :
+// `z.registry` est du pur cœur Zod, client-safe.
+export const COLOR_REGISTRY = z.registry<{ color: true }>();
 const hexColor = z.string().refine(
   (v) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v) || v === "transparent" || TOKEN_RE.test(v),
   { message: "Couleur invalide (attendu #RGB, #RRGGBB, #RRGGBBAA, « transparent » ou un jeton)" },
-);
+).register(COLOR_REGISTRY, { color: true });
 
 const frame = z.object({
   x: z.number(), y: z.number(),
@@ -231,6 +249,124 @@ export const sceneSchema = z.object({
   layers: z.array(layer),
 });
 
+// U4 Tâche 1 (spike) — LE marcheur candidat pour la Tâche 2. Il descend un nœud de schéma EN
+// PARALLÈLE de sa valeur (il faut la valeur pour résoudre une union — quel membre a matché — et une
+// array — combien d'arrêts — et une option — présente ou absente) et rend le CHEMIN de chaque nœud
+// que `COLOR_REGISTRY` reconnaît. Les enveloppes traversées : `optional`/`nullable` (def.innerType),
+// `object` (def.shape), `array` (def.element), `union`/`discriminatedUnion` (def.options, membre
+// choisi par safeParse). `z.string` refine-é est une FEUILLE : le registre l'y arrête. On lit
+// `._zod.def`, la surface d'introspection du cœur Zod v4 (typée `any` : c'est de l'interne Zod).
+function collectColorPaths(node: unknown, value: unknown, path: (string | number)[], out: (string | number)[][]): void {
+  const def = (node as { _zod?: { def?: Record<string, unknown> } })?._zod?.def;
+  if (!def) return;
+  if (COLOR_REGISTRY.has(node as z.core.$ZodType)) { out.push(path); return; }
+  switch (def.type) {
+    case "optional":
+    case "nullable":
+      if (value === undefined || value === null) return;
+      collectColorPaths(def.innerType, value, path, out);
+      return;
+    case "object":
+      for (const [key, child] of Object.entries(def.shape as Record<string, unknown>)) {
+        collectColorPaths(child, (value as Record<string, unknown>)?.[key], [...path, key], out);
+      }
+      return;
+    case "array":
+      if (Array.isArray(value)) {
+        value.forEach((item, i) => collectColorPaths(def.element, item, [...path, i], out));
+      }
+      return;
+    case "union": // couvre z.union ET z.discriminatedUnion (même def.type en Zod v4)
+      for (const opt of def.options as z.core.$ZodType[]) {
+        if ((opt as unknown as { safeParse(v: unknown): { success: boolean } }).safeParse(value).success) {
+          collectColorPaths(opt, value, path, out);
+          return;
+        }
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+/** Les chemins des champs couleur d'UN calque (ex. `["color","shadow.color","stroke.color"]`),
+ *  énumérés depuis le SCHÉMA — pas d'une liste écrite à la main. Produit de la Tâche 1 pour la 2. */
+export function colorFieldPaths(layerValue: Layer): string[] {
+  const out: (string | number)[][] = [];
+  collectColorPaths(layer, layerValue, [], out);
+  return out.map((p) => p.join("."));
+}
+
+/** Idem au niveau scène — prouve que `canvas.background` s'énumère aussi (même marcheur). */
+export function sceneColorFieldPaths(scene: Scene): string[] {
+  const out: (string | number)[][] = [];
+  collectColorPaths(sceneSchema, scene, [], out);
+  return out.map((p) => p.join("."));
+}
+
+// U4 Tâche 2 — lit/écrit la valeur pointée par un chemin en NOTATION POINTÉE (ex. « fill.stops.0.color »,
+// produit par `colorFieldPaths`/`colorFieldsOf` ci-dessus). Un segment tout en chiffres adresse un INDEX
+// de tableau (les arrêts d'un dégradé) ; tout le reste adresse une clé d'objet. Générique : ni l'un ni
+// l'autre ne connaît la forme d'un calque en particulier, ce qui est le point — `resolveTokens`
+// (lib/studio/values.ts) s'en sert pour substituer CHAQUE champ que `colorFieldsOf` a trouvé, sans
+// ré-écrire un `switch` par type de calque pour la partie couleur.
+function isArrayIndex(segment: string): boolean {
+  return /^\d+$/.test(segment);
+}
+
+function getAtPath(value: unknown, segments: string[]): string {
+  let cur: unknown = value;
+  for (const segment of segments) {
+    const key: string | number = isArrayIndex(segment) ? Number(segment) : segment;
+    cur = (cur as Record<string | number, unknown> | undefined)?.[key];
+  }
+  return cur as string;
+}
+
+// IMMUTABLE : clone chaque niveau traversé par `segments`, ne touche à RIEN d'autre. `resolveTokens`
+// s'appuie sur cette garantie (tests/studio-values.test.ts, « ne mute jamais la scène d'entrée ») —
+// et chaîne plusieurs appels (un par champ-couleur) sur l'accumulateur qu'elle renvoie, jamais sur
+// l'objet d'origine, pour que les champs déjà substitués ne soient pas écrasés par le suivant.
+function setAtPath<T>(value: T, segments: string[], newValue: string): T {
+  const [head, ...rest] = segments;
+  const key: string | number = isArrayIndex(head) ? Number(head) : head;
+  if (Array.isArray(value)) {
+    const copy = value.slice();
+    copy[key as number] = rest.length === 0 ? newValue : setAtPath(copy[key as number], rest, newValue);
+    return copy as unknown as T;
+  }
+  const record = value as Record<string | number, unknown>;
+  return {
+    ...record,
+    [key]: rest.length === 0 ? newValue : setAtPath(record[key], rest, newValue),
+  } as unknown as T;
+}
+
+/** UN champ-couleur énuméré : son chemin (notation pointée) et un accesseur vers sa valeur COURANTE.
+ *  Produit par `colorFieldsOf` ; `path` se repasse tel quel à `setColorAtPath` pour la substitution. */
+export type ColorField = { path: string; get: () => string };
+
+/**
+ * L'API réconciliée de la Tâche 2 — CE que `usesInLayer` (tokens.ts) ET `resolveTokens` (values.ts)
+ * consomment désormais pour la dimension couleur, à la place des deux listes recopiées à la main
+ * qu'elles tenaient chacune. `colorFieldPaths` (Tâche 1) donne les CHEMINS ; `colorFieldsOf` y attache
+ * un accesseur vers la scène RÉELLE passée en argument (fermeture sur `layer`, pas sur le schéma) —
+ * c'est ce qui manquait à `colorFieldPaths` seul pour que tokens.ts puisse LIRE chaque chaîne et que
+ * values.ts puisse la remplacer (via `setColorAtPath`, plus bas).
+ */
+export function colorFieldsOf(layer: Layer): ColorField[] {
+  return colorFieldPaths(layer).map((path) => {
+    const segments = path.split(".");
+    return { path, get: () => getAtPath(layer, segments) };
+  });
+}
+
+/** La substitution IMMUTABLE que `resolveTokens` applique à un `path` renvoyé par `colorFieldsOf` —
+ *  voir `setAtPath` ci-dessus pour la garantie de non-mutation. */
+export function setColorAtPath(layer: Layer, path: string, value: string): Layer {
+  return setAtPath(layer, path.split("."), value);
+}
+
 export type Frame = z.infer<typeof frame>;
 export type ImageSource = z.infer<typeof imageSource>;
 export type ImageLayer = z.infer<typeof imageLayer>;
@@ -241,21 +377,47 @@ export type QrLayer = z.infer<typeof qrLayer>;
 export type Layer = z.infer<typeof layer>;
 export type Scene = z.infer<typeof sceneSchema>;
 
+// U4 Tâche 4 — le premier identifiant de calque VU DEUX FOIS dans `layers`, ou `null` s'il n'y en
+// a pas. Prend un `unknown` (pas un `Layer[]` typé) exprès : appelée à la fois sur l'entrée BRUTE
+// — quand le schéma a déjà échoué et que `parsed.data` n'existe pas — et sur `parsed.data.layers`
+// une fois le schéma validé. Un élément dont `id` n'est pas une chaîne est simplement ignoré : ce
+// n'est pas à cette fonction de le signaler, `sceneSchema` s'en charge déjà (comme issue Zod).
+function findDuplicateLayerId(layers: unknown): string | null {
+  if (!Array.isArray(layers)) return null;
+  const ids = new Set<string>();
+  for (const l of layers) {
+    const id = (l as { id?: unknown } | null | undefined)?.id;
+    if (typeof id !== "string") continue;
+    if (ids.has(id)) return id;
+    ids.add(id);
+  }
+  return null;
+}
+
 // Une scène lue en base est une donnée NON FIABLE : elle a pu être écrite par une version
 // antérieure du code. Tout chemin de lecture passe par ici.
+//
+// U4 Tâche 4 — remonte TOUTES les anomalies d'un coup, pas seulement la première : un gabarit qui
+// porte plusieurs erreurs à la fois (type de calque inconnu, dimension négative, identifiant en
+// double...) doit toutes les afficher en une seule levée, une par ligne, pour qu'un rédacteur les
+// corrige toutes sans relancer l'aperçu entre chaque correction. La signature ne change pas —
+// `parseScene` continue de LEVER un `SceneError`, seul son `.message` s'allonge.
 export function parseScene(input: unknown): Scene {
   const parsed = sceneSchema.safeParse(input);
   if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    // For custom refine() messages (already in French), use them directly.
-    // For built-in Zod validations, use French locale translation.
-    const message = first.code === "custom" ? first.message : frenchZodMessages(first as Parameters<typeof frenchZodMessages>[0]);
-    throw new SceneError(`Scène invalide : ${first.path.join(".") || "racine"} — ${message}`);
+    const messages = parsed.error.issues.map((issue) => {
+      // For custom refine() messages (already in French), use them directly.
+      // For built-in Zod validations, use French locale translation.
+      const message = issue.code === "custom" ? issue.message : frenchZodMessages(issue as Parameters<typeof frenchZodMessages>[0]);
+      return `${issue.path.join(".") || "racine"} — ${message}`;
+    });
+    // Le double-id est un contrôle INDÉPENDANT du schéma (Zod ne connaît pas l'unicité entre
+    // calques) : il tourne sur l'entrée BRUTE, jamais bloqué par un échec de schéma ailleurs.
+    const dupId = findDuplicateLayerId((input as { layers?: unknown } | null)?.layers);
+    if (dupId !== null) messages.push(`identifiant de calque en double « ${dupId} ».`);
+    throw new SceneError(`Scène invalide : ${messages.join("\n")}`);
   }
-  const ids = new Set<string>();
-  for (const l of parsed.data.layers) {
-    if (ids.has(l.id)) throw new SceneError(`Scène invalide : identifiant de calque en double « ${l.id} ».`);
-    ids.add(l.id);
-  }
+  const dupId = findDuplicateLayerId(parsed.data.layers);
+  if (dupId !== null) throw new SceneError(`Scène invalide : identifiant de calque en double « ${dupId} ».`);
   return parsed.data;
 }

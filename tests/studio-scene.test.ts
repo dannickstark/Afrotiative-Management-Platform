@@ -46,6 +46,40 @@ describe("parseScene", () => {
     (bad.layers[0] as unknown as { fit: string }).fit = "stretch";
     expect(() => parseScene(bad)).toThrow(/Scène invalide.*valeur parmi/i);
   });
+
+  // U4 Tâche 4 — parseScene ne s'arrête plus à la PREMIÈRE anomalie : un gabarit qui porte
+  // plusieurs erreurs à la fois (type de calque inconnu, dimension négative, identifiant en
+  // double) doit toutes les remonter en une seule levée, pour qu'un rédacteur les corrige toutes
+  // sans relancer l'aperçu à chaque fois.
+  it("parseScene rapporte TOUTES les erreurs, pas seulement la première", () => {
+    const bad = structuredClone(valid);
+    (bad.layers[0] as unknown as { type: string }).type = "video"; // issue 1 : layers.0.type
+    bad.layers[1].frame.w = -10; // issue 2 : layers.1.frame.w
+    bad.layers[1].id = "l1"; // issue 3 : identifiant de calque en double
+    try {
+      parseScene(bad);
+      throw new Error("devrait lever");
+    } catch (e) {
+      expect(e).toBeInstanceOf(SceneError);
+      const msg = (e as SceneError).message;
+      expect(msg).toContain("layers.0.type");
+      expect(msg).toContain("layers.1.frame.w");
+      expect(msg).toContain("identifiant de calque en double");
+    }
+  });
+
+  it("une scène à une seule erreur ne laisse pas de séparateur qui traîne", () => {
+    const bad = structuredClone(valid);
+    (bad.layers[0] as unknown as { type: string }).type = "video";
+    try {
+      parseScene(bad);
+      throw new Error("devrait lever");
+    } catch (e) {
+      const msg = (e as SceneError).message;
+      expect(msg).not.toContain("\n");
+      expect(msg.startsWith("Scène invalide : ")).toBe(true);
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

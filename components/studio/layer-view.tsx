@@ -4,6 +4,8 @@ import type { CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
 import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
+import { resolveLayerColorsForDisplay } from "@/lib/studio/values";
+import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -99,12 +101,14 @@ function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" 
 }
 
 function ShapeContent({ layer }: { layer: Extract<Layer, { type: "shape" }> }) {
-  const isToken = typeof layer.fill === "string" && layer.fill.startsWith("{{");
-  const fillStyle: CSSProperties = isToken
-    ? { background: "repeating-linear-gradient(45deg, #666 0, #666 6px, #999 6px, #999 12px)" }
-    : typeof layer.fill === "string"
-      ? { backgroundColor: layer.fill === "transparent" ? undefined : layer.fill }
-      : { backgroundImage: gradientCss(layer.fill) };
+  // U4 Tâche 3 — `layer` ici est déjà le calque D'AFFICHAGE (LayerView l'a résolu via
+  // `resolveLayerColorsForDisplay` avant de descendre jusqu'à `LayerContent`) : un `fill` lié à un
+  // jeton porte donc déjà la couleur d'ÉCHANTILLON, jamais la chaîne « {{jeton}} » brute — l'ancien
+  // espace réservé à hachures diagonales (qui masquait purement et simplement la couleur choisie,
+  // le défaut que le §0 du plan U4 nomme) n'a plus lieu d'être.
+  const fillStyle: CSSProperties = typeof layer.fill === "string"
+    ? { backgroundColor: layer.fill === "transparent" ? undefined : layer.fill }
+    : { backgroundImage: gradientCss(layer.fill) };
 
   // `layerBorder` et NON `layer.border` (revue U3 Tâche 3, Medium 4) : sur une forme découpée, le
   // navigateur clippe l'élément ENTIER — bordure comprise — tandis que satori laisse le contour
@@ -185,6 +189,15 @@ function LayerContent({ layer, image }: { layer: Layer; image?: string }) {
 
 export function LayerView({ layer, frame, rotation, selected, image, scale = 1, onPointerDown }: LayerViewProps) {
   const interactive = !layer.locked;
+  // U4 Tâche 3 (§0 du plan) — le calque tel que ce composant le PEINT, jamais celui que `state.scene`
+  // détient : `resolveLayerColorsForDisplay` (lib/studio/values.ts) ne touche QUE les champs-couleur
+  // du schéma (colorFieldsOf, Task 2) — fill/color/shadow.color/stroke.color/border.color/fg/bg — et
+  // les remplace par un ÉCHANTILLON quand ils portent un jeton, sans jamais muter `layer` (même
+  // discipline immutable que `resolveTokens`, le chemin export). La source d'une image et le contenu
+  // d'un texte restent EXACTEMENT ceux du calque d'origine : `colorFieldsOf` ne les connaît pas, donc
+  // cette résolution ne les touche pas — un `{{slot}}` d'image garde son espace réservé (Task 6, hors
+  // périmètre ici), et un contenu de texte garde sa forme technique brute.
+  const displayLayer = resolveLayerColorsForDisplay(layer, SAMPLE_VALUES);
   return (
     <div
       data-layer-id={layer.id}
@@ -206,7 +219,7 @@ export function LayerView({ layer, frame, rotation, selected, image, scale = 1, 
         overflow: layer.type === "shape" ? undefined : "hidden",
       }}
     >
-      <LayerContent layer={layer} image={image} />
+      <LayerContent layer={displayLayer} image={image} />
     </div>
   );
 }

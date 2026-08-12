@@ -1040,9 +1040,93 @@ describe("PropertyPanel — calque QR", () => {
     expect(html).toContain('value="4"');
   });
 
-  it("un contexte sans aucun jeton URL (recap_card) affiche un message plutôt qu'un sélecteur vide trompeur", () => {
+  // Tâche 5 (U4) — CHANGEMENT DE COMPORTEMENT assumé : avant cette tâche, un contexte SANS aucun
+  // jeton URL LÉGAL (recap_card, quote_card, newsletter_header, article_image — seul social_post
+  // légalise article.url, la règle V1 de tokens.ts) faisait disparaître le sélecteur entier derrière
+  // un message d'absence. article.url reste le SEUL jeton "url" du catalogue (tokens.ts) : il existe
+  // donc TOUJOURS une ligne à montrer — désormais GRISÉE, avec sa raison en aide sous le contrôle,
+  // jamais un sélecteur qui se dérobe entièrement.
+  it("un contexte sans aucun jeton URL LÉGAL (recap_card) montre quand même le sélecteur — l'unique jeton \"url\" du catalogue y apparaît GRISÉ, jamais omis", () => {
     const html = render([qrLayer], "q", "recap_card");
-    expect(html).toContain("Aucun jeton URL disponible");
+    expect(html).not.toContain("Aucun jeton URL disponible");
+    // Le sélecteur EXISTE bien (son déclencheur affiche le libellé de la valeur COURANTE, même
+    // popup fermé — voir SelectValue). L'état accessible RÉEL de l'option grisée (aria-disabled, pas
+    // l'attribut disabled) est prouvé sur le VRAI DOM par tests/studio-interactions.test.ts, « seam
+    // SelectField » : le popup de `<Select>` ne se portale dans `document.body` QU'OUVERT, jamais
+    // sous `renderToStaticMarkup` (même contrainte que le Popover de TokenPicker).
+    expect(html).toContain("URL de l&#x27;article"); // TOKEN_LABELS["article.url"], apostrophe échappée par SSR
+    // La raison reprend le fragment exact de validateScene (lib/studio/tokens.ts) — jamais une phrase
+    // inventée à part qui pourrait diverger.
+    expect(html).toContain("n&#x27;est pas disponible dans ce contexte");
+  });
+
+  it("social_post légalise article.url : le sélecteur QR le propose SANS aide « indisponible »", () => {
+    const html = render([qrLayer], "q", "social_post");
+    expect(html).toContain("URL de l&#x27;article");
+    expect(html).not.toContain("n&#x27;est pas disponible dans ce contexte");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 5 (U4) — AUDIT DE COUVERTURE : un sélecteur de jeton (TokenPicker, ou le `<SelectField>`
+// DÉDIÉ à l'emplacement pour image/QR) existe sur CHAQUE champ liable du panneau — texte, chaque
+// ColorField, l'emplacement image, l'emplacement URL du QR — jamais un champ qui accepterait un jeton
+// (`colorFieldsOf`/`usesInLayer`, lib/studio/tokens.ts) sans offrir le moyen de l'y poser depuis
+// l'interface. Champs délibérément SANS sélecteur, et pourquoi (aucun n'apparaît dans
+// `colorFieldsOf`/`usesInLayer`, donc aucun n'est un champ LIABLE) :
+//   - `layer.name` (RenameField, layer-panel.tsx) — un IDENTIFIANT d'affichage, jamais substitué.
+//   - Cadre (X/Y/largeur/hauteur/rotation/opacité, geometry-strip.tsx) — des NOMBRES, aucun jeton
+//     n'est de type "number".
+//   - Police (famille, taille, graisse, italique), Alignement, Ajustement d'image, Forme, épaisseurs
+//     (bordure/contour), rayon, flou, marge QR — idem : aucun TokenKind ne couvre un nombre, un
+//     énuméré ou une police, et `colorFieldsOf`/`usesInLayer` ne les énumère jamais.
+//   - `layer.stroke`/`layer.shadow` PRÉSENCE (SwitchField) — un booléen, pas un champ-couleur ; sa
+//     COULEUR, une fois activée, EST un ColorField et EST donc couverte ci-dessous.
+describe("PropertyPanel — Tâche 5 (U4), audit de couverture : un sélecteur de jeton sur CHAQUE champ liable", () => {
+  it("contenu TEXTE : le sélecteur (data-kind=\"text\") est présent", () => {
+    const html = render([textLayer], "t", "social_post");
+    expect(countOf(html, 'data-action="token-picker"')).toBeGreaterThan(0);
+    expect(html).toContain('data-kind="text"');
+  });
+
+  it("calque TEXTE : un sélecteur COULEUR (data-kind=\"color\") pour CHACUN de ses trois ColorField — couleur, ombre, contour — ni plus, ni moins", () => {
+    // `textLayer` (fixture en tête de fichier) porte shadow ET stroke déjà réglés : les TROIS
+    // ColorField de TextFields (Couleur/Apparence, Couleur de l'ombre/Ombre, Couleur du
+    // contour/Contour) sont donc tous les trois rendus (sections ouvertes par défaut,
+    // DEFAULT_PREFS.sectionsOpen = {}).
+    const html = render([textLayer], "t", "social_post");
+    expect(countOf(html, 'data-kind="color"')).toBe(3);
+  });
+
+  it("calque FORME : un sélecteur COULEUR pour CHAQUE étape de dégradé, la bordure ET l'ombre quand les trois sont actifs — la LACUNE que cette tâche corrige (l'étape de dégradé n'en avait aucun avant elle)", () => {
+    const shapeAllColorFields: Layer = {
+      ...shapeLayerSolid,
+      // Dégradé à DEUX étapes (au lieu du remplissage uni de la fixture) : chacune doit désormais
+      // porter son propre sélecteur — avant cette tâche, `action={false}` les en privait TOUTES LES
+      // DEUX (voir le commentaire de GradientEditor, property-panel.tsx).
+      fill: { angle: 45, stops: [{ color: "#000000", at: 0 }, { color: "#FFFFFF", at: 1 }] },
+      // Bordure déjà réglée par la fixture (width 2, sides top/left) — non découpée (shape "rect"),
+      // donc peinte et son ColorField rendu.
+      shadow: { x: 1, y: 2, blur: 3, color: "#112233" },
+    };
+    const html = render([shapeAllColorFields], "s1", "recap_card");
+    // 2 (étapes de dégradé) + 1 (bordure) + 1 (ombre) = 4.
+    expect(countOf(html, 'data-kind="color"')).toBe(4);
+  });
+
+  it("calque IMAGE : un sélecteur COULEUR pour le voile (overlay), ET un sélecteur d'EMPLACEMENT (le jeton image) — jamais l'un sans l'autre", () => {
+    // `imageLayer` (fixture) porte overlay="#00000080" -> son ColorField est rendu.
+    const html = render([imageLayer], "i", "article_image");
+    expect(countOf(html, 'data-kind="color"')).toBe(1);
+    // L'emplacement (Tâche 5) : le `<SelectField data-field="image-slot">`, présent qu'il y ait ou
+    // non un jeton LÉGAL dans ce contexte (voir la description « calque image » plus haut).
+    expect(html).toContain('data-field="image-slot"');
+  });
+
+  it("calque QR : un sélecteur COULEUR pour le premier plan ET le fond, ET un sélecteur d'EMPLACEMENT (le jeton URL) — jamais l'un sans l'autre", () => {
+    const html = render([qrLayer], "q", "social_post");
+    expect(countOf(html, 'data-kind="color"')).toBe(2); // fg + bg
+    expect(html).toContain('data-field="qr-slot"');
   });
 });
 

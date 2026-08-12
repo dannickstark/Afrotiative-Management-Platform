@@ -8,6 +8,8 @@ import {
   type ShapeCss,
 } from "@/lib/studio/shapes";
 import { sceneToElement } from "@/lib/studio/element";
+import { resolveDisplayColor } from "@/lib/studio/values";
+import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { SHAPE_TILES } from "@/lib/studio/shape-gallery";
 import { LayerView } from "@/components/studio/layer-view";
 
@@ -335,8 +337,14 @@ describe("rect — identité de sortie avant/après refactor", () => {
       '<div data-layer-id="r0" style="position:absolute;left:1px;top:2px;width:30px;height:40px;transform:rotate(15deg);box-sizing:border-box;cursor:move"><div style="width:100%;height:100%;background-color:#123456;border-radius:12px"></div></div>'],
     "remplissage transparent": [{ fill: "transparent", radius: 3 },
       '<div data-layer-id="r0" style="position:absolute;left:1px;top:2px;width:30px;height:40px;transform:rotate(15deg);box-sizing:border-box;cursor:move"><div style="width:100%;height:100%;border-radius:3px"></div></div>'],
+    // U4 Tâche 3 (§0 du plan) — CE témoin CHANGE délibérément : avant, un `fill` lié à un jeton
+    // peignait un espace réservé à hachures (une couleur CSS invalide, silencieusement abandonnée
+    // par le navigateur) ; l'éditeur résout désormais la couleur pour l'AFFICHAGE avec un ÉCHANTILLON
+    // (SAMPLE_VALUES["category.color"] = DEFAULT_CATEGORY_COLOR = "#1B7F4A", lib/studio/values.ts
+    // #resolveLayerColorsForDisplay) — la MÊME valeur que l'export peint pour ce même jeton. Voir
+    // tests/studio-layer-view.test.ts pour la preuve d'accord éditeur/export.
     "remplissage par jeton": [{ fill: "{{category.color}}", radius: undefined },
-      '<div data-layer-id="r0" style="position:absolute;left:1px;top:2px;width:30px;height:40px;transform:rotate(15deg);box-sizing:border-box;cursor:move"><div style="width:100%;height:100%;background:repeating-linear-gradient(45deg, #666 0, #666 6px, #999 6px, #999 12px)"></div></div>'],
+      '<div data-layer-id="r0" style="position:absolute;left:1px;top:2px;width:30px;height:40px;transform:rotate(15deg);box-sizing:border-box;cursor:move"><div style="width:100%;height:100%;background-color:#1B7F4A"></div></div>'],
     "dégradé": [{ fill: { angle: 90, stops: [{ color: "#000000", at: 0 }, { color: "#FFFFFF", at: 1 }] }, radius: 4 },
       '<div data-layer-id="r0" style="position:absolute;left:1px;top:2px;width:30px;height:40px;transform:rotate(15deg);box-sizing:border-box;cursor:move"><div style="width:100%;height:100%;background-image:linear-gradient(90deg, #000000 0%, #FFFFFF 100%);border-radius:4px"></div></div>'],
     "bordure partielle": [{ radius: 5, border: { width: 2, color: "#FFF", sides: ["top", "left"] } },
@@ -925,7 +933,7 @@ describe("l'ombre, sur les DEUX chemins (U3 Tâche 4)", () => {
       { x: -2593, y: 2593, blur: 0, color: "#FFFFFF" },   // les extrêmes de U2, sur les décalages
       { x: 0.5, y: -0.5, blur: 0.25, color: "#00000080" },
       { x: 8, y: 8, blur: 2593, color: "transparent" },   // un flou démesuré
-      { x: -6, y: -3, blur: 12, color: "{{category.color}}" }, // un JETON, non résolu (voir values.ts)
+      { x: -6, y: -3, blur: 12, color: "{{category.color}}" }, // un JETON — voir la note U4 ci-dessous
     ] as const;
     let peintes = 0, muettes = 0;
     for (const kind of SHAPE_KINDS) {
@@ -936,7 +944,18 @@ describe("l'ombre, sur les DEUX chemins (U3 Tâche 4)", () => {
         const étiquette = `${kind}@${shadow.x}/${shadow.y}/${shadow.blur}/${shadow.color}`;
         expect(`${étiquette} peinte=${String(layerBoxShadow(layer))}`).toBe(`${étiquette} peinte=${String(attendue)}`);
         expect(`${étiquette} export=${String(exportStyleOf(layer).boxShadow)}`).toBe(`${étiquette} export=${String(attendue)}`);
-        expect(`${étiquette} éditeur=${String(editorDeclsOf(layer).get("box-shadow"))}`).toBe(`${étiquette} éditeur=${String(attendue)}`);
+        // U4 Tâche 3 — `exportStyleOf` (ci-dessus) appelle `sceneToElement` SANS `resolveTokens` : il
+        // teste la construction STRUCTURELLE de shapes.ts, pas la résolution de jeton (déjà couverte
+        // par tests/studio-values.test.ts), donc un jeton y traverse tel quel, intact. `editorDeclsOf`,
+        // lui, passe désormais par LayerView, qui résout la couleur pour l'AFFICHAGE avant d'appeler
+        // shapeCssFor (lib/studio/values.ts#resolveLayerColorsForDisplay) — la MÊME résolution que
+        // components/studio/layer-view.tsx applique en production. L'attendu côté éditeur suit donc
+        // cette résolution ; `resolveDisplayColor` laisse une couleur NON-jeton totalement inchangée
+        // (elle ne remplace que `{{…}}`), donc les cinq autres lignes de OMBRES ne bougent pas.
+        const attendueÉditeur = supportsShadow(kind)
+          ? boxShadowCss({ ...shadow, color: resolveDisplayColor(shadow.color, SAMPLE_VALUES) })
+          : undefined;
+        expect(`${étiquette} éditeur=${String(editorDeclsOf(layer).get("box-shadow"))}`).toBe(`${étiquette} éditeur=${String(attendueÉditeur)}`);
       }
     }
     // ANTI-VACUITÉ du balayage : les deux issues doivent avoir été réellement visitées.
