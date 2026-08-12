@@ -43,7 +43,18 @@ export type EditorCommand =
   | { kind: "selectAll" }
   | { kind: "deselect" }
   | { kind: "delete" }
-  | { kind: "nudge"; dx: number; dy: number };
+  | { kind: "nudge"; dx: number; dy: number }
+  // Chantier B, Tâche 2 — le presse-papiers en session (copier/coller/dupliquer). Trois commandes
+  // pures : ce module ne sait RIEN du contenu réel des calques ni du presse-papiers lui-même
+  // (lib/studio/clipboard.ts) — c'est le hook (hooks/use-editor-keymap.ts) qui lit la sélection
+  // courante et le presse-papiers, exactement comme il résout déjà l'id unique et le verrou pour
+  // `delete`/`nudge` (voir son en-tête, « CE QUE CE HOOK DÉCIDE QUE resolveShortcut NE PEUT PAS
+  // DÉCIDER »). `copy`/`duplicate` exigent une sélection non vide (même garde que `delete`, via
+  // `ctx.hasSelection`) — coller, lui, n'a pas besoin d'une sélection : on peut coller dans une scène
+  // sans rien sélectionner au préalable.
+  | { kind: "copy" }
+  | { kind: "paste" }
+  | { kind: "duplicate" };
 
 export interface ShortcutEvent {
   key: string;
@@ -100,6 +111,22 @@ export function resolveShortcut(e: ShortcutEvent, ctx: ShortcutContext): EditorC
   }
   if (mod && key.toLowerCase() === "a") {
     return { kind: "selectAll" };
+  }
+  // Chantier B, Tâche 2 — voir le commentaire de `"copy"`/`"paste"`/`"duplicate"` sur `EditorCommand`
+  // ci-dessus. `copy`/`duplicate` suivent EXACTEMENT le motif déjà posé par `delete` (`ctx.hasSelection`
+  // avant de renvoyer une commande, plutôt que la renvoyer inconditionnellement et laisser le hook
+  // décider) : sans sélection, il n'y a rien à copier ni à dupliquer, donc `resolveShortcut` renvoie
+  // `null` — pas une commande que le hook devrait de toute façon ignorer. `paste`, lui, n'a PAS cette
+  // garde : coller ne dépend pas de la sélection courante, seulement du contenu du presse-papiers, que
+  // ce module ne connaît pas (c'est au hook de vérifier qu'il n'est pas vide avant de dispatcher).
+  if (mod && key.toLowerCase() === "c") {
+    return ctx.hasSelection ? { kind: "copy" } : null;
+  }
+  if (mod && key.toLowerCase() === "v") {
+    return { kind: "paste" };
+  }
+  if (mod && key.toLowerCase() === "d") {
+    return ctx.hasSelection ? { kind: "duplicate" } : null;
   }
   if (!mod && key === "Escape") {
     return { kind: "deselect" };

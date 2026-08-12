@@ -122,6 +122,14 @@ export type EditorAction =
   // même ancrage à toute la sélection multiple sans empiler N annulations pour un seul geste.
   | { type: "setLayerProps"; ids: readonly string[]; patch: LayerPatch }
   | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
+  // Chantier B, Tâche 2 — le pendant PLURIEL de `addLayer` : le presse-papiers en session
+  // (lib/studio/clipboard.ts) l'utilise pour coller/dupliquer. Sur le modèle de `setFrames`/
+  // `setLayerProps` : un LOT de calques DÉJÀ CONSTRUITS (typiquement la sortie de
+  // `cloneLayersWithNewIds`, ids déjà neufs et cadres déjà décalés — cette action ne clone ni ne
+  // décale rien elle-même), ajoutés en UNE SEULE entrée d'historique. Voir son cas dans le réducteur
+  // pour la sélection produite (TOUS les ids ajoutés, contrairement à `addLayer` qui n'en sélectionne
+  // qu'un).
+  | { type: "addLayers"; layers: readonly Layer[] }
   | { type: "deleteLayer"; id: string }
   | { type: "reorderLayer"; id: string; toIndex: number }
   | { type: "toggleVisible"; id: string }
@@ -242,6 +250,10 @@ export function setLayerProps(ids: readonly string[], patch: LayerPatch): Editor
 // inchangé bit à bit.
 export function addLayer(type: Layer["type"], layer?: Layer): EditorAction {
   return { type: "addLayer", layerType: type, layer };
+}
+// Chantier B, Tâche 2 : voir le commentaire de `"addLayers"` sur `EditorAction` ci-dessus.
+export function addLayers(layers: Layer[]): EditorAction {
+  return { type: "addLayers", layers: [...layers] };
 }
 export function deleteLayer(id: string): EditorAction {
   return { type: "deleteLayer", id };
@@ -505,6 +517,24 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // Un ajout REMPLACE la sélection par le seul calque ajouté (comportement d'avant la Tâche 3,
       // inchangé) : c'est celui que l'utilisateur vient de créer et va vouloir régler.
       return next === state ? state : { ...next, selectedIds: [layer.id] };
+    }
+
+    // Chantier B, Tâche 2 — le LOT d'ajout : sur le modèle de `setFrames`/`setLayerProps`, un lot
+    // vide est un no-op SANS ENTRÉE FANTÔME (même garde que ces deux actions) — c'est ce qui rend
+    // « coller avec un presse-papiers vide » un no-op au niveau du réducteur lui-même, pas seulement
+    // au niveau de l'appelant qui choisirait de ne pas dispatcher. Sinon, TOUS les calques fournis
+    // sont ajoutés À LA FIN de `scene.layers` (avant-plan, comme `addLayer`) EN UN SEUL `commit()` —
+    // undo retire donc les N calques d'un coup, jamais un par un.
+    //
+    // Sélection : REMPLACE la sélection par TOUS les ids ajoutés, dans l'ordre fourni — pas un seul
+    // comme `addLayer` (qui n'ajoute jamais qu'un calque à la fois). C'est ce qui fait qu'un coller
+    // sélectionne exactement ce qu'on vient de coller, et qu'un ⌘D (dupliquer = copier + coller en
+    // place avec décalage, en UN geste) sélectionne le(s) nouveau(x) calque(s) plutôt que de laisser
+    // la sélection sur la source.
+    case "addLayers": {
+      if (action.layers.length === 0) return state;
+      const next = commit(state, { ...state.scene, layers: [...state.scene.layers, ...action.layers] });
+      return next === state ? state : { ...next, selectedIds: action.layers.map((l) => l.id) };
     }
 
     case "deleteLayer": {

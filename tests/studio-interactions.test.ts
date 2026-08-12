@@ -4,6 +4,7 @@ import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harnes
 import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
+import { clearClipboard } from "@/lib/studio/clipboard";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
 import type { AssetRow } from "@/lib/queries/assets";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
@@ -1649,6 +1650,171 @@ describe("EditorShell — le keymap central câble ⌘Z/⌘⇧Z/⌘A/Échap/Supp
       await pressKey({ key: "a", metaKey: true }, renameInput!);
       // ⌘A gardé : « t » reste NON sélectionné.
       expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 2 — le presse-papiers en session (⌘C/⌘V/⌘D), câblé à travers le VRAI EditorShell
+// (même discipline que le bloc ⌘Z/⌘A/Échap/Suppr/flèches ci-dessus : un VRAI KeyboardEvent sur
+// `window`, un VRAI réducteur derrière). Ce que ce fichier prouve que tests/studio-clipboard.test.ts
+// (le clonage et le module clipboard, en pur) et tests/studio-keymap.test.ts (resolveShortcut, en
+// pur) ne peuvent PAS prouver à eux seuls : que le hook (hooks/use-editor-keymap.ts) résout
+// RÉELLEMENT la sélection courante en calques, appelle RÉELLEMENT `copyToClipboard`/
+// `cloneLayersWithNewIds`, et dispatche RÉELLEMENT `addLayers` — jusqu'au DOM rendu par le VRAI
+// Canvas.
+//
+// `clearClipboard()` entre chaque test : le presse-papiers est un singleton de MODULE, partagé par
+// tout le processus `bun test` — sans ce nettoyage, un test laisserait son contenu fuiter vers le
+// suivant (exactement le risque que documente déjà `afterEach` de `window.localStorage` plus haut
+// dans ce fichier, pour la même raison structurelle).
+describe("EditorShell — le presse-papiers en session câble ⌘C/⌘V/⌘D sur `window` (Chantier B, Tâche 2)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    clearClipboard();
+  });
+
+  it("⌘D RÉEL sur un calque sélectionné ajoute UN second calque, décalé de {16,16}, et le SÉLECTIONNE — UN SEUL undo revient à un seul calque", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "d", metaKey: true });
+
+      const layerNodes = container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]');
+      expect(layerNodes).toHaveLength(2);
+      // La source n'a PAS bougé…
+      expect(parseFloat(shellLayerEl(container, "sh").style.left)).toBe(10);
+      // …et exactement UN autre nœud est apparu, décalé de {16,16} par rapport à la source, ET
+      // sélectionné à la place d'elle (⌘D transfère la sélection au nouveau calque).
+      const clone = Array.from(layerNodes).find((el) => el.getAttribute("data-layer-id") !== "sh")!;
+      expect(parseFloat((clone as HTMLElement).style.left)).toBe(26); // 10 + 16
+      expect(parseFloat((clone as HTMLElement).style.top)).toBe(26);
+      expect(clone.getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBeNull();
+
+      await pressKey({ key: "z", metaKey: true }); // UN SEUL undo
+
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(1);
+      expect(shellLayerEl(container, "sh")).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘C puis ⌘V RÉELS : colle un clone décalé de {16,16}, sélectionné, sans toucher la source", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      await pressKey({ key: "c", metaKey: true });
+
+      // Copier seul n'ajoute RIEN à la scène — c'est un geste de LECTURE.
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(1);
+
+      await pressKey({ key: "v", metaKey: true });
+
+      const layerNodes = container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]');
+      expect(layerNodes).toHaveLength(2);
+      expect(parseFloat(shellLayerEl(container, "sh").style.left)).toBe(10); // source intacte
+      const pasted = Array.from(layerNodes).find((el) => el.getAttribute("data-layer-id") !== "sh")!;
+      expect(parseFloat((pasted as HTMLElement).style.left)).toBe(26);
+      expect(pasted.getAttribute("data-selected")).toBe("true");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("coller DEUX FOIS de suite ajoute deux clones aux ids DISTINCTS — pas le même clone réappliqué", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      await pressKey({ key: "c", metaKey: true });
+      await pressKey({ key: "v", metaKey: true });
+      await pressKey({ key: "v", metaKey: true });
+
+      const ids = Array.from(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]'))
+        .map((el) => el.getAttribute("data-layer-id"));
+      expect(ids).toHaveLength(3);
+      expect(new Set(ids).size).toBe(3); // aucun doublon
+
+      // Le SECOND collage reste sélectionné seul (⌘V remplace la sélection par ce qu'il vient de
+      // coller) — la preuve que les deux collages sont deux gestes indépendants, pas un geste dupliqué.
+      const selected = container.querySelectorAll('[data-testid="studio-canvas"] [data-selected="true"]');
+      expect(selected).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘V avec le presse-papiers VIDE ne dispatche RIEN — aucun calque ajouté, AUCUNE entrée d'historique (⌘Z reste sans effet)", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      // Aucun ⌘C avant : le presse-papiers du module est vide (nettoyé par afterEach ci-dessus).
+      await pressKey({ key: "v", metaKey: true });
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(1);
+
+      // Anti-vacuité : PAS d'entrée d'historique fantôme à défaire — un ⌘Z ici ne fait RIEN, la scène
+      // reste identique (si un `commit()` fantôme avait eu lieu, ce ⌘Z « annulerait » silencieusement
+      // un vrai geste précédent au lieu de ne rien faire).
+      await pressKey({ key: "z", metaKey: true });
+      expect(shellLayerEl(container, "sh").style.left).toBe("10px");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("le presse-papiers TRAVERSE deux gabarits (deux montages EditorShell distincts) — module-level, pas un état de composant", async () => {
+    // Gabarit A : copie « sh ».
+    const shellA = await mountShellAttached(sceneWithOneShapeLayer());
+    await pointer(shellLayerEl(shellA.container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+    await pressKey({ key: "c", metaKey: true });
+    shellA.cleanup(); // démonte ENTIÈREMENT le premier EditorShell — plus aucun état React vivant
+
+    // Gabarit B : une scène DIFFÉRENTE (id de calque différent, gabarit vide au départ pour ce calque).
+    const otherScene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 1080, height: 1080, background: "#222222" },
+      layers: [],
+    };
+    const shellB = await mountShellAttached(otherScene);
+    try {
+      await pressKey({ key: "v", metaKey: true });
+
+      const nodes = shellB.container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]');
+      expect(nodes).toHaveLength(1);
+      // Le calque collé est bien un CLONE de « sh » (même style de départ, un id NEUF, décalé) — pas
+      // le calque original du gabarit A ni un id partagé avec lui.
+      expect(nodes[0].getAttribute("data-layer-id")).not.toBe("sh");
+      expect(parseFloat((nodes[0] as HTMLElement).style.left)).toBe(26); // 10 + 16
+    } finally {
+      shellB.cleanup();
+    }
+  });
+
+  it("LA GARDE DE FOCUS : ⌘C/⌘V/⌘D ciblés sur un VRAI <input> de renommage ne dispatchent RIEN (le navigateur garde la main sur son propre copier/coller)", async () => {
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      const renameInput = container.querySelector(
+        '[data-action="rename"][data-layer-id="t"]',
+      ) as HTMLInputElement | null;
+      expect(renameInput).not.toBeNull();
+
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "c", metaKey: true }, renameInput!);
+      await pressKey({ key: "d", metaKey: true }, renameInput!);
+      await pressKey({ key: "v", metaKey: true }, renameInput!);
+
+      // Toujours DEUX calques (« t », « u ») — aucun ajout, la garde a bloqué les trois raccourcis.
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(2);
     } finally {
       cleanup();
     }

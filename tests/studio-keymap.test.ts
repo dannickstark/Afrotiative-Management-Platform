@@ -68,6 +68,61 @@ describe("resolveShortcut — chaque chord vers sa commande", () => {
   });
 });
 
+// Chantier B, Tâche 2 — le presse-papiers en session : ⌘C/⌘V/⌘D.
+describe("resolveShortcut — ⌘C/⌘V/⌘D, le presse-papiers en session (chantier B, tâche 2)", () => {
+  it("⌘C -> copy, UNIQUEMENT avec une sélection (même garde que Suppr)", () => {
+    expect(resolveShortcut({ key: "c", metaKey: true }, SEL)).toEqual({ kind: "copy" });
+    expect(resolveShortcut({ key: "c", metaKey: true }, NO_SEL)).toBeNull();
+  });
+
+  it("Ctrl+C (hors macOS) -> copy aussi", () => {
+    expect(resolveShortcut({ key: "c", ctrlKey: true }, SEL)).toEqual({ kind: "copy" });
+  });
+
+  it("⌘V -> paste, MÊME sans sélection (coller ne dépend pas de la sélection courante)", () => {
+    expect(resolveShortcut({ key: "v", metaKey: true }, SEL)).toEqual({ kind: "paste" });
+    expect(resolveShortcut({ key: "v", metaKey: true }, NO_SEL)).toEqual({ kind: "paste" });
+  });
+
+  it("⌘D -> duplicate, UNIQUEMENT avec une sélection", () => {
+    expect(resolveShortcut({ key: "d", metaKey: true }, SEL)).toEqual({ kind: "duplicate" });
+    expect(resolveShortcut({ key: "d", metaKey: true }, NO_SEL)).toBeNull();
+  });
+
+  it("anti-vacuité : ⌘C, ⌘V et ⌘D produisent trois commandes DISTINCTES, jamais confondues", () => {
+    const copyCmd = resolveShortcut({ key: "c", metaKey: true }, SEL);
+    const pasteCmd = resolveShortcut({ key: "v", metaKey: true }, SEL);
+    const dupCmd = resolveShortcut({ key: "d", metaKey: true }, SEL);
+    expect(copyCmd).toEqual({ kind: "copy" });
+    expect(pasteCmd).toEqual({ kind: "paste" });
+    expect(dupCmd).toEqual({ kind: "duplicate" });
+    expect(copyCmd).not.toEqual(pasteCmd);
+    expect(pasteCmd).not.toEqual(dupCmd);
+  });
+});
+
+describe("resolveShortcut — LA GARDE DE FOCUS s'applique aussi à ⌘C/⌘V/⌘D (pas d'exception chord par chord)", () => {
+  it("⌘C/⌘V/⌘D pendant l'édition d'un champ texte -> null (le navigateur doit garder la main)", () => {
+    expect(resolveShortcut({ key: "c", metaKey: true }, EDITING)).toBeNull();
+    expect(resolveShortcut({ key: "v", metaKey: true }, EDITING)).toBeNull();
+    expect(resolveShortcut({ key: "d", metaKey: true }, EDITING)).toBeNull();
+  });
+
+  it("anti-vacuité : ⌘V guardé -> null, ⌘V NON guardé -> paste (la même entrée, deux contextes)", () => {
+    const event = { key: "v", metaKey: true };
+    expect(resolveShortcut(event, EDITING)).toBeNull();
+    expect(resolveShortcut(event, SEL)).toEqual({ kind: "paste" });
+  });
+});
+
+describe("resolveShortcut — LA GARDE DE POPUP s'applique aussi à ⌘C/⌘V/⌘D", () => {
+  it("⌘C/⌘V/⌘D pendant qu'un popup est ouvert -> null", () => {
+    expect(resolveShortcut({ key: "c", metaKey: true }, POPUP_OPEN)).toBeNull();
+    expect(resolveShortcut({ key: "v", metaKey: true }, POPUP_OPEN)).toBeNull();
+    expect(resolveShortcut({ key: "d", metaKey: true }, POPUP_OPEN)).toBeNull();
+  });
+});
+
 describe("resolveShortcut — LA GARDE DE FOCUS (ctx.isEditingText) coupe TOUT raccourci géré ici", () => {
   const CHORDS: Array<{ nom: string; event: Parameters<typeof resolveShortcut>[0] }> = [
     { nom: "⌘Z", event: { key: "z", metaKey: true } },
@@ -174,7 +229,7 @@ describe("isPopupOpen — signal DOM `data-open`/`role=\"listbox\"`/`role=\"menu
 
 // Garde-fou de complétude du littéral `EditorCommand` — si une future tâche ajoute un membre à
 // l'union sans mettre à jour ce test, TypeScript le signale ici plutôt qu'en silence à l'usage.
-describe("EditorCommand — les six variantes actuelles restent assignables", () => {
+describe("EditorCommand — les neuf variantes actuelles restent assignables", () => {
   it("littéraux de contrôle", () => {
     const all: EditorCommand[] = [
       { kind: "undo" },
@@ -183,7 +238,10 @@ describe("EditorCommand — les six variantes actuelles restent assignables", ()
       { kind: "deselect" },
       { kind: "delete" },
       { kind: "nudge", dx: 1, dy: 0 },
+      { kind: "copy" },
+      { kind: "paste" },
+      { kind: "duplicate" },
     ];
-    expect(all).toHaveLength(6);
+    expect(all).toHaveLength(9);
   });
 });

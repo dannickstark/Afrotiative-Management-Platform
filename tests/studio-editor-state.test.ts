@@ -16,6 +16,7 @@ import {
   rotateLayer,
   setLayerProp,
   addLayer,
+  addLayers,
   deleteLayer,
   reorderLayer,
   toggleVisible,
@@ -269,6 +270,77 @@ describe("addLayer", () => {
     const state = makeState();
     const invalid = { ...state.scene.layers[1], frame: { x: 0, y: 0, w: -1, h: 100 } } as Layer;
     const next = editorReducer(state, addLayer("text", invalid));
+    expect(next).toBe(state);
+  });
+});
+
+// ── Chantier B, Tâche 2 — `addLayers` : le pendant PLURIEL de `addLayer`, pour le presse-papiers en
+// session (copier/coller/dupliquer). Sur le modèle de `setFrames`/`setLayerProps` : un LOT de
+// calques, UNE SEULE entrée d'historique — voir le commentaire de `"addLayers"` sur `EditorAction`
+// (lib/studio/editor-state.ts) pour le détail. Contrairement à `addLayer`, qui REMPLACE la
+// sélection par le seul calque ajouté, `addLayers` la remplace par TOUS les ids ajoutés (c'est ce
+// qui fait qu'un coller sélectionne ce qu'on vient de coller).
+describe("addLayers — le LOT d'ajout, UNE entrée d'historique (chantier B, tâche 2)", () => {
+  function extra(id: string): Layer {
+    return {
+      id, name: "Collé", visible: true, locked: false,
+      frame: { x: 16, y: 16, w: 80, h: 80 },
+      type: "shape", shape: "rect", fill: "#123456",
+    };
+  }
+
+  it("ajoute N calques À LA FIN de scene.layers (avant-plan) en UNE SEULE entrée d'historique", () => {
+    const state = makeState();
+    const before = state.scene.layers.length;
+    const next = editorReducer(state, addLayers([extra("p1"), extra("p2"), extra("p3")]));
+    expect(next.scene.layers).toHaveLength(before + 3);
+    expect(next.scene.layers.slice(-3).map((l) => l.id)).toEqual(["p1", "p2", "p3"]);
+    expect(next.past).toHaveLength(1);
+    expect(next.future).toEqual([]);
+  });
+
+  it("sélectionne TOUS les calques ajoutés, dans l'ordre fourni", () => {
+    const state = makeState();
+    const next = editorReducer(state, addLayers([extra("p1"), extra("p2")]));
+    expect(next.selectedIds).toEqual(["p1", "p2"]);
+  });
+
+  it("UN SEUL undo retire les N calques à la fois — pas un par un", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
+    const before = state.scene.layers.length;
+    const next = editorReducer(state, addLayers([extra("p1"), extra("p2"), extra("p3")]));
+    const afterUndo = editorReducer(next, undo());
+    expect(afterUndo.scene.layers).toHaveLength(before);
+    expect(afterUndo.scene.layers.some((l) => l.id === "p1" || l.id === "p2" || l.id === "p3")).toBe(false);
+    // …et restaure la sélection D'AVANT le coller (même contrat que le reste de l'historique).
+    expect(afterUndo.selectedIds).toEqual(["title"]);
+
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(afterRedo.scene).toEqual(next.scene);
+    expect(afterRedo.selectedIds).toEqual(["p1", "p2", "p3"]);
+  });
+
+  // Anti-vacuité (brief) : « paste avec un presse-papiers VIDE est un no-op — aucune entrée
+  // d'historique, état inchangé PAR RÉFÉRENCE ». C'est le module clipboard (lib/studio/clipboard.ts)
+  // qui décide QUAND appeler addLayers([]), mais le réducteur lui-même doit être sûr sur ce cas :
+  // sans cette garde, un coller à vide empilerait une entrée d'annulation fantôme.
+  it("un lot VIDE est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, addLayers([]))).toBe(state);
+  });
+
+  it("un calque invalide dans le lot fait refuser TOUT le lot (commit() valide la scène entière)", () => {
+    const state = makeState();
+    const invalid = { ...extra("bad"), frame: { x: 0, y: 0, w: -1, h: 10 } } as Layer;
+    const next = editorReducer(state, addLayers([extra("ok"), invalid]));
+    expect(next).toBe(state);
+  });
+
+  it("un id qui collide avec un calque déjà présent dans la scène est refusé — parseScene rejette les doublons", () => {
+    const state = makeState();
+    // "title" existe déjà dans makeScene() : ajouter un calque partageant cet id doit être refusé,
+    // exactement comme setLayerProp qui créerait un doublon (voir « garde-fou scène invalide »).
+    const next = editorReducer(state, addLayers([extra("title")]));
     expect(next).toBe(state);
   });
 });

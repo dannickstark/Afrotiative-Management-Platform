@@ -5,8 +5,10 @@ import type { Dispatch } from "react";
 import { resolveShortcut, isEditingText, isPopupOpen } from "@/lib/studio/keymap";
 import {
   type EditorAction, type EditorState,
-  undo, redo, selectMany, clearSelection, deleteLayer, moveLayer, singleSelectedId,
+  undo, redo, selectMany, clearSelection, deleteLayer, moveLayer, singleSelectedId, addLayers,
 } from "@/lib/studio/editor-state";
+import { cloneLayersWithNewIds, copyToClipboard, readClipboard, PASTE_OFFSET } from "@/lib/studio/clipboard";
+import type { Layer } from "@/lib/studio/scene";
 
 // hooks/use-editor-keymap.ts — Chantier B, Tâche 1 : le pont navigateur pour
 // lib/studio/keymap.ts#resolveShortcut (lui-même PUR). Un écouteur CENTRAL, monté UNE FOIS dans
@@ -50,6 +52,21 @@ import {
 //     posait (`!selectedLayer || selectedLayer.locked`) — y COMPRIS `l.visible`, qui faisait déjà
 //     partie de la définition de `selectedLayer` là-bas : un calque masqué n'est pas plus supprimable
 //     ou déplaçable au clavier qu'il ne l'était avant.
+// Résout `selectedIds` en calques RÉELS de la scène courante, dans l'ordre de la sélection — pour
+// copy/duplicate (chantier B, tâche 2). Contrairement à `delete`/`nudge` ci-dessus, ni le verrou ni
+// la visibilité ne sont un motif d'exclusion ICI : copier (ou dupliquer, qui clone plutôt que
+// modifier la source) ne MUTE jamais le calque source, donc rien ne justifie de refuser un calque
+// verrouillé ou masqué — seule une sélection pointant vers un id qui n'existe PLUS dans la scène
+// (§2 de l'en-tête du module) doit être filtrée.
+function selectedLayers(state: EditorState): Layer[] {
+  const layers: Layer[] = [];
+  for (const id of state.selectedIds) {
+    const layer = state.scene.layers.find((l) => l.id === id);
+    if (layer) layers.push(layer);
+  }
+  return layers;
+}
+
 export function useEditorKeymap(state: EditorState, dispatch: Dispatch<EditorAction>): void {
   const stateRef = useRef(state);
   useEffect(() => {
@@ -100,6 +117,37 @@ export function useEditorKeymap(state: EditorState, dispatch: Dispatch<EditorAct
           if (!layer || layer.locked) return;
           e.preventDefault();
           dispatch(moveLayer(id!, command.dx, command.dy));
+          return;
+        }
+        // Chantier B, Tâche 2 — le presse-papiers en session. `resolveShortcut` a déjà tranché
+        // « y a-t-il une sélection » (ctx.hasSelection, pour copy/duplicate) ; ce que LUI ne peut pas
+        // savoir, comme pour delete/nudge ci-dessus, c'est si ces ids DÉSIGNENT ENCORE des calques
+        // réels de la scène courante (§2 de l'en-tête du module, « la sélection n'est pas validée
+        // contre la scène ») — donc résolu ICI, pas dans le module pur.
+        case "copy": {
+          const layers = selectedLayers(current);
+          if (layers.length === 0) return;
+          e.preventDefault();
+          copyToClipboard(layers);
+          return;
+        }
+        case "paste": {
+          const clipped = readClipboard();
+          if (clipped.length === 0) return; // presse-papiers vide -> no-op, AUCUN dispatch (voir le
+          // commentaire d'`addLayers` dans editor-state.ts : un lot vide serait de toute façon un
+          // no-op côté réducteur, mais s'arrêter ICI évite même l'appel).
+          e.preventDefault();
+          dispatch(addLayers(cloneLayersWithNewIds(clipped, PASTE_OFFSET)));
+          return;
+        }
+        case "duplicate": {
+          // ⌘D = copier + coller-en-place-décalé comme UN SEUL geste (brief) : clone DIRECTEMENT la
+          // sélection courante — sans passer par (ni écraser) le presse-papiers du module, pour que
+          // dupliquer et copier restent deux gestes indépendants qui ne se marchent pas dessus.
+          const layers = selectedLayers(current);
+          if (layers.length === 0) return;
+          e.preventDefault();
+          dispatch(addLayers(cloneLayersWithNewIds(layers, PASTE_OFFSET)));
           return;
         }
       }
