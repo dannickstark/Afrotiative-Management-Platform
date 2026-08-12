@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   parsePrefs, serializePrefs, DEFAULT_PREFS, RAIL_CATEGORIES, RAIL_LABELS,
   toggleCollapse, openModelesIfEmpty, setOpenPanel, nextOpenPanel,
+  clampPanelWidth, RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
 } from "@/lib/studio/editor-prefs";
 
 describe("editor prefs — pure, never throws", () => {
@@ -19,6 +20,7 @@ describe("editor prefs — pure, never throws", () => {
       openPanel: "texte" as const, lastOpenPanel: "images" as const, rulers: true, grid: true, safeAreas: false,
       showBindings: true,
       zoom: 0.5, sectionsOpen: { "text.ombre": false }, recentShapes: ["qr", "rect"],
+      railPanelWidth: 260, inspectorWidth: 340,
     };
     expect(parsePrefs(serializePrefs(p))).toEqual(p);
   });
@@ -194,5 +196,70 @@ describe("openModelesIfEmpty — un gabarit sans calque ouvre sur Modèles, sans
     const next = openModelesIfEmpty(prefs, false);
     expect(next.rulers).toBe(true);
     expect(next.zoom).toBe(0.5);
+  });
+});
+
+// Chantier A Tâche 3 (spec §2/§3) — corps trois zones : les bordures rail-panneau↔canevas et
+// canevas↔inspecteur deviennent redimensionnables, la largeur choisie survivant au rechargement au
+// même titre que le reste des préférences. `clampPanelWidth` est la fonction PURE que le glisser
+// (components/studio/panel-resize-handle.tsx) appelle à CHAQUE `pointermove`, jamais seulement à la
+// fin du geste — un simple test de bornes suffit à la couvrir sans monter la moindre poignée.
+describe("clampPanelWidth — pure, bornée (chantier A Tâche 3)", () => {
+  it("une valeur DANS les bornes traverse inchangée", () => {
+    expect(clampPanelWidth(250, 180, 360)).toBe(250);
+  });
+
+  it("une valeur SOUS le minimum est ramenée au minimum", () => {
+    expect(clampPanelWidth(10, 180, 360)).toBe(180);
+  });
+
+  it("une valeur AU-DESSUS du maximum est ramenée au maximum", () => {
+    expect(clampPanelWidth(9999, 180, 360)).toBe(360);
+  });
+
+  it("les bornes elles-mêmes sont acceptées telles quelles (bornes inclusives)", () => {
+    expect(clampPanelWidth(180, 180, 360)).toBe(180);
+    expect(clampPanelWidth(360, 180, 360)).toBe(360);
+  });
+});
+
+describe("EditorPrefs.railPanelWidth / inspectorWidth — même idiome par-champ que rulers/grid/zoom (chantier A Tâche 3)", () => {
+  it("DEFAULT_PREFS porte des largeurs numériques, dans leurs propres bornes", () => {
+    expect(typeof DEFAULT_PREFS.railPanelWidth).toBe("number");
+    expect(typeof DEFAULT_PREFS.inspectorWidth).toBe("number");
+    expect(DEFAULT_PREFS.railPanelWidth).toBeGreaterThanOrEqual(RAIL_PANEL_WIDTH_MIN);
+    expect(DEFAULT_PREFS.railPanelWidth).toBeLessThanOrEqual(RAIL_PANEL_WIDTH_MAX);
+    expect(DEFAULT_PREFS.inspectorWidth).toBeGreaterThanOrEqual(INSPECTOR_WIDTH_MIN);
+    expect(DEFAULT_PREFS.inspectorWidth).toBeLessThanOrEqual(INSPECTOR_WIDTH_MAX);
+  });
+
+  it("une largeur persistée VALIDE est restaurée telle quelle", () => {
+    const raw = JSON.stringify({ railPanelWidth: 260, inspectorWidth: 340 });
+    const parsed = parsePrefs(raw);
+    expect(parsed.railPanelWidth).toBe(260);
+    expect(parsed.inspectorWidth).toBe(340);
+  });
+
+  // Discipline « par champ, jamais en bloc » (voir la docstring de parsePrefs) : une largeur
+  // corrompue (mauvais type) retombe sur SON PROPRE défaut, sans faire tomber le reste d'un objet
+  // par ailleurs valide — même mutation-preuve que lastOpenPanel/showBindings ci-dessus : rendre ce
+  // champ "requis" en le faisant retomber sur DEFAULT_PREFS EN BLOC ferait perdre `rulers` ici aussi.
+  it("une largeur corrompue (mauvais type) retombe sur son propre défaut, sans faire tomber `rulers`", () => {
+    const raw = JSON.stringify({ railPanelWidth: "large", inspectorWidth: null, rulers: true });
+    const parsed = parsePrefs(raw);
+    expect(parsed.railPanelWidth).toBe(DEFAULT_PREFS.railPanelWidth);
+    expect(parsed.inspectorWidth).toBe(DEFAULT_PREFS.inspectorWidth);
+    expect(parsed.rulers).toBe(true);
+  });
+
+  // Mutation « drop the clamp » (brief, Étape 4) : une largeur persistée hors bornes (ex. une
+  // ancienne borne plus large qu'aujourd'hui, ou une valeur bricolée dans localStorage) est RAMENÉE
+  // dans les bornes courantes au lieu d'être reprise telle quelle — sans ce clamp au chargement, ce
+  // test rougirait.
+  it("une largeur persistée HORS BORNES est ramenée dans les bornes courantes, pas reprise telle quelle", () => {
+    const raw = JSON.stringify({ railPanelWidth: 5, inspectorWidth: 99999 });
+    const parsed = parsePrefs(raw);
+    expect(parsed.railPanelWidth).toBe(RAIL_PANEL_WIDTH_MIN);
+    expect(parsed.inspectorWidth).toBe(INSPECTOR_WIDTH_MAX);
   });
 });

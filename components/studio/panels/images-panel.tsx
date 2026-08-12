@@ -55,6 +55,9 @@ export interface ImagesPanelProps {
   selectedId: string | null;
   dispatch: Dispatch<EditorAction>;
   onOpenChange?: (next: RailCategory | null) => void;
+  // Chantier A Tâche 3 (spec §2/§3) : transmise TELLE QUELLE à PanelHost — voir son commentaire
+  // (panel-host.tsx) pour la source (EditorPrefs.railPanelWidth) et le défaut.
+  width?: number;
 }
 
 // PURE — exportée pour rester testable sans rendu (même convention que tokensFor dans
@@ -87,7 +90,7 @@ export function pickImageForSelection(
   dispatch(setLayerProp(layer.id, { source: pickImageAsset(assetId) }));
 }
 
-export function ImagesPanel({ context, assets, scene, selectedId, dispatch, onOpenChange = () => {} }: ImagesPanelProps) {
+export function ImagesPanel({ context, assets, scene, selectedId, dispatch, onOpenChange = () => {}, width }: ImagesPanelProps) {
   const [query, setQuery] = useState("");
   const slots = imageSlotsFor(context);
   const filteredAssets = useMemo(() => filterAssetsBySearch(assets, query), [assets, query]);
@@ -100,6 +103,7 @@ export function ImagesPanel({ context, assets, scene, selectedId, dispatch, onOp
     <PanelHost
       open="images"
       onOpenChange={onOpenChange}
+      width={width}
       search={
         <div className="relative">
           <Search aria-hidden className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />

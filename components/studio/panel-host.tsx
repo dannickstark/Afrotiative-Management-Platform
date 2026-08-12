@@ -33,14 +33,22 @@ export interface PanelHostProps {
   search?: ReactNode;
   primaryAction?: ReactNode;
   children?: ReactNode;
+  // Chantier A Tâche 3 (spec §2/§3) : largeur COURANTE (px), désormais pilotée par
+  // EditorPrefs.railPanelWidth (lib/studio/editor-prefs.ts) via une poignée de glisser posée par
+  // editor-shell.tsx (components/studio/panel-resize-handle.tsx) — jamais par ce composant lui-même,
+  // qui reste ignorant du geste. Défaut 212 : la valeur FIXE qu'un `w-[212px]` codait en dur avant
+  // cette tâche, pour qu'un appelant qui omet cette prop (aucun aujourd'hui hors editor-shell.tsx et
+  // les trois panneaux qui s'enrobent eux-mêmes) rende exactement la même largeur qu'avant.
+  width?: number;
 }
 
-export function PanelHost({ open, onOpenChange, search, primaryAction, children }: PanelHostProps) {
+export function PanelHost({ open, onOpenChange, search, primaryAction, children, width = 212 }: PanelHostProps) {
   return (
     <div
       data-testid="panel-host"
       data-panel={open}
-      className="flex w-[212px] shrink-0 flex-col gap-2 overflow-hidden rounded-lg border"
+      style={{ width }}
+      className="flex shrink-0 flex-col gap-2 overflow-hidden rounded-lg border"
     >
       <div className="flex items-center justify-between border-b px-2 py-1.5">
         <span className="text-sm font-medium">{RAIL_LABELS[open]}</span>

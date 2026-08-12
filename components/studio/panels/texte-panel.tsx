@@ -43,15 +43,19 @@ export interface TextePanelProps {
   canvas: { width: number; height: number };
   dispatch: Dispatch<EditorAction>;
   onOpenChange?: (next: RailCategory | null) => void;
+  // Chantier A Tâche 3 (spec §2/§3) : transmise TELLE QUELLE à PanelHost — voir son commentaire
+  // (panel-host.tsx) pour la source (EditorPrefs.railPanelWidth) et le défaut.
+  width?: number;
 }
 
-export function TextePanel({ context, canvas, dispatch, onOpenChange = () => {} }: TextePanelProps) {
+export function TextePanel({ context, canvas, dispatch, onOpenChange = () => {}, width }: TextePanelProps) {
   const rows = dynamicTextRowsFor(context);
 
   return (
     <PanelHost
       open="texte"
       onOpenChange={onOpenChange}
+      width={width}
       primaryAction={
         <Button
           type="button"

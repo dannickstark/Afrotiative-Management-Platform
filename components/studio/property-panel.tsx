@@ -902,13 +902,25 @@ export function PropertyPanel({
     );
   }
 
+  // Chantier A Tâche 3 (spec §2/§3) — état vide COMPACT. AVANT cette tâche, ce message occupait tout
+  // `h-full` de la colonne inspecteur via `items-center justify-center` : sur une colonne de 300px de
+  // haut (toute la hauteur de l'éditeur), une phrase de neuf mots flottait seule au centre d'un vide
+  // — le défaut explicitement nommé par le brief (« a 300px full-height void »). Le message devient
+  // ici une PETITE carte discrète, ANCRÉE en haut (`items-start` — pas de `justify-center` vertical),
+  // dans une largeur bornée (`max-w-[220px]`) plutôt qu'étirée sur toute la colonne : elle se lit
+  // comme un indice ponctuel, pas comme l'unique occupant d'un panneau entier. Même texte, même
+  // `data-testid="property-panel-empty"` (verrouillé par tests/studio-editor-shell.test.ts et
+  // tests/studio-property-panel.test.ts) — seule la STRUCTURE change, jamais le message ni son
+  // adressage pour un test existant.
   if (!layer) {
     return (
-      <div
-        className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground"
-        data-testid="property-panel-empty"
-      >
-        Sélectionnez un calque pour modifier ses propriétés.
+      <div className="flex h-full flex-col items-center p-3" data-testid="property-panel-empty">
+        <div
+          className="w-full max-w-[220px] rounded-lg border border-dashed bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground"
+          data-testid="property-panel-empty-hint"
+        >
+          Sélectionnez un calque pour modifier ses propriétés.
+        </div>
       </div>
     );
   }
