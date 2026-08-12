@@ -389,6 +389,71 @@ describe("migration de `radius` — une chaîne traverse les deux chemins", () =
     const back = parseScene(JSON.parse(JSON.stringify(scene)));
     expect((back.layers[0] as ShapeLayer).radius).toBe("50%");
   });
+
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  // REVUE FINALE U3, MINOR 3 — UN PIÈGE LATENT QUE U3 A CRÉÉ LUI-MÊME.
+  //
+  // Il existe désormais DEUX champs nommés `radius` de TYPES DIFFÉRENTS dans le même schéma :
+  //   — `shapeLayer.radius` (scene.ts:193, `cssRadius`) : `number | string`, migré par l'arbitrage C
+  //     parce qu'une ellipse EXIGE « 50% » ;
+  //   — `imageLayer.radius` (scene.ts:46) : `z.number()`, laissé numérique DÉLIBÉRÉMENT (décision du
+  //     contrôleur : le migrer achèterait des masques d'image elliptiques, une fonctionnalité, pas un
+  //     refactor).
+  // Ils ne sont tenus à l'écart que par les gardes `layer.type === "image"` de lib/studio/element.ts
+  // (`imageNode`, appelé pour les calques image ET qr) et par le narrowing de `ImageContent`
+  // (components/studio/layer-view.tsx). Ce test est ce qui rend la SÉPARATION observable plutôt que
+  // seulement commentée.
+  //
+  // MUTATION QUI FAIT ROUGIR : donner `cssRadius` à `imageLayer.radius` dans lib/studio/scene.ts — le
+  // pourcentage cesse d'être refusé et la deuxième assertion tombe. C'est très exactement la migration
+  // que le ledger a refusée : si quelqu'un la fait un jour, ce sera par décision, pas par distraction.
+  // ───────────────────────────────────────────────────────────────────────────────────────────────
+  it("les DEUX champs `radius` du schéma restent SÉPARÉS — celui d'une forme accepte un pourcentage, celui d'une image NON", () => {
+    function sceneWithImageRadius(radius: unknown): unknown {
+      return {
+        schemaVersion: 1,
+        canvas: { width: 800, height: 400, background: "#000000" },
+        layers: [{
+          ...BASE, id: "i", name: "image", frame: { ...FRAME },
+          type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover", radius,
+        }],
+      };
+    }
+    // TÉMOIN POSITIF : un rayon NUMÉRIQUE sur une image passe — sans lui, un schéma qui refuserait
+    // TOUT rayon d'image passerait l'assertion suivante.
+    expect(((parseScene(sceneWithImageRadius(8)).layers[0]) as Extract<Layer, { type: "image" }>).radius).toBe(8);
+    // LE PIÈGE, épinglé : la grammaire du rayon d'une FORME n'est pas celle d'une image.
+    expect(() => parseScene(sceneWithImageRadius("50%"))).toThrow(/radius/);
+    // Et le pourcentage reste bien légal là où il l'est — les deux moitiés au même point.
+    expect((parseScene({
+      schemaVersion: 1,
+      canvas: { width: 800, height: 400, background: "#000000" },
+      layers: [shapeLayerOf("rect", { radius: "50%" })],
+    }).layers[0] as ShapeLayer).radius).toBe("50%");
+  });
+
+  it("le rayon d'une IMAGE est peint, celui d'un QR n'existe pas — la garde d'`imageNode` est observable", () => {
+    // `imageNode` (lib/studio/element.ts) est appelé pour les calques image ET qr ; sa garde
+    // `layer.type === "image"` est ce qui empêche de chercher un `radius` là où le schéma n'en prévoit
+    // aucun. Les deux cas sont rendus par le VRAI `sceneToElement`, avec une URI préparée.
+    function stylesOf(layer: Layer): Record<string, unknown> {
+      const root = sceneToElement(
+        { schemaVersion: 1, canvas: { width: 800, height: 400, background: "#000000" }, layers: [layer] },
+        new Map([[layer.id, "data:image/png;base64,AA"]]),
+      );
+      return (root.props as { children: { props: { style: Record<string, unknown> } }[] }).children[0].props.style;
+    }
+    const image = {
+      ...BASE, id: "i", name: "image", frame: { ...FRAME },
+      type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover", radius: 8,
+    } as Layer;
+    const qr = {
+      ...BASE, id: "q", name: "qr", frame: { ...FRAME },
+      type: "qr", slot: "article.url", fg: "#000000", bg: "#FFFFFF", margin: 4,
+    } as Layer;
+    expect(stylesOf(image).borderRadius).toBe(8);
+    expect(stylesOf(qr).borderRadius).toBeUndefined(); // un QR n'a pas de rayon dans le schéma
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────────────────────────

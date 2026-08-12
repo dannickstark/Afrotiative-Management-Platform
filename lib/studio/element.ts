@@ -131,6 +131,15 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
 }
 
 function imageNode(layer: Layer, uri: string): SatoriNode {
+  // ATTENTION, DEUX CHAMPS `radius` DE TYPES DIFFÉRENTS (revue finale U3, Minor 3 — un piège que U3 a
+  // créé lui-même) : celui-ci est `imageLayer.radius`, un `z.number()` (lib/studio/scene.ts:46) laissé
+  // NUMÉRIQUE délibérément — le migrer achèterait des masques d'image elliptiques, une fonctionnalité,
+  // pas un refactor. Son homonyme `shapeLayer.radius` (scene.ts, `cssRadius`) est `number | string`
+  // depuis l'arbitrage C, parce qu'une ellipse EXIGE « 50% ». Ne jamais faire passer l'un pour l'autre.
+  // La garde `layer.type === "image"` ci-dessous est ce qui les tient à l'écart ICI (`imageNode` est
+  // appelé pour les calques image ET qr, et un qr n'a pas de rayon) : la retirer ne COMPILE PAS —
+  // vérifié, `layer.radius` sur l'union `Layer` est TS2339. Le versant observable de la séparation est
+  // testé dans tests/studio-shapes.test.ts, « les DEUX champs `radius` du schéma restent SÉPARÉS ».
   const radius = layer.type === "image" && layer.radius ? { borderRadius: layer.radius } : {};
   const fit = layer.type === "image" ? layer.fit : "contain";
   return {

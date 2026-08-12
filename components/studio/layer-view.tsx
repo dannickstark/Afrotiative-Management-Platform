@@ -85,6 +85,12 @@ function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" 
       style={{
         width: "100%", height: "100%",
         objectFit: layer.fit,
+        // `imageLayer.radius`, un NOMBRE (lib/studio/scene.ts:46) — et NON son homonyme
+        // `shapeLayer.radius`, qui est `number | string` depuis l'arbitrage C (« 50% » pour l'ellipse).
+        // Deux champs de même nom et de types différents ; ce qui les tient à l'écart ici est le
+        // narrowing du prop (`Extract<Layer, { type: "image" }>`), donc le typechecker. Voir
+        // lib/studio/element.ts#imageNode pour la garde du chemin d'export et
+        // tests/studio-shapes.test.ts, « les DEUX champs `radius` du schéma restent SÉPARÉS ».
         borderRadius: layer.radius,
         filter: layer.blur ? `blur(${layer.blur}px)` : undefined,
       }}
