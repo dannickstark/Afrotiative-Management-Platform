@@ -52,18 +52,42 @@ export function relayoutAxis(
       const scale = target / base;
       return { pos: pos * scale, size: size * scale };
     }
+    default: {
+      // Garde-fou : si une 6ᵉ contrainte s'ajoute un jour à H_CONSTRAINTS/V_CONSTRAINTS (scene.ts)
+      // sans qu'on mette CE switch à jour, on veut un plantage BRUYANT à l'exécution — jamais un
+      // `undefined` silencieux qui se propagerait en NaN dans `relayoutFrame` puis dans le rendu.
+      const exhaustive: never = mode;
+      throw new Error(`relayoutAxis : mode de contrainte inconnu « ${String(exhaustive)} »`);
+    }
   }
 }
 
 // La taille minimale d'un cadre — un calque ne disparaît jamais totalement, même quand
 // `leftRight`/`topBottom` produit une taille négative ou nulle pour une cible bien plus petite que
-// l'écart des deux bords. Même clamp que `lib/studio/layer-geometry.ts#centeredFrame` (pas de
-// deuxième définition : ce module reste FEUILLE, sans dépendance vers layer-geometry.ts).
+// l'écart des deux bords. Même VALEUR que le clamp de `lib/studio/layer-geometry.ts#centeredFrame`
+// (pas de deuxième définition : ce module reste FEUILLE, sans dépendance vers layer-geometry.ts) —
+// mais PAS le même plancher : voir `relayoutFrame` ci-dessous, où le plancher RÉEL appliqué est
+// `Math.min(MIN_SIZE, tailleOrigine)`, pas `MIN_SIZE` tout court.
 const MIN_SIZE = 1;
 
 // relayoutFrame — LES DEUX axes + le clamp de taille minimale. La position n'est JAMAIS clampée
 // (un calque peut légitimement sortir du canevas, ex. `right` sur une cible bien plus étroite) —
 // seule la taille l'est, pour qu'un calque garde toujours une existence géométrique.
+//
+// LE PLANCHER DU CLAMP N'EST PAS `MIN_SIZE` FIXE — c'est `Math.min(MIN_SIZE, tailleOrigine)`.
+// Raison (revue post-Tâche 2, Important 1) : le schéma de `frame` (scene.ts) exige seulement
+// `w: z.number().positive()` — PAS `.int()`, PAS `.min(1)` — donc un cadre sous le pixel (`w: 0.5`)
+// est LÉGAL. Un plancher fixe à `MIN_SIZE=1` GONFLERAIT un tel calque même à l'IDENTITÉ (cible ===
+// base, où `hAxis.size === frame.w` EXACTEMENT pour les 5 modes — voir relayoutAxis) : `w:0.5` →
+// `Math.max(1, 0.5) = 1`, ce qui casse le no-op de migration pour tout calque sous-pixel (bordure
+// fine, forme réduite à l'échelle). Le plancher `Math.min(MIN_SIZE, tailleOrigine)` répare cela :
+//   • taille d'origine ≥ 1 (le cas courant)  → plancher = 1        → comportement INCHANGÉ.
+//   • taille d'origine < 1 (cas sous-pixel)  → plancher = tailleOrigine → jamais gonflée, et à
+//     l'identité `Math.max(tailleOrigine, tailleOrigine) = tailleOrigine` EXACTEMENT.
+// Sur un format DIFFÉRENT (non-identité), le calque sous-pixel peut donc rétrécir plus loin que 1px
+// mais JAMAIS en dessous de sa propre taille d'origine — il ne disparaît ni ne s'inverse, mais ne se
+// fait pas non plus artificiellement gonfler à 1px. tests/studio-relayout.test.ts épingle les DEUX
+// cas (identité ET reformatage) pour ce comportement.
 export function relayoutFrame(
   frame: Frame,
   c: LayerConstraints,
@@ -75,8 +99,8 @@ export function relayoutFrame(
   return {
     x: hAxis.pos,
     y: vAxis.pos,
-    w: Math.max(MIN_SIZE, hAxis.size),
-    h: Math.max(MIN_SIZE, vAxis.size),
+    w: Math.max(Math.min(MIN_SIZE, frame.w), hAxis.size),
+    h: Math.max(Math.min(MIN_SIZE, frame.h), vAxis.size),
   };
 }
 

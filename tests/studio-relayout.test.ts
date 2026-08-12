@@ -112,6 +112,28 @@ describe("relayout — identité au format d'accueil (migration no-op)", () => {
     relayout(scene, { w: 400, h: 300 });
     expect(scene).toEqual(before);
   });
+
+  // Revue post-implémentation, Important 1 : le schéma de `frame` (scene.ts) exige seulement
+  // `w: z.number().positive()` — PAS `.int()`, PAS `.min(1)` — donc un cadre SOUS LE PIXEL (une
+  // bordure fine, une forme réduite à l'échelle) est LÉGAL. Un plancher de clamp fixe à 1px
+  // gonflerait un tel calque MÊME À L'IDENTITÉ (`w:0.5` → `Math.max(1, 0.5) = 1`), cassant le no-op
+  // de migration pour ces calques. Ce test couvre les 5×5 combinaisons de contraintes avec un cadre
+  // `w:0.5, h:0.75` : avant le correctif du plancher (`Math.min(MIN_SIZE, tailleOrigine)` au lieu de
+  // `MIN_SIZE` fixe), il rougissait pour TOUTE combinaison où l'axe correspondant retombe sur la
+  // taille d'origine (donc pour les 25 combinaisons, puisque cible === base ici).
+  for (const h of H_CONSTRAINTS) {
+    for (const v of V_CONSTRAINTS) {
+      it(`identité pour un cadre SOUS LE PIXEL (w:0.5, h:0.75) — { h: ${h}, v: ${v} }`, () => {
+        const scene = sceneOf(
+          [shapeLayer({ constraints: { h, v }, frame: { x: 12, y: 34, w: 0.5, h: 0.75 } })],
+          canvas,
+        );
+        const result = relayout(scene, { w: scene.canvas.width, h: scene.canvas.height });
+        expect(result).toEqual(scene);
+        expect(result.layers[0].frame).toEqual({ x: 12, y: 34, w: 0.5, h: 0.75 });
+      });
+    }
+  }
 });
 
 // ── Préservation des écarts / centre / échelle — testée sur `relayoutAxis` directement (avant tout
@@ -192,6 +214,36 @@ describe("relayoutFrame — clamp de taille minimale", () => {
     // La position, elle, n'est jamais clampée.
     expect(frame.x).toBe(100);
     expect(frame.y).toBe(100);
+  });
+
+  // Comportement CHOISI pour un cadre sous le pixel relayouté vers un AUTRE format (pas
+  // l'identité) : le plancher du clamp est `Math.min(MIN_SIZE, tailleOrigine)`, pas `MIN_SIZE` fixe.
+  // Un calque de 0.5px qui rétrécit encore (leftRight/topBottom vers une cible bien plus petite) ne
+  // descend donc jamais SOUS sa propre taille d'origine (0.5) — mais il n'est pas non plus GONFLÉ
+  // jusqu'à 1px comme le serait un calque de taille normale dans le même cas. Documenté explicitement
+  // ici pour que ce choix ne reste pas implicite.
+  it("un cadre sous le pixel qui rétrécit vers un AUTRE format se clampe à SA PROPRE taille d'origine (pas à 1)", () => {
+    const c: LayerConstraints = { h: "leftRight", v: "topBottom" };
+    const frame = relayoutFrame({ x: 100, y: 100, w: 0.5, h: 0.5 }, c, { w: 1000, h: 1000 }, { w: 500, h: 500 });
+    // taille brute = 0.5 + (500-1000) = -499.5 → clampée au plancher min(1, 0.5) = 0.5, PAS à 1.
+    expect(frame.w).toBe(0.5);
+    expect(frame.h).toBe(0.5);
+  });
+
+  it("un cadre sous le pixel qui GRANDIT vers un autre format n'est pas affecté par le clamp", () => {
+    const c: LayerConstraints = { h: "scale", v: "scale" };
+    const frame = relayoutFrame({ x: 100, y: 100, w: 0.5, h: 0.5 }, c, { w: 1000, h: 1000 }, { w: 2000, h: 2000 });
+    // taille brute = 0.5 * 2 = 1 → déjà au-dessus du plancher (0.5), le clamp ne change rien.
+    expect(frame.w).toBe(1);
+    expect(frame.h).toBe(1);
+  });
+
+  it("un cadre de taille NORMALE (≥1px) garde le plancher fixe à 1, comportement inchangé", () => {
+    const c: LayerConstraints = { h: "leftRight", v: "topBottom" };
+    // taille d'origine 200 ≥ MIN_SIZE(1) → plancher = min(1,200) = 1, identique à l'ancien clamp fixe.
+    const frame = relayoutFrame({ x: 100, y: 100, w: 200, h: 200 }, c, { w: 1000, h: 1000 }, { w: 500, h: 500 });
+    expect(frame.w).toBe(1);
+    expect(frame.h).toBe(1);
   });
 
   it("laisse une taille positive intacte", () => {
