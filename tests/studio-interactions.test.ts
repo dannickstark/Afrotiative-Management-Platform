@@ -2046,6 +2046,63 @@ describe("EditorShell — l'écouteur `wheel` est posé NON PASSIF (revue chanti
       HTMLElement.prototype.addEventListener = original;
     }
   });
+
+  it("un aller-retour Montage -> Rendu réel -> Montage (ModeSwitch) RÉ-ATTACHE l'écouteur `wheel` sur le NOUVEAU nœud — régression trouvée en repassage navigateur", async () => {
+    // LE BUG (trouvé en repassage navigateur, PAS par bun test) : `canvas-backdrop` est démonté par
+    // DEUX conditions indépendantes, pas une seule — `layout !== "too-small"` ET `mode === "montage"`
+    // (`mode === "rendu"` monte `<RenderMode>` à la place, un arbre ENTIÈREMENT différent). Le premier
+    // jet de l'effet ne dépendait que de `[layout]` : un aller-retour de MODE (ModeSwitch, ou le
+    // raccourci « R ») démonte l'ancien `canvas-backdrop` et en monte un NOUVEAU nœud DOM SANS jamais
+    // faire varier `layout` — l'effet ne se redéclenchait donc JAMAIS, le nouveau nœud n'avait AUCUN
+    // écouteur `wheel`, et le bug d'origine (⌘/Ctrl-molette zoome la PAGE, pas le canevas) revenait
+    // silencieusement après un aller-retour de mode pourtant tout à fait ordinaire.
+    const calls: Array<{ target: EventTarget; options: unknown }> = [];
+    const original = HTMLElement.prototype.addEventListener;
+    HTMLElement.prototype.addEventListener = function (
+      this: HTMLElement,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) {
+      if (type === "wheel") calls.push({ target: this, options });
+      return original.call(this, type, listener, options);
+    } as typeof HTMLElement.prototype.addEventListener;
+
+    try {
+      const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+      try {
+        const firstBackdrop = backdropEl(container);
+        expect(calls.some((c) => c.target === firstBackdrop)).toBe(true); // le PREMIER nœud a bien reçu son écouteur
+
+        const modeRendu = container.querySelector('[data-action="mode-rendu"]') as HTMLElement | null;
+        const modeMontage = container.querySelector('[data-action="mode-montage"]') as HTMLElement | null;
+        expect(modeRendu).not.toBeNull();
+        expect(modeMontage).not.toBeNull();
+
+        await click(modeRendu!); // Montage -> Rendu réel : `canvas-backdrop` DÉMONTÉ (RenderMode à la place)
+        expect(container.querySelector('[data-testid="canvas-backdrop"]')).toBeNull();
+
+        await click(modeMontage!); // Rendu réel -> Montage : un NOUVEAU `canvas-backdrop` est monté
+
+        const secondBackdrop = backdropEl(container);
+        expect(secondBackdrop).not.toBe(firstBackdrop); // bien un NŒUD DOM DIFFÉRENT, pas le même réutilisé
+
+        const ourCallsOnSecondNode = calls.filter((c) => c.target === secondBackdrop);
+        // LE cœur du correctif : le NOUVEAU nœud, lui aussi, a reçu un `addEventListener("wheel", …,
+        // { passive: false })` — pas zéro appel (ce qu'un effet keyed sur `[layout]` seul laisserait,
+        // puisque `layout` n'a jamais changé pendant tout cet aller-retour).
+        expect(ourCallsOnSecondNode.length).toBeGreaterThan(0);
+        for (const call of ourCallsOnSecondNode) {
+          expect(typeof call.options).toBe("object");
+          expect((call.options as AddEventListenerOptions).passive).toBe(false);
+        }
+      } finally {
+        cleanup();
+      }
+    } finally {
+      HTMLElement.prototype.addEventListener = original;
+    }
+  });
 });
 
 describe("EditorShell — Espace-glisser : pan du conteneur, curseur grab/grabbing, SANS toucher aucun calque (Chantier B, Tâche 4)", () => {

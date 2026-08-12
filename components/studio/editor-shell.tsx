@@ -495,20 +495,31 @@ function EditorShellInner({
   // false }` explicite est la SEULE façon d'obtenir un `wheel` sur lequel `preventDefault()` a un
   // effet réel — d'où cet écouteur natif dédié plutôt qu'une prop JSX.
   //
-  // Dépendance `[layout]`, pas `[]` : `canvasWrapRef` ne pointe vers UN ÉLÉMENT RÉEL que lorsque
-  // `layout !== "too-small"` (voir le rendu plus bas — la branche `too-small` ne monte pas du tout ce
-  // conteneur). Un effet à `[]` poserait l'écouteur une seule fois, potentiellement sur `null`, et ne
-  // le reposerait jamais si `layout` bascule PLUS TARD (redimensionnement de fenêtre) vers une valeur
-  // qui monte enfin le conteneur.
+  // `canvasWrapRef` ne pointe vers UN ÉLÉMENT RÉEL que sous DEUX conditions, PAS une seule (revue —
+  // régression trouvée en repassage navigateur) : `layout !== "too-small"` ET `mode === "montage"`
+  // (voir le rendu plus bas — `mode === "rendu"` monte `<RenderMode>` à la place, un arbre ENTIÈREMENT
+  // différent, sans `canvas-backdrop` du tout). `canvasMounted` réunit les DEUX en un seul booléen —
+  // PAS `[layout]` seul (le premier jet de ce correctif, et son bug) : un aller-retour Montage ->
+  // Rendu réel -> Montage (`ModeSwitch`/raccourci « R ») DÉMONTE l'ancien `canvas-backdrop` et en
+  // MONTE un NOUVEAU nœud DOM, sans que `layout` n'ait bougé d'un cran — un effet keyed sur `[layout]`
+  // seul ne se redéclenche alors JAMAIS, laisse le NOUVEAU nœud SANS écouteur `wheel`, et fait
+  // silencieusement REVENIR le bug d'origine (⌘/Ctrl-molette zoome à nouveau la PAGE) après un simple
+  // aller-retour de mode — pourtant un geste on ne peut plus ordinaire. Dépendre du booléen DÉRIVÉ
+  // (plutôt que d'énumérer `layout`/`mode` séparément dans le tableau de dépendances) est ce qui
+  // garantit que l'effet se redéclenche À CHAQUE fois que ce nœud est RÉELLEMENT (dé)monté, et
+  // seulement alors — pas à chaque changement de `layout` qui laisserait le nœud en place (ex.
+  // `full` <-> `inspector-drawer`, aucun des deux `too-small`).
+  const canvasMounted = layout !== "too-small" && mode === "montage";
+
   useEffect(() => {
     const el = canvasWrapRef.current;
-    if (!el) return;
+    if (!el) return; // `canvasMounted` faux -> la ref est `null`, rien à attacher (no-op correct)
     function onWheel(e: WheelEvent) {
       handleCanvasWheelRef.current(e);
     }
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [layout]);
+  }, [canvasMounted]);
 
   // `Espace`-glisser pan (spec §2 du brief). `spacePanning` : Espace physiquement maintenu (garde de
   // focus ci-dessous respectée — un designer qui tape un espace dans un champ de saisie doit obtenir
