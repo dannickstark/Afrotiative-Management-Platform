@@ -190,10 +190,29 @@ export function setFrameOverride(format: FormatKey, layerId: string, frame: Fram
 // éditable qui n'existe pas — précisément ce que le brief demande de NE PAS fabriquer.
 //
 // Cette fonction est donc, pour l'instant, la SEULE consommatrice testée de l'invariant — exercée
-// directement par tests/studio-editor-state.test.ts. Le jour où une tâche future rend un format
-// non-accueil éditable (ex. un canevas Montage qui suit `view.selectedId` comme render-mode.tsx le
-// fait déjà pour l'aperçu), c'est CETTE fonction qu'elle appellera pour décider quelle action
-// dispatcher — elle n'aura pas à être réécrite, seulement branchée sur un `onFrameChange` réel.
+// directement par tests/studio-editor-state.test.ts.
+//
+// CE QUE CE ROUTEUR NE DÉCIDE PAS (revue Tâche 5, Important) : le VERROU. `setFrameOverride`
+// lui-même n'a délibérément AUCUNE garde de verrou (voir son commentaire) — et ce routeur n'en ajoute
+// pas non plus. La raison n'est PAS un oubli : le bon comportement dépend de la NATURE du futur
+// appelant, que ce fichier ne connaît pas encore.
+//   • Un glisser sur un CANEVAS (mécanisme souris, comme `resizeLayer`/`moveLayer` aujourd'hui) DOIT
+//     respecter le verrou — c'est la distinction que documente déjà l'en-tête du module (« un calque
+//     locked ne répond ni au clic ni au glisser »).
+//   • Un champ NUMÉRIQUE de panneau (édition explicite, comme `setLayerProp`/`toggleVisible`
+//     aujourd'hui) ne le doit PAS, par la même distinction.
+// Puisqu'on ne sait pas ENCORE laquelle des deux surfaces appellera ce routeur (voire les deux, pour
+// des gestes différents), câbler une garde ICI la rendrait FAUSSE pour l'un des deux cas d'usage
+// possibles. C'est donc au FUTUR appelant de trancher — un appelant « glisser » enveloppera son geste
+// d'une vérification `layer.locked` avant de dispatcher, exactement comme le canevas actuel le fait
+// déjà pour `resizeLayer`/`moveLayer` (voir canvas.tsx) ; un appelant « panneau » n'aura rien à
+// ajouter, comme `setLayerProp` aujourd'hui.
+//
+// TODO(next-UI-task) : quand une tâche future rend un format non-accueil éditable (ex. un canevas
+// Montage qui suit `view.selectedId` comme render-mode.tsx le fait déjà pour l'aperçu), c'est CETTE
+// fonction qu'elle appellera pour décider quelle action dispatcher — elle n'aura pas à être réécrite,
+// seulement branchée sur un `onFrameChange` réel, AVEC la garde de verrou tranchée ci-dessus posée
+// côté appelant si ce dernier est un geste de glisser sur le canevas.
 export function frameEditAction(
   homeFormat: FormatKey,
   activeFormat: FormatKey,
@@ -425,9 +444,13 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     // garantit `layer.frame` intact pour le calque édité, l'invariant central de cette tâche.
     //
     // Le calque doit exister dans la scène (même garde que `setLayerProp` : un id absent est un
-    // no-op, pas une erreur). PAS de garde de verrou ici, délibérément : comme `setLayerProp`/
-    // `toggleVisible` (voir le commentaire d'en-tête du module), c'est une édition EXPLICITE — pas un
-    // geste souris sur le canevas — et le verrou protège spécifiquement contre le second.
+    // no-op, pas une erreur). PAS de garde de verrou ici, délibérément — mais PAS parce que cette
+    // action serait catégoriquement une « édition de panneau » : elle n'a ENCORE aucun appelant réel
+    // (voir `frameEditAction` ci-dessus), donc rien ne dit si son futur appelant sera un glisser sur
+    // le canevas (devrait respecter le verrou, comme `resizeLayer`) ou un champ de panneau (ne le
+    // devrait pas, comme `setLayerProp`). Câbler la garde ICI la rendrait fausse pour l'un des deux
+    // cas. La décision est donc reportée au futur appelant — voir le commentaire de `frameEditAction`
+    // pour le détail de ce partage de responsabilité (revue Tâche 5, Important).
     //
     // AUCUN code de nettoyage dédié pour l'annulation : `commit()` empile l'entrée d'historique
     // habituelle, et l'`undo` générique (cas "undo" plus bas) restaure la scène ENTIÈRE d'avant CETTE

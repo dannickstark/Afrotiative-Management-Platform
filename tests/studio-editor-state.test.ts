@@ -513,6 +513,37 @@ describe("setFrameOverride — l'échappatoire manuelle pour un format non-accue
     expect(withSecond.scene.formatOverrides?.story?.badge).toEqual(overrideFrame);
     expect(withSecond.scene.formatOverrides?.ig_square?.title).toEqual({ x: 1, y: 1, w: 5, h: 5 });
   });
+
+  // Revue Tâche 5 (Minor à combler) : le test ci-dessus varie le FORMAT entre les deux appels, ce qui
+  // ne peut PAS attraper une réutilisation mutée de la carte INTERNE par format
+  // (`formatOverrides[format]`) — seul un DEUXIÈME appel au MÊME format, sur un AUTRE calque, y touche.
+  // Si l'implémentation faisait `Object.assign(state.scene.formatOverrides[format], {...})` au lieu de
+  // `{ ...state.scene.formatOverrides[format], [layerId]: frame }`, la SECONDE action muterait en place
+  // l'objet que la PREMIÈRE action a déjà rangé dans `withFirst.scene` (et que l'historique de
+  // `withSecond` garde vivant à `past[1].scene`, par référence) — cette scène passée gagnerait alors
+  // silencieusement l'entrée de la seconde action, alors qu'elle est censée être figée pour toujours.
+  it("DEUX surcharges au MÊME format, calques DIFFÉRENTS : la scène de la PREMIÈRE (vivante dans l'historique de la seconde) reste inchangée — pas de carte interne réutilisée-mutée", () => {
+    const state = makeState();
+    const withFirst = editorReducer(state, setFrameOverride("story", "badge", overrideFrame));
+    // Gardé par référence — c'est CET objet précis que `withSecond.past[1].scene` doit toujours être.
+    const firstScene = withFirst.scene;
+
+    const secondFrame = { x: 3, y: 3, w: 33, h: 33 };
+    const withSecond = editorReducer(withFirst, setFrameOverride("story", "title", secondFrame));
+
+    // La scène de la première action n'a PAS gagné l'entrée « title » de la seconde.
+    expect(firstScene.formatOverrides?.story).toEqual({ badge: overrideFrame });
+    expect(firstScene.formatOverrides?.story?.title).toBeUndefined();
+    // …et c'est bien CETTE MÊME référence que l'historique de la seconde action a empilée : un undo
+    // depuis `withSecond` y reviendrait, donc si elle avait été mutée, l'undo « restaurerait » un état
+    // qui n'a jamais existé.
+    expect(withSecond.past[1].scene).toBe(firstScene);
+    expect(withSecond.past[1].scene.formatOverrides?.story?.title).toBeUndefined();
+
+    // La scène COURANTE de la seconde action, elle, porte bien les DEUX entrées — c'est elle qui doit
+    // accumuler, pas la précédente.
+    expect(withSecond.scene.formatOverrides?.story).toEqual({ badge: overrideFrame, title: secondFrame });
+  });
 });
 
 // `frameEditAction` — le routeur home-vs-surcharge (chantier D, tâche 5). Aucune surface d'édition
