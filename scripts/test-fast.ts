@@ -56,6 +56,7 @@ const PURE_FILES = new Set<string>([
   "studio-interactions.test.ts", "studio-layer-geometry.test.ts", "studio-layer-panel.test.ts",
   "studio-marque-panel.test.ts", "studio-mode-switch.test.ts", "studio-mode.test.ts", "studio-no-r2.test.ts",
   "studio-property-panel.test.ts", "studio-public-api.test.ts", "studio-rail.test.ts",
+  "studio-relayout.test.ts", "studio-constraints.test.ts",
   "studio-render-clippath.test.ts", "studio-render-mode.test.ts", "studio-render.test.ts",
   "studio-save-indicator.test.ts", "studio-scene.test.ts", "studio-server-import.test.ts",
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
