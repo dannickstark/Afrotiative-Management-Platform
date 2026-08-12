@@ -7,7 +7,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
@@ -37,7 +36,7 @@ import { TokenPicker, pickerRowsFor } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { alignParticipants } from "@/lib/studio/align";
-import { FieldRow, NumberField, useCommitBuffer, type Patch } from "./property-fields";
+import { FieldRow, NumberField, SelectField, useCommitBuffer, type Patch } from "./property-fields";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
 // les champs que l'union Layer autorise (spec Tâche 8). Deux principes traversent tout ce fichier :
@@ -275,61 +274,6 @@ function SwitchField({
       <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
       <Switch checked={checked} disabled={disabled} data-field={dataField} onCheckedChange={(v) => onCommit(!!v)} />
     </div>
-  );
-}
-
-function SelectField({
-  label, value, options, onCommit, placeholder, optionDataAttr, hint, dataField,
-}: {
-  label: string;
-  value: string;
-  /** Tâche 5 (U4), additif : `disabled` marque une option ILLÉGALE dans ce contexte plutôt que de la
-   * faire disparaître de la liste (ImageFields/QrFields, plus bas) — jamais utilisé par les autres
-   * appelants de ce panneau (alignement, graisse, forme…), qui n'ont pas de notion de légalité. */
-  options: { value: string; label: string; disabled?: boolean }[];
-  onCommit: (v: string) => void;
-  placeholder?: string;
-  /** U3 Tâche 3 : pose `<attr>="<valeur d'option>"` sur chaque option, pour qu'un test puisse COMPTER
-   * les options rendues au lieu de se contenter de chercher leurs libellés dans tout le HTML (un
-   * sélecteur qui rendrait deux fois la même option passerait une simple recherche de sous-chaîne). */
-  optionDataAttr?: string;
-  /** Tâche 5 (U4), additif : ligne d'aide sous le contrôle — ImageFields/QrFields y posent la raison
-   * (« … n'est pas disponible dans ce contexte. ») quand la valeur COURANTE est une option grisée,
-   * même idiome que `RadiusField`/`shape-radius-help` un peu plus haut dans ce fichier. */
-  hint?: string;
-  /** Tâche 5 (U4), additif : pose `data-field` sur LE DÉCLENCHEUR — même convention que
-   * `TextField`/`ColorField` (dataField), pour qu'un test DOM cible sans ambiguïté CE sélecteur
-   * précis quand le panneau en affiche plusieurs (« Ajustement » ET « Emplacement » sur un calque
-   * image, par exemple) plutôt que d'indexer sur l'ORDRE de rendu — fragile au moindre remaniement. */
-  dataField?: string;
-}) {
-  return (
-    <FieldRow label={label}>
-      <Select value={value} onValueChange={(v) => { if (v) onCommit(v); }}>
-        <SelectTrigger className="w-full" data-field={dataField}>
-          {/* Base UI's <SelectValue> ne dérive PAS automatiquement le libellé du <SelectItem>
-              correspondant (contrairement à un <select> natif) — repéré en vérifiant l'écran réel
-              dans un navigateur : sans ce mappeur explicite, chaque sélecteur de ce panneau
-              (alignement, graisse de police, ajustement d'image…) affichait sa valeur technique
-              brute ("left", "700"…) au lieu de son libellé français — même piège déjà corrigé dans
-              components/studio/preview-pane.tsx, voir sa note. */}
-          <SelectValue placeholder={placeholder ?? "Choisir…"}>
-            {(v: string | null) => options.find((o) => o.value === v)?.label ?? placeholder ?? "Choisir…"}
-          </SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((o) => (
-            <SelectItem
-              key={o.value} value={o.value} disabled={o.disabled}
-              {...(optionDataAttr ? { [optionDataAttr]: o.value } : {})}
-            >
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
-    </FieldRow>
   );
 }
 

@@ -1,14 +1,18 @@
 "use client";
 
 import type { Dispatch, MouseEvent } from "react";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   H_CONSTRAINTS, V_CONSTRAINTS, constraintsOf,
   type HConstraint, type VConstraint, type LayerConstraints, type Layer,
 } from "@/lib/studio/scene";
 import { setLayerProps, type EditorAction } from "@/lib/studio/editor-state";
-import { FieldRow, type Patch } from "./property-fields";
+// `SelectField` vient de property-fields.tsx (Chantier D, Tâche 4, revue Important 1) — PAS d'une
+// copie locale des primitives `<Select>` de Base UI, et PAS d'un import depuis property-panel.tsx
+// (où `SelectField` vivait avant cette revue) : les deux importent désormais VERS LE BAS depuis la
+// même feuille commune, exactement la raison d'être de property-fields.tsx (voir son en-tête) —
+// property-panel.tsx -> constraints-field.tsx (via geometry-strip.tsx) aurait été un cycle.
+import { FieldRow, SelectField, type Patch } from "./property-fields";
 
 // components/studio/constraints-field.tsx — Chantier D, Tâche 4 : le widget de contraintes de
 // l'inspecteur — un carré cliquable (bords + centre) plus deux menus H/V — dans l'esprit de
@@ -188,36 +192,25 @@ export function ConstraintsField({ layer, patch, selectedIds, dispatch }: Constr
           />
         </div>
         <div className="grid flex-1 grid-cols-1 gap-2">
-          <Select
+          {/* `SelectField` (property-fields.tsx) plutôt qu'un `<Select>` Base UI reconstruit à la
+              main : MÊME primitive que le sélecteur de forme (property-panel.tsx), donc le mappeur
+              de libellé (voir sa note) et le rendu des options sont partagés, pas dupliqués. */}
+          <SelectField
+            label="Horizontal"
             value={current.h}
-            onValueChange={(v) => { if (v) patch({ constraints: { ...current, h: v as HConstraint } }); }}
-          >
-            <SelectTrigger className="w-full" data-field="constraints.h">
-              <SelectValue placeholder="Choisir…">
-                {(v: string | null) => H_CONSTRAINT_LABELS[(v ?? current.h) as HConstraint]}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {H_CONSTRAINTS.map((c) => (
-                <SelectItem key={c} value={c} data-constraint-h={c}>{H_CONSTRAINT_LABELS[c]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
+            options={H_CONSTRAINTS.map((c) => ({ value: c, label: H_CONSTRAINT_LABELS[c] }))}
+            optionDataAttr="data-constraint-h"
+            dataField="constraints.h"
+            onCommit={(v) => patch({ constraints: { ...current, h: v as HConstraint } })}
+          />
+          <SelectField
+            label="Vertical"
             value={current.v}
-            onValueChange={(v) => { if (v) patch({ constraints: { ...current, v: v as VConstraint } }); }}
-          >
-            <SelectTrigger className="w-full" data-field="constraints.v">
-              <SelectValue placeholder="Choisir…">
-                {(v: string | null) => V_CONSTRAINT_LABELS[(v ?? current.v) as VConstraint]}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {V_CONSTRAINTS.map((c) => (
-                <SelectItem key={c} value={c} data-constraint-v={c}>{V_CONSTRAINT_LABELS[c]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            options={V_CONSTRAINTS.map((c) => ({ value: c, label: V_CONSTRAINT_LABELS[c] }))}
+            optionDataAttr="data-constraint-v"
+            dataField="constraints.v"
+            onCommit={(v) => patch({ constraints: { ...current, v: v as VConstraint } })}
+          />
         </div>
       </div>
     </FieldRow>
