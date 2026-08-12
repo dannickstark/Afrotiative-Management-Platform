@@ -9,7 +9,10 @@ import {
 // Chantier B, Tâche 5 — un clic sur un MEMBRE de groupe sélectionne le GROUPE ENTIER (spec §6). Voir
 // son commentaire en tête de module pour le modèle FLAT — cette fonction dérive les membres à la
 // volée, aucune donnée « groupe » n'est stockée à part.
-import { expandSelectionToGroups } from "@/lib/studio/groups";
+// Chantier B, Tâche 6 — `groupBounds` (T5, même module) donne à la barre contextuelle flottante la
+// MÊME géométrie que le glisser de groupe utilise déjà pour son propre calcul : jamais une seconde
+// boîte englobante qui pourrait diverger de celle que l'utilisateur voit déjà bouger à l'écran.
+import { expandSelectionToGroups, groupBounds } from "@/lib/studio/groups";
 import { useLayerDrag, HANDLES, type HandleId } from "@/hooks/use-layer-drag";
 // U3 Tâche 3 (arbitrage A) : LA MÊME question que les deux chemins de rendu posent — cette forme
 // tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
@@ -30,6 +33,11 @@ import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { usesInLayer, type TokenId } from "@/lib/studio/tokens";
 import { TOKEN_LABELS } from "@/lib/studio/token-labels";
 import { LayerView } from "./layer-view";
+// Chantier B, Tâche 6 — la barre contextuelle flottante. PAS de Popover/Select à l'intérieur (voir
+// son en-tête) : `FloatingToolbar` ne réutilise que `<Button>`, donc son import ici ne réintroduit
+// jamais l'incident que tests/studio-no-popover-in-canvas.test.ts garde (voir le commentaire de U4
+// Tâche 6 plus haut dans ce fichier).
+import { FloatingToolbar } from "./floating-toolbar";
 
 // Le canevas est du DOM, pas un `<canvas>` (spec §2) : chaque calque est une `div` positionnée en
 // absolu, à l'intérieur d'un conteneur mis à l'échelle. Le conteneur EXTÉRIEUR (celui que le parent
@@ -148,6 +156,16 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
   // rotation seules, plus au clavier.
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
+
+  // Chantier B, Tâche 6 — la sélection RÉSOLUE contre la scène (jamais les ids bruts de la prop), sur
+  // le modèle de `selectedLayers()` (hooks/use-editor-keymap.ts, copier/dupliquer) : un id qui ne
+  // désigne plus aucun calque (§2 de l'en-tête d'editor-state.ts, « la sélection n'est pas validée
+  // contre la scène ») est silencieusement absent, jamais une entrée `undefined`. AUCUN filtre sur
+  // `visible`/`locked` ici — contrairement à `selectedLayer` ci-dessus (poignées de geste), la barre
+  // contextuelle affiche des ACTIONS (dupliquer, verrouiller…) qui ont un sens même sur un calque
+  // masqué ou déjà verrouillé (verrouiller reste, par construction, jamais bloqué par son propre
+  // verrou — voir editor-state.ts#toggleLocked).
+  const selectedLayers = scene.layers.filter((l) => selectedIds.includes(l.id));
 
   // U4 Tâche 3 — le fond du canevas, résolu pour l'AFFICHAGE (même discipline que LayerView) : un
   // fond lié à `{{jeton}}` montre l'échantillon plutôt qu'une chaîne CSS invalide silencieusement
@@ -494,6 +512,29 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
             </div>
           );
         })}
+
+        {/* Barre contextuelle flottante (Chantier B, Tâche 6, spec §4) — SIBLING des calques et des
+            surcouches ci-dessus, à l'intérieur du MÊME conteneur mis à l'échelle (même garde que la
+            grille de U1 : jamais un conteneur à côté de l'artboard). Rendue EN DERNIER pour rester
+            au-dessus de tout le reste à l'écran (ordre de peinture DOM, sans z-index, même idiome que
+            les guides/le contour de liaisons plus haut).
+              - `selectedLayers.length > 0` : §0 du plan — sans sélection, rien ne s'ancre, le canevas
+                reste inchangé (`FloatingToolbar` renvoie aussi `null` de son côté si
+                `toolbarActionsFor` renvoyait `[]`, mais la garde ici évite même de calculer
+                `groupBounds` sur un tableau vide).
+              - `!preview` : « masquée pendant un glisser/redimensionnement/rotation » (brief T6) —
+                `preview` (useLayerDrag, plus haut) est truthy pour LA DURÉE du geste entier, qu'il
+                déplace un seul calque ou tout un groupe ; la barre réapparaît au relâchement, quand
+                `preview` retombe à `null`. */}
+        {selectedLayers.length > 0 && !preview && (
+          <FloatingToolbar
+            selection={selectedLayers}
+            layers={scene.layers}
+            bounds={groupBounds(selectedLayers)}
+            scale={scale}
+            dispatch={dispatch}
+          />
+        )}
       </div>
     </div>
   );
