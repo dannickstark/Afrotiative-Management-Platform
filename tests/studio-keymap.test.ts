@@ -101,6 +101,47 @@ describe("resolveShortcut — ⌘C/⌘V/⌘D, le presse-papiers en session (chan
   });
 });
 
+// Chantier B, Tâche 3 — le VRAI zoom : ⇧0 (100 %), ⇧1 (fit), ⇧2 (zoom sur sélection).
+describe("resolveShortcut — ⇧0/⇧1/⇧2, le VRAI zoom (chantier B, tâche 3)", () => {
+  it("⇧0 -> zoom100, sans avoir besoin d'une sélection", () => {
+    expect(resolveShortcut({ key: "0", shiftKey: true }, SEL)).toEqual({ kind: "zoom100" });
+    expect(resolveShortcut({ key: "0", shiftKey: true }, NO_SEL)).toEqual({ kind: "zoom100" });
+  });
+
+  it("⇧1 -> zoomFit, sans avoir besoin d'une sélection", () => {
+    expect(resolveShortcut({ key: "1", shiftKey: true }, SEL)).toEqual({ kind: "zoomFit" });
+    expect(resolveShortcut({ key: "1", shiftKey: true }, NO_SEL)).toEqual({ kind: "zoomFit" });
+  });
+
+  it("⇧2 -> zoomSelection, UNIQUEMENT avec une sélection (même garde que ⌘C/⌘D)", () => {
+    expect(resolveShortcut({ key: "2", shiftKey: true }, SEL)).toEqual({ kind: "zoomSelection" });
+    expect(resolveShortcut({ key: "2", shiftKey: true }, NO_SEL)).toBeNull();
+  });
+
+  it("SANS Maj, « 0 »/« 1 »/« 2 » nus ne produisent AUCUNE commande (ce ne sont pas des chords zoom)", () => {
+    expect(resolveShortcut({ key: "0" }, SEL)).toBeNull();
+    expect(resolveShortcut({ key: "1" }, SEL)).toBeNull();
+    expect(resolveShortcut({ key: "2" }, SEL)).toBeNull();
+  });
+
+  it("⌘⇧0/⌘⇧1/⌘⇧2 (avec ⌘/Ctrl en plus) ne produisent AUCUNE commande — un chord DIFFÉRENT, jamais un alias", () => {
+    expect(resolveShortcut({ key: "0", shiftKey: true, metaKey: true }, SEL)).toBeNull();
+    expect(resolveShortcut({ key: "1", shiftKey: true, metaKey: true }, SEL)).toBeNull();
+    expect(resolveShortcut({ key: "2", shiftKey: true, metaKey: true }, SEL)).toBeNull();
+  });
+
+  it("anti-vacuité : ⇧0, ⇧1 et ⇧2 produisent trois commandes DISTINCTES, jamais confondues", () => {
+    const zoom100 = resolveShortcut({ key: "0", shiftKey: true }, SEL);
+    const zoomFit = resolveShortcut({ key: "1", shiftKey: true }, SEL);
+    const zoomSel = resolveShortcut({ key: "2", shiftKey: true }, SEL);
+    expect(zoom100).toEqual({ kind: "zoom100" });
+    expect(zoomFit).toEqual({ kind: "zoomFit" });
+    expect(zoomSel).toEqual({ kind: "zoomSelection" });
+    expect(zoom100).not.toEqual(zoomFit);
+    expect(zoomFit).not.toEqual(zoomSel);
+  });
+});
+
 describe("resolveShortcut — LA GARDE DE FOCUS s'applique aussi à ⌘C/⌘V/⌘D (pas d'exception chord par chord)", () => {
   it("⌘C/⌘V/⌘D pendant l'édition d'un champ texte -> null (le navigateur doit garder la main)", () => {
     expect(resolveShortcut({ key: "c", metaKey: true }, EDITING)).toBeNull();
@@ -120,6 +161,20 @@ describe("resolveShortcut — LA GARDE DE POPUP s'applique aussi à ⌘C/⌘V/�
     expect(resolveShortcut({ key: "c", metaKey: true }, POPUP_OPEN)).toBeNull();
     expect(resolveShortcut({ key: "v", metaKey: true }, POPUP_OPEN)).toBeNull();
     expect(resolveShortcut({ key: "d", metaKey: true }, POPUP_OPEN)).toBeNull();
+  });
+});
+
+describe("resolveShortcut — LES DEUX GARDES s'appliquent aussi à ⇧0/⇧1/⇧2", () => {
+  it("⇧0/⇧1/⇧2 pendant l'édition d'un champ texte -> null", () => {
+    expect(resolveShortcut({ key: "0", shiftKey: true }, EDITING)).toBeNull();
+    expect(resolveShortcut({ key: "1", shiftKey: true }, EDITING)).toBeNull();
+    expect(resolveShortcut({ key: "2", shiftKey: true }, EDITING)).toBeNull();
+  });
+
+  it("⇧0/⇧1/⇧2 pendant qu'un popup est ouvert -> null", () => {
+    expect(resolveShortcut({ key: "0", shiftKey: true }, POPUP_OPEN)).toBeNull();
+    expect(resolveShortcut({ key: "1", shiftKey: true }, POPUP_OPEN)).toBeNull();
+    expect(resolveShortcut({ key: "2", shiftKey: true }, POPUP_OPEN)).toBeNull();
   });
 });
 
@@ -229,7 +284,7 @@ describe("isPopupOpen — signal DOM `data-open`/`role=\"listbox\"`/`role=\"menu
 
 // Garde-fou de complétude du littéral `EditorCommand` — si une future tâche ajoute un membre à
 // l'union sans mettre à jour ce test, TypeScript le signale ici plutôt qu'en silence à l'usage.
-describe("EditorCommand — les neuf variantes actuelles restent assignables", () => {
+describe("EditorCommand — les douze variantes actuelles restent assignables", () => {
   it("littéraux de contrôle", () => {
     const all: EditorCommand[] = [
       { kind: "undo" },
@@ -241,7 +296,10 @@ describe("EditorCommand — les neuf variantes actuelles restent assignables", (
       { kind: "copy" },
       { kind: "paste" },
       { kind: "duplicate" },
+      { kind: "zoom100" },
+      { kind: "zoomFit" },
+      { kind: "zoomSelection" },
     ];
-    expect(all).toHaveLength(9);
+    expect(all).toHaveLength(12);
   });
 });

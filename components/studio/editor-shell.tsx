@@ -4,9 +4,12 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, Undo2, Redo2, PanelRight } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, PanelRight, Minus, Plus } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { Canvas } from "./canvas";
 import { CanvasChrome, safeAreaDefaultFor, RULER_SIZE } from "./canvas-chrome";
@@ -39,6 +42,7 @@ import {
   RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
 } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
+import { clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS } from "@/lib/studio/zoom";
 import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
@@ -56,6 +60,13 @@ const AUTOSAVE_DELAY_MS = 1500;
 // qui produit « ? », ouvre la recherche du menu Aide — un raccourci DIFFÉRENT) donc pas de collision
 // technique constatée ; conservé tel quel plutôt que le repli « ⌘. » envisagé par la spec.
 const COLLAPSE_PANEL_KEY = "/";
+
+// Chantier B, Tâche 3 — le slot de zoom (spec ci-dessous) : préréglages numériques additionnels du
+// menu déroulant, EN PLUS des trois entrées « spéciales » (Ajuster/100 %/Cadrer la sélection, qui
+// passent par lib/studio/zoom.ts#zoomPresetScale). `100` n'y figure PAS — déjà couvert par sa propre
+// entrée dédiée (« 100 % », qui reste exacte quel que soit `fitScale` via zoomPresetScale("100", …),
+// alors qu'un simple `100/100/fitScale` ici donnerait le MÊME résultat mais dupliquerait l'entrée).
+const ZOOM_PERCENT_PRESETS = [50, 75, 125, 150, 200] as const;
 
 const CONTEXT_LABEL: Record<TemplateContext, string> = {
   article_image: "Image à la une",
@@ -181,12 +192,6 @@ function EditorShellInner({
 }: EditorShellInnerProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
-
-  // Chantier B, Tâche 1 — le KEYMAP CENTRAL (⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches, avec la garde de focus
-  // de lib/studio/keymap.ts). Monté ICI, sur `state`/`dispatch` déjà en place, plutôt que dans un
-  // composant enfant : c'est ce qui lui donne accès à la sélection ET à la scène ENTIÈRES pour
-  // ⌘A (sélectionner tous les calques) sans faire remonter ces deux valeurs par une prop dédiée.
-  useEditorKeymap(state, dispatch);
 
   // ── Réactif (Chantier A Tâche 4, spec §2/§9) ──────────────────────────────
   // `layout` retombe sur `"full"` (hooks/use-editor-layout.ts) tant que le premier effet n'a pas
@@ -345,8 +350,12 @@ function EditorShellInner({
   }
 
   // ── Mise à l'échelle du canevas (spec §2, §7) ────────────────────────────
+  // `fitScale` (renommé depuis `scale` — Chantier B, Tâche 3) reste EXACTEMENT ce qu'il était : la
+  // mesure du conteneur par le ResizeObserver ci-dessous, RECALCULÉE, jamais touchée par le zoom
+  // utilisateur. `computeCanvasScale` lui-même n'a pas changé d'une ligne (§0 non-régression du
+  // brief T3) — voir sa propre documentation en tête de fichier.
   const canvasWrapRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const [fitScale, setFitScale] = useState(1);
   useEffect(() => {
     const el = canvasWrapRef.current;
     if (!el) return;
@@ -358,7 +367,7 @@ function EditorShellInner({
         { width: template.width, height: template.height },
         prefs.rulers,
       );
-      if (next !== null) setScale(next);
+      if (next !== null) setFitScale(next);
     }
     computeScale();
     const ro = new ResizeObserver(computeScale);
@@ -373,6 +382,52 @@ function EditorShellInner({
     // là où vivent les règles, les rendant de facto invisibles en plus de faire apparaître des
     // barres de défilement inattendues.
   }, [template.width, template.height, prefs.rulers]);
+
+  // ── Zoom RÉEL (Chantier B, Tâche 3) : `scale = fitScale × factor` ────────
+  // `factor` vient de `EditorPrefs.zoom` (lib/studio/editor-prefs.ts, déjà persisté par utilisateur
+  // depuis U1/U7 — jamais consommé avant cette tâche, voir le commentaire d'origine de
+  // canvas-chrome.tsx). `"fit"` -> `1` (`scale = fitScale`, BIT À BIT le comportement d'avant cette
+  // tâche — §0 non-régression) ; un nombre passe par `clampZoom` (lib/studio/zoom.ts) à CHAQUE lecture
+  // — même discipline défensive que `clampPanelWidth` pour `railPanelWidth`/`inspectorWidth`
+  // (editor-prefs.ts) : une valeur persistée hors bornes (ex. un futur resserrement de ZOOM_STEPS) ne
+  // fait jamais déborder `scale`. `scale` — PAS `fitScale` — est ce que reçoivent `<Canvas>` et
+  // `<CanvasChrome>` plus bas : c'est LA seule échelle réellement appliquée à l'écran, la même que la
+  // pastille `zoom-chip` (canvas-chrome.tsx) affiche et que le slot `zoom-slot` ci-dessous affiche —
+  // UNE SEULE source de vérité, jamais deux nombres qui pourraient diverger.
+  const factor = prefs.zoom === "fit" ? 1 : clampZoom(prefs.zoom);
+  const scale = fitScale * factor;
+
+  function setZoom(next: number | "fit") {
+    setPrefs((p) => ({ ...p, zoom: next }));
+  }
+
+  function currentViewport(): { width: number; height: number } | null {
+    const el = canvasWrapRef.current;
+    return el ? { width: el.clientWidth, height: el.clientHeight } : null;
+  }
+
+  // Cadre la sélection courante dans le viewport — partagé par ⇧2 (via le keymap ci-dessous) ET
+  // l'entrée « Cadrer la sélection » du menu déroulant du slot (plus bas dans le rendu), pour que les
+  // deux chemins produisent EXACTEMENT le même facteur plutôt que deux calculs qui pourraient diverger.
+  function zoomToSelection() {
+    const layers = state.scene.layers.filter((l) => state.selectedIds.includes(l.id));
+    const bounds = unionBounds(layers.map((l) => l.frame));
+    const viewport = currentViewport();
+    if (!bounds || !viewport) return; // rien à cadrer, ou conteneur pas encore mesurable — no-op
+    setZoom(zoomPresetScale("selection", fitScale, bounds, viewport));
+  }
+
+  // Chantier B, Tâche 1 — le KEYMAP CENTRAL (⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches, avec la garde de focus
+  // de lib/studio/keymap.ts). Monté ICI, sur `state`/`dispatch` déjà en place, plutôt que dans un
+  // composant enfant : c'est ce qui lui donne accès à la sélection ET à la scène ENTIÈRES pour
+  // ⌘A (sélectionner tous les calques) sans faire remonter ces deux valeurs par une prop dédiée.
+  //
+  // Chantier B, Tâche 3 (additif, déplacé ici — ce hook exigeait `fitScale`/`canvasWrapRef`/`setZoom`,
+  // tous les trois posés juste au-dessus) : le troisième argument câble ⇧0/⇧1/⇧2 (le VRAI zoom) — voir
+  // hooks/use-editor-keymap.ts#ZoomKeymapContext. `setZoom` écrit `EditorPrefs.zoom`, JAMAIS
+  // `dispatch` : un changement de zoom n'est pas une action du réducteur de scène (aucun
+  // `HistoryEntry`, aucun autosave — l'effet d'autosave plus haut ne compare QUE `state.scene`).
+  useEditorKeymap(state, dispatch, { fitScale, getViewport: currentViewport, setZoom });
 
   const showUnpublishedBadge = shouldShowUnpublishedBadge(template.publishedVersion, state.scene, publishedScene);
 
@@ -505,19 +560,6 @@ function EditorShellInner({
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          {/* Slot chantier B (spec Studio Pro chantier A, Tâche 2) : affordance de zoom
-              DÉLIBÉRÉMENT inerte — `disabled`, aucun `onClick` — juste un emplacement réservé dans la
-              barre. Le vrai contrôle (lecture/écriture du zoom réel du canevas, `scale` ci-dessus)
-              est câblé par le chantier B, pas ici ; ce bouton n'affiche que "100%" en dur pour occuper
-              la place et fixer la forme attendue (`data-testid="zoom-slot"`, verrouillé par le test
-              U0 ci-dessous). */}
-          <Button
-            type="button" variant="outline" size="sm" disabled
-            data-testid="zoom-slot" aria-label="Zoom (à venir)"
-            className="tabular-nums"
-          >
-            100%
-          </Button>
           {/* Correctif revue (Chantier A Tâche 4) : « aperçu seulement » n'était PAS honnête —
               annuler/rétablir/restaurer une version restaient de VRAIES actions (dispatch(undo())/
               dispatch(redo()), un vrai `HistoryEntry` du réducteur ; `VersionHistory.onRestore`
@@ -527,9 +569,79 @@ function EditorShellInner({
               l'étiquette lecture seule. Repliées ici plutôt que simplement désactivées : un bouton
               `disabled` resterait un AFFORDANCE visible d'édition sur un écran qui prétend n'en avoir
               aucune — la même discipline que `TooSmallState` (Canvas en lecture seule, PAS un Canvas
-              éditable désactivé au pixel près). */}
+              éditable désactivé au pixel près).
+
+              Chantier B, Tâche 3 (additif) : le slot de zoom REJOINT ce même groupe conditionnel — le
+              brief le nomme explicitement (« follow how undo/redo are gated ») : c'est un contrôle
+              d'ÉDITION du canevas au même titre qu'annuler/rétablir, jamais un simple affichage, donc
+              il n'a pas plus sa place qu'eux dans l'en-tête lecture seule `too-small`. */}
           {layout !== "too-small" && (
             <>
+              {/* Le slot de zoom (spec Studio Pro chantier A Tâche 2, câblé ICI par le chantier B
+                  Tâche 3) : `−`/`+` (nextZoom, lib/studio/zoom.ts) encadrant le pourcentage COURANT
+                  (le déclencheur du menu, `scale × 100` arrondi — LA MÊME valeur que `zoom-chip`,
+                  canvas-chrome.tsx, puisque les deux lisent `scale = fitScale × factor` ci-dessus) et
+                  un menu déroulant Ajuster/100 %/Cadrer la sélection/préréglages 50–200 %.
+                  `data-testid="zoom-slot"` reste sur le CONTENEUR (verrouillé par le test U0) — plus
+                  un `<Button disabled>` isolé, mais le groupe entier du contrôle désormais vivant. */}
+              <div className="flex items-center gap-0.5" data-testid="zoom-slot">
+                <Button
+                  type="button" variant="ghost" size="icon-sm" title="Zoom arrière"
+                  aria-label="Zoom arrière" data-testid="zoom-out"
+                  disabled={factor <= ZOOM_STEPS[0]}
+                  onClick={() => setZoom(nextZoom(factor, -1))}
+                >
+                  <Minus />
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        type="button" variant="outline" size="sm" className="tabular-nums px-2"
+                        aria-label="Niveau de zoom" data-testid="zoom-current"
+                      />
+                    }
+                  >
+                    {Math.round(scale * 100)}%
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem data-testid="zoom-menu-fit" onClick={() => setZoom("fit")}>
+                      Ajuster
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      data-testid="zoom-menu-100"
+                      onClick={() => setZoom(zoomPresetScale("100", fitScale))}
+                    >
+                      100 %
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      data-testid="zoom-menu-selection"
+                      disabled={state.selectedIds.length === 0}
+                      onClick={zoomToSelection}
+                    >
+                      Cadrer la sélection
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {ZOOM_PERCENT_PRESETS.map((pct) => (
+                      <DropdownMenuItem
+                        key={pct}
+                        data-testid={`zoom-menu-${pct}`}
+                        onClick={() => setZoom(clampZoom(pct / 100 / fitScale))}
+                      >
+                        {pct} %
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  type="button" variant="ghost" size="icon-sm" title="Zoom avant"
+                  aria-label="Zoom avant" data-testid="zoom-in"
+                  disabled={factor >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+                  onClick={() => setZoom(nextZoom(factor, 1))}
+                >
+                  <Plus />
+                </Button>
+              </div>
               <Button
                 type="button" variant="ghost" size="icon-sm" title="Annuler"
                 disabled={state.past.length === 0} onClick={() => dispatch(undo())}

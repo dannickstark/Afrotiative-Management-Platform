@@ -8,6 +8,7 @@ import {
   undo, redo, selectMany, clearSelection, deleteLayer, moveLayer, singleSelectedId, addLayers,
 } from "@/lib/studio/editor-state";
 import { cloneLayersWithNewIds, copyToClipboard, readClipboard, PASTE_OFFSET } from "@/lib/studio/clipboard";
+import { unionBounds, zoomPresetScale, type ZoomViewport } from "@/lib/studio/zoom";
 import type { Layer } from "@/lib/studio/scene";
 
 // hooks/use-editor-keymap.ts — Chantier B, Tâche 1 : le pont navigateur pour
@@ -67,11 +68,42 @@ function selectedLayers(state: EditorState): Layer[] {
   return layers;
 }
 
-export function useEditorKeymap(state: EditorState, dispatch: Dispatch<EditorAction>): void {
+// Chantier B, Tâche 3 — le VRAI zoom (⇧0/⇧1/⇧2). Ce que ce hook ajoute à `resolveShortcut`
+// (lib/studio/keymap.ts), qui ne connaît que « y a-t-il une sélection » (booléen) : la mesure RÉELLE
+// (`fitScale`, le viewport ÉCRAN courant) et l'écriture de la préférence — zoom est un PRÉFÉRENCE,
+// jamais une action du réducteur de scène (voir editor-shell.tsx : `setZoom` pose `EditorPrefs.zoom`,
+// PAS `dispatch` — aucun `HistoryEntry`, aucun autosave déclenché par un changement de zoom).
+export interface ZoomKeymapContext {
+  /** L'échelle d'AJUSTEMENT courante (editor-shell.tsx#computeCanvasScale, le `fitScale` ResizeObserver
+   * — PAS `scale` = fitScale × factor). Lu à CHAQUE frappe via une ref (voir `zoomRef` plus bas),
+   * jamais figé à la valeur du montage : `fitScale` change à chaque redimensionnement de fenêtre. */
+  fitScale: number;
+  /** La zone ÉCRAN disponible pour cadrer une sélection (le conteneur du canevas), mesurée au moment
+   * de la frappe — `null` si le conteneur n'est pas encore monté/mesurable. */
+  getViewport: () => ZoomViewport | null;
+  /** Écrit `EditorPrefs.zoom` — `"fit"` pour ⇧1, un FACTEUR numérique (relatif à `fitScale`, voir
+   * lib/studio/zoom.ts) pour ⇧0/⇧2. Jamais `dispatch` : le zoom ne mute pas `state.scene`. */
+  setZoom: (factor: number | "fit") => void;
+}
+
+export function useEditorKeymap(
+  state: EditorState,
+  dispatch: Dispatch<EditorAction>,
+  zoom: ZoomKeymapContext,
+): void {
   const stateRef = useRef(state);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  // Même motif que `stateRef` ci-dessus : une ref, jamais une dépendance de l'effet d'écoute plus bas
+  // (voir son en-tête, « DÉPENDANCES STABLES DE L'EFFET ») — `zoom` (l'objet littéral passé par
+  // editor-shell.tsx) change de référence à CHAQUE rendu (nouvelle closure `getViewport`/`setZoom`),
+  // ce qui reposerait l'écouteur `window` à chaque frappe traitée si c'était une dépendance directe.
+  const zoomRef = useRef(zoom);
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -148,6 +180,30 @@ export function useEditorKeymap(state: EditorState, dispatch: Dispatch<EditorAct
           if (layers.length === 0) return;
           e.preventDefault();
           dispatch(addLayers(cloneLayersWithNewIds(layers, PASTE_OFFSET)));
+          return;
+        }
+        // Chantier B, Tâche 3 — ⇧0/⇧1/⇧2 : `zoomRef.current.setZoom(...)`, JAMAIS `dispatch` — voir
+        // `ZoomKeymapContext` ci-dessus pour pourquoi (préférence, pas action du réducteur de scène).
+        case "zoom100":
+          e.preventDefault();
+          zoomRef.current.setZoom(zoomPresetScale("100", zoomRef.current.fitScale));
+          return;
+        case "zoomFit":
+          e.preventDefault();
+          zoomRef.current.setZoom("fit");
+          return;
+        case "zoomSelection": {
+          // `resolveShortcut` a déjà tranché `ctx.hasSelection` — ce que LUI ne peut pas savoir, comme
+          // pour copy/duplicate ci-dessus, c'est si ces ids DÉSIGNENT ENCORE des calques réels de la
+          // scène courante, ni la géométrie (leurs `frame`) qu'il faut cadrer. Un viewport pas encore
+          // mesurable (conteneur pas monté) est un no-op silencieux, pas une erreur.
+          const layers = selectedLayers(current);
+          if (layers.length === 0) return;
+          const bounds = unionBounds(layers.map((l) => l.frame));
+          const viewport = zoomRef.current.getViewport();
+          if (!bounds || !viewport) return;
+          e.preventDefault();
+          zoomRef.current.setZoom(zoomPresetScale("selection", zoomRef.current.fitScale, bounds, viewport));
           return;
         }
       }

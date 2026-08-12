@@ -54,7 +54,17 @@ export type EditorCommand =
   // sans rien sélectionner au préalable.
   | { kind: "copy" }
   | { kind: "paste" }
-  | { kind: "duplicate" };
+  | { kind: "duplicate" }
+  // Chantier B, Tâche 3 — le VRAI zoom (⇧0/⇧1/⇧2). Trois commandes, comme les trois préréglages de
+  // lib/studio/zoom.ts#zoomPresetScale ("100"/"fit"/"selection") — ce module ne sait toujours RIEN de
+  // `fitScale`, de la sélection réelle ni du viewport : c'est hooks/use-editor-keymap.ts qui résout
+  // ces trois commandes en un facteur réel via zoom.ts, exactement comme il résout déjà `selectedIds`
+  // en calques réels pour `copy`/`duplicate` ci-dessus. `zoomSelection` porte la MÊME garde que
+  // `copy`/`duplicate` (`ctx.hasSelection`, plus bas) — zoomer sur une sélection vide n'a rien à
+  // cadrer ; `zoom100`/`zoomFit` n'en ont pas besoin, comme `paste`.
+  | { kind: "zoom100" }
+  | { kind: "zoomFit" }
+  | { kind: "zoomSelection" };
 
 export interface ShortcutEvent {
   key: string;
@@ -127,6 +137,20 @@ export function resolveShortcut(e: ShortcutEvent, ctx: ShortcutContext): EditorC
   }
   if (mod && key.toLowerCase() === "d") {
     return ctx.hasSelection ? { kind: "duplicate" } : null;
+  }
+  // Chantier B, Tâche 3 — ⇧0/⇧1/⇧2 : MAJ SEULE, jamais ⌘/Ctrl (ce sont des chords DIFFÉRENTS —
+  // ⌘⇧0 ne fait rien ici, comme aucun navigateur ne réserve ⇧0/⇧1/⇧2 nus sur un clavier standard,
+  // vérifié au même titre que ⌘/ dans editor-shell.tsx). `zoomSelection` (⇧2) suit EXACTEMENT le
+  // motif de `copy`/`duplicate` : sans sélection, rien à cadrer, `resolveShortcut` renvoie `null`
+  // plutôt qu'une commande que le hook devrait de toute façon ignorer.
+  if (!mod && e.shiftKey && key === "0") {
+    return { kind: "zoom100" };
+  }
+  if (!mod && e.shiftKey && key === "1") {
+    return { kind: "zoomFit" };
+  }
+  if (!mod && e.shiftKey && key === "2") {
+    return ctx.hasSelection ? { kind: "zoomSelection" } : null;
   }
   if (!mod && key === "Escape") {
     return { kind: "deselect" };
