@@ -817,8 +817,8 @@ function ShapeFields({
         {!supportsShadow(layer.shape) && (
           <p className="text-[11px] text-muted-foreground" data-testid="shape-shadow-none">
             L&rsquo;ombre n&rsquo;est pas disponible sur la forme «&nbsp;{descriptor.label}&nbsp;» : une
-            ombre portée se peint AUTOUR de la boîte du calque, et le découpage l&rsquo;emporte avec le
-            reste — ni le canevas ni l&rsquo;image exportée n&rsquo;en montreraient quoi que ce soit.
+            ombre portée se peint AUTOUR de la boîte du calque, et une forme découpée n&rsquo;en montre
+            rien — ni sur le canevas, ni dans l&rsquo;image exportée. Vérifié en pixels sur les deux.
             Elle n&rsquo;est donc peinte nulle part ici, et une ombre déjà réglée reste conservée telle
             quelle si vous revenez à une forme pleine.
           </p>
