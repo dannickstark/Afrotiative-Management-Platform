@@ -1993,6 +1993,61 @@ describe("EditorShell — molette ⌘/Ctrl : zoom centré sur le curseur, défil
   });
 });
 
+describe("EditorShell — l'écouteur `wheel` est posé NON PASSIF (revue chantier B T4, Important — passage réel navigateur)", () => {
+  // Ce que le contrôleur a trouvé en conditions RÉELLES (jsdom ne simule pas la passivité d'un
+  // écouteur, donc AUCUN test contre le COMPORTEMENT — molette bloquée, page qui ne zoome pas — ne
+  // peut détecter ce défaut-là ici) : `onWheel={handleCanvasWheel}` (une prop JSX React) délègue au
+  // SEUL écouteur `wheel` racine que React pose, PASSIF par défaut — `e.preventDefault()` y est un
+  // no-op silencieux. Le canevas zoomait bien au bon endroit, mais le NAVIGATEUR zoomait AUSSI la
+  // page entière. Ce test épingle donc le CÂBLAGE (comment l'écouteur est posé), pas le symptôme
+  // (que jsdom ne peut pas observer) — la seule façon de garder ce correctif honnête sous `bun test`.
+  it("`canvasWrapRef` reçoit un VRAI `addEventListener('wheel', …, { passive: false })` natif — pas une prop `onWheel` React", async () => {
+    // `spyOn` seul ne rapporte pas `this` (bun:test) — un monkey-patch manuel le capture, pour SCOPER
+    // l'assertion au SEUL `canvasWrapRef` (data-testid="canvas-backdrop"). Nécessaire : l'arbre
+    // EditorShell monte d'autres composants base-ui qui posent LEUR PROPRE écouteur "wheel" ailleurs
+    // (ex. `ScrollAreaViewport`, `NumberFieldRoot` du panneau de propriétés — `NumberFieldRoot`
+    // documente d'ailleurs LE MÊME piège dans son propre code source : « React attaches onWheel as a
+    // passive listener, so calling preventDefault there is ignored ») — un simple filtre sur le TYPE
+    // d'événement compterait AUSSI leurs écouteurs à eux, dont certains sont légitimement passifs (ce
+    // ne sont pas les nôtres, pas notre affaire), et ferait planter ce test pour une raison qui n'a
+    // rien à voir avec le correctif vérifié ici.
+    const calls: Array<{ target: EventTarget; options: unknown }> = [];
+    const original = HTMLElement.prototype.addEventListener;
+    HTMLElement.prototype.addEventListener = function (
+      this: HTMLElement,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) {
+      if (type === "wheel") calls.push({ target: this, options });
+      return original.call(this, type, listener, options);
+    } as typeof HTMLElement.prototype.addEventListener;
+
+    try {
+      const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+      try {
+        const backdrop = backdropEl(container);
+        const ourCalls = calls.filter((c) => c.target === backdrop);
+        // AU MOINS un écouteur "wheel" sur `canvasWrapRef` lui-même — l'effet de
+        // editor-shell.tsx#handleCanvasWheel doit avoir tourné (conteneur monté, `layout !==
+        // "too-small"` en jsdom par défaut) — sinon ce test ne prouverait rien (anti-vacuité).
+        expect(ourCalls.length).toBeGreaterThan(0);
+        for (const call of ourCalls) {
+          // MUTATION (revue) : omettre `{ passive: false }`, ou le poser à `true`/`undefined`/`false`
+          // (arg booléen legacy = `useCapture`, PAS `passive`), doit rougir CETTE assertion — c'est
+          // exactement le défaut réel trouvé par le contrôleur.
+          expect(typeof call.options).toBe("object");
+          expect((call.options as AddEventListenerOptions).passive).toBe(false);
+        }
+      } finally {
+        cleanup();
+      }
+    } finally {
+      HTMLElement.prototype.addEventListener = original;
+    }
+  });
+});
+
 describe("EditorShell — Espace-glisser : pan du conteneur, curseur grab/grabbing, SANS toucher aucun calque (Chantier B, Tâche 4)", () => {
   afterEach(() => {
     window.localStorage.clear();

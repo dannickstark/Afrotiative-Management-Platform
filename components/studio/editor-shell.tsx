@@ -444,7 +444,10 @@ function EditorShellInner({
   // `preventDefault` — le défilement NATIF du conteneur `overflow-auto` fait déjà le pan, rien à
   // câbler ici pour ce cas. Le pincement trackpad synthétise un `wheel` avec `ctrlKey` (spec
   // navigateur) : le MÊME chemin ⌘/Ctrl le couvre déjà, pas de second gestionnaire.
-  function handleCanvasWheel(e: React.WheelEvent<HTMLDivElement>) {
+  //
+  // `WheelEvent` NATIF (pas `React.WheelEvent`) — revue chantier B T4, Important : voir l'effet
+  // `useEffect` plus bas qui pose ce gestionnaire, POURQUOI un `onWheel` React ne peut pas marcher ici.
+  function handleCanvasWheel(e: WheelEvent) {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     const el = canvasWrapRef.current;
@@ -472,6 +475,40 @@ function EditorShellInner({
     pendingWheelScrollRef.current = corrected.scroll;
     setZoom(nextFactor);
   }
+
+  // Même motif que `stateRef`/`zoomRef` (hooks/use-editor-keymap.ts) : l'écouteur natif posé par
+  // l'effet ci-dessous ne doit PAS se figer sur les valeurs de `scale`/`fitScale`/`factor` du rendu où
+  // il a été attaché — cette ref porte toujours la fermeture la PLUS RÉCENTE de `handleCanvasWheel`.
+  const handleCanvasWheelRef = useRef(handleCanvasWheel);
+  useEffect(() => {
+    handleCanvasWheelRef.current = handleCanvasWheel;
+  });
+
+  // POSÉ IMPÉRATIVEMENT, NON PASSIF (revue chantier B T4, Important) — PAS un `onWheel` React sur le
+  // JSX plus bas. React délègue `wheel` par un unique écouteur RACINE, posé PASSIF par défaut : dans
+  // ce mode, `e.preventDefault()` (dans `handleCanvasWheel` ci-dessus) est un NO-OP SILENCIEUX — React
+  // avertit même « Unable to preventDefault inside passive event listener » en console. Constaté en
+  // conditions réelles (navigateur) : le canevas zoomait bien au bon endroit, mais le NAVIGATEUR
+  // zoomait AUSSI la page entière en même temps — la fonctionnalité cœur de cette tâche cassée malgré
+  // une suite `bun test` entièrement verte (jsdom ne simule pas la passivité des écouteurs, donc ce
+  // défaut-là est invisible en jsdom quel que soit le test écrit contre le COMPORTEMENT). `{ passive:
+  // false }` explicite est la SEULE façon d'obtenir un `wheel` sur lequel `preventDefault()` a un
+  // effet réel — d'où cet écouteur natif dédié plutôt qu'une prop JSX.
+  //
+  // Dépendance `[layout]`, pas `[]` : `canvasWrapRef` ne pointe vers UN ÉLÉMENT RÉEL que lorsque
+  // `layout !== "too-small"` (voir le rendu plus bas — la branche `too-small` ne monte pas du tout ce
+  // conteneur). Un effet à `[]` poserait l'écouteur une seule fois, potentiellement sur `null`, et ne
+  // le reposerait jamais si `layout` bascule PLUS TARD (redimensionnement de fenêtre) vers une valeur
+  // qui monte enfin le conteneur.
+  useEffect(() => {
+    const el = canvasWrapRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      handleCanvasWheelRef.current(e);
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [layout]);
 
   // `Espace`-glisser pan (spec §2 du brief). `spacePanning` : Espace physiquement maintenu (garde de
   // focus ci-dessous respectée — un designer qui tape un espace dans un champ de saisie doit obtenir
@@ -913,13 +950,14 @@ function EditorShellInner({
                 "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900",
                 layout !== "full" && "min-w-[240px]",
               )}
-              // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur) + Espace-glisser (pan) — voir les
-              // handlers ci-dessus. `style.cursor` reflète l'état PAN (grab en attente, grabbing en
-              // cours) exactement comme n'importe quelle autre affordance de curseur du canevas
-              // (poignées de redimensionnement, canvas.tsx#HANDLE_CURSOR) ; `undefined` en dehors du
-              // mode pan laisse le curseur PAR DÉFAUT du navigateur, §0 non-régression.
+              // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur, posée IMPÉRATIVEMENT en effet —
+              // voir `useEffect([layout])` ci-dessus, PAS de prop `onWheel` ici : React la poserait
+              // PASSIVE, rendant `preventDefault()` sans effet) + Espace-glisser (pan). `style.cursor`
+              // reflète l'état PAN (grab en attente, grabbing en cours) exactement comme n'importe
+              // quelle autre affordance de curseur du canevas (poignées de redimensionnement,
+              // canvas.tsx#HANDLE_CURSOR) ; `undefined` en dehors du mode pan laisse le curseur PAR
+              // DÉFAUT du navigateur, §0 non-régression.
               style={{ cursor: panDragging ? "grabbing" : spacePanning ? "grab" : undefined }}
-              onWheel={handleCanvasWheel}
               onPointerDownCapture={handleCanvasPointerDownCapture}
             >
               <CanvasChrome
