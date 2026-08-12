@@ -1,10 +1,12 @@
 import { describe, it, expect } from "bun:test";
+import satori from "satori";
 import {
   relayoutAxis,
   relayoutFrame,
   relayout,
   relayoutToFormat,
 } from "@/lib/studio/relayout";
+import { constrainedTextOverflows } from "@/lib/studio/relayout-warn";
 import {
   H_CONSTRAINTS,
   V_CONSTRAINTS,
@@ -12,8 +14,11 @@ import {
   type Layer,
   type Scene,
   type LayerConstraints,
+  type TextLayer,
 } from "@/lib/studio/scene";
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
+import { loadFallbackFonts } from "@/lib/studio/fonts";
+import { textStyleFor } from "@/lib/studio/element";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chantier D, Tâche 2 — LE moteur pur `relayout`. Chaque calque porte deux contraintes
@@ -343,4 +348,126 @@ describe("relayoutToFormat — garde-fou structurel sur les dimensions du caneva
       expect(result.canvas.background).toBe(scene.canvas.background);
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 3 — `constrainedTextOverflows` (lib/studio/relayout-warn.ts). Un calque texte
+// CONTRAINT EN LARGEUR (h: "leftRight"/"scale") change de largeur réelle quand le format change
+// (relayoutToFormat) — et donc son retour à la ligne change AUSSI. Si `maxLines` est posé, ce
+// nouveau retour à la ligne peut déborder et être coupé au rendu. Le prédicat le dit, MESURÉ AU
+// RENDU (satori — le même mécanisme que fitFontSize, render.ts), jamais deviné géométriquement.
+//
+// La MESURE indépendante ci-dessous (`renderedLineCount`) n'appelle PAS `constrainedTextOverflows` :
+// elle rejoue le même mécanisme de mesure (satori, largeur seule transmise, hauteur intrinsèque lue
+// dans l'attribut `height=` du SVG — voir render.ts#fitFontSize pour la même technique et son
+// commentaire sur POURQUOI seule `width` doit être transmise) de façon INDÉPENDANTE, pour que le test
+// RENDU ne soit pas une tautologie qui se contente de rejouer l'implémentation.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("constrainedTextOverflows — un texte contraint qui déborde maxLines dans un format, MESURÉ AU RENDU (chantier D T3)", () => {
+  // Titre choisi empiriquement (voir le rapport de tâche) : EXACTEMENT 1 ligne rendue à 1520px de
+  // large (le format d'accueil ci-dessous, x_landscape 1600×900, moins 40px de marge de chaque
+  // côté), EXACTEMENT 2 lignes à 1000px (la largeur qu'obtient ce même calque une fois relayouté
+  // vers « story » : leftRight -> 1520 + (1080-1600) = 1000).
+  const TITLE = "Le cacao camerounais bat un record d'exportation";
+  // Choisi pour dépasser DÉJÀ 1 ligne à 1520px (2 lignes) ET à 1000px (3 lignes) — sert le test
+  // d'anti-vacuité de la garde « constrainte en largeur » plus bas : un calque qui déborde déjà
+  // AVANT tout changement de format ne doit pas déclencher CETTE alerte-ci (elle est spécifique à un
+  // débordement INDUIT PAR LE CHANGEMENT DE FORMAT), même si son texte est objectivement trop long.
+  const ALREADY_LONG_TITLE = "Le cacao camerounais bat un record d'exportation historique en 2026 partout dans le monde";
+
+  function titleLayer(overrides: Partial<TextLayer> = {}): TextLayer {
+    return {
+      id: "title", name: "Titre", visible: true, locked: false,
+      frame: { x: 40, y: 40, w: 1520, h: 300 },
+      constraints: { h: "leftRight", v: "top" },
+      type: "text",
+      content: TITLE,
+      font: { family: "Noto Sans", size: 48, weight: 700 },
+      color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      maxLines: 1,
+      ...overrides,
+    };
+  }
+
+  function sceneWithTitle(layer: TextLayer): Scene {
+    return sceneOf([layer as unknown as Layer], { width: 1600, height: 900, background: "#000000" });
+  }
+
+  // Mesure INDÉPENDANTE — un calque texte SEUL, `width` transmise sans `height` (IMPORTANT, voir
+  // render.ts#fitFontSize) pour que satori calcule et renvoie la hauteur intrinsèque du contenu
+  // enroulé à cette largeur. Convertie en nombre de lignes via `fontSize * lineHeight` : vérifié
+  // empiriquement, satori rend des multiples QUASI EXACTS de cette valeur (un léger dépassement
+  // < 1.5%, jamais assez pour franchir la moitié d'une ligne), donc `Math.round` la retrouve sans
+  // ambiguïté — pas une estimation hasardeuse, une lecture directe d'une mesure déterministe.
+  async function renderedLineCount(layer: TextLayer, width: number): Promise<number> {
+    const fonts = await loadFallbackFonts();
+    const probe = {
+      type: "div",
+      props: { style: { display: "flex", width, ...textStyleFor(layer) }, children: layer.content },
+    };
+    const svg = await satori(probe as never, { width, fonts: fonts as never, embedFont: false });
+    const height = Number(/height="(\d+(?:\.\d+)?)"/.exec(svg)?.[1] ?? 0);
+    return Math.round(height / (layer.font.size * layer.lineHeight));
+  }
+
+  it("MESURE INDÉPENDANTE (satori, hors implémentation) — 1 ligne au format d'accueil (large), 2 lignes une fois relayouté vers « story » (1080×1920, plus étroit)", async () => {
+    const layer = titleLayer();
+    const scene = sceneWithTitle(layer);
+
+    expect(await renderedLineCount(layer, layer.frame.w)).toBe(1); // 1520px, au format d'accueil
+
+    const relaid = relayoutToFormat(scene, "story");
+    const relaidLayer = relaid.layers[0];
+    if (relaidLayer.type !== "text") throw new Error("type de calque inattendu");
+    expect(relaidLayer.frame.w).toBe(1000); // leftRight : 1520 + (1080 - 1600)
+
+    // Rendu réel à cette nouvelle largeur : 2 lignes, DONC un texte déclaré `maxLines:1` est coupé.
+    expect(await renderedLineCount(layer, relaidLayer.frame.w)).toBe(2);
+  });
+
+  it("constrainedTextOverflows : FAUX au format d'accueil (identité — relayoutToFormat ne change rien, 1 ligne tient)", async () => {
+    const layer = titleLayer();
+    const scene = sceneWithTitle(layer);
+    expect(await constrainedTextOverflows(scene, layer, "x_landscape")).toBe(false);
+  });
+
+  it("constrainedTextOverflows : VRAI une fois relayouté vers « story » (2 lignes rendues > maxLines:1)", async () => {
+    const layer = titleLayer();
+    const scene = sceneWithTitle(layer);
+    expect(await constrainedTextOverflows(scene, layer, "story")).toBe(true);
+  });
+
+  it("constrainedTextOverflows : VRAI aussi pour une contrainte « scale » (l'autre contrainte qui change la largeur)", async () => {
+    // scale : largeur ET position suivent le même facteur (cible/base). Home 1600 -> story 1080 :
+    // facteur 1080/1600 = 0.675 -> 1520 * 0.675 = 1026, encore assez étroit pour déborder à 2 lignes.
+    const layer = titleLayer({ constraints: { h: "scale", v: "top" } });
+    const scene = sceneWithTitle(layer);
+    expect(await constrainedTextOverflows(scene, layer, "story")).toBe(true);
+  });
+
+  it("anti-vacuité — sans maxLines, jamais de débordement signalé (rien à comparer)", async () => {
+    const layer = titleLayer({ maxLines: undefined });
+    const scene = sceneWithTitle(layer);
+    expect(await constrainedTextOverflows(scene, layer, "story")).toBe(false);
+  });
+
+  it("anti-vacuité — une contrainte NON changeante en largeur (« left ») ne déclenche JAMAIS, même pour un texte qui déborde déjà indépendamment du format", async () => {
+    // ALREADY_LONG_TITLE déborde déjà à 2 lignes à 1520px (donc aussi à « story », puisque « left »
+    // ne change PAS la largeur du cadre — c'est précisément ce que ce test épingle) : le débordement
+    // n'est PAS INDUIT par le changement de format, donc CETTE alerte (spécifique au chantier D) ne
+    // doit pas se déclencher. Une mutation qui retirerait la garde de contrainte ferait rougir ce
+    // test (elle mesurerait alors 2 lignes > maxLines:1 et répondrait VRAI à tort).
+    const layer = titleLayer({ content: ALREADY_LONG_TITLE, constraints: { h: "left", v: "top" } });
+    const scene = sceneWithTitle(layer);
+    expect(await renderedLineCount(layer, layer.frame.w)).toBe(2); // déborde déjà à l'accueil
+    expect(await constrainedTextOverflows(scene, layer, "story")).toBe(false);
+  });
+
+  it("anti-vacuité — un calque non-texte ne déclenche jamais", async () => {
+    const scene = sceneOf(
+      [shapeLayer({ id: "s1", constraints: { h: "leftRight", v: "top" }, frame: { x: 40, y: 40, w: 1520, h: 300 } })],
+      { width: 1600, height: 900, background: "#000000" },
+    );
+    expect(await constrainedTextOverflows(scene, scene.layers[0], "story")).toBe(false);
+  });
 });

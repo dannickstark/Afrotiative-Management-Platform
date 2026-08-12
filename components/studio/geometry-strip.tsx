@@ -14,6 +14,7 @@ import {
   type AlignMode, type DistributeAxis,
 } from "@/lib/studio/align";
 import { setFrames, type EditorAction } from "@/lib/studio/editor-state";
+import { FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
 // U3 Tâche 3 : la rotation d'une forme est une propriété de sa DESCRIPTION (arbitrage A) — ce
 // composant la demande, il ne la déduit ni d'une liste de noms ni du type de calque.
 import { layerRotation, layerSupportsRotation, shapeLabel } from "@/lib/studio/shapes";
@@ -43,12 +44,43 @@ export interface GeometryStripProps {
   scene: Scene;
   selectedIds: readonly string[];
   dispatch: Dispatch<EditorAction>;
+  // Chantier D, Tâche 3 — la note « texte contraint qui déborde maxLines » ci-dessous a besoin de
+  // savoir (a) si ÇA DÉBORDE et (b) DANS QUEL FORMAT, mais ne peut pas le calculer ELLE-MÊME :
+  // `constrainedTextOverflows` (lib/studio/relayout-warn.ts) fait un VRAI rendu satori pour mesurer
+  // le nombre de lignes, ce qui tire `lib/studio/fonts.ts` (`node:fs/promises`) — importer QUOI QUE
+  // CE SOIT depuis ce module dans CE composant "use client" ferait planter Turbopack en le tirant
+  // dans le bundle navigateur (même piège déjà documenté dans components/studio/asset-picker.tsx :
+  // « the chunking context (unknown) does not support external modules »). L'appelant (ou, pour
+  // l'instant, le test) calcule donc `constrainedTextOverflows` de son côté et fournit le résultat —
+  // absent ou faux, aucune note ; jamais de mensonge par défaut optimiste.
+  textOverflowsMaxLines?: boolean;
+  /** Le format pour lequel `textOverflowsMaxLines` a été mesuré — sert UNIQUEMENT à nommer ce format
+   * dans la note ; ne pilote PAS sa condition d'affichage (déjà tranchée par `textOverflowsMaxLines`,
+   * qui encode déjà « pour ce format-là »). */
+  previewFormat?: FormatKey;
+}
+
+/**
+ * Chantier D, Tâche 3 — LE texte exact de la note « texte contraint qui déborde maxLines », extrait
+ * en fonction PURE (plutôt que composé en JSX multi-lignes) pour deux raisons : (1) le contenu JSX
+ * réparti sur plusieurs lignes se voit collapsé par des règles d'espacement peu prévisibles, ce qui
+ * aurait rendu une assertion d'ÉGALITÉ EXACTE contre `.textContent` fragile pour de mauvaises
+ * raisons ; (2) tests/studio-geometry-strip.test.ts peut ainsi affirmer l'égalité de la vraie
+ * propriété accessible contre CETTE fonction plutôt que contre une chaîne recopiée à la main qui
+ * pourrait dériver du composant sans qu'aucun test ne le remarque.
+ */
+export function maxLinesOverflowNote(maxLines: number, previewFormat?: FormatKey): string {
+  const formatPart = previewFormat ? ` dans « ${FORMAT_PRESETS[previewFormat].label} »` : "";
+  const linePart = maxLines > 1 ? "lignes" : "ligne";
+  return `Texte contraint en largeur : le retour à la ligne change${formatPart} et dépasse la limite de ${maxLines} ${linePart} posée sur ce calque — le surplus sera coupé au rendu (maxLines).`;
 }
 
 // La place que U1 avait laissée ici (spec §6 : « U2 ajoutera ici une rangée align/distribute une fois
 // la sélection multiple disponible ») est désormais occupée par `AlignRow`, en TROISIÈME rangée. Reste
 // à venir, et toujours pas construit par anticipation : U5 y ajoutera le widget d'ancrage par côté.
-export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: GeometryStripProps) {
+export function GeometryStrip({
+  layer, patch, scene, selectedIds, dispatch, textOverflowsMaxLines, previewFormat,
+}: GeometryStripProps) {
   // U3 Tâche 3 : la rotation est-elle PEINTE pour ce calque ? Faux uniquement pour une forme découpée
   // (arbitrage A) — un texte, une image, un QR, un rectangle, une ellipse ou une ligne tournent tous.
   const tourne = layerSupportsRotation(layer);
@@ -123,6 +155,23 @@ export function GeometryStrip({ layer, patch, scene, selectedIds, dispatch }: Ge
           Calque pivoté : l&rsquo;accrochage est désactivé pendant un redimensionnement ; pendant un
           déplacement, les guides marquent le cadre non pivoté (X, Y, largeur, hauteur), pas le
           contour visible à l&rsquo;écran.
+        </p>
+      )}
+      {/* Chantier D, Tâche 3 — « un calque texte contraint en largeur change de largeur RÉELLE quand
+          le format change → son retour à la ligne change AUSSI → s'il porte `maxLines`, ce nouveau
+          retour à la ligne peut déborder et être coupé au rendu » (brief). MÊME ton, MÊME placement
+          que les notes de rotation ci-dessus : un `<p>` discret, dans la bande de géométrie,
+          UNIQUEMENT quand la condition est RÉELLEMENT vraie — `textOverflowsMaxLines` encode déjà
+          « calque texte, contrainte en largeur (leftRight/scale), ET débordement mesuré au rendu
+          pour `previewFormat` » (lib/studio/relayout-warn.ts#constrainedTextOverflows) ; ce composant
+          ne fait QUE l'afficher, jamais ne le recalcule ni ne l'approxime — voir le commentaire de
+          `textOverflowsMaxLines` sur GeometryStripProps pour la frontière "use client" qui l'impose.
+          `layer.type === "text"` en garde supplémentaire : un appelant qui fournirait ce prop pour un
+          calque non-texte (bogue amont) ne doit jamais faire apparaître une note qui parle de son
+          `maxLines`, un champ que ce calque ne porte même pas. */}
+      {layer.type === "text" && textOverflowsMaxLines && layer.maxLines !== undefined && (
+        <p className="text-[11px] text-muted-foreground" data-testid="text-maxlines-overflow-note">
+          {maxLinesOverflowNote(layer.maxLines, previewFormat)}
         </p>
       )}
       <AlignRow scene={scene} selectedIds={selectedIds} dispatch={dispatch} />
