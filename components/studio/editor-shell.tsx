@@ -649,11 +649,14 @@ function EditorShellInner({
                 `<Canvas>` reçoit juste en dessous, jamais EditorPrefs.zoom (mémorisé mais sans
                 consommateur avant cette tâche, voir le commentaire de canvas-chrome.tsx).
 
-                Chantier A Tâche 3 (spec §2/§3) : `bg-muted/20` -> `bg-muted/40` — un fond TOKEN
-                nettement plus affirmé qu'un simple soupçon de teinte (spec : « kill the white void »),
-                pour que l'artboard (son propre box-shadow, canvas.tsx, inchangé) se lise comme une
-                SURFACE posée sur un espace de travail plutôt que comme un rectangle flottant sur un
-                fond qui reste, à cette opacité, visuellement proche du blanc.
+                Chantier A Tâche 3 (spec §2/§3) puis revue de branche (fix wave) : `bg-muted/20` ->
+                `bg-muted/40` -> `bg-neutral-100 dark:bg-neutral-900` — `bg-muted/40` restait un TOKEN,
+                mais à ~1.4% d'écart du blanc pur il ne se distinguait pas franchement des panneaux
+                blancs qui l'entourent (spec : « kill the white void »). `bg-neutral-100
+                dark:bg-neutral-900` donne un fond d'atelier NETTEMENT visible — gris perceptible en
+                clair, presque noir en sombre — pour que l'artboard (son propre box-shadow, canvas.tsx,
+                inchangé) se lise comme une SURFACE posée sur un espace de travail plutôt que comme un
+                rectangle flottant sur un fond resté visuellement proche du blanc.
 
                 Chantier A Tâche 4 (spec §2/§9) : `min-w-[240px]` hors `full` — le brief nomme
                 explicitement « canvas full-bleed with a minimum width » pour `all-drawers` ; la même
@@ -664,7 +667,7 @@ function EditorShellInner({
               ref={canvasWrapRef}
               data-testid="canvas-backdrop"
               className={cn(
-                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-muted/40 p-4",
+                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900",
                 layout !== "full" && "min-w-[240px]",
               )}
             >

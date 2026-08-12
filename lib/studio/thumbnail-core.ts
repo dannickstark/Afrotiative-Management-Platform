@@ -61,6 +61,11 @@ export async function renderTemplateThumbnailCore(input: RenderTemplateThumbnail
     .where(eq(renderTemplates.id, input.templateId));
   if (!row) return { ok: false, message: "Gabarit introuvable." };
 
+  // NON ATOMIQUE, sciemment : cette lecture (pour la clé de cache) et celle, INDÉPENDANTE, que
+  // previewTemplateCore refait pour rendre sont deux allers-retours DB séparés — si le brouillon est
+  // édité entre les deux, le cache peut se remplir sous une clé qui ne correspond plus tout à fait à
+  // la scène réellement rendue. Sans conséquence pratique (idempotent, dernier écrivain gagnant, au
+  // pire un rendu redondant plus tard — jamais un résultat périmé ou faux servi) : pas de verrou ici.
   const key = thumbnailCacheKey(input.templateId, row.scene);
   const cached = thumbnailCache.get(key);
   if (cached) return cached;

@@ -118,16 +118,17 @@ describe("EditorShell — mode Montage (revue Tâche 6, spec §2/§5)", () => {
 // STRUCTURE/les CLASSES rendues au premier rendu (`prefs` vaut DEFAULT_PREFS ici, useEffect de
 // useEditorPrefs n'ayant jamais tourné sous ce mode de rendu — voir le commentaire d'en-tête).
 describe("EditorShell — corps trois zones : fond neutre, état vide compact, poignées de glisser (chantier A Tâche 3)", () => {
-  it("le conteneur du canevas porte un fond TOKEN neutre (bg-muted/40), pas bg-muted/20 ni un fond blanc implicite", () => {
+  it("le conteneur du canevas porte un fond d'atelier NETTEMENT visible (bg-neutral-100 dark:bg-neutral-900), pas l'ancien bg-muted/40 quasi blanc", () => {
     const html = render();
     const openTag = html.slice(
       html.indexOf('data-testid="canvas-backdrop"') - 400,
       html.indexOf('data-testid="canvas-backdrop"') + 200,
     );
-    expect(openTag).toContain("bg-muted/40");
-    // Anti-vacuité : l'ANCIEN fond, trop pâle pour se distinguer du blanc (le défaut que corrige
-    // cette tâche), ne doit plus apparaître SUR CE conteneur précis.
-    expect(openTag).not.toContain("bg-muted/20");
+    expect(openTag).toContain("bg-neutral-100");
+    expect(openTag).toContain("dark:bg-neutral-900");
+    // Anti-vacuité : l'ANCIEN fond (bg-muted/40, ~1.4% d'écart du blanc pur — ne se distinguait pas
+    // franchement des panneaux blancs, revue de branche) ne doit plus apparaître SUR CE conteneur précis.
+    expect(openTag).not.toContain("bg-muted/40");
   });
 
   it("l'état vide de l'inspecteur est COMPACT — une petite carte ancrée en haut, pas le vide plein-écran d'avant cette tâche", () => {
