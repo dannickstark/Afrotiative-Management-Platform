@@ -976,8 +976,13 @@ function sceneWithThreeShapes(): Scene {
 }
 
 /** Monte le VRAI `PropertyPanel` derrière un VRAI `editorReducer` — même recette que
- * `mountCanvasWithReducer` ci-dessus (le panneau est contrôlé : scène et sélection en props). */
-async function mountPropertyPanelWithReducer(scene: Scene, initialSelection: string[]) {
+ * `mountCanvasWithReducer` ci-dessus (le panneau est contrôlé : scène et sélection en props).
+ * `context` (Tâche 5, U4, additif) : "social_post" reste la valeur par défaut de tous les appels
+ * d'avant cette tâche — le seam TokenPicker plus bas est le premier à avoir besoin d'un AUTRE
+ * contexte (pour obtenir, dans le MÊME popover, une ligne légale et une ligne illégale). */
+async function mountPropertyPanelWithReducer(
+  scene: Scene, initialSelection: string[], context: TemplateContext = "social_post",
+) {
   const initial: EditorState = { ...initEditorState(scene), selectedIds: initialSelection };
   const box: { state: EditorState; actions: EditorAction[] } = { state: initial, actions: [] };
 
@@ -987,7 +992,7 @@ async function mountPropertyPanelWithReducer(scene: Scene, initialSelection: str
     return React.createElement(PropertyPanelC, {
       scene: state.scene,
       selectedIds: state.selectedIds,
-      context: "social_post" as TemplateContext,
+      context,
       dispatch: (a: EditorAction) => { box.actions.push(a); rawDispatch(a); },
     });
   }
@@ -1243,4 +1248,154 @@ describe("Canvas — l'épaisseur d'un guide est constante à L'ÉCRAN, pas dans
     expect(guideEls(container)).toHaveLength(0);
     unmount();
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam — TokenPicker (components/studio/token-picker.tsx), Tâche 5 (U4). `pickerRowsFor` (testée
+// PUREMENT dans tests/studio-token-picker.test.ts) prouve que la LISTE contient bien une ligne
+// grisée avec sa raison pour un jeton hors contexte — mais ce fichier-là ne peut PAS prouver le
+// COMPORTEMENT au clic : `PopoverContent` (@/components/ui/popover, @base-ui/react) ne rend son
+// contenu QUE popover OUVERT (portalé dans `document.body`), et `renderToStaticMarkup` ne l'ouvre
+// jamais (voir le commentaire de tests/studio-token-picker.test.ts). Un sabotage qui ferait quand
+// même appeler `onPick` sur une ligne `aria-disabled="true"` laisserait donc TOUTE la suite pure
+// verte — seul un VRAI Popover, un VRAI clic DOM, dit si la ligne grisée est réellement inerte.
+// Même piège que documenté en tête de fichier pour le Popover d'ImageAssetPicker (Seam 1) : gardé par
+// le même `it.skipIf(!popoverEffectsLive)`.
+describe("TokenPicker — un jeton ILLÉGAL grisé n'insère RIEN au clic ; un jeton LÉGAL, lui, insère bien {{jeton}} (Tâche 5, U4)", () => {
+  function sceneWithOneTextLayer(): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 1200, height: 630, background: "#000000" },
+      layers: [{
+        id: "t", name: "Titre", visible: true, locked: false,
+        frame: { x: 10, y: 10, w: 400, h: 100 },
+        type: "text", content: "Bonjour",
+        font: { family: "Noto Sans", size: 32, weight: 400 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      }],
+    };
+  }
+
+  it.skipIf(!popoverEffectsLive)(
+    "quote_card × contenu texte : article.byline (illégal ici) reste inerte au clic ; article.title (légal) insère {{article.title}}",
+    async () => {
+      const context: TemplateContext = "quote_card";
+      // Prémisse — dérivée de pickerRowsFor, jamais recodée : quote_card légalise article.title mais
+      // pas article.byline (CONTEXT_TOKENS, lib/studio/tokens.ts). Si CONTEXT_TOKENS changeait un
+      // jour, ce test échouerait ICI plutôt que de prouver moins qu'il ne prétend.
+      const { pickerRowsFor } = await import("@/components/studio/token-picker");
+      const rows = pickerRowsFor(context, "text");
+      expect(rows.find((r) => r.id === "article.byline")!.available).toBe(false);
+      expect(rows.find((r) => r.id === "article.title")!.available).toBe(true);
+
+      const { box, container, unmount } = await mountPropertyPanelWithReducer(
+        sceneWithOneTextLayer(), ["t"], context,
+      );
+
+      const trigger = container.querySelector('[data-action="token-picker"][data-kind="text"]') as HTMLButtonElement;
+      expect(trigger).not.toBeNull();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+      await click(trigger); // VRAI clic DOM sur le VRAI déclencheur du Popover
+      await flush();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+      // Le Popover portale son contenu dans `document.body` — jamais dans le conteneur détaché de
+      // mount() (même mécanique que le Seam Images ci-dessus).
+      const byline = document.body.querySelector('[data-token="article.byline"]') as HTMLButtonElement | null;
+      const title = document.body.querySelector('[data-token="article.title"]') as HTMLButtonElement | null;
+      expect(byline).not.toBeNull();
+      expect(title).not.toBeNull();
+
+      // L'ÉTAT ACCESSIBLE réel, pas une sous-chaîne : la classe Tailwind statique de CES DEUX boutons
+      // contient elle-même "disabled:not-allowed"-like fragments potentiels — c'est `aria-disabled`
+      // qui distingue, et NI L'UN NI L'AUTRE ne porte l'attribut HTML `disabled` (les deux restent
+      // focusables, piège documenté par le brief de cette tâche).
+      expect(byline!.hasAttribute("disabled")).toBe(false);
+      expect(byline!.getAttribute("aria-disabled")).toBe("true");
+      expect(title!.hasAttribute("disabled")).toBe(false);
+      expect(title!.getAttribute("aria-disabled")).not.toBe("true");
+
+      // 1) Clic sur la ligne GRISÉE (illégale ici) : AUCUN dispatch, contenu INCHANGÉ.
+      await click(byline!);
+      expect(box.actions).toEqual([]);
+      expect((box.state.scene.layers[0] as { content: string }).content).toBe("Bonjour");
+
+      // 2) Clic sur la ligne DISPONIBLE : le VRAI réducteur reçoit bien setLayerProp, et le contenu
+      // du calque est CONCATÉNÉ du jeton — jamais un appel direct à onPick/dispatch simulé.
+      await click(title!);
+      expect(box.actions.some((a) => a.type === "setLayerProp")).toBe(true);
+      expect((box.state.scene.layers[0] as { content: string }).content).toBe("Bonjour{{article.title}}");
+
+      unmount();
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam — le sélecteur d'emplacement (image/QR) grise une option ILLÉGALE via `SelectItem disabled`
+// plutôt que de l'omettre (Tâche 5, U4, coverage audit — components/studio/property-panel.tsx,
+// ImageFields/QrFields). Première utilisation de `disabled` sur `SelectItem` dans ce dépôt (grep
+// vérifié) : contrairement à `SwitchField`/`TabsTrigger`, dont le comportement `disabled` est déjà
+// exercé ailleurs, celui-ci n'a AUCUN précédent testé — d'où ce test dédié plutôt qu'une confiance
+// aveugle dans la lecture de `useFocusableWhenDisabled.js` (node_modules/@base-ui/react) qui a guidé
+// l'implémentation. Même piège Base UI que TokenPicker : `<div role="option" aria-disabled="true">`,
+// jamais l'attribut HTML `disabled`, et le popup se portale dans `document.body` seulement une fois
+// OUVERT — ce test-ci pilote donc le VRAI `<Select>`, pas une simulation.
+describe("SelectField (emplacement image/QR) — une option ILLÉGALE reste dans la liste mais n'est PAS sélectionnable au clic (Tâche 5, U4)", () => {
+  function sceneWithImageLayerSlot(slot: string): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 1080, height: 1080, background: "#111111" },
+      layers: [{
+        id: "img1", name: "Image", visible: true, locked: false,
+        frame: { x: 0, y: 0, w: 300, h: 200 },
+        type: "image", source: { kind: "slot", slot }, fit: "cover",
+      }],
+    };
+  }
+
+  it.skipIf(!popoverEffectsLive)(
+    "newsletter_header : article.image (illégal ici) apparaît GRISÉ dans la liste ; le sélectionner au clic laisse `slot` INCHANGÉ",
+    async () => {
+      const context: TemplateContext = "newsletter_header";
+      // Prémisse dérivée de pickerRowsFor : newsletter_header ne légalise QUE brand.logo côté
+      // "image" (CONTEXT_TOKENS.newsletter_header = [edition.title, edition.date, brand.logo]) —
+      // article.image y est donc illégal, et reste pourtant dans la liste (Tâche 5).
+      const { pickerRowsFor } = await import("@/components/studio/token-picker");
+      const rows = pickerRowsFor(context, "image");
+      expect(rows.find((r) => r.id === "article.image")!.available).toBe(false);
+      expect(rows.find((r) => r.id === "brand.logo")!.available).toBe(true);
+
+      const { box, container, unmount } = await mountPropertyPanelWithReducer(
+        sceneWithImageLayerSlot("brand.logo"), ["img1"], context,
+      );
+
+      const trigger = container.querySelector('[data-field="image-slot"]') as HTMLElement;
+      expect(trigger).not.toBeNull();
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
+      await click(trigger);
+      await flush();
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+
+      // Le popup se portale dans `document.body`, jamais dans le conteneur détaché de mount().
+      const options = Array.from(document.body.querySelectorAll('[role="option"]')) as HTMLElement[];
+      const illegal = options.find((o) => o.textContent?.includes("Image de l'article"));
+      expect(illegal).toBeDefined();
+      // L'ÉTAT ACCESSIBLE réel : jamais l'attribut HTML `disabled` (SelectItem rend un `<div>`, pas
+      // un `<button>`), toujours `aria-disabled="true"`.
+      expect(illegal!.hasAttribute("disabled")).toBe(false);
+      expect(illegal!.getAttribute("aria-disabled")).toBe("true");
+
+      await click(illegal!); // VRAI clic DOM sur l'option grisée
+
+      // AUCUN commit : le réducteur ne voit passer AUCUNE action, et `source.slot` reste "brand.logo".
+      expect(box.actions).toEqual([]);
+      const layer = box.state.scene.layers[0];
+      expect(layer.type === "image" && layer.source.kind === "slot" ? layer.source.slot : null).toBe("brand.logo");
+
+      unmount();
+    },
+  );
 });

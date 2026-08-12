@@ -33,7 +33,7 @@ import { descriptorFor, SHAPE_OPTIONS, supportsShadow } from "@/lib/studio/shape
 import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/editor-state";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
-import { TokenPicker, tokensFor, TOKEN_LABELS } from "./token-picker";
+import { TokenPicker, pickerRowsFor } from "./token-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { alignParticipants } from "@/lib/studio/align";
@@ -279,19 +279,34 @@ function SwitchField({
 }
 
 function SelectField({
-  label, value, options, onCommit, placeholder, optionDataAttr,
+  label, value, options, onCommit, placeholder, optionDataAttr, hint, dataField,
 }: {
-  label: string; value: string; options: { value: string; label: string }[]; onCommit: (v: string) => void;
+  label: string;
+  value: string;
+  /** Tâche 5 (U4), additif : `disabled` marque une option ILLÉGALE dans ce contexte plutôt que de la
+   * faire disparaître de la liste (ImageFields/QrFields, plus bas) — jamais utilisé par les autres
+   * appelants de ce panneau (alignement, graisse, forme…), qui n'ont pas de notion de légalité. */
+  options: { value: string; label: string; disabled?: boolean }[];
+  onCommit: (v: string) => void;
   placeholder?: string;
   /** U3 Tâche 3 : pose `<attr>="<valeur d'option>"` sur chaque option, pour qu'un test puisse COMPTER
    * les options rendues au lieu de se contenter de chercher leurs libellés dans tout le HTML (un
    * sélecteur qui rendrait deux fois la même option passerait une simple recherche de sous-chaîne). */
   optionDataAttr?: string;
+  /** Tâche 5 (U4), additif : ligne d'aide sous le contrôle — ImageFields/QrFields y posent la raison
+   * (« … n'est pas disponible dans ce contexte. ») quand la valeur COURANTE est une option grisée,
+   * même idiome que `RadiusField`/`shape-radius-help` un peu plus haut dans ce fichier. */
+  hint?: string;
+  /** Tâche 5 (U4), additif : pose `data-field` sur LE DÉCLENCHEUR — même convention que
+   * `TextField`/`ColorField` (dataField), pour qu'un test DOM cible sans ambiguïté CE sélecteur
+   * précis quand le panneau en affiche plusieurs (« Ajustement » ET « Emplacement » sur un calque
+   * image, par exemple) plutôt que d'indexer sur l'ORDRE de rendu — fragile au moindre remaniement. */
+  dataField?: string;
 }) {
   return (
     <FieldRow label={label}>
       <Select value={value} onValueChange={(v) => { if (v) onCommit(v); }}>
-        <SelectTrigger className="w-full">
+        <SelectTrigger className="w-full" data-field={dataField}>
           {/* Base UI's <SelectValue> ne dérive PAS automatiquement le libellé du <SelectItem>
               correspondant (contrairement à un <select> natif) — repéré en vérifiant l'écran réel
               dans un navigateur : sans ce mappeur explicite, chaque sélecteur de ce panneau
@@ -304,12 +319,16 @@ function SelectField({
         </SelectTrigger>
         <SelectContent>
           {options.map((o) => (
-            <SelectItem key={o.value} value={o.value} {...(optionDataAttr ? { [optionDataAttr]: o.value } : {})}>
+            <SelectItem
+              key={o.value} value={o.value} disabled={o.disabled}
+              {...(optionDataAttr ? { [optionDataAttr]: o.value } : {})}
+            >
               {o.label}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
+      {hint && <p className="text-[11px] text-muted-foreground">{hint}</p>}
     </FieldRow>
   );
 }
@@ -519,7 +538,16 @@ function ImageFields({
   sectionsOpen: Record<string, boolean>; onToggleSection: (key: string, open: boolean) => void;
 }) {
   const source = layer.source;
-  const imageTokens = tokensFor(context, "image");
+  // Tâche 5 (U4), coverage audit : `tokensFor` (FILTRE, jamais un rôle mais l'ANCIEN comportement de
+  // ce sélecteur) faisait purement et simplement disparaître un jeton image illégal dans ce contexte
+  // de la liste — le même défaut que celui corrigé sur TokenPicker, ici sur le sélecteur DÉDIÉ à
+  // l'emplacement image plutôt que sur le bouton « insérer un jeton ». `pickerRowsFor` renvoie
+  // l'univers COMPLET des jetons "image" : `imageRows` alimente le `<SelectField>` plus bas (options
+  // ILLÉGALES grisées, avec leur raison), et `availableImageTokens` (le sous-ensemble légal) reste la
+  // seule source pour un NOUVEAU choix par défaut (onValueChange ci-dessous) — jamais pour choisir un
+  // jeton déjà réglé, qu'un calque existant garde tel quel même s'il devient illégal.
+  const imageRows = pickerRowsFor(context, "image");
+  const availableImageTokens = imageRows.filter((r) => r.available).map((r) => r.id);
   // Premier asset image disponible — sert de valeur de repli VALIDE au premier passage sur l'onglet
   // "Bibliothèque" (voir onValueChange ci-dessous, correctif Tâche 13).
   const firstImageAssetId = assets.find((a) => a.kind === "image")?.id;
@@ -536,7 +564,7 @@ function ImageFields({
         <Tabs
           value={source.kind}
           onValueChange={(v) => {
-            if (v === "slot") patch({ source: { kind: "slot", slot: imageTokens[0] ?? "article.image" } });
+            if (v === "slot") patch({ source: { kind: "slot", slot: availableImageTokens[0] ?? "article.image" } });
             // "https://" seul échoue z.string().url() (aucun hôte) — repéré en pilotant un vrai
             // navigateur : le premier clic sur l'onglet "URL" ne faisait STRICTEMENT rien à l'écran,
             // sans la moindre erreur console. lib/studio/editor-state.ts:commit() valide CHAQUE
@@ -578,16 +606,20 @@ function ImageFields({
         )}
 
         {source.kind === "slot" && (
-          imageTokens.length > 0 ? (
-            <SelectField
-              label="Emplacement (jeton image)"
-              value={source.slot}
-              options={imageTokens.map((id) => ({ value: id, label: TOKEN_LABELS[id] }))}
-              onCommit={(v) => patch({ source: { kind: "slot", slot: v } })}
-            />
-          ) : (
-            <p className="text-[11px] text-muted-foreground">Aucun jeton image disponible dans ce contexte.</p>
-          )
+          // Tâche 5 (U4) : TOUS les jetons "image" du catalogue apparaissent désormais — ceux hors
+          // CONTEXT_TOKENS[context] restent LISTÉS, grisés (SelectItem disabled -> aria-disabled, pas
+          // l'attribut HTML `disabled`), avec leur raison en `hint` sous le contrôle. Chaque TokenKind
+          // a au moins un jeton dans le catalogue (tokens.ts) : `imageRows` n'est donc jamais vide, et
+          // le message de repli « aucun jeton disponible » (qui masquait plutôt qu'il n'expliquait)
+          // disparaît avec le seul état qu'il servait à couvrir.
+          <SelectField
+            label="Emplacement (jeton image)"
+            value={source.slot}
+            options={imageRows.map((row) => ({ value: row.id, label: row.label, disabled: !row.available }))}
+            hint={imageRows.find((row) => row.id === source.slot)?.reason}
+            dataField="image-slot"
+            onCommit={(v) => patch({ source: { kind: "slot", slot: v } })}
+          />
         )}
         {source.kind === "url" && (
           <TextField label="URL de l'image" value={source.url} onCommit={(v) => patch({ source: { kind: "url", url: v } })} />
@@ -638,8 +670,17 @@ function GradientEditor({ gradient, context, onChange }: { gradient: Gradient; c
       {gradient.stops.map((stop, i) => (
         <div key={i} className="flex items-end gap-1.5">
           <div className="flex-1">
+            {/* Tâche 5 (U4), correctif de couverture : cette étape de dégradé N'AVAIT PAS de sélecteur
+                de jeton (action={false}) avant cette tâche — pourtant `colorFieldsOf`
+                (lib/studio/scene.ts) énumère bien `fill.stops.N.color` comme un champ-couleur LIABLE
+                au même titre que n'importe quel autre (c'est lui que `usesInLayer`/`resolveTokens`
+                consultent pour la substitution), donc l'omission privait spécifiquement CE champ-là
+                de l'affordance « insérer un jeton » qu'offre chaque AUTRE champ couleur du panneau.
+                Rien ne justifiait cette exception — `action` retrouve donc sa valeur par défaut
+                (true), et un jeton couleur légal ici (ex. category.color) devient sélectionnable
+                exactement comme sur un remplissage uni. */}
             <ColorField
-              label={`Étape ${i + 1}`} value={stop.color} context={context} action={false}
+              label={`Étape ${i + 1}`} value={stop.color} context={context}
               onCommit={(v) => onChange({ ...gradient, stops: replaceStop(gradient.stops, i, { ...stop, color: v }) })}
             />
           </div>
@@ -847,19 +888,24 @@ function QrFields({
   layer: QrLayer; context: TemplateContext; patch: Patch;
   sectionsOpen: Record<string, boolean>; onToggleSection: (key: string, open: boolean) => void;
 }) {
-  const urlTokens = tokensFor(context, "url");
+  // Tâche 5 (U4), coverage audit : même correctif que ImageFields — `article.url` est le SEUL jeton
+  // "url" du catalogue entier (tokens.ts) ; il n'était légal QUE pour social_post (la règle V1 :
+  // article.url n'existe qu'APRÈS publication WordPress). Avant cette tâche, les quatre AUTRES
+  // contextes ne voyaient qu'un message d'absence — jamais le jeton lui-même, ni pourquoi il ne
+  // s'applique pas ici. `urlRows` n'est jamais vide (au moins ce jeton existe toujours) : le
+  // sélecteur s'affiche donc dans TOUS les contextes, avec le jeton grisé + sa raison en `hint` là où
+  // il ne s'applique pas.
+  const urlRows = pickerRowsFor(context, "url");
   return (
     <TypeSection title="QR code" sectionId="qrcode" layerType="qr" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
-      {urlTokens.length > 0 ? (
-        <SelectField
-          label="Emplacement (jeton URL)"
-          value={layer.slot}
-          options={urlTokens.map((id) => ({ value: id, label: TOKEN_LABELS[id] }))}
-          onCommit={(v) => patch({ slot: v })}
-        />
-      ) : (
-        <p className="text-[11px] text-muted-foreground">Aucun jeton URL disponible dans ce contexte — un QR code n&rsquo;y a rien à encoder.</p>
-      )}
+      <SelectField
+        label="Emplacement (jeton URL)"
+        value={layer.slot}
+        options={urlRows.map((row) => ({ value: row.id, label: row.label, disabled: !row.available }))}
+        hint={urlRows.find((row) => row.id === layer.slot)?.reason}
+        dataField="qr-slot"
+        onCommit={(v) => patch({ slot: v })}
+      />
       <ColorField label="Couleur (premier plan)" value={layer.fg} context={context} onCommit={(v) => patch({ fg: v })} />
       <ColorField label="Couleur de fond" value={layer.bg} context={context} onCommit={(v) => patch({ bg: v })} />
       <NumberField label="Marge" value={layer.margin} min={0} step={1} onCommit={(v) => patch({ margin: Math.max(0, Math.round(v)) })} />

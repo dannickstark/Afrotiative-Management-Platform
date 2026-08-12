@@ -6,7 +6,7 @@ import {
   type TemplateContext, type Scene,
 } from "@/lib/studio";
 import type { TokenKind } from "@/lib/studio/tokens";
-import { TokenPicker, tokensFor, TOKEN_LABELS } from "@/components/studio/token-picker";
+import { TokenPicker, tokensFor, pickerRowsFor, TOKEN_LABELS } from "@/components/studio/token-picker";
 import { editorReducer, initEditorState, setLayerProp, type EditorAction } from "@/lib/studio/editor-state";
 
 // Même convention que tests/studio-layer-panel.test.ts et tests/studio-drag.test.ts : pas de DOM
@@ -73,11 +73,83 @@ describe("tokensFor — filtrage PUR par contexte ET par type (le contrat requis
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tâche 5 (U4) — pickerRowsFor : contrairement à tokensFor (qui ne renvoie QUE les jetons LÉGAUX du
+// contexte, faisant disparaître silencieusement tout le reste — exactement le défaut que cette tâche
+// corrige), pickerRowsFor renvoie l'univers COMPLET des jetons du TokenKind demandé. Chaque jeton
+// hors CONTEXT_TOKENS[context] porte `available:false` et une raison non vide (au lieu d'être omis) ;
+// chaque jeton légal porte `available:true`. Même principe que dynamicTextRowsFor
+// (lib/studio/dynamic-text.ts) — mais appliqué au sélecteur GÉNÉRIQUE de n'importe quel champ, pas
+// seulement à la section « Texte dynamique ».
+describe("pickerRowsFor — l'univers COMPLET du TokenKind, jamais un sous-ensemble qui omet les jetons illégaux", () => {
+  it("anti-vacuité : article_image × text contient À LA FOIS une ligne disponible ET une ligne indisponible", () => {
+    // article_image (CONTEXT_TOKENS) légalise article.title/excerpt/date/byline/category.name/
+    // source.names, mais PAS quote.text ni recap.title (calques d'un AUTRE type de gabarit) — un
+    // helper qui marquerait tout disponible, ou qui omettrait encore les illégaux, ne pourrait pas
+    // faire passer les deux moitiés de ce test à la fois.
+    const rows = pickerRowsFor("article_image", "text");
+    const available = rows.filter((r) => r.available);
+    const unavailable = rows.filter((r) => !r.available);
+    expect(available.length).toBeGreaterThan(0);
+    expect(unavailable.length).toBeGreaterThan(0);
+
+    const title = rows.find((r) => r.id === "article.title")!;
+    expect(title.available).toBe(true);
+    expect(title.reason).toBeUndefined();
+
+    const quoteText = rows.find((r) => r.id === "quote.text")!;
+    expect(quoteText.available).toBe(false);
+    expect(typeof quoteText.reason).toBe("string");
+    expect(quoteText.reason!.trim().length).toBeGreaterThan(0);
+    // La formulation reprend celle de validateScene (lib/studio/tokens.ts) / dynamic-text.ts — pas
+    // une phrase inventée à part qui pourrait diverger du reste du programme.
+    expect(quoteText.reason).toContain("n'est pas disponible dans ce contexte");
+  });
+
+  it("l'univers renvoyé est EXACTEMENT tous les TOKEN_IDS de ce TokenKind — aucun oubli, aucun ajout", () => {
+    for (const context of TEMPLATE_CONTEXTS) {
+      for (const kind of ALL_KINDS) {
+        const rows = pickerRowsFor(context, kind);
+        const expectedIds = TOKEN_IDS.filter((id) => TOKEN_KINDS[id] === kind);
+        expect(rows.map((r) => r.id).sort()).toEqual([...expectedIds].sort());
+      }
+    }
+  });
+
+  it("available suit EXACTEMENT CONTEXT_TOKENS[context], pour chaque contexte et chaque type", () => {
+    for (const context of TEMPLATE_CONTEXTS) {
+      const legal = new Set<string>(CONTEXT_TOKENS[context]);
+      for (const kind of ALL_KINDS) {
+        for (const row of pickerRowsFor(context, kind)) {
+          expect(row.available).toBe(legal.has(row.id));
+          if (row.available) expect(row.reason).toBeUndefined();
+          else expect(row.reason).toBeTruthy();
+        }
+      }
+    }
+  });
+
+  it("chaque ligne porte l'étiquette FRANÇAISE de TOKEN_LABELS, jamais la forme technique brute", () => {
+    for (const row of pickerRowsFor("article_image", "text")) {
+      expect(row.label).toBe(TOKEN_LABELS[row.id]);
+      expect(row.label).not.toBe(row.id);
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 describe("TokenPicker — composant (rendu structurel réel, pas seulement la fonction pure)", () => {
-  it("ne rend RIEN pour un contexte/type sans aucun jeton disponible (article_image × url)", () => {
+  // Tâche 5 (U4) — CHANGEMENT DE COMPORTEMENT assumé : avant cette tâche, un contexte/type sans
+  // AUCUN jeton LÉGAL ne rendait RIEN (`tokens.length === 0` -> `return null`), faisant disparaître
+  // silencieusement l'affordance « insérer un jeton » plutôt que de dire pourquoi. article.url est le
+  // SEUL jeton de type "url" du catalogue entier (tokens.ts) — il existe donc toujours une ligne à
+  // montrer (grisée, avec sa raison) même si CONTEXT_TOKENS.article_image ne le légalise pas. Le
+  // déclencheur rend désormais TANT QU'IL EXISTE au moins un jeton de ce TokenKind quelque part dans
+  // le catalogue — jamais seulement dans CE contexte.
+  it("rend un déclencheur MÊME quand aucun jeton n'est légal dans ce contexte (article_image × url) — grisé, jamais absent", () => {
     const html = render(React.createElement(TokenPicker, { context: "article_image", kind: "url", onPick: () => {} }));
-    expect(html).toBe("");
-    expect(html).not.toContain("article.url");
+    expect(html).not.toBe("");
+    expect(html).toContain('data-action="token-picker"');
+    expect(html).toContain('data-kind="url"');
   });
 
   it("rend un déclencheur pour un contexte/type qui a des jetons disponibles (article_image × color)", () => {
@@ -90,6 +162,22 @@ describe("TokenPicker — composant (rendu structurel réel, pas seulement la fo
     const html = render(React.createElement(TokenPicker, { context: "recap_card", kind: "text", onPick: () => {} }));
     expect(html).toContain('data-action="token-picker"');
   });
+
+  // PORTÉE EXACTE de ce describe (revue Tâche 5) : `PopoverContent` (@/components/ui/popover,
+  // @base-ui/react) ne rend son contenu QUE lorsque le popover est OUVERT — vérifié directement,
+  // `renderToStaticMarkup` sur un `<TokenPicker>` fermé ne produit que le `<button>` déclencheur,
+  // JAMAIS le `<ul>` des lignes (portale + conditionné, comme components/studio/asset-picker.tsx,
+  // documenté par tests/studio-interactions.test.ts en tête de fichier). C'est pourquoi AUCUN test de
+  // ce fichier n'affirme le contenu d'une ligne (aria-disabled, raison, data-token) par une chaîne
+  // HTML statique : ce serait un test qui NE POURRAIT PAS rougir, quoi que fasse le composant, tant
+  // le popover reste fermé — un faux témoin. La preuve par contenu RÉEL (le popover OUVERT, un VRAI
+  // clic DOM sur une ligne disponible vs. une ligne grisée) vit dans
+  // tests/studio-interactions.test.ts (« Seam — TokenPicker »), qui monte déjà le VRAI DOM (jsdom) et
+  // gère déjà le piège `useIsoLayoutEffect`/Popover documenté là-bas — dupliquer ce harnais ICI
+  // risquerait, sans lui, le même poison inter-fichiers que ce fichier-là évite explicitement
+  // (studio-property-panel.test.ts, exécuté dans le même processus `bun test` par la commande « Run
+  // focused » du brief, importe PropertyPanel — donc Button — via `renderToStaticMarkup` SANS jamais
+  // installer de DOM).
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
