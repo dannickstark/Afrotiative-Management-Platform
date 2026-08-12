@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { safeEqual } from "@/lib/timing-safe";
 
 export async function POST(req: NextRequest) {
   const secret = getPipelineConfig().triggerSecret;
   const auth = req.headers.get("authorization");
   // No secret configured => never an open endpoint: always 401, not a silent bypass.
-  if (!secret || auth !== `Bearer ${secret}`) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Constant-time compare: !== short-circuits on the first differing byte, a timing side-channel.
+  if (!secret || !auth || !safeEqual(auth, `Bearer ${secret}`)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   // Dynamic import: runPipeline() transitively pulls in the extraction chain (jsdom, via
   // @mozilla/readability). Statically importing that at module top-level breaks Turbopack's
