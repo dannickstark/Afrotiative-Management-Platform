@@ -1,4 +1,4 @@
-import type { Scene, Layer, Gradient } from "./scene";
+import { colorFieldsOf, setColorAtPath, type Scene, type Layer } from "./scene";
 import { extractTokens, type TokenId } from "./tokens";
 
 export type TokenValues = Partial<Record<TokenId, string>>;
@@ -18,17 +18,30 @@ function substitute(value: string, values: TokenValues): string {
   return value.replace(TOKEN_IN_TEXT, (_m, token: string) => values[token as TokenId] ?? "");
 }
 
-function resolveGradient(gradient: Gradient, values: TokenValues): Gradient {
-  return { ...gradient, stops: gradient.stops.map((s) => ({ ...s, color: substitute(s.color, values) })) };
+// U4 Tâche 2 — la dimension COULEUR n'est plus une liste recopiée à la main (fill/gradient/border/
+// shadow/stroke/overlay/fg/bg, un `if` par champ optionnel) : `colorFieldsOf` (scene.ts) énumère
+// CHAQUE champ-couleur du calque — y compris un arrêt de dégradé par entrée — et `setColorAtPath`
+// écrit la substitution IMMUTABLEMENT à ce chemin. `usesInLayer` (tokens.ts) consulte le MÊME
+// `colorFieldsOf` pour scanner ces champs : les deux fonctions ne peuvent plus diverger.
+//
+// `field.get()` lit toujours dans le calque D'ORIGINE (fermeture prise par `colorFieldsOf(layer)`) ;
+// chaque `setColorAtPath` s'applique à l'ACCUMULATEUR, pas à l'original, pour que les champs déjà
+// substitués ne soient jamais écrasés par le suivant.
+function substituteColorFields(layer: Layer, values: TokenValues): Layer {
+  return colorFieldsOf(layer).reduce(
+    (acc, field) => setColorAtPath(acc, field.path, substitute(field.get(), values)),
+    layer,
+  );
 }
 
 // Renvoie une NOUVELLE scène ; l'entrée n'est jamais mutée (les scènes viennent d'un cache ou
 // d'une ligne de base et peuvent être réutilisées).
 //
 // La substitution couvre EXACTEMENT les champs qu'extractTokens (tokens.ts) scanne, sans quoi les
-// deux fonctions divergeraient : arrière-plan du canevas, source/overlay d'image, contenu/couleur/
-// ombre/contour de texte, remplissage (couleur unie ou dégradé), bordure ET OMBRE de forme (U3
-// Tâche 4), avant-plan/fond de QR code.
+// deux fonctions divergeraient : arrière-plan du canevas (traité ici, seul champ-couleur au niveau
+// scène), toute couleur de calque (via `substituteColorFields`, dérivée du schéma), PLUS le
+// source/overlay d'image et le contenu de texte, qui restent spécifiques à leur type — comme
+// `colorFieldsOf` ne les connaît pas.
 export function resolveTokens(scene: Scene, values: TokenValues): Scene {
   const missing = [...new Set(
     extractTokens(scene)
@@ -38,50 +51,23 @@ export function resolveTokens(scene: Scene, values: TokenValues): Scene {
   if (missing.length > 0) throw new MissingTokensError(missing.sort());
 
   const layers: Layer[] = scene.layers.map((layer): Layer => {
-    switch (layer.type) {
+    const colored = substituteColorFields(layer, values);
+    switch (colored.type) {
       case "image": {
-        const source = layer.source.kind === "slot"
-          ? { kind: "url" as const, url: values[layer.source.slot as TokenId]! }
-          : layer.source;
-        const overlay = layer.overlay !== undefined ? substitute(layer.overlay, values) : undefined;
-        return { ...layer, source, ...(overlay !== undefined ? { overlay } : {}) };
+        const source = colored.source.kind === "slot"
+          ? { kind: "url" as const, url: values[colored.source.slot as TokenId]! }
+          : colored.source;
+        return { ...colored, source };
       }
-      case "qr": {
+      case "qr":
         // qrLayer.slot n'est PAS substitué ici : seul render.ts sait transformer une URL en bitmap
-        // QR, donc le slot reste un identifiant de jeton jusqu'au rendu. fg/bg, en revanche, sont
-        // des couleurs comme les autres et sont résolues normalement.
-        return { ...layer, fg: substitute(layer.fg, values), bg: substitute(layer.bg, values) };
-      }
-      case "text": {
-        const shadow = layer.shadow
-          ? { ...layer.shadow, color: substitute(layer.shadow.color, values) }
-          : undefined;
-        const stroke = layer.stroke
-          ? { ...layer.stroke, color: substitute(layer.stroke.color, values) }
-          : undefined;
-        return {
-          ...layer,
-          content: substitute(layer.content, values),
-          color: substitute(layer.color, values),
-          ...(shadow ? { shadow } : {}),
-          ...(stroke ? { stroke } : {}),
-        };
-      }
-      case "shape": {
-        const fill = typeof layer.fill === "string"
-          ? substitute(layer.fill, values)
-          : resolveGradient(layer.fill, values);
-        const border = layer.border
-          ? { ...layer.border, color: substitute(layer.border.color, values) }
-          : undefined;
-        // L'ombre d'une forme (U3 Tâche 4) : douzième emplacement substituable, traité exactement
-        // comme celle d'un texte juste au-dessus. tests/studio-values.test.ts en fait le tour par un
-        // aller-retour avec extractTokens — un champ oublié ici y laisse un jeton détectable.
-        const shadow = layer.shadow
-          ? { ...layer.shadow, color: substitute(layer.shadow.color, values) }
-          : undefined;
-        return { ...layer, fill, ...(border ? { border } : {}), ...(shadow ? { shadow } : {}) };
-      }
+        // QR, donc le slot reste un identifiant de jeton jusqu'au rendu. fg/bg, en revanche, ont
+        // déjà été résolues normalement par `substituteColorFields` ci-dessus.
+        return colored;
+      case "text":
+        return { ...colored, content: substitute(colored.content, values) };
+      case "shape":
+        return colored;
     }
   });
 

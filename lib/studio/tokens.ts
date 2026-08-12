@@ -1,4 +1,4 @@
-import type { Scene, Layer } from "./scene";
+import { colorFieldsOf, type Scene, type Layer } from "./scene";
 
 export type TokenKind = "text" | "image" | "color" | "url";
 
@@ -82,6 +82,12 @@ function tokensInString(value: string): string[] {
   return [...value.matchAll(TOKEN_IN_TEXT)].map((m) => m[1]);
 }
 
+// La dimension COULEUR n'est plus une liste recopiée à la main par type de calque (U4 Tâche 2) : elle
+// vient de `colorFieldsOf` (lib/studio/scene.ts), le marcheur dérivé du schéma que `resolveTokens`
+// (lib/studio/values.ts) consulte aussi pour la substitution — les deux ne peuvent donc plus diverger.
+// Ce qui RESTE ici, spécifique à chaque type, est la dimension NON-couleur : le slot d'image, le slot
+// d'URL du QR, le contenu du texte — trois choses que `colorFieldsOf` ne connaît pas et n'a pas à
+// connaître.
 function usesInLayer(layer: Layer): TokenUse[] {
   const where = `calque « ${layer.name || layer.id} »`;
   const uses: TokenUse[] = [];
@@ -91,41 +97,21 @@ function usesInLayer(layer: Layer): TokenUse[] {
       if (layer.source.kind === "slot") {
         uses.push({ token: layer.source.slot, expected: "image", where });
       }
-      // Scan imageLayer.overlay
-      if (layer.overlay) {
-        uses.push(...tokensInString(layer.overlay).map((t) => ({ token: t, expected: "color" as const, where })));
-      }
       break;
     case "qr":
       uses.push({ token: layer.slot, expected: "url", where });
-      // Scan qrLayer.fg and qrLayer.bg
-      uses.push(...tokensInString(layer.fg).map((t) => ({ token: t, expected: "color" as const, where })));
-      uses.push(...tokensInString(layer.bg).map((t) => ({ token: t, expected: "color" as const, where })));
       break;
     case "text":
       uses.push(...tokensInString(layer.content).map((t) => ({ token: t, expected: "text" as const, where })));
-      uses.push(...tokensInString(layer.color).map((t) => ({ token: t, expected: "color" as const, where })));
-      // Scan textLayer.shadow.color
-      if (layer.shadow) {
-        uses.push(...tokensInString(layer.shadow.color).map((t) => ({ token: t, expected: "color" as const, where })));
-      }
-      // Scan textLayer.stroke.color
-      if (layer.stroke) {
-        uses.push(...tokensInString(layer.stroke.color).map((t) => ({ token: t, expected: "color" as const, where })));
-      }
       break;
-    case "shape": {
-      const colors = typeof layer.fill === "string" ? [layer.fill] : layer.fill.stops.map((s) => s.color);
-      if (layer.border) colors.push(layer.border.color);
-      // Scan shapeLayer.shadow.color (U3 Tâche 4) — une couleur comme les autres. Sans cette ligne, un
-      // jeton posé dans l'ombre d'une forme échapperait à validateScene (donc « jeton inconnu » ne
-      // serait jamais dit) ET à resolveTokens, qui substitue EXACTEMENT les champs scannés ici :
-      // « {{category.color}} » arriverait tel quel à satori, où il ne peint rien du tout.
-      if (layer.shadow) colors.push(layer.shadow.color);
-      uses.push(...colors.flatMap((c) => tokensInString(c).map((t) => ({ token: t, expected: "color" as const, where }))));
+    case "shape":
       break;
-    }
   }
+
+  uses.push(
+    ...colorFieldsOf(layer).flatMap((field) =>
+      tokensInString(field.get()).map((t) => ({ token: t, expected: "color" as const, where }))),
+  );
 
   return uses;
 }

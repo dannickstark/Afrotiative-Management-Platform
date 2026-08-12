@@ -304,6 +304,108 @@ export function sceneColorFieldPaths(scene: Scene): string[] {
   return out.map((p) => p.join("."));
 }
 
+// U4 Tâche 2 — lit/écrit la valeur pointée par un chemin en NOTATION POINTÉE (ex. « fill.stops.0.color »,
+// produit par `colorFieldPaths`/`colorFieldsOf` ci-dessus). Un segment tout en chiffres adresse un INDEX
+// de tableau (les arrêts d'un dégradé) ; tout le reste adresse une clé d'objet. Générique : ni l'un ni
+// l'autre ne connaît la forme d'un calque en particulier, ce qui est le point — `resolveTokens`
+// (lib/studio/values.ts) s'en sert pour substituer CHAQUE champ que `colorFieldsOf` a trouvé, sans
+// ré-écrire un `switch` par type de calque pour la partie couleur.
+function isArrayIndex(segment: string): boolean {
+  return /^\d+$/.test(segment);
+}
+
+function getAtPath(value: unknown, segments: string[]): string {
+  let cur: unknown = value;
+  for (const segment of segments) {
+    const key: string | number = isArrayIndex(segment) ? Number(segment) : segment;
+    cur = (cur as Record<string | number, unknown> | undefined)?.[key];
+  }
+  return cur as string;
+}
+
+// IMMUTABLE : clone chaque niveau traversé par `segments`, ne touche à RIEN d'autre. `resolveTokens`
+// s'appuie sur cette garantie (tests/studio-values.test.ts, « ne mute jamais la scène d'entrée ») —
+// et chaîne plusieurs appels (un par champ-couleur) sur l'accumulateur qu'elle renvoie, jamais sur
+// l'objet d'origine, pour que les champs déjà substitués ne soient pas écrasés par le suivant.
+function setAtPath<T>(value: T, segments: string[], newValue: string): T {
+  const [head, ...rest] = segments;
+  const key: string | number = isArrayIndex(head) ? Number(head) : head;
+  if (Array.isArray(value)) {
+    const copy = value.slice();
+    copy[key as number] = rest.length === 0 ? newValue : setAtPath(copy[key as number], rest, newValue);
+    return copy as unknown as T;
+  }
+  const record = value as Record<string | number, unknown>;
+  return {
+    ...record,
+    [key]: rest.length === 0 ? newValue : setAtPath(record[key], rest, newValue),
+  } as unknown as T;
+}
+
+/** UN champ-couleur énuméré : son chemin (notation pointée) et un accesseur vers sa valeur COURANTE.
+ *  Produit par `colorFieldsOf` ; `path` se repasse tel quel à `setColorAtPath` pour la substitution. */
+export type ColorField = { path: string; get: () => string };
+
+/**
+ * L'API réconciliée de la Tâche 2 — CE que `usesInLayer` (tokens.ts) ET `resolveTokens` (values.ts)
+ * consomment désormais pour la dimension couleur, à la place des deux listes recopiées à la main
+ * qu'elles tenaient chacune. `colorFieldPaths` (Tâche 1) donne les CHEMINS ; `colorFieldsOf` y attache
+ * un accesseur vers la scène RÉELLE passée en argument (fermeture sur `layer`, pas sur le schéma) —
+ * c'est ce qui manquait à `colorFieldPaths` seul pour que tokens.ts puisse LIRE chaque chaîne et que
+ * values.ts puisse la remplacer (via `setColorAtPath`, plus bas).
+ */
+export function colorFieldsOf(layer: Layer): ColorField[] {
+  return colorFieldPaths(layer).map((path) => {
+    const segments = path.split(".");
+    return { path, get: () => getAtPath(layer, segments) };
+  });
+}
+
+/** La substitution IMMUTABLE que `resolveTokens` applique à un `path` renvoyé par `colorFieldsOf` —
+ *  voir `setAtPath` ci-dessus pour la garantie de non-mutation. */
+export function setColorAtPath(layer: Layer, path: string, value: string): Layer {
+  return setAtPath(layer, path.split("."), value);
+}
+
+// U4 Tâche 2 — représentants « au complet » d'UN calque de chaque TYPE, chaque champ-couleur optionnel
+// RENSEIGNÉ, pour que `colorFieldPaths` en énumère la liste MAXIMALE. `SCENE_COLOR_FIELDS` est donc
+// DÉRIVÉE du MÊME marcheur que `colorFieldsOf` — jamais une liste retapée à la main — et sert de table
+// de référence au garde-fou structurel (tests/studio-color-fields.test.ts). Seule la FORME du
+// représentant (quels sous-objets optionnels existent) est écrite ici ; les CHEMINS qu'elle produit
+// viennent du schéma, pas de cette liste.
+const REPRESENTATIVE_LAYERS: Record<Layer["type"], Layer> = {
+  image: {
+    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
+    type: "image", source: { kind: "asset", assetId: "_" }, fit: "cover", overlay: "#000000",
+  },
+  text: {
+    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
+    type: "text", content: "_", font: { family: "_", size: 1, weight: 400 }, color: "#000000",
+    align: "left", vAlign: "top", lineHeight: 1,
+    shadow: { x: 0, y: 0, blur: 0, color: "#000000" },
+    stroke: { width: 1, color: "#000000" },
+  },
+  shape: {
+    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
+    type: "shape", shape: "rect", fill: "#000000",
+    border: { width: 1, color: "#000000" },
+    shadow: { x: 0, y: 0, blur: 0, color: "#000000" },
+  },
+  qr: {
+    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
+    type: "qr", slot: "_", fg: "#000000", bg: "#000000", margin: 0,
+  },
+};
+
+/** La liste MAXIMALE des chemins-couleur, PAR TYPE de calque — voir `REPRESENTATIVE_LAYERS`
+ *  ci-dessus. Le garde-fou structurel (tests/studio-color-fields.test.ts) la confronte à
+ *  `colorFieldsOf` appliqué à une instance réelle du test. */
+export const SCENE_COLOR_FIELDS: Record<Layer["type"], string[]> = Object.fromEntries(
+  (Object.entries(REPRESENTATIVE_LAYERS) as [Layer["type"], Layer][]).map(
+    ([type, representative]) => [type, colorFieldPaths(representative)],
+  ),
+) as Record<Layer["type"], string[]>;
+
 export type Frame = z.infer<typeof frame>;
 export type ImageSource = z.infer<typeof imageSource>;
 export type ImageLayer = z.infer<typeof imageLayer>;
