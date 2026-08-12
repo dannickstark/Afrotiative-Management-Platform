@@ -377,21 +377,47 @@ export type QrLayer = z.infer<typeof qrLayer>;
 export type Layer = z.infer<typeof layer>;
 export type Scene = z.infer<typeof sceneSchema>;
 
+// U4 Tâche 4 — le premier identifiant de calque VU DEUX FOIS dans `layers`, ou `null` s'il n'y en
+// a pas. Prend un `unknown` (pas un `Layer[]` typé) exprès : appelée à la fois sur l'entrée BRUTE
+// — quand le schéma a déjà échoué et que `parsed.data` n'existe pas — et sur `parsed.data.layers`
+// une fois le schéma validé. Un élément dont `id` n'est pas une chaîne est simplement ignoré : ce
+// n'est pas à cette fonction de le signaler, `sceneSchema` s'en charge déjà (comme issue Zod).
+function findDuplicateLayerId(layers: unknown): string | null {
+  if (!Array.isArray(layers)) return null;
+  const ids = new Set<string>();
+  for (const l of layers) {
+    const id = (l as { id?: unknown } | null | undefined)?.id;
+    if (typeof id !== "string") continue;
+    if (ids.has(id)) return id;
+    ids.add(id);
+  }
+  return null;
+}
+
 // Une scène lue en base est une donnée NON FIABLE : elle a pu être écrite par une version
 // antérieure du code. Tout chemin de lecture passe par ici.
+//
+// U4 Tâche 4 — remonte TOUTES les anomalies d'un coup, pas seulement la première : un gabarit qui
+// porte plusieurs erreurs à la fois (type de calque inconnu, dimension négative, identifiant en
+// double...) doit toutes les afficher en une seule levée, une par ligne, pour qu'un rédacteur les
+// corrige toutes sans relancer l'aperçu entre chaque correction. La signature ne change pas —
+// `parseScene` continue de LEVER un `SceneError`, seul son `.message` s'allonge.
 export function parseScene(input: unknown): Scene {
   const parsed = sceneSchema.safeParse(input);
   if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    // For custom refine() messages (already in French), use them directly.
-    // For built-in Zod validations, use French locale translation.
-    const message = first.code === "custom" ? first.message : frenchZodMessages(first as Parameters<typeof frenchZodMessages>[0]);
-    throw new SceneError(`Scène invalide : ${first.path.join(".") || "racine"} — ${message}`);
+    const messages = parsed.error.issues.map((issue) => {
+      // For custom refine() messages (already in French), use them directly.
+      // For built-in Zod validations, use French locale translation.
+      const message = issue.code === "custom" ? issue.message : frenchZodMessages(issue as Parameters<typeof frenchZodMessages>[0]);
+      return `${issue.path.join(".") || "racine"} — ${message}`;
+    });
+    // Le double-id est un contrôle INDÉPENDANT du schéma (Zod ne connaît pas l'unicité entre
+    // calques) : il tourne sur l'entrée BRUTE, jamais bloqué par un échec de schéma ailleurs.
+    const dupId = findDuplicateLayerId((input as { layers?: unknown } | null)?.layers);
+    if (dupId !== null) messages.push(`identifiant de calque en double « ${dupId} ».`);
+    throw new SceneError(`Scène invalide : ${messages.join("\n")}`);
   }
-  const ids = new Set<string>();
-  for (const l of parsed.data.layers) {
-    if (ids.has(l.id)) throw new SceneError(`Scène invalide : identifiant de calque en double « ${l.id} ».`);
-    ids.add(l.id);
-  }
+  const dupId = findDuplicateLayerId(parsed.data.layers);
+  if (dupId !== null) throw new SceneError(`Scène invalide : identifiant de calque en double « ${dupId} ».`);
   return parsed.data;
 }
