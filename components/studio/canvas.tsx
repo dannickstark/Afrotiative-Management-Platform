@@ -306,14 +306,24 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
                 // (voir `beginMove`), et les calques MASQUÉS suivent le groupe — décision et motif dans
                 // hooks/use-layer-drag.ts.
                 const déjàSélectionné = selectedIds.includes(layer.id);
-                // Chantier B, Tâche 5 — un clic qui SÉLECTIONNE (pas déjà dans la sélection) étend
-                // TOUJOURS à tout le groupe du calque cliqué : `expandSelectionToGroups` renvoie
-                // `[layer.id]` seul pour un calque SANS `groupId` (le comportement d'avant, intact),
-                // et TOUS les co-membres pour un calque groupé. `select(layer.id)` (remplacement par
-                // UN seul id) ne suffirait plus depuis cette tâche — `selectMany` porte l'ensemble.
-                if (!déjàSélectionné) dispatch(selectMany(expandSelectionToGroups([layer.id], scene)));
-                const groupe = déjàSélectionné && selectedIds.length > 1
-                  ? scene.layers.filter((l) => selectedIds.includes(l.id))
+                // Chantier B, Tâche 5 (revue, Critique 1) — `selectedIds` (prop) est encore la valeur
+                // D'AVANT ce clic : `dispatch` ne réapplique pas React synchrones dans CE gestionnaire,
+                // donc lire `selectedIds` juste après avoir dispatché ne verrait JAMAIS le groupe qu'on
+                // vient de sélectionner. Sur le TOUT PREMIER clic d'un membre (pas encore sélectionné),
+                // `idsForDrag` doit donc venir de la MÊME expansion que celle qu'on dispatche — pas de
+                // `selectedIds`, qui est encore l'ancienne sélection (vide, ou autre chose) à cet
+                // instant précis. Sans ce correctif, ce premier clic armait un glisser À UN SEUL calque
+                // (`groupe` à `undefined`) : le membre cliqué bougeait seul, les autres restaient
+                // plantés — mesuré (actions `["select","moveLayer"]`, pas `"setFrames"`).
+                const idsForDrag = déjàSélectionné ? selectedIds : expandSelectionToGroups([layer.id], scene);
+                // Un clic qui SÉLECTIONNE (pas déjà dans la sélection) étend TOUJOURS à tout le
+                // groupe du calque cliqué : `expandSelectionToGroups` renvoie `[layer.id]` seul pour
+                // un calque SANS `groupId` (le comportement d'avant, intact), et TOUS les co-membres
+                // pour un calque groupé. `select(layer.id)` (remplacement par UN seul id) ne
+                // suffirait plus depuis cette tâche — `selectMany` porte l'ensemble.
+                if (!déjàSélectionné) dispatch(selectMany(idsForDrag));
+                const groupe = idsForDrag.length > 1
+                  ? scene.layers.filter((l) => idsForDrag.includes(l.id))
                   : undefined;
                 getMoveHandler(layer, groupe)(e);
               }}

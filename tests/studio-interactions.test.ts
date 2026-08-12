@@ -975,6 +975,42 @@ describe("Canvas — un clic sur un MEMBRE de groupe sélectionne TOUT LE GROUPE
   });
 });
 
+// Chantier B, Tâche 5 (revue, Critique 1) — LE GLISSER DE GROUPE DÈS LE TOUT PREMIER CLIC, en UN
+// SEUL geste continu (pointerdown -> pointermove -> pointerup, SANS relâcher entre la sélection et
+// le glisser). `selectedIds` (la prop) est encore l'ANCIENNE sélection au moment de ce pointerdown —
+// React ne réapplique pas le dispatch synchrones dans le même gestionnaire — donc un correctif qui
+// dériverait `groupe` de `selectedIds` plutôt que de la MÊME expansion que celle dispatchée armerait
+// un glisser À UN SEUL calque sur ce premier clic : le membre cliqué bougerait seul, le reste du
+// groupe resterait planté. Le bloc précédent (« tirer un membre de groupe DÉJÀ sélectionné ») ne
+// couvre PAS ce cas : il pré-remplit `selectedIds` au montage, ce qui masque exactement ce défaut.
+describe("Canvas — le TOUT PREMIER geste (sélection + glisser en UN seul pointerdown/move/up) déplace le groupe ENTIER (chantier B, Tâche 5, revue)", () => {
+  it("clic + glisser continu sur un membre depuis une sélection VIDE déplace TOUS les membres, pas seulement celui tiré", async () => {
+    const scene = sceneWithGroupedPairFarFromGuides();
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, []);
+    const a = layerEl(container, "a");
+
+    await pointer(a, "pointerdown", { clientX: 30, clientY: 30, button: 0 });
+    // La sélection s'est bien étendue au groupe entier dès ce premier pointerdown.
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    await pointer(a, "pointermove", { clientX: 130, clientY: 130 });
+    await pointer(a, "pointerup", { clientX: 130, clientY: 130 });
+
+    expect(box.state.scene.layers.map((l) => l.frame)).toEqual([
+      { x: 110, y: 110, w: 50, h: 50 }, // "a" : +100, +100
+      { x: 300, y: 300, w: 50, h: 50 }, // "b" : +100, +100 aussi — le groupe entier a suivi, PAS resté planté
+      { x: 900, y: 900, w: 50, h: 50 }, // "c" : hors groupe ET hors sélection, INTACT
+    ]);
+    // UN LOT (`setFrames`), jamais un `moveLayer` isolé — la signature même du glisser de GROUPE,
+    // par opposition au glisser à un seul calque que le défaut produisait.
+    expect(box.actions.some((a) => a.type === "setFrames")).toBe(true);
+    expect(box.actions.some((a) => a.type === "moveLayer")).toBe(false);
+    expect(box.state.past).toHaveLength(1);
+
+    unmount();
+  });
+});
+
 // Canevas et cadres DÉDIÉS à ce test (2000×2000, coordonnées à trois chiffres bien espacées) —
 // PAS `sceneWithGroupedPair()`/`sceneWithThreeShapesOnCanvas()` : ce dernier a été calibré pour un
 // glisser qui déplace les TROIS calques (aucune référence d'accrochage ne reste sur place, voir son

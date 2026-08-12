@@ -619,7 +619,22 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     // n'écrit JAMAIS `layer.constraints` — `withGroupId` ci-dessus ne touche QUE `groupId`, tout le
     // reste du calque (donc `constraints`, présent ou absent) traverse par la copie superficielle
     // `{ ...layer }`. tests/studio-editor-state.test.ts épingle `constraints` identique avant/après.
+    //
+    // INVARIANT « < 2 = NO-OP » (revue, Important 3) — APPLIQUÉ ICI, pas seulement côté hook
+    // (hooks/use-editor-keymap.ts#case "group") : un futur appelant (chantiers B T6/T7) qui
+    // dispatcherait `setGroup` directement, sans repasser par le hook, ne doit PAS pouvoir marquer un
+    // calque SEUL comme « groupe » — un groupe à un membre n'a rien à faire suivre ni à sélectionner
+    // ensemble. Compté sur les ids qui RÉSOLVENT réellement à un calque de la scène (pas
+    // `action.ids.length` brut) : `setGroup(["title","inexistant"], "g1")` ne doit pas non plus
+    // passer en comptant un id fantôme. Seul le chemin ASSIGNATION (`groupId` non nul) est concerné —
+    // DÉGROUPER (`groupId: null`) reste valide quel que soit le nombre de membres visés, y compris un
+    // seul ou zéro : la garde `touched` plus bas le rend déjà inoffensif (aucune entrée fantôme) sans
+    // qu'il faille lui interdire quoi que ce soit.
     case "setGroup": {
+      if (action.groupId !== null) {
+        const resolvedCount = action.ids.filter((id) => layerIndex(state.scene, id) !== -1).length;
+        if (resolvedCount < 2) return state;
+      }
       let layers = state.scene.layers;
       let touched = false;
       for (const id of action.ids) {

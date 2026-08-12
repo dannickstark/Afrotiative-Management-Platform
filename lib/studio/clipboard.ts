@@ -1,7 +1,11 @@
 // lib/studio/clipboard.ts — Chantier B, Tâche 2 : le presse-papiers EN SESSION de l'éditeur
-// (copier/coller/dupliquer). Un module FEUILLE — comme keymap.ts et align.ts avant lui — aucun
-// import de valeur, aucune I/O, aucun DOM : uniquement des transformations pures sur des `Layer[]`
-// et un état MODULE-level (le presse-papiers lui-même).
+// (copier/coller/dupliquer). Un module FEUILLE au même sens que keymap.ts et align.ts avant lui :
+// aucune I/O, aucun DOM, aucun React — uniquement des transformations pures sur des `Layer[]` et un
+// état MODULE-level (le presse-papiers lui-même). Depuis la Tâche 5, il porte UN import de VALEUR
+// (`nextGroupId`, lib/studio/groups.ts) : `groups.ts` est lui-même une feuille du même genre (aucun
+// DOM/React, voir son en-tête), et réutiliser SA source d'id de groupe plutôt que d'en écrire une
+// seconde ici est exactement la même discipline que l'ID-GEN ci-dessous applique déjà aux ids de
+// calque — un seul générateur, jamais deux schémas qui pourraient diverger.
 //
 // CE N'EST PAS le presse-papiers du système d'exploitation, ni localStorage : c'est une variable au
 // niveau du module, qui vit pour la durée du PROCESSUS (donc de la session onglet). C'est le brief
@@ -15,6 +19,7 @@
 // d'id (pas de nanoid, pas de compteur) : un id de calque est un UUID partout dans l'éditeur, sans
 // exception pour les clones.
 import type { Layer } from "./scene";
+import { nextGroupId } from "./groups";
 
 /** Un décalage de cadre, en pixels gabarit — voir `cloneLayersWithNewIds`. */
 export interface CloneOffset {
@@ -34,22 +39,35 @@ export const PASTE_OFFSET: CloneOffset = { dx: 16, dy: 16 };
  * que `createLayer()`, jamais un second schéma), et son cadre est décalé de `offset`. Toute autre
  * propriété du calque source est recopiée telle quelle.
  *
- * `groupId` (chantier B, tâche 5, PAS ENCORE dans le schéma) : cette fonction ne le touche PAS — un
- * calque source qui portera un `groupId` un jour verra son clone hériter du MÊME `groupId` que le
- * spread superficiel ci-dessous recopie déjà avec le reste. Ce n'est PAS le comportement final visé
- * (le brief demande qu'un groupe DUPLIQUÉ reste groupé entre SES clones, avec un `groupId` FRAIS et
- * PARTAGÉ entre eux — pas l'ancien `groupId`, partagé avec le groupe source) : c'est la tâche 5 qui
- * ajoutera ce remappage, une fois le champ lui-même introduit dans le schéma. Documenté ici plutôt
- * que deviné, pour que ce TODO ne se perde pas entre les deux tâches.
+ * `groupId` (chantier B, Tâche 5, spec §3 verbatim : « Un calque groupé collé reçoit un groupId
+ * neuf partagé (le groupe est dupliqué, pas fusionné) ») — REMAPPÉ, jamais recopié tel quel. Sans
+ * ce remappage, coller/dupliquer un groupe `[a,b]` (groupId `g1`) produirait quatre calques
+ * partageant TOUS le même `g1` : cliquer n'importe lequel des quatre sélectionnerait les quatre, et
+ * dégrouper le CLONE dégrouperait la SOURCE au passage — une fusion, pas une duplication. `remap`
+ * associe donc CHAQUE `groupId` DISTINCT rencontré dans le lot à UN SEUL `nextGroupId()` frais,
+ * appliqué à TOUS les calques qui le partageaient (le clone d'un groupe RESTE un groupe, entre SES
+ * clones) — et un calque source SANS `groupId` clone SANS `groupId`, tout aussi fidèlement. Deux
+ * groupes sources DIFFÉRENTS dans le même lot (ex. coller deux sélections multi-groupes d'un coup)
+ * reçoivent chacun leur PROPRE `groupId` neuf, jamais fusionnés entre eux.
  *
  * Ne mute JAMAIS `layers` : chaque clone est un objet neuf, avec un `frame` neuf.
  */
 export function cloneLayersWithNewIds(layers: readonly Layer[], offset: CloneOffset): Layer[] {
-  return layers.map((layer) => ({
-    ...layer,
-    id: crypto.randomUUID(),
-    frame: { ...layer.frame, x: layer.frame.x + offset.dx, y: layer.frame.y + offset.dy },
-  }));
+  const remap = new Map<string, string>();
+  return layers.map((layer) => {
+    // `{ ...layer, id, frame }` SANS poser `groupId` explicitement : un calque source SANS ce champ
+    // clone donc SANS lui non plus (la clé reste ABSENTE, jamais `groupId: undefined`) — le même
+    // souci d'exactitude que `withGroupId` (editor-state.ts) applique déjà au dégroupement, pour la
+    // même raison (un champ optionnel absent doit RESTER absent, pas devenir présent-et-undefined).
+    const cloned: Layer = {
+      ...layer,
+      id: crypto.randomUUID(),
+      frame: { ...layer.frame, x: layer.frame.x + offset.dx, y: layer.frame.y + offset.dy },
+    };
+    if (!layer.groupId) return cloned;
+    if (!remap.has(layer.groupId)) remap.set(layer.groupId, nextGroupId());
+    return { ...cloned, groupId: remap.get(layer.groupId)! };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

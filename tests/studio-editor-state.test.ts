@@ -439,6 +439,45 @@ describe("setGroup — grouper/dégrouper, UNE entrée d'historique (chantier B,
     expect(find(next, "locked1").groupId).toBe("g1");
     expect(find(next, "locked1").locked).toBe(true);
   });
+
+  // ── Revue (Important 3) — l'invariant « < 2 = no-op » est appliqué DANS LE RÉDUCTEUR lui-même, pas
+  // seulement côté hook (hooks/use-editor-keymap.ts) : un futur appelant (chantiers B T6/T7) qui
+  // dispatcherait `setGroup` directement, sans repasser par le hook, ne doit pas pouvoir marquer un
+  // calque SEUL comme « groupe ». Seul le chemin ASSIGNATION est concerné — dégrouper reste valide
+  // quel que soit le compte (déjà couvert par « dégrouper des calques SANS groupId est un no-op » et
+  // par le test d'undo ci-dessus, qui dégroupe deux membres à la fois sans qu'aucune borne basse
+  // n'intervienne).
+  describe("invariant < 2 = no-op, appliqué DANS LE RÉDUCTEUR (revue, Important 3)", () => {
+    it("grouper UN SEUL calque est un no-op — même référence, aucun groupId posé, aucune entrée d'historique", () => {
+      const state = makeState();
+      const next = editorReducer(state, setGroup(["title"], "g1"));
+      expect(next).toBe(state);
+      expect("groupId" in find(next, "title")).toBe(false);
+      expect(next.past).toEqual([]);
+    });
+
+    it("grouper un lot VIDE reste un no-op (déjà couvert par la garde générale, mais l'invariant <2 ne doit pas non plus lever)", () => {
+      const state = makeState();
+      expect(editorReducer(state, setGroup([], "g1"))).toBe(state);
+    });
+
+    // Un lot de deux ids dont UN SEUL résout réellement à un calque de la scène compte comme UN
+    // membre RÉEL, pas deux — l'id fantôme ne doit pas suffire à franchir le seuil.
+    it("un id fantôme dans le lot ne compte pas comme un second membre — toujours un no-op", () => {
+      const state = makeState();
+      const next = editorReducer(state, setGroup(["title", "inexistant"], "g1"));
+      expect(next).toBe(state);
+      expect("groupId" in find(next, "title")).toBe(false);
+    });
+
+    it("DEUX calques RÉELS franchissent le seuil normalement — le groupe se forme", () => {
+      const state = makeState();
+      const next = editorReducer(state, setGroup(["title", "badge"], "g1"));
+      expect(next).not.toBe(state);
+      expect(find(next, "title").groupId).toBe("g1");
+      expect(find(next, "badge").groupId).toBe("g1");
+    });
+  });
 });
 
 describe("deleteLayer", () => {

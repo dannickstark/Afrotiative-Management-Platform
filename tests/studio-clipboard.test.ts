@@ -130,6 +130,69 @@ describe("module clipboard — stockage EN SESSION, en mémoire", () => {
   });
 });
 
+// ── Chantier B, Tâche 5 (revue, Critique 2) — spec §3 verbatim : « Un calque groupé collé reçoit un
+// groupId neuf partagé (le groupe est dupliqué, pas fusionné) ». Sans ce remappage, ⌘D sur un groupe
+// `[a,b]` (groupId `g1`) produirait quatre calques partageant TOUS `g1` — cliquer n'importe lequel
+// des quatre sélectionnerait les quatre, et dégrouper le clone dégrouperait la source au passage.
+function groupedLayer(id: string, groupId: string, x = 40, y = 40): Layer {
+  return { ...makeLayer(id, x, y), groupId };
+}
+
+describe("cloneLayersWithNewIds — remappage de groupId (chantier B, Tâche 5, revue Critique 2)", () => {
+  it("les clones d'un groupe partagent un groupId NEUF, distinct du groupId source", () => {
+    const source = [groupedLayer("a", "g1"), groupedLayer("b", "g1")];
+    const clones = cloneLayersWithNewIds(source, { dx: 16, dy: 16 });
+    expect(clones[0].groupId).toBeDefined();
+    expect(clones[0].groupId).not.toBe("g1");
+    // Les DEUX clones partagent LE MÊME groupId neuf entre eux — le groupe reste un groupe.
+    expect(clones[1].groupId).toBe(clones[0].groupId);
+  });
+
+  it("le groupe SOURCE est inchangé — cloner ne mute ni ne réassigne son groupId", () => {
+    const source = [groupedLayer("a", "g1"), groupedLayer("b", "g1")];
+    cloneLayersWithNewIds(source, { dx: 16, dy: 16 });
+    expect(source[0].groupId).toBe("g1");
+    expect(source[1].groupId).toBe("g1");
+  });
+
+  it("DEUX groupes sources DIFFÉRENTS dans le même lot reçoivent chacun leur PROPRE groupId neuf — jamais fusionnés", () => {
+    const source = [
+      groupedLayer("a", "g1"), groupedLayer("b", "g1"),
+      groupedLayer("c", "g2"), groupedLayer("d", "g2"),
+    ];
+    const clones = cloneLayersWithNewIds(source, { dx: 16, dy: 16 });
+    const [ca, cb, cc, cd] = clones;
+    expect(ca.groupId).toBe(cb.groupId);
+    expect(cc.groupId).toBe(cd.groupId);
+    expect(ca.groupId).not.toBe(cc.groupId); // les deux groupes clonés restent DISTINCTS entre eux
+    expect(ca.groupId).not.toBe("g1");
+    expect(cc.groupId).not.toBe("g2");
+  });
+
+  it("un calque SANS groupId clone SANS groupId — la clé reste ABSENTE, jamais `groupId: undefined`", () => {
+    const source = [makeLayer("a")];
+    const [clone] = cloneLayersWithNewIds(source, { dx: 16, dy: 16 });
+    expect("groupId" in clone).toBe(false);
+  });
+
+  it("un lot MÉLANGÉ (groupé + non groupé) ne fait pas fuir le groupId sur le calque non groupé", () => {
+    const source = [groupedLayer("a", "g1"), groupedLayer("b", "g1"), makeLayer("c")];
+    const clones = cloneLayersWithNewIds(source, { dx: 16, dy: 16 });
+    expect(clones[0].groupId).toBe(clones[1].groupId);
+    expect("groupId" in clones[2]).toBe(false);
+  });
+
+  // Anti-vacuité (brief, Step 4 du T5 original, réappliqué ici) : une régression qui recopierait
+  // simplement `layer.groupId` tel quel (comme avant ce correctif) laisserait les clones partager
+  // "g1" — CE test rougirait, contrairement à un test qui ne vérifierait que « les clones ont un
+  // groupId défini » (vrai aussi dans la version bogue).
+  it("anti-vacuité : le groupId d'un clone n'est PAS la chaîne source « g1 »", () => {
+    const source = [groupedLayer("a", "g1")];
+    const [clone] = cloneLayersWithNewIds(source, { dx: 16, dy: 16 });
+    expect(clone.groupId).not.toBe("g1");
+  });
+});
+
 // Anti-vacuité générale (brief) : deux appels distincts à cloneLayersWithNewIds sur la MÊME scène
 // source ne collident jamais entre eux (deux paste consécutifs).
 describe("anti-vacuité — deux clonages successifs ne collident jamais", () => {
