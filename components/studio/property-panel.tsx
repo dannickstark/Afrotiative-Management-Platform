@@ -758,6 +758,12 @@ function ShapeFields({
           options={SHAPE_OPTIONS.map((o) => ({ value: o.value as string, label: o.label }))}
           optionDataAttr="data-shape-option"
           onCommit={(v) => patch({ shape: v })}
+          // Chantier D, Tâche 4 — GeometryStrip porte désormais SES PROPRES `<Select>` (les menus H/V
+          // du widget de contraintes, `data-field="constraints.h"`/`"constraints.v"`), rendus AVANT
+          // cette section dans le panneau. Sans `dataField` ici, un extracteur qui cherchait
+          // « le seul `role="combobox"` du panneau » (tests/studio-property-panel.test.ts) n'aurait
+          // plus visé sans ambiguïté CE sélecteur-ci.
+          dataField="shape"
         />
         {/* Le rayon N'EST OFFERT que là où il veut dire quelque chose (lib/studio/shapes.ts,
             `radiusApplies`) : sur une ellipse il la transformerait en stade, sur une forme découpée il

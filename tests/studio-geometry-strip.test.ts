@@ -14,15 +14,58 @@
 // qu'une simple bascule manuelle du prop dans le test n'aurait pas prouvé.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import React from "react";
-import { installDom, mount } from "./dom-harness";
+import { installDom, mount, click } from "./dom-harness";
 import type { Layer, Scene, TextLayer } from "@/lib/studio/scene";
 import { constrainedTextOverflows } from "@/lib/studio/relayout-warn";
 import { relayoutToFormat } from "@/lib/studio/relayout";
 import { GeometryStrip, maxLinesOverflowNote } from "@/components/studio/geometry-strip";
+// Chantier D, Tâche 4 — le widget de contraintes (ConstraintsField) est monté DANS GeometryStrip
+// (voir la place réservée par U1 : « U5 y ajoutera le widget d'ancrage par côté »), donc ses tests
+// DOM vivent ICI plutôt que dans un fichier séparé — c'est tests/studio-constraints-field.test.ts qui
+// tient la logique PURE (`nextConstraintOnEdgeClick`, sans DOM). `H_CONSTRAINT_LABELS`/
+// `V_CONSTRAINT_LABELS` sont importés pour affirmer le TEXTE accessible réel des deux menus contre
+// LA MÊME table que le composant, jamais une chaîne recopiée à la main (même idiome que
+// `maxLinesOverflowNote` ci-dessus).
+import { H_CONSTRAINT_LABELS, V_CONSTRAINT_LABELS } from "@/components/studio/constraints-field";
+import { setLayerProps, type EditorAction } from "@/lib/studio/editor-state";
+
+// Globals que jsdom 30 (sans `pretendToBeVisual`) ne fournit pas, et que `installDom()` n'installe
+// PAS (§2 du plan U0 : window/document/navigator/HTMLElement/Node/Event/KeyboardEvent/MouseEvent/
+// IntersectionObserver/localStorage — pas ceux-ci) — `ConstraintsField` (Chantier D, Tâche 4) monte
+// deux `<Select>` de @/components/ui/select (Base UI), qui construit un contexte floating-ui-react
+// DÈS le montage, PAS seulement à l'ouverture : `floating-ui-react` fait `value instanceof Element`
+// (le `Element` GLOBAL nu, pas `window.Element`) et calcule un positionnement (`getComputedStyle`, via
+// une promesse planifiée par `requestAnimationFrame`) même pour un popup fermé. Sans ces globals,
+// monter GeometryStrip lève `ReferenceError: Element is not defined` au tout premier rendu — mesuré
+// (voir la trace RED de ce fichier avant ce correctif). MÊME solution, MÊME portée que
+// tests/studio-interactions.test.ts#installExtraGlobals (jamais migrée dans dom-harness.ts partagé —
+// décision documentée là-bas), reprise ici plutôt que dupliquée en aveugle : ce fichier est le second
+// à avoir besoin d'un `<Select>` sous ce harnais, PAS le premier.
+function installExtraGlobals(): () => void {
+  const g = globalThis as unknown as Record<string, unknown> & { window: Record<string, unknown> };
+  const snapshot = new Map<string, { had: boolean; value: unknown }>();
+  const set = (key: string, value: unknown) => {
+    snapshot.set(key, { had: Object.prototype.hasOwnProperty.call(g, key), value: g[key] });
+    g[key] = value;
+  };
+
+  set("Element", g.window.Element);
+  set("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0) as unknown as number);
+  set("cancelAnimationFrame", (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>));
+  set("getComputedStyle", (g.window.getComputedStyle as (...a: unknown[]) => unknown).bind(g.window));
+
+  return () => {
+    for (const [key, prior] of snapshot) {
+      if (prior.had) g[key] = prior.value;
+      else delete g[key];
+    }
+  };
+}
 
 let teardownDom: () => void;
-beforeAll(() => { teardownDom = installDom(); });
-afterAll(() => { teardownDom(); });
+let teardownExtraGlobals: () => void;
+beforeAll(() => { teardownDom = installDom(); teardownExtraGlobals = installExtraGlobals(); });
+afterAll(() => { teardownExtraGlobals(); teardownDom(); });
 
 // Même scénario numérique que tests/studio-relayout.test.ts (« constrainedTextOverflows — un texte
 // contraint... ») : 1 ligne à 1520px (le format d'accueil, x_landscape 1600×900, moins 40px de marge
@@ -151,5 +194,150 @@ describe("GeometryStrip — note « texte contraint qui déborde maxLines » (ch
     const scene = sceneWith(layer);
     const relaid = relayoutToFormat(scene, "story");
     expect(relaid.layers[0].frame.w).toBe(1000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 4 — le widget de contraintes (ConstraintsField), monté dans GeometryStrip.
+function shapeLayer(overrides: Partial<Layer> = {}): Layer {
+  return {
+    id: "l1", name: "Forme", visible: true, locked: false,
+    frame: { x: 0, y: 0, w: 100, h: 100 }, type: "shape", shape: "rect", fill: "#FFFFFF",
+    ...overrides,
+  } as Layer;
+}
+
+function shapeScene(...layers: Layer[]): Scene {
+  return { schemaVersion: 1, canvas: { width: 1600, height: 900, background: "#000000" }, layers };
+}
+
+describe("GeometryStrip — le widget de contraintes (ConstraintsField, chantier D T4)", () => {
+  it("le carré reflète constraintsOf(layer) : aria-pressed VRAI sur les bords posés, FAUX ailleurs", async () => {
+    const layer = shapeLayer({ constraints: { h: "leftRight", v: "center" } });
+    const scene = shapeScene(layer);
+    const { container, unmount } = await mount(
+      React.createElement(GeometryStrip, { layer, patch: () => {}, scene, selectedIds: [layer.id], dispatch: () => {} }),
+    );
+    try {
+      const pressed = (edge: string) =>
+        container.querySelector(`[data-edge="${edge}"]`)!.getAttribute("aria-pressed");
+      // h:"leftRight" -> les DEUX bords horizontaux posés ; v:"center" -> aucun bord vertical, et le
+      // centre lui-même FAUX (le centre n'est actif que quand LES DEUX axes valent "center").
+      expect(pressed("left")).toBe("true");
+      expect(pressed("right")).toBe("true");
+      expect(pressed("top")).toBe("false");
+      expect(pressed("bottom")).toBe("false");
+      expect(pressed("center")).toBe("false");
+    } finally {
+      unmount();
+    }
+  });
+
+  it("le centre reflète VRAI seulement quand LES DEUX axes valent \"center\"", async () => {
+    const layer = shapeLayer({ constraints: { h: "center", v: "center" } });
+    const scene = shapeScene(layer);
+    const { container, unmount } = await mount(
+      React.createElement(GeometryStrip, { layer, patch: () => {}, scene, selectedIds: [layer.id], dispatch: () => {} }),
+    );
+    try {
+      expect(container.querySelector('[data-edge="center"]')!.getAttribute("aria-pressed")).toBe("true");
+    } finally {
+      unmount();
+    }
+  });
+
+  it("les menus H/V affichent le TEXTE accessible EXACT de constraintsOf(layer)", async () => {
+    const layer = shapeLayer({ constraints: { h: "leftRight", v: "topBottom" } });
+    const scene = shapeScene(layer);
+    const { container, unmount } = await mount(
+      React.createElement(GeometryStrip, { layer, patch: () => {}, scene, selectedIds: [layer.id], dispatch: () => {} }),
+    );
+    try {
+      // `[data-slot="select-value"]`, PAS le déclencheur entier : celui-ci porte aussi l'icône
+      // chevron (`ChevronDownIcon`), qui ajoute son propre texte de repli au `.textContent` du
+      // conteneur — comparer le déclencheur entier comparerait donc « Gauche et droite▼ » à
+      // « Gauche et droite », un écart qui n'a rien à voir avec ce que ce test affirme.
+      const hValue = container.querySelector('[data-field="constraints.h"] [data-slot="select-value"]');
+      const vValue = container.querySelector('[data-field="constraints.v"] [data-slot="select-value"]');
+      expect(hValue).not.toBeNull();
+      expect(vValue).not.toBeNull();
+      expect(hValue!.textContent).toBe(H_CONSTRAINT_LABELS.leftRight);
+      expect(vValue!.textContent).toBe(V_CONSTRAINT_LABELS.topBottom);
+      expect(hValue!.textContent).toBe("Gauche et droite");
+      expect(vValue!.textContent).toBe("Haut et bas");
+    } finally {
+      unmount();
+    }
+  });
+
+  it("cliquer le bord droit (calque par défaut h:\"left\") DISPATCHE un correctif h:\"leftRight\" via patch", async () => {
+    // Aucun `constraints` écrit -> `constraintsOf` retombe sur { h: "left", v: "top" } (T1) : le bord
+    // gauche est donc déjà posé, et cliquer le bord OPPOSÉ (droit) promeut la paire en étirement —
+    // exactement la règle vérifiée sans DOM dans tests/studio-constraints-field.test.ts.
+    const layer = shapeLayer();
+    const scene = shapeScene(layer);
+    const patches: Record<string, unknown>[] = [];
+    const patch = (p: Record<string, unknown>) => patches.push(p);
+    const { container, unmount } = await mount(
+      React.createElement(GeometryStrip, { layer, patch, scene, selectedIds: [layer.id], dispatch: () => {} }),
+    );
+    try {
+      const rightEdge = container.querySelector('[data-edge="right"]')!;
+      expect(rightEdge.getAttribute("aria-pressed")).toBe("false"); // prémisse : pas encore posé
+      await click(rightEdge);
+      expect(patches.length).toBe(1);
+      expect(patches[0]).toEqual({ constraints: { h: "leftRight", v: "top" } });
+    } finally {
+      unmount();
+    }
+  });
+
+  it("Maj-clic sur le bord droit applique le correctif à TOUTE la sélection multiple via dispatch(setLayerProps)", async () => {
+    const layer1 = shapeLayer({ id: "l1" });
+    const layer2 = shapeLayer({ id: "l2", frame: { x: 200, y: 0, w: 50, h: 50 } });
+    const scene = shapeScene(layer1, layer2);
+    const patches: Record<string, unknown>[] = [];
+    const dispatched: EditorAction[] = [];
+    const patch = (p: Record<string, unknown>) => patches.push(p);
+    const { container, unmount } = await mount(
+      React.createElement(GeometryStrip, {
+        layer: layer1, patch, scene, selectedIds: [layer1.id, layer2.id], dispatch: (a: EditorAction) => dispatched.push(a),
+      }),
+    );
+    try {
+      const rightEdge = container.querySelector('[data-edge="right"]')!;
+      await click(rightEdge, { shiftKey: true });
+      // Maj-clic : le lot passe par `dispatch(setLayerProps(...))`, JAMAIS par `patch()` (qui n'édite
+      // que le calque courant) — sinon la sélection multiple n'aurait reçu qu'UNE entrée d'historique
+      // pour UN seul calque au lieu d'un vrai lot.
+      expect(patches.length).toBe(0);
+      expect(dispatched.length).toBe(1);
+      expect(dispatched[0]).toEqual(setLayerProps([layer1.id, layer2.id], { constraints: { h: "leftRight", v: "top" } }));
+    } finally {
+      unmount();
+    }
+  });
+
+  it("SANS Maj (même sélection multiple) : clic normal reste borné au calque courant via patch, jamais dispatch", async () => {
+    const layer1 = shapeLayer({ id: "l1" });
+    const layer2 = shapeLayer({ id: "l2", frame: { x: 200, y: 0, w: 50, h: 50 } });
+    const scene = shapeScene(layer1, layer2);
+    const patches: Record<string, unknown>[] = [];
+    const dispatched: EditorAction[] = [];
+    const patch = (p: Record<string, unknown>) => patches.push(p);
+    const { container, unmount } = await mount(
+      React.createElement(GeometryStrip, {
+        layer: layer1, patch, scene, selectedIds: [layer1.id, layer2.id], dispatch: (a: EditorAction) => dispatched.push(a),
+      }),
+    );
+    try {
+      const rightEdge = container.querySelector('[data-edge="right"]')!;
+      await click(rightEdge); // pas de shiftKey
+      expect(dispatched.length).toBe(0);
+      expect(patches.length).toBe(1);
+      expect(patches[0]).toEqual({ constraints: { h: "leftRight", v: "top" } });
+    } finally {
+      unmount();
+    }
   });
 });

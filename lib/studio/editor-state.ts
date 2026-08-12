@@ -104,6 +104,12 @@ export type EditorAction =
   | { type: "setFrames"; changes: readonly FrameChange[] }
   | { type: "rotateLayer"; id: string; deg: number }
   | { type: "setLayerProp"; id: string; patch: LayerPatch }
+  // Chantier D, Tâche 4 — le pendant PLURIEL de `setLayerProp` : le MÊME correctif superficiel
+  // appliqué à PLUSIEURS calques comme UNE SEULE entrée d'historique, sur le modèle de `setFrames`
+  // ci-dessus (un lot = une entrée). Le widget de contraintes de l'inspecteur (ConstraintsField,
+  // components/studio/constraints-field.tsx) en a besoin pour son geste « Maj-clic » : appliquer le
+  // même ancrage à toute la sélection multiple sans empiler N annulations pour un seul geste.
+  | { type: "setLayerProps"; ids: readonly string[]; patch: LayerPatch }
   | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
   | { type: "deleteLayer"; id: string }
   | { type: "reorderLayer"; id: string; toIndex: number }
@@ -159,6 +165,11 @@ export function rotateLayer(id: string, deg: number): EditorAction {
 }
 export function setLayerProp(id: string, patch: LayerPatch): EditorAction {
   return { type: "setLayerProp", id, patch };
+}
+// Chantier D, Tâche 4 : voir le commentaire de `"setLayerProps"` sur `EditorAction` ci-dessus — le
+// MÊME correctif appliqué à CHAQUE id de `ids`, en une seule entrée d'historique.
+export function setLayerProps(ids: readonly string[], patch: LayerPatch): EditorAction {
+  return { type: "setLayerProps", ids: [...ids], patch };
 }
 // `layer` (Tâche 3, U1 spec §4) : quand fourni, ce calque DÉJÀ CONSTRUIT (ex.
 // dynamic-text.ts:buildDynamicTextLayer, un TextLayer déjà lié à un jeton et stylé depuis un
@@ -376,6 +387,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // (dans commit()) est le vrai garde-fou, ce cast ne fait qu'exprimer l'intention.
       const updated = { ...layer, ...action.patch } as unknown as Layer;
       return commit(state, { ...state.scene, layers: replaceAt(state.scene.layers, index, updated) });
+    }
+
+    // Chantier D, Tâche 4 — le même correctif superficiel que "setLayerProp" ci-dessus, appliqué à
+    // CHAQUE id du lot, sur le modèle de "setFrames" plus haut : une seule entrée d'historique pour
+    // tout le lot, aucune entrée fantôme si aucun id ne matche (l'état revient tel quel, même
+    // référence — même garantie que "setFrames"). Un id absent est ignoré ligne à ligne, jamais
+    // rejeté en bloc.
+    case "setLayerProps": {
+      let layers = state.scene.layers;
+      let touched = false;
+      for (const id of action.ids) {
+        const index = layers.findIndex((l) => l.id === id);
+        if (index === -1) continue;
+        const layer = layers[index];
+        const updated = { ...layer, ...action.patch } as unknown as Layer;
+        layers = replaceAt(layers, index, updated);
+        touched = true;
+      }
+      if (!touched) return state;
+      return commit(state, { ...state.scene, layers });
     }
 
     case "addLayer": {

@@ -19,6 +19,9 @@ import { FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
 // composant la demande, il ne la déduit ni d'une liste de noms ni du type de calque.
 import { layerRotation, layerSupportsRotation, shapeLabel } from "@/lib/studio/shapes";
 import { NumberField, type Patch } from "./property-fields";
+// Chantier D, Tâche 4 : le widget d'ancrage par côté — voir le commentaire juste avant `GeometryStrip`
+// ci-dessous, sur la place que U1 avait laissée pour lui.
+import { ConstraintsField } from "./constraints-field";
 
 // components/studio/geometry-strip.tsx — Tâche 6 (U1, spec §6) : les six champs de cadre (X, Y,
 // largeur, hauteur, rotation, opacité) extraits de l'ancienne section « Cadre » de property-panel.tsx
@@ -76,8 +79,12 @@ export function maxLinesOverflowNote(maxLines: number, previewFormat?: FormatKey
 }
 
 // La place que U1 avait laissée ici (spec §6 : « U2 ajoutera ici une rangée align/distribute une fois
-// la sélection multiple disponible ») est désormais occupée par `AlignRow`, en TROISIÈME rangée. Reste
-// à venir, et toujours pas construit par anticipation : U5 y ajoutera le widget d'ancrage par côté.
+// la sélection multiple disponible ») est désormais occupée par `AlignRow`, en TROISIÈME rangée. La
+// place que U1 réservait ensuite (« U5 y ajoutera le widget d'ancrage par côté ») est occupée depuis
+// le chantier D, Tâche 4, par `ConstraintsField` (constraints-field.tsx) — en QUATRIÈME rangée, sous
+// `AlignRow` : aligner/répartir agit sur les cadres bruts (Tâche 4, U2) alors que l'ancrage gouverne
+// leur comportement à travers un changement de FORMAT (chantier D) — deux notions liées mais
+// distinctes, chacune sa rangée plutôt que fondues en une seule.
 export function GeometryStrip({
   layer, patch, scene, selectedIds, dispatch, textOverflowsMaxLines, previewFormat,
 }: GeometryStripProps) {
@@ -175,6 +182,7 @@ export function GeometryStrip({
         </p>
       )}
       <AlignRow scene={scene} selectedIds={selectedIds} dispatch={dispatch} />
+      <ConstraintsField layer={layer} patch={patch} selectedIds={selectedIds} dispatch={dispatch} />
     </div>
   );
 }
