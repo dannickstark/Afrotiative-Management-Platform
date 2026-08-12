@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
-import { EmptyState } from "./empty-state";
+import { EmptyState } from "@/components/shell/empty-state";
 import { relativeDate, type ArticleStatus } from "@/lib/format";
 
 type PendingItem = {

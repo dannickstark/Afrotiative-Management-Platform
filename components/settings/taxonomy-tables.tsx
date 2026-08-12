@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/shell/page-header";
+import { EmptyState } from "@/components/shell/empty-state";
 import { syncTaxonomyFromWordPress, setCategoryColor } from "@/lib/actions/taxonomy-actions";
 import type { Taxonomy } from "@/lib/queries/settings";
 // Module dédié, sans import de @/db (contrairement à lib/studio/bindings.ts) — importable ici,
@@ -82,7 +83,7 @@ function TaxonomyCard<R extends Row>({
         <CardTitle>{title}</CardTitle>
       </CardHeader>
       <CardContent className="px-0">
-        <div className="mx-(--card-spacing) rounded-lg border">
+        <div className="mx-(--card-spacing) overflow-x-auto rounded-lg border">
           <Table>
             <TableHeader>
               <TableRow>
@@ -95,8 +96,11 @@ function TaxonomyCard<R extends Row>({
             <TableBody>
               {rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={columnCount} className="h-24 text-center text-muted-foreground">
-                    {emptyLabel}
+                  <TableCell colSpan={columnCount} className="border-0 p-0">
+                    <EmptyState
+                      title={emptyLabel}
+                      hint="Synchronisez depuis WordPress pour les récupérer."
+                    />
                   </TableCell>
                 </TableRow>
               ) : (

@@ -8,6 +8,7 @@ import { LiveRunPanel } from "@/components/pipeline/live-run-panel";
 import { RunDetailSheet } from "@/components/pipeline/run-detail-sheet";
 import { RunTrends } from "@/components/pipeline/run-trends";
 import { PageHeader } from "@/components/shell/page-header";
+import { EmptyState } from "@/components/shell/empty-state";
 import {
   formatDate, formatRunDuration, pipelineStatusLabel, PIPELINE_STATUS_LABEL, type PipelineStatus,
 } from "@/lib/format";
@@ -134,45 +135,53 @@ export function RunsView({
         </CardHeader>
         <CardContent>
           {runs.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">Aucune exécution pour l&apos;instant.</p>
+            <EmptyState
+              title="Aucune exécution pour l'instant"
+              hint="Les exécutions du pipeline apparaîtront ici une fois lancées."
+            />
           ) : filteredRuns.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">Aucune exécution ne correspond à ces filtres.</p>
+            <EmptyState
+              title="Aucune exécution ne correspond à ces filtres"
+              hint="Essayez d'élargir vos filtres de statut ou de déclencheur."
+            />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Horodatage</TableHead>
-                  <TableHead>Déclencheur</TableHead>
-                  <TableHead className="text-right">Flux lus</TableHead>
-                  <TableHead className="text-right">Nouveaux</TableHead>
-                  <TableHead>Durée</TableHead>
-                  <TableHead>Statut</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredRuns.map((r) => (
-                  <TableRow
-                    key={r.id}
-                    onClick={() => handleRowClick(r.id)}
-                    className="cursor-pointer hover:bg-muted/50"
-                  >
-                    <TableCell>{formatDate(r.startedAt)}</TableCell>
-                    <TableCell>{TRIGGER_LABEL[r.triggeredBy] ?? r.triggeredBy}</TableCell>
-                    <TableCell className="text-right">{r.feedsRead}</TableCell>
-                    <TableCell className="text-right">{r.newItems}</TableCell>
-                    <TableCell>{formatRunDuration(r.startedAt, r.finishedAt, r.status)}</TableCell>
-                    <TableCell>
-                      <span className={STATUS_STYLE[r.status]}>{pipelineStatusLabel(r.status)}</span>
-                      {r.failedSteps > 0 && (
-                        <span className="ml-2 text-xs text-[var(--status-error)]">
-                          ({r.failedSteps} étape{r.failedSteps > 1 ? "s" : ""} en échec)
-                        </span>
-                      )}
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Horodatage</TableHead>
+                    <TableHead>Déclencheur</TableHead>
+                    <TableHead className="text-right">Flux lus</TableHead>
+                    <TableHead className="text-right">Nouveaux</TableHead>
+                    <TableHead>Durée</TableHead>
+                    <TableHead>Statut</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filteredRuns.map((r) => (
+                    <TableRow
+                      key={r.id}
+                      onClick={() => handleRowClick(r.id)}
+                      className="cursor-pointer hover:bg-muted/50"
+                    >
+                      <TableCell>{formatDate(r.startedAt)}</TableCell>
+                      <TableCell>{TRIGGER_LABEL[r.triggeredBy] ?? r.triggeredBy}</TableCell>
+                      <TableCell className="text-right">{r.feedsRead}</TableCell>
+                      <TableCell className="text-right">{r.newItems}</TableCell>
+                      <TableCell>{formatRunDuration(r.startedAt, r.finishedAt, r.status)}</TableCell>
+                      <TableCell>
+                        <span className={STATUS_STYLE[r.status]}>{pipelineStatusLabel(r.status)}</span>
+                        {r.failedSteps > 0 && (
+                          <span className="ml-2 text-xs text-[var(--status-error)]">
+                            ({r.failedSteps} étape{r.failedSteps > 1 ? "s" : ""} en échec)
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

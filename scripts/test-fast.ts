@@ -42,7 +42,7 @@ const PURE_FILES = new Set<string>([
   "article-preview-incomplete.test.ts", "auto-publish.test.ts",
   "completeness.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
-  "embeddings.test.ts", "extract-chain.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
+  "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
   "interval-picker.test.ts", "live-panel.test.ts",
   "mock-llm.test.ts", "nav-sections.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
   "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "resend.test.ts", "rss-parse.test.ts",

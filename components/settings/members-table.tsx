@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PageHeader } from "@/components/shell/page-header";
+import { EmptyState } from "@/components/shell/empty-state";
 import { AddMemberDialog } from "./add-member-dialog";
 import { setMemberRole, disableMember, enableMember } from "@/lib/actions/team-actions";
 import { ROLE_LABEL } from "@/lib/rbac";
@@ -32,7 +33,7 @@ export function MembersTable({ members, currentUserId }: { members: Member[]; cu
     <div className="space-y-6">
       <PageHeader title="Équipe" actions={<AddMemberDialog />} />
 
-      <div className="rounded-lg border">
+      <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
             <TableRow>
@@ -47,8 +48,12 @@ export function MembersTable({ members, currentUserId }: { members: Member[]; cu
           <TableBody>
             {members.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                  Aucun membre.
+                <TableCell colSpan={6} className="border-0 p-0">
+                  <EmptyState
+                    title="Aucun membre"
+                    hint="Ajoutez un membre pour lui donner accès à l'équipe."
+                    action={<AddMemberDialog />}
+                  />
                 </TableCell>
               </TableRow>
             ) : (
