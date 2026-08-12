@@ -145,19 +145,32 @@
 }
 
 /* Afrotiative design tokens — accent (terracotta/amber, actions only) + editorial
-   status palette. Additive to shadcn's generated variables above; do not replace them. */
+   status palette. Additive to shadcn's generated variables above; do not replace them.
+   Plan 011 Part E: status text is rendered at 100% opacity over its own /15 fill (StatusBadge
+   and the several status-pill patterns that copy it — feeds-table, members-table,
+   run-detail-sheet). A single lightness shared by both themes cannot pass WCAG AA (4.5:1) in
+   both: light mode needs dark text, dark mode needs light text. So each status now carries a
+   distinct :root (light) and .dark (dark) lightness, same hue/chroma — verified >=5.1:1 against
+   the /15 fill in every combination (see task-011e-report.md). */
 :root {
   --accent-brand: oklch(0.62 0.15 47); /* terracotta/amber — actions only */
   --accent-brand-foreground: oklch(0.98 0 0);
-  --status-draft: oklch(0.55 0.02 260);
-  --status-pending: oklch(0.75 0.15 75); /* amber */
-  --status-in-review: oklch(0.55 0.16 265); /* indigo */
-  --status-approved: oklch(0.62 0.16 150); /* green */
-  --status-published: oklch(0.62 0.16 150);
-  --status-rejected: oklch(0.58 0.2 25); /* red */
-  --status-error: oklch(0.55 0.22 20);
+  --status-draft: oklch(0.42 0.02 260);
+  --status-pending: oklch(0.42 0.15 75); /* amber */
+  --status-in-review: oklch(0.42 0.16 265); /* indigo */
+  --status-approved: oklch(0.4 0.16 150); /* green */
+  --status-published: oklch(0.4 0.16 150);
+  --status-rejected: oklch(0.44 0.2 25); /* red */
+  --status-error: oklch(0.46 0.22 20);
 }
 
 .dark {
   --accent-brand: oklch(0.68 0.15 47);
+  --status-draft: oklch(0.76 0.02 260);
+  --status-pending: oklch(0.76 0.15 75);
+  --status-in-review: oklch(0.76 0.16 265);
+  --status-approved: oklch(0.74 0.16 150);
+  --status-published: oklch(0.74 0.16 150);
+  --status-rejected: oklch(0.78 0.2 25);
+  --status-error: oklch(0.8 0.22 20);
 }
