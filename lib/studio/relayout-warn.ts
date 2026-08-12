@@ -90,3 +90,20 @@ export async function constrainedTextOverflows(scene: Scene, layer: Layer, forma
   const lines = await naturalLineCount(layer, relaidLayer.frame.w, fonts);
   return lines > layer.maxLines;
 }
+
+// Chantier D, Tâche 6 (handoff H1) — l'agrégat SCÈNE ENTIÈRE que le filmstrip (components/studio/
+// render-mode.tsx) a besoin : QUELS calques, parmi TOUS ceux de `scene`, débordent leur `maxLines`
+// une fois relayoutés vers `format` ? `constrainedTextOverflows` ci-dessus répond calque par
+// calque ; cette fonction n'est que la boucle, car aucun appelant avant cette tâche n'avait besoin
+// de la réponse pour LA scène entière (le seul appelant antérieur, Tâche 3, questionnait un SEUL
+// calque — celui sélectionné dans le panneau de propriétés). Séquentiel (pas Promise.all) :
+// une vignette ne porte typiquement qu'une poignée de calques texte contraints, et le sérialiser
+// garde le nombre d'appels à satori/loadFallbackFonts prévisible plutôt que de les paralléliser
+// pour un gain marginal sur si peu d'éléments.
+export async function overflowingLayerIds(scene: Scene, format: FormatKey): Promise<string[]> {
+  const ids: string[] = [];
+  for (const layer of scene.layers) {
+    if (await constrainedTextOverflows(scene, layer, format)) ids.push(layer.id);
+  }
+  return ids;
+}

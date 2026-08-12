@@ -269,4 +269,40 @@ describe("sendToChannelCore — ordonnancement (D1 §4/§7, Task 5)", () => {
     expect(rows[0].externalId).toBe("ext-first");
     expect(rows[0].caption).toBe("Envoi initial.");
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Chantier D, Tâche 6 — LE PAYOFF côté diffusion sociale : sendToChannelCore transmet désormais
+  // `format: socialChannel.format` à renderForArticle. Le gabarit de CE fichier (`templateId`,
+  // channel="tiktok") est nativement "fb_link" (1200×630, FB_TEMPLATE) — SOCIAL_CHANNELS.tiktok.format
+  // vaut pourtant "story" (1080×1920, lib/diffusion/channels.ts) : un canevas natif SANS AUCUN rapport
+  // avec le format cible réel du canal, exactement le cas que ce chantier corrige. Article DÉDIÉ (pas
+  // un des articles du beforeAll partagé) pour un rendu FRAIS, jamais servi par le cache inputHash
+  // d'un test voisin — auto-nettoyé en fin de test plutôt qu'ajouté aux listes fixes du afterAll de
+  // fichier (celles-ci sont figées à la déclaration, avant que cet id n'existe).
+  it("le rendu diffusé est relayouté vers le format du CANAL (« story », 1080×1920), pas les dimensions natives du gabarit (« fb_link », 1200×630)", async () => {
+    const [art] = await db.insert(articles).values({
+      title: "Diffusion — relayout format canal", bodyHtml: "<p>x</p>", status: "published",
+      publishedAt: new Date(), categoryId, featuredImageUrl: `http://127.0.0.1:${server.port}/photo.png`,
+    }).returning();
+    const articleId = art.id;
+    try {
+      const store = new MemoryRenderStore();
+      const fake = new FakeChannel([{ ok: true, externalId: "ext-relayout" }]);
+      const r = await sendToChannelCore({
+        articleId, channel: TEMPLATE_CHANNEL, caption: "Légende relayout.", triggeredBy: "manual", actorId: null,
+        renderStore: store, fetchImpl: fetch, channelOverride: fake,
+      });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+
+      const [row] = await db.select({ width: renders.width, height: renders.height }).from(renders).where(eq(renders.id, r.renderId));
+      expect(row.width).toBe(1080);
+      expect(row.height).toBe(1920);
+    } finally {
+      await db.delete(renders).where(eq(renders.subjectId, articleId));
+      await db.delete(distributions).where(eq(distributions.articleId, articleId));
+      await db.delete(articleRevisions).where(eq(articleRevisions.articleId, articleId));
+      await db.delete(articles).where(eq(articles.id, articleId));
+    }
+  });
 });

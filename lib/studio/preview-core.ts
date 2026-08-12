@@ -20,6 +20,14 @@ import { MissingTokensError, type TokenValues } from "./values";
 import { ImageFetchError } from "./images";
 import { SAMPLE_VALUES } from "./sample-values";
 import type { AssetLoader } from "./fonts";
+// Chantier D, Tâche 6 (handoff H1) — voir PreviewTemplateInput.format ci-dessous. relayout-warn.ts
+// reste, comme fonts.ts déjà importé juste au-dessus, un module NON client-safe (`node:fs/promises`
+// via loadFallbackFonts) — mais previewTemplateCore, appelé UNIQUEMENT depuis un module "use server"
+// gardé (lib/actions/studio-preview-actions.ts), n'a jamais eu cette contrainte : c'est
+// components/studio/geometry-strip.tsx, "use client", qui devait s'en tenir écarté (voir son propre
+// commentaire d'en-tête).
+import { overflowingLayerIds } from "./relayout-warn";
+import type { FormatKey } from "./formats";
 // Tâche 12 (Lot 3) : importé directement de "./asset-loader", PAS du barrel "./index" — index.ts
 // importe lib/studio/store.ts (R2RenderStore/saveRender), et
 // tests/studio-preview.test.ts:"garantie structurelle" vérifie que preview-core.ts n'atteint JAMAIS
@@ -30,7 +38,17 @@ import type { AssetLoader } from "./fonts";
 import { DbAssetLoader } from "./asset-loader";
 
 export type PreviewResult =
-  | { ok: true; dataUri: string; degraded: boolean }
+  | {
+      ok: true; dataUri: string; degraded: boolean;
+      /** Chantier D, Tâche 6 (handoff H1) — les identifiants des calques texte dont le retour à la
+       * ligne, une fois `input.scene` relayoutée vers `input.format`, dépasse leur `maxLines` —
+       * `[]` quand `input.format` est absent (rien à mesurer POUR QUEL format) ou qu'aucun calque
+       * ne déborde. FALLBACK-FONT-APPROXIMATIF (handoff H2, voir constrainedTextOverflows) : mesuré
+       * avec la police de repli, jamais avec la police d'asset réellement peinte par CE rendu (elle,
+       * chargée via `assets` juste au-dessus) — voir le commentaire de FilmstripThumb
+       * (components/studio/render-mode.tsx) pour la portée exacte de cette approximation. */
+      overflowingLayerIds: string[];
+    }
   | { ok: false; message: string };
 
 export interface PreviewTemplateInput {
@@ -58,6 +76,14 @@ export interface PreviewTemplateInput {
   // Lot 3 introduit. Toujours overridable, comme avant : les tests y injectent leurs propres
   // implémentations sans jamais toucher à R2.
   assets?: AssetLoader;
+  /** Chantier D, Tâche 6 (handoff H1) — le format pour lequel signaler un débordement `maxLines`
+   * (voir `PreviewResult.overflowingLayerIds`). N'INFLUENCE PAS le rendu lui-même : `input.scene`,
+   * quand fourni, est déjà la scène que l'appelant veut peindre TELLE QUELLE (le filmstrip envoie sa
+   * propre scène déjà relayoutée — components/studio/render-mode.tsx#sceneForFormat) ; ce champ ne
+   * sert QU'À mesurer le débordement, indépendamment de ce que `scene` porte déjà. Absent, aucun
+   * calcul n'a lieu — `overflowingLayerIds` vaut toujours `[]`, comportement inchangé pour tout
+   * appelant antérieur à cette tâche (ex. PreviewPane, components/studio/preview-pane.tsx). */
+  format?: FormatKey;
 }
 
 // Fusionne les trois sources dans l'ORDRE DE PRIORITÉ requis (appelant > article > échantillon,
@@ -107,7 +133,14 @@ export async function previewTemplateCore(input: PreviewTemplateInput): Promise<
     const out = await renderScene({
       scene, values, assets: input.assets ?? new DbAssetLoader(), fetchImpl: input.fetchImpl, encode: "jpeg",
     });
-    return { ok: true, dataUri: `data:${out.mime};base64,${Buffer.from(out.bytes).toString("base64")}`, degraded: out.degraded };
+    // Chantier D, Tâche 6 (handoff H1) — après un rendu réussi, PAS avant : un débordement de texte
+    // n'a de sens à signaler que pour une scène qui rend effectivement. `scene` ici est CELLE reçue
+    // (voir PreviewTemplateInput.format sur pourquoi ce n'est délibérément pas un second relayout).
+    const overflowIds = input.format ? await overflowingLayerIds(scene, input.format) : [];
+    return {
+      ok: true, dataUri: `data:${out.mime};base64,${Buffer.from(out.bytes).toString("base64")}`,
+      degraded: out.degraded, overflowingLayerIds: overflowIds,
+    };
   } catch (e) {
     // Même politique que renderForArticle (lib/studio/index.ts) : message français sans détail
     // natif, journalisé côté serveur pour que l'incident reste traçable ailleurs qu'à l'écran.

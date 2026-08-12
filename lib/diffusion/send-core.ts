@@ -116,7 +116,14 @@ export async function sendToChannelCore(input: SendToChannelInput): Promise<Send
     renderId = existing.renderId;
     imageUrl = render.url;
   } else {
-    const rendered = await renderForArticle(articleId, { context: "social_post", channel, store: renderStore, fetchImpl });
+    // Chantier D, Tâche 6 — `socialChannel.format` (lib/diffusion/channels.ts) est LE format que ce
+    // canal attend (ex. "story" pour tiktok, "wa_square" pour whatsapp) : le gabarit résolu — qui
+    // peut très bien être le gabarit PAR DÉFAUT du contexte, partagé par plusieurs canaux dont les
+    // formats diffèrent — est désormais RELAYOUTÉ (relayoutToFormat, T2) vers CE format avant rendu,
+    // au lieu d'être rendu à ses dimensions natives quel que soit le canal demandeur.
+    const rendered = await renderForArticle(articleId, {
+      context: "social_post", channel, store: renderStore, fetchImpl, format: socialChannel.format,
+    });
     if (!rendered.ok) return { ok: false, message: rendered.message };
     if (rendered.url === null) {
       return {

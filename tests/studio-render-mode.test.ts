@@ -1,9 +1,12 @@
 import { describe, it, expect } from "bun:test";
+import path from "node:path";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RenderMode, type RenderModeProps } from "@/components/studio/render-mode";
+import { RenderMode, sceneForFormat, type RenderModeProps } from "@/components/studio/render-mode";
 import { parseScene, type Scene } from "@/lib/studio/scene";
 import { FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
+import { relayoutToFormat } from "@/lib/studio/relayout";
 import type { PreservedView } from "@/lib/studio/studio-mode";
 
 // tests/studio-render-mode.test.ts — Tâche 5 (U1, spec §5) : le mode « Rendu réel ».
@@ -202,6 +205,111 @@ describe("RenderMode — la bande a sa PROPRE légende de provenance, distincte 
       context: "social_post", articles: [{ id: "a1", title: "Un article de test" }],
     })));
     expect(withoutPicker).toBe(withPicker);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 6 — LE PAYOFF : `sceneForFormat` appelle enfin `relayoutToFormat` (T2). Fixture
+// DÉDIÉE : un gabarit natif "x_landscape" (1600×900, formats.ts) avec une bande qui s'étire sur
+// presque toute la largeur (`h: "leftRight"`, marge 40px de chaque côté à l'accueil -> w:1520).
+// "story" (1080×1920) est BEAUCOUP plus étroit que x_landscape (1600) : la bande doit donc y
+// apparaître RÉTRÉCIE une fois relayoutée — exactement le cas du brief (« the story thumbnail's
+// scene has the banner spanning the narrower width »).
+function fixtureBannerScene(): Scene {
+  return parseScene({
+    schemaVersion: 1,
+    canvas: { width: 1600, height: 900, background: "#101010" },
+    layers: [
+      {
+        id: "banner", name: "Bandeau", visible: true, locked: false,
+        frame: { x: 40, y: 40, w: 1520, h: 200 },
+        constraints: { h: "leftRight", v: "top" },
+        type: "shape", shape: "rect", fill: "#FF0000",
+      },
+    ],
+  });
+}
+
+describe("sceneForFormat (chantier D, Tâche 6) — le filmstrip appelle RÉELLEMENT relayoutToFormat, plus un simple swap de canevas", () => {
+  it("RED->GREEN : pour un format DIFFÉRENT de l'accueil, la scène retournée EST relayoutToFormat(scene, key) — la bande leftRight y est plus ÉTROITE (§ story, plus étroit que x_landscape)", () => {
+    const scene = fixtureBannerScene();
+    const variant = sceneForFormat(scene, "story", "x_landscape");
+    expect(variant).toEqual(relayoutToFormat(scene, "story"));
+    // Chiffre EXACT (table de vérité leftRight, chantier D T2) : 1520 + (1080 - 1600) = 1000 — plus
+    // étroit que les 1520px d'accueil. Un `sceneForFormat` qui se contenterait de swapper le canevas
+    // (comportement D'AVANT cette tâche) laisserait ce cadre à 1520 inchangé : ce test rougirait.
+    const banner = variant.layers.find((l) => l.id === "banner")!;
+    expect(banner.frame.w).toBe(1000);
+    expect(banner.frame.w).toBeLessThan(scene.layers[0]!.frame.w);
+    // Le canevas de la vignette est bien celui de "story", pas celui de l'accueil.
+    expect(variant.canvas).toEqual({ width: 1080, height: 1920, background: "#101010" });
+  });
+
+  it("au format d'accueil : identité EXACTE — MÊME référence de scène (raccourci documenté, mathématiquement une identité de toute façon — chantier D T2)", () => {
+    const scene = fixtureBannerScene();
+    expect(sceneForFormat(scene, "x_landscape", "x_landscape")).toBe(scene);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §0 — le filmstrip (sceneForFormat, ci-dessus) et la génération (lib/studio/index.ts#renderForArticle,
+// chantier D T6) ne doivent JAMAIS pouvoir diverger : les DEUX appellent la MÊME fonction pure
+// `relayoutToFormat` (chantier D T2), jamais deux implémentations parallèles. Reprend le motif « les
+// deux chemins » déjà établi ailleurs dans ce dépôt (U4) : une comparaison directe pour la partie
+// testable en mémoire (filmstrip), une preuve STRUCTURELLE — pas simulée — pour la partie qui touche
+// la base (génération), même style que tests/studio-preview.test.ts (« garantie structurelle »).
+describe("§0 — le filmstrip et la génération relayoutent IDENTIQUEMENT (chantier D, Tâche 6)", () => {
+  it("sceneForFormat(scene, format, native) égale EXACTEMENT relayoutToFormat(scene, format) pour CHAQUE format non-natif — pas seulement « story »", () => {
+    const scene = fixtureBannerScene();
+    for (const key of FORMAT_KEYS.filter((k) => k !== "x_landscape")) {
+      expect(sceneForFormat(scene, key, "x_landscape")).toEqual(relayoutToFormat(scene, key));
+    }
+  });
+
+  it("preuve STRUCTURELLE : lib/studio/index.ts#renderForArticle (le chemin de GÉNÉRATION) importe relayoutToFormat et l'applique à `template.scene`/`o.format` AVANT rendu — pas une seconde implémentation qui pourrait diverger de sceneForFormat", () => {
+    const src = readFileSync(path.resolve(import.meta.dir, "..", "lib/studio/index.ts"), "utf8");
+    expect(src).toMatch(/import\s*\{\s*relayoutToFormat\s*\}\s*from\s*["']\.\/relayout["']/);
+    // La ligne qui applique RÉELLEMENT le relayout au gabarit résolu, avant que `scene` n'atteigne
+    // renderScene — mutation qui ferait rougir : revenir à `template.scene` nu (comportement d'avant
+    // cette tâche) fait disparaître cette ligne du fichier.
+    expect(src).toMatch(/relayoutToFormat\(\s*template\.scene\s*,\s*o\.format\s*\)/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 6 (handoff H1) — la note « texte tronqué » de FilmstripThumb, épinglée via
+// l'amorce de test `initialOverflowFormats` (même convention que initialDegraded/initialStale déjà
+// établie plus bas dans ce fichier) puisque react-dom/server n'exécute aucun effet (voir le
+// commentaire d'en-tête de RenderModeProps.initialOverflowFormats, render-mode.tsx). Ce test épingle
+// donc le CÂBLAGE (la légende suit-elle réellement la donnée par vignette ?), pas la mesure
+// satori/maxLines elle-même — celle-ci reste testée bout en bout côté serveur, avec un VRAI rendu,
+// dans tests/studio-preview.test.ts (previewTemplateCore + overflowingLayerIds).
+describe("FilmstripThumb — la note « texte tronqué » (handoff H1) suit `initialOverflowFormats`, PAR FORMAT", () => {
+  it("un format listé dans initialOverflowFormats affiche la note ; un format non listé (anti-vacuité) ne l'affiche PAS", () => {
+    const html = render(fixtureProps({ format: "ig_portrait", initialOverflowFormats: ["story"] }));
+    // "story" : la note est présente, épinglée à SA vignette précisément (data-format="story").
+    expect(html).toMatch(/data-testid="filmstrip-overflow-badge" data-format="story"/);
+    // Tous les AUTRES formats de la bande n'en portent AUCUNE — l'anti-vacuité : un composant qui
+    // afficherait TOUJOURS la note (ignorant `initialOverflowFormats`) passerait la ligne du dessus
+    // mais rougirait ici.
+    const badgeFormats = [...html.matchAll(/data-testid="filmstrip-overflow-badge" data-format="([a-z_]+)"/g)].map((m) => m[1]!);
+    expect(badgeFormats).toEqual(["story"]);
+  });
+
+  it("initialOverflowFormats absent (défaut réel de composition) : AUCUNE vignette n'affiche la note", () => {
+    const html = render(fixtureProps({ format: "ig_portrait" }));
+    expect(html).not.toContain('data-testid="filmstrip-overflow-badge"');
+  });
+
+  it("MUTATION (sceneForFormat ignore relayout) : si la bande cessait d'appeler relayoutToFormat, le premier test « § relayout » ci-dessus rougirait sur le cadre ATTENDU (1000, pas 1520) — vérifié manuellement (rapport de tâche), pas rejoué ici pour ne pas dupliquer le sabotage dans le fichier de production", () => {
+    // Fixture témoin : re-affirme juste que la valeur non-relayoutée (1520, le cadre BRUT à
+    // l'accueil) N'EST PAS ce que sceneForFormat renvoie pour "story" — la preuve directe de
+    // sensibilité à la mutation vit dans le test ci-dessus (« RED->GREEN »), qui échouerait sur
+    // `toBe(1000)` si `sceneForFormat` retombait sur un simple swap de canevas.
+    const scene = fixtureBannerScene();
+    const variant = sceneForFormat(scene, "story", "x_landscape");
+    const banner = variant.layers.find((l) => l.id === "banner")!;
+    expect(banner.frame.w).not.toBe(1520);
   });
 });
 

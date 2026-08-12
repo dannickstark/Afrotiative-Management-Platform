@@ -36,6 +36,27 @@ describe("computeInputHash", () => {
     expect(computeInputHash({ ...baseInput, values: { ...baseInput.values, "article.title": "Autre" } }))
       .not.toBe(computeInputHash(baseInput));
   });
+
+  // Chantier D, Tâche 6 — `format` (nouveau champ OPTIONNEL). Correctif de sécurité de cache : SANS
+  // ce champ dans l'empreinte, deux canaux de formats différents partageant le même gabarit résolu
+  // (lib/studio/index.ts#renderForArticle, chantier D T6) trouveraient le rendu l'un de l'autre en
+  // cache et le SERVIRAIENT tel quel — mauvaises dimensions, mise en page pour un autre format. Voir
+  // tests/studio-bindings.test.ts (« deux formats CIBLES différents ... ») pour la preuve bout en
+  // bout, EN PIXELS ; ce fichier épingle juste l'empreinte elle-même, en isolation.
+  it("change si `format` change (deux canaux de formats différents, même gabarit/version/valeurs, ne collisionnent JAMAIS en cache)", () => {
+    expect(computeInputHash({ ...baseInput, format: "wa_square" }))
+      .not.toBe(computeInputHash({ ...baseInput, format: "story" }));
+  });
+
+  it("`format` absent produit EXACTEMENT la même empreinte qu'avant cette tâche (rétrocompatibilité : AUCUNE invalidation de cache pour les appelants qui ne le fournissent pas encore, ex. lib/studio/manual-core.ts)", () => {
+    // `format: undefined` explicite doit se comporter EXACTEMENT comme son absence — pas une
+    // troisième valeur distincte (ex. sérialisée en "undefined" ou normalisée en `null`).
+    expect(computeInputHash({ ...baseInput, format: undefined })).toBe(computeInputHash(baseInput));
+  });
+
+  it("`format` présent produit une empreinte DIFFÉRENTE de son absence, même valeur de gabarit/version/valeurs par ailleurs", () => {
+    expect(computeInputHash({ ...baseInput, format: "story" })).not.toBe(computeInputHash(baseInput));
+  });
 });
 
 describe("storageKeyFor", () => {
