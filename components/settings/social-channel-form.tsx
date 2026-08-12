@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { IntervalPicker } from "@/components/settings/interval-picker";
 import { formatDate } from "@/lib/format";
 import {
   updateChannelSettings, updateChannelCredentials, deleteChannelCredentials, testChannelConnection,
@@ -455,10 +456,11 @@ export function SocialChannelForm({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="auto-interval">Intervalle (heures)</Label>
-            <Input
-              id="auto-interval" type="number" min={1} disabled={isSaving}
-              value={form.autoIntervalHours}
-              onChange={(e) => setForm((f) => ({ ...f, autoIntervalHours: e.target.value }))}
+            <IntervalPicker
+              id="auto-interval"
+              value={Number(form.autoIntervalHours) || 6}
+              disabled={isSaving}
+              onChange={(hours) => setForm((f) => ({ ...f, autoIntervalHours: String(hours) }))}
             />
           </div>
           <div className="space-y-1.5">

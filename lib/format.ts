@@ -33,6 +33,14 @@ export function formatDate(d: Date | string | null): string {
   return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d));
 }
 
+// Mirrors formatDate but forces UTC, for previews that are explicitly labelled "(UTC)"
+// (e.g. schedule-field.tsx's "next runs" list) — without this, Intl.DateTimeFormat falls
+// back to the browser's local timezone and the "(UTC)" label lies for non-UTC admins.
+export function formatDateUtc(d: Date | string | null): string {
+  if (!d) return "—";
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(d));
+}
+
 export function relativeDate(d: Date | string | null): string {
   if (!d) return "—";
   const diff = (Date.now() - new Date(d).getTime()) / 1000;

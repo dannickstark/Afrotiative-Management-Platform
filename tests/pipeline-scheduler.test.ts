@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { triggerScheduledRun, reloadSchedule, getScheduledJob } from "@/lib/pipeline/scheduler";
 import { pipelineSettingsSchema } from "@/lib/validation";
 import type { PipelineSettings } from "@/lib/queries/settings";
+import { SCHEDULE_TZ } from "@/lib/pipeline/schedule-expr";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // triggerScheduledRun: must no-op (never call runPipeline / open a new run row) when a run is
@@ -135,4 +136,29 @@ describe("pipelineSettingsSchema.scheduleCron (croner-backed)", () => {
     expect(r.success).toBe(false);
     if (!r.success) expect(r.error.issues[0]?.message).toContain("Cron invalide");
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reloadSchedule builds its Cron job with an explicit UTC timezone, so behavior is deterministic
+// regardless of host TZ. Same singleton-restore convention as the "reloadSchedule" describe above.
+describe("reloadSchedule — timezone", () => {
+  it("builds the job so '0 8 * * *' next-fires at 08:00 UTC", async () => {
+    const [prev] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));
+    try {
+      await db.update(pipelineSettings).set({ scheduleCron: "0 8 * * *" }).where(eq(pipelineSettings.id, 1));
+      await reloadSchedule();
+      const job = getScheduledJob();
+      expect(job).not.toBeNull();
+      const next = job!.nextRun();
+      expect(next).not.toBeNull();
+      // Behavioral proof the UTC timezone is wired: 08:00 in UTC, regardless of host TZ.
+      expect(next!.getUTCHours()).toBe(8);
+      expect(next!.getUTCMinutes()).toBe(0);
+    } finally {
+      await db.update(pipelineSettings).set({ scheduleCron: prev?.scheduleCron ?? null }).where(eq(pipelineSettings.id, 1));
+      await reloadSchedule();
+    }
+  });
+
+  it("SCHEDULE_TZ is UTC", () => expect(SCHEDULE_TZ).toBe("UTC"));
 });
