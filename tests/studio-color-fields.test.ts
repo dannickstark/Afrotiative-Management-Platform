@@ -7,16 +7,13 @@
  * Mutation à l'appui (voir task-2-report.md) :
  *   (a) ajouter un NOUVEAU champ `hexColor` à un schéma de calque SANS toucher le marcheur → ce test
  *       rougit (colorFieldsOf trouve un chemin de plus que ce que buildShapeLayer/buildTextLayer
- *       attendaient... en fait l'inverse : le représentant ne le renseigne pas, mais l'instance
- *       littérale ci-dessous, si on lui donne la nouvelle valeur, ferait apparaître le chemin en trop
- *       dans SCENE_COLOR_FIELDS sans qu'on l'attende — voir le rapport pour la preuve exacte).
+ *       attendaient — voir le rapport pour la preuve exacte).
  *   (b) un marcheur qui OUBLIE un cas (ex. ne descend plus dans `union`) → ce test rougit aussitôt
  *       (les chemins de `fill`/`shadow.color`/`stroke.color` disparaissent des tableaux attendus).
  */
 import { test, expect } from "bun:test";
 import {
   colorFieldsOf,
-  SCENE_COLOR_FIELDS,
   parseScene,
   type Layer,
   type Scene,
@@ -109,14 +106,4 @@ test("un calque QR énumère fg et bg — aucune enveloppe entre les deux", () =
 test("un calque image SANS overlay n'énumère aucune couleur — l'optionnel absent n'invente rien", () => {
   const image = validated({ ...base("i"), type: "image", source: { kind: "slot", slot: "hero" }, fit: "contain" });
   expect(colorFieldsOf(image)).toEqual([]);
-});
-
-// SCENE_COLOR_FIELDS — la table dérivée (représentants « au complet » de chaque type de calque,
-// passés au MÊME marcheur que colorFieldsOf) : un double contrôle, indépendant du choix des fixtures
-// ci-dessus, que le marcheur reste stable par type de calque.
-test("SCENE_COLOR_FIELDS retrouve, par type de calque, les mêmes chemins que colorFieldsOf sur un représentant équivalent", () => {
-  expect([...SCENE_COLOR_FIELDS.shape].sort()).toEqual(["border.color", "fill", "shadow.color"]);
-  expect([...SCENE_COLOR_FIELDS.text].sort()).toEqual(["color", "shadow.color", "stroke.color"]);
-  expect([...SCENE_COLOR_FIELDS.qr].sort()).toEqual(["bg", "fg"]);
-  expect([...SCENE_COLOR_FIELDS.image].sort()).toEqual(["overlay"]);
 });

@@ -367,45 +367,6 @@ export function setColorAtPath(layer: Layer, path: string, value: string): Layer
   return setAtPath(layer, path.split("."), value);
 }
 
-// U4 Tâche 2 — représentants « au complet » d'UN calque de chaque TYPE, chaque champ-couleur optionnel
-// RENSEIGNÉ, pour que `colorFieldPaths` en énumère la liste MAXIMALE. `SCENE_COLOR_FIELDS` est donc
-// DÉRIVÉE du MÊME marcheur que `colorFieldsOf` — jamais une liste retapée à la main — et sert de table
-// de référence au garde-fou structurel (tests/studio-color-fields.test.ts). Seule la FORME du
-// représentant (quels sous-objets optionnels existent) est écrite ici ; les CHEMINS qu'elle produit
-// viennent du schéma, pas de cette liste.
-const REPRESENTATIVE_LAYERS: Record<Layer["type"], Layer> = {
-  image: {
-    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
-    type: "image", source: { kind: "asset", assetId: "_" }, fit: "cover", overlay: "#000000",
-  },
-  text: {
-    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
-    type: "text", content: "_", font: { family: "_", size: 1, weight: 400 }, color: "#000000",
-    align: "left", vAlign: "top", lineHeight: 1,
-    shadow: { x: 0, y: 0, blur: 0, color: "#000000" },
-    stroke: { width: 1, color: "#000000" },
-  },
-  shape: {
-    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
-    type: "shape", shape: "rect", fill: "#000000",
-    border: { width: 1, color: "#000000" },
-    shadow: { x: 0, y: 0, blur: 0, color: "#000000" },
-  },
-  qr: {
-    id: "_", name: "_", visible: true, locked: false, frame: { x: 0, y: 0, w: 1, h: 1 },
-    type: "qr", slot: "_", fg: "#000000", bg: "#000000", margin: 0,
-  },
-};
-
-/** La liste MAXIMALE des chemins-couleur, PAR TYPE de calque — voir `REPRESENTATIVE_LAYERS`
- *  ci-dessus. Le garde-fou structurel (tests/studio-color-fields.test.ts) la confronte à
- *  `colorFieldsOf` appliqué à une instance réelle du test. */
-export const SCENE_COLOR_FIELDS: Record<Layer["type"], string[]> = Object.fromEntries(
-  (Object.entries(REPRESENTATIVE_LAYERS) as [Layer["type"], Layer][]).map(
-    ([type, representative]) => [type, colorFieldPaths(representative)],
-  ),
-) as Record<Layer["type"], string[]>;
-
 export type Frame = z.infer<typeof frame>;
 export type ImageSource = z.infer<typeof imageSource>;
 export type ImageLayer = z.infer<typeof imageLayer>;
