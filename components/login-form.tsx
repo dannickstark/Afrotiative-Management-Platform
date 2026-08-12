@@ -34,7 +34,7 @@ export function LoginForm() {
 
   return (
     <Card className="w-full max-w-sm">
-      <CardHeader><CardTitle>Console éditoriale Afrotiative</CardTitle></CardHeader>
+      <CardHeader><CardTitle className="font-heading">Console éditoriale Afrotiative</CardTitle></CardHeader>
       <CardContent>
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-2">

@@ -35,7 +35,7 @@ Drizzle query builder (no raw SQL from input); server actions begin with `requir
 | 004 | `requireUser` re-checks `banned` | security | **P0** | S | none | DONE |
 | 005 | Go-live production-config checklist (auth/cookies) | dx/security | **P0** | S | none | IN-REPO ✅ / OPERATOR PENDING |
 | 006 | Security hardening bundle (cron compare, font proxy, stale comment) | security | P1 | S | none | DONE |
-| 007 | Wire the editorial serif + define a type scale | ui | P1 | S | none | TODO |
+| 007 | Wire the editorial serif + define a type scale | ui | P1 | S | none | DONE |
 | 008 | Shared `PageHeader` adopted across all pages | ui | P1 | M | 007 | TODO |
 | 009 | Brand accent as a real default utility | ui | P1 | S | none | TODO |
 | 010 | Shared `StatCard`/`Metric` + dashboard hierarchy | ui | P1 | M | 007 | TODO |
