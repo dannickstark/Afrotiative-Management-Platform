@@ -1017,13 +1017,16 @@ describe("PropertyPanel — le sélecteur de forme", () => {
     for (const kind of SHAPE_KINDS) {
       const html = render([{ ...shapeLayerSolid, shape: kind } as Layer], "s1", "recap_card");
       expect(`${kind} : ${html.includes(shapeLabel(kind))}`).toBe(`${kind} : true`);
-      // Le panneau d'une forme n'a QU'UN sélecteur : l'extraction est donc sans ambiguïté (et si un
-      // second en apparaissait un jour, ce compte le dirait plutôt que de laisser l'extraction viser
-      // le mauvais).
-      expect(`${kind} : ${countOf(html, 'role="combobox"')}`).toBe(`${kind} : 1`);
+      // Chantier D, Tâche 4 : le panneau d'une forme porte désormais TROIS sélecteurs — celui de la
+      // forme (cette section) plus les deux menus H/V du widget de contraintes de GeometryStrip
+      // (`ConstraintsField`, épinglé en haut du panneau pour TOUT calque). L'extraction du sélecteur
+      // de forme n'est donc plus « le seul combobox du panneau » : elle vise désormais
+      // `data-field="shape"`, l'attribut que ce SelectField porte spécifiquement (property-panel.tsx),
+      // sans ambiguïté possible avec les deux `constraints.h`/`constraints.v` voisins.
+      expect(`${kind} : ${countOf(html, 'role="combobox"')}`).toBe(`${kind} : 3`);
       // Et le libellé de la forme est bien celui du sélecteur, pas seulement le nom du calque
       // (`shapeLayerSolid` s'appelle « Fond ») ni celui d'une note voisine.
-      const trigger = elementWith(html, "role", "combobox");
+      const trigger = elementWith(html, "data-field", "shape");
       expect(`${kind} déclencheur : ${trigger.includes(shapeLabel(kind))}`).toBe(`${kind} déclencheur : true`);
       // L'autre moitié, explicite : la CLÉ TECHNIQUE n'y est jamais — c'est exactement ce que Base UI
       // affiche à la place du libellé quand le mappeur manque.

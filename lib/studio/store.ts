@@ -30,13 +30,30 @@ export class MemoryRenderStore implements RenderStore {
 // Empreinte canonique des ENTRÉES d'un rendu. Les clés sont triées, donc l'ordre de construction
 // de l'objet `values` n'a aucune influence — sans ce tri, deux appels identiques produiraient deux
 // empreintes différentes et le cache ne servirait jamais.
+//
+// `format` (chantier D, Tâche 6) — optionnel, et délibérément absent du canonique quand il l'est
+// (plutôt que normalisé en `null`) : AVANT cette tâche, rien ne relayoutait jamais un gabarit avant
+// rendu, donc (templateId, templateVersion, values) suffisait — DEUX canaux partageant le MÊME
+// gabarit par défaut (resolveTemplate retombant sur (context, null, null)) produisaient de toute
+// façon la MÊME image, puisque `renderScene` ne consultait que `scene.canvas`, jamais un format
+// cible. Maintenant que renderForArticle (lib/studio/index.ts) relayoute vers `o.format` AVANT
+// rendu, deux canaux de formats DIFFÉRENTS partageant ce même gabarit produisent des images
+// DIFFÉRENTES (canevas et cadres relayoutés différemment) — sans `format` dans l'empreinte, le
+// second canal à demander ce gabarit trouverait le rendu du PREMIER en cache et le SERVIRAIT TEL
+// QUEL (mauvaises dimensions, mise en page pour un autre format). Le garder ABSENT du canonique
+// pour les appelants qui ne le fournissent toujours pas (lib/studio/manual-core.ts ; tout contexte
+// sans notion de format cible) préserve EXACTEMENT les empreintes déjà en base pour ces chemins —
+// aucune invalidation de cache non nécessaire.
 export function computeInputHash(input: {
   templateId: string;
   templateVersion: number;
   values: TokenValues;
+  format?: string;
 }): string {
   const sorted = Object.keys(input.values).sort().map((k) => [k, input.values[k as keyof TokenValues]]);
-  const canonical = JSON.stringify([input.templateId, input.templateVersion, sorted]);
+  const canonical = input.format !== undefined
+    ? JSON.stringify([input.templateId, input.templateVersion, sorted, input.format])
+    : JSON.stringify([input.templateId, input.templateVersion, sorted]);
   return createHash("sha256").update(canonical).digest("hex");
 }
 

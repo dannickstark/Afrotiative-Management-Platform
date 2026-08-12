@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { PreviewPane, ARTICLE_SELECTABLE_CONTEXTS } from "./preview-pane";
 import { previewTemplate } from "@/lib/actions/studio-preview-actions";
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
+import { relayoutToFormat } from "@/lib/studio/relayout";
 import type { Scene } from "@/lib/studio/scene";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { PreviewArticleOption } from "@/lib/queries/studio";
@@ -26,12 +27,14 @@ import type { PreservedView } from "@/lib/studio/studio-mode";
 // Actualiser, une UI bien trop lourde pour une vignette de ~110px (brief : « small render requests
 // for the filmstrip »).
 //
-// LIMITE HONNÊTE (spec §5, § final) : tant que U5 (re-layout) n'existe pas, les calques d'une scène
-// conçue pour `format` gardent leurs positions ABSOLUES quand on les rend sur un autre format — sept
-// des huit vignettes montreront donc un gabarit taillé pour un autre rapport largeur/hauteur
-// (recadré/mal placé). C'est un signal UTILE (« ce gabarit ne s'adapte pas encore »), pas un bug à
-// masquer : AUCUNE affordance « adapter »/« réagencer » n'apparaît nulle part dans ce fichier, et
-// aucune bulle d'aide ne promet cette fonctionnalité — voir tests/studio-render-mode.test.ts.
+// CHANTIER D, TÂCHE 6 — le correctif de la limite honnête ci-dessus (spec §5, § final) : U5 est
+// désormais `lib/studio/relayout.ts` (chantier D, Tâche 2), et `sceneForFormat` ci-dessous l'appelle
+// RÉELLEMENT (`relayoutToFormat(scene, key)`), plus un simple redimensionnement du canevas. Les sept
+// vignettes montrent donc, pour la première fois, le gabarit RÉAGENCÉ pour chaque format — pas une
+// version recadrée/mal placée de sa mise en page d'accueil. AUCUNE affordance « adapter »/
+// « réagencer » n'apparaît pour autant nulle part dans ce fichier : il n'y en a pas besoin, le
+// réagencement est désormais AUTOMATIQUE (piloté par les contraintes par calque, chantier D Tâche 1),
+// pas une action que l'utilisateur déclenche — voir tests/studio-render-mode.test.ts.
 //
 // COÛT DES RENDUS (Important 2, revue Tâche 5) : entrer en Rendu réel déclenche jusqu'à HUIT appels
 // previewTemplate() — un pour la case large (PreviewPane) et sept pour la bande — et AUCUN des deux
@@ -77,17 +80,32 @@ export interface RenderModeProps {
   // pourrait vérifier ni légende sans harnais DOM ni Server Action mockée.
   initialDegraded?: boolean;
   initialStale?: boolean;
+  // Chantier D, Tâche 6 (handoff H1) — amorce de test UNIQUEMENT, même convention que les deux
+  // champs juste au-dessus : les formats pour lesquels FilmstripThumb doit démarrer avec sa note
+  // « Texte tronqué » déjà visible (voir FilmstripThumb.initialOverflow). La vraie composition
+  // (editor-shell.tsx) ne fournit JAMAIS ce champ — RenderMode le passe toujours à `undefined`, et
+  // chaque vignette démarre donc réellement sans note tant que son propre aller-retour réseau n'a
+  // pas répondu.
+  initialOverflowFormats?: readonly FormatKey[];
 }
 
-// Même scène, calques INCHANGÉS, canevas remplacé par les dimensions de `key` — c'est EXACTEMENT le
-// mécanisme que tests/studio-preview.test.ts vérifie déjà côté moteur (« une scène cliente qui ne
-// diffère que par les dimensions du canevas »#Critique 1) : aucune ligne `renders`/objet R2 n'est
-// jamais écrite, quel que soit le format demandé (previewTemplate -> previewTemplateCore ->
-// renderScene, jamais renderForArticle/saveRender).
-function sceneForFormat(scene: Scene, key: FormatKey, native: FormatKey): Scene {
+// Chantier D, Tâche 6 — LE gabarit RÉAGENCÉ pour `key`, pas seulement redimensionné : `key === native`
+// reste une identité EXACTE (raccourci, mais `relayoutToFormat` serait de toute façon une identité
+// mathématique dans ce cas précis — chantier D, Tâche 2, « identité au format d'accueil ») ; sinon,
+// chaque calque prend le cadre que ses contraintes par calque (chantier D, Tâche 1 — ou sa surcharge
+// par format, Tâche 5) prescrivent pour `key`. EXPORTÉE pour que tests/studio-render-mode.test.ts
+// puisse l'épingler directement contre `relayoutToFormat` (le §0 : cette fonction ET
+// lib/studio/index.ts#renderForArticle — le chemin de GÉNÉRATION — appellent toutes deux CETTE MÊME
+// fonction pure, jamais deux implémentations parallèles qui pourraient diverger).
+//
+// `previewTemplate` (appelé par FilmstripThumb ci-dessous avec CETTE scène déjà relayoutée) reste
+// structurellement incapable d'écrire quoi que ce soit — voir toujours tests/studio-preview.test.ts
+// (« une scène cliente qui ne diffère que par les dimensions du canevas »#Critique 1) : aucune ligne
+// `renders`/objet R2 n'est jamais écrite, quel que soit le format demandé (previewTemplate ->
+// previewTemplateCore -> renderScene, jamais renderForArticle/saveRender).
+export function sceneForFormat(scene: Scene, key: FormatKey, native: FormatKey): Scene {
   if (key === native) return scene;
-  const preset = FORMAT_PRESETS[key];
-  return { ...scene, canvas: { ...scene.canvas, width: preset.width, height: preset.height } };
+  return relayoutToFormat(scene, key);
 }
 
 type ThumbState =
@@ -97,7 +115,7 @@ type ThumbState =
   | { status: "error" };
 
 function FilmstripThumb({
-  templateId, scene, nativeFormat, format, disabled, refreshNonce, onPromote,
+  templateId, scene, nativeFormat, format, disabled, refreshNonce, onPromote, initialOverflow = false,
 }: {
   templateId: string;
   scene: Scene;
@@ -106,9 +124,25 @@ function FilmstripThumb({
   disabled?: boolean;
   refreshNonce: number;
   onPromote: (format: FormatKey) => void;
+  // Chantier D, Tâche 6 (handoff H1) — amorce de test UNIQUEMENT, même convention que
+  // RenderModeProps.initialDegraded/initialStale ci-dessous : la vraie composition (RenderMode) ne la
+  // fournit JAMAIS, elle vaut toujours `false` au montage réel. `overflow` (l'état ci-dessous) ne
+  // devient vrai qu'après le VRAI aller-retour réseau (previewTemplate -> overflowingLayerIds,
+  // lib/studio/relayout-warn.ts), invisible à un rendu STATIQUE (react-dom/server n'exécute aucun
+  // effet) — sans cette amorce, tests/studio-render-mode.test.ts ne pourrait jamais affirmer que la
+  // légende de débordement SUIT réellement un résultat plutôt que d'être un texte figé dans le JSX.
+  initialOverflow?: boolean;
 }) {
   const preset = FORMAT_PRESETS[format];
   const [state, setState] = useState<ThumbState>({ status: "idle" });
+  // Chantier D, Tâche 6 (handoff H1) — le calque texte contraint qui déborde `maxLines` UNE FOIS ce
+  // gabarit relayouté vers CE format, mesuré côté serveur (previewTemplateCore ->
+  // overflowingLayerIds, FALLBACK-FONT-APPROXIMATIF — handoff H2, voir le commentaire de
+  // PreviewResult.overflowingLayerIds, lib/studio/preview-core.ts) — SÉPARÉ de `state` ci-dessus :
+  // un rendu en ERREUR (state.status==="error") ne doit pas effacer un débordement déjà connu d'un
+  // rendu PRÉCÉDENT réussi, et inversement un rendu qui RÉUSSIT sans calque en débordement doit bien
+  // faire RETOMBER cette alerte (pas de « sticky » optimiste dans un sens comme dans l'autre).
+  const [overflow, setOverflow] = useState(initialOverflow);
   const requestIdRef = useRef(0);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -153,13 +187,20 @@ function FilmstripThumb({
     const id = ++requestIdRef.current;
     setState({ status: "loading" });
     const variant = sceneForFormat(scene, format, nativeFormat);
-    previewTemplate({ templateId, scene: variant })
+    // Chantier D, Tâche 6 (handoff H1) — `format` transmis EN PLUS de `scene: variant` : c'est ce qui
+    // fait calculer `overflowingLayerIds` côté serveur (voir PreviewTemplateInput.format,
+    // lib/studio/preview-core.ts). Passer `variant` (déjà relayoutée) plutôt que `scene` brute ne
+    // change PAS le résultat de la mesure — `overflowingLayerIds` relayoute lui-même en interne, et
+    // `relayoutToFormat` est IDEMPOTENTE sur une scène déjà à ce format (chantier D, Tâche 2, identité)
+    // — mais évite un second aller-retour distinct rien que pour cette mesure.
+    previewTemplate({ templateId, scene: variant, format })
       .then((res) => {
         if (id !== requestIdRef.current) return;
         setState(res.ok ? { status: "ready", dataUri: res.dataUri } : { status: "error" });
+        setOverflow(res.ok && res.overflowingLayerIds.length > 0);
       })
       .catch(() => {
-        if (id === requestIdRef.current) setState({ status: "error" });
+        if (id === requestIdRef.current) { setState({ status: "error" }); setOverflow(false); }
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId, format, nativeFormat, refreshNonce, disabled, visible]);
@@ -188,13 +229,36 @@ function FilmstripThumb({
       </span>
       <span className="truncate text-[11px] font-medium">{preset.label}</span>
       <span className="text-[10px] text-muted-foreground">{preset.width}×{preset.height}</span>
+      {/* Chantier D, Tâche 6 (handoff H1) — la note « texte contraint qui déborde maxLines » que la
+          Tâche 3 avait écrite mais laissée SANS appelant (geometry-strip.tsx la reçoit encore en
+          prop, jamais fournie par property-panel.tsx) trouve ICI sa place naturelle : c'est LE
+          filmstrip qu'un designer regarde pour évaluer chaque format, pas la bande de géométrie d'un
+          format unique. Discrète, dans le style des autres notes de ce chantier, et UNIQUEMENT quand
+          `overflow` est réellement vrai pour CE format précis — jamais un avertissement permanent.
+
+          CORRECTIF HONNÊTETÉ (revue de branche, avant fusion chantier D) : le libellé disait « Texte
+          tronqué » et le survol « le surplus sera coupé au rendu (maxLines) » — un MÉCANISME
+          (troncage) que le moteur réel ne fournit PAS (voir le même correctif sur
+          maxLinesOverflowNote, geometry-strip.tsx, pour la preuve : lineClamp de satori est inerte
+          sur le style réellement peint, `display:"flex"`). Reformulé sans ce mécanisme : le texte
+          DÉBORDE du cadre, il n'est pas proprement coupé. */}
+      {overflow && (
+        <span
+          className="truncate text-[10px] text-amber-600 dark:text-amber-500"
+          data-testid="filmstrip-overflow-badge"
+          data-format={format}
+          title="Un texte contraint dépasse sa limite de lignes dans ce format — il risque de déborder du cadre. Mesuré avec la police de repli, approximatif si ce calque porte une police personnalisée."
+        >
+          Texte déborde
+        </span>
+      )}
     </button>
   );
 }
 
 export function RenderMode({
   templateId, context, scene, format, articles, disabled, view, onViewChange,
-  initialDegraded = false, initialStale = false,
+  initialDegraded = false, initialStale = false, initialOverflowFormats,
 }: RenderModeProps) {
   // Défensif : `view.selectedId` est un `string | null` générique (lib/studio/studio-mode.ts) — ne
   // JAMAIS indexer FORMAT_PRESETS avec une valeur qui ne serait pas une clé de format réelle (rien
@@ -358,6 +422,7 @@ export function RenderMode({
             <FilmstripThumb
               key={key} templateId={templateId} scene={scene} nativeFormat={format} format={key}
               disabled={disabled} refreshNonce={refreshNonce} onPromote={promote}
+              initialOverflow={initialOverflowFormats?.includes(key) ?? false}
             />
           ))}
         </div>

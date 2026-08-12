@@ -36,3 +36,4 @@ yarn-error.log*
 
 # superpowers brainstorm mockups (local only)
 .superpowers/
+.playwright-mcp/

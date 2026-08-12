@@ -9,6 +9,7 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { previewTemplateCore } from "@/lib/studio/preview-core";
 import type { TokenValues } from "@/lib/studio/values";
+import type { FormatKey } from "@/lib/studio/formats";
 
 export async function previewTemplate(input: {
   templateId: string;
@@ -18,6 +19,8 @@ export async function previewTemplate(input: {
   scene?: unknown;
   values?: TokenValues;
   articleId?: string | null;
+  /** Chantier D, Tâche 6 (handoff H1) — voir lib/studio/preview-core.ts:PreviewTemplateInput.format. */
+  format?: FormatKey;
 }) {
   const user = await requireUser();
   requirePermission(user.role, "template", "read");

@@ -252,7 +252,11 @@ async function buildPublishPayload(
   // l'image d'origine (crédit, lien source), et c'est ce dont le gabarit repart à CHAQUE rendu (le
   // cache par inputHash de V1 s'en charge — un rendu identique ne relance jamais renderScene).
   let featuredImageUrl = article.featuredImageUrl;
-  const render = await renderForArticle(article.id, { context: "article_image", store });
+  // Chantier D, Tâche 6 — "website_featured" (lib/studio/formats.ts) est LE format cible de l'image
+  // à la une : un gabarit article_image résolu dont le canevas natif diffère (ex. repris d'un autre
+  // format, ou le gabarit par défaut du contexte) est désormais RELAYOUTÉ (relayoutToFormat, T2)
+  // avant rendu, au lieu d'être téléversé à ses dimensions d'origine quelles qu'elles soient.
+  const render = await renderForArticle(article.id, { context: "article_image", store, format: "website_featured" });
   if (render.ok) {
     // { ok: true, url } : un rendu a été produit — c'est CETTE url qui sera téléversée ci-dessous,
     // à la place de l'image brute. { ok: true, url: null } : aucun gabarit résolu pour ce

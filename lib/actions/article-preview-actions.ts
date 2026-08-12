@@ -18,5 +18,8 @@ import { renderForArticle, type RenderForArticleResult } from "@/lib/studio";
 export async function previewArticleImage(articleId: string): Promise<RenderForArticleResult> {
   const user = await requireUser();
   requirePermission(user.role, "article", "edit");
-  return renderForArticle(articleId, { context: "article_image" });
+  // Chantier D, Tâche 6 — même format cible que lib/wp/publish.ts (buildPublishPayload) : cet
+  // aperçu doit montrer EXACTEMENT ce que la publication produira, y compris le relayout (T2) quand
+  // le gabarit résolu n'est pas nativement au format "website_featured".
+  return renderForArticle(articleId, { context: "article_image", format: "website_featured" });
 }

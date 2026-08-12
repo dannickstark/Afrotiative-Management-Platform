@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import sharp from "sharp";
 import {
   db, articles, articleSources, wpCategories, distributions,
   renderTemplates, renderTemplateVersions, renders,
@@ -260,5 +261,115 @@ describe("renderForArticle", () => {
       context: "article_image", store: new MemoryRenderStore(),
     });
     expect(res).toEqual({ ok: false, reason: "render_failed", message: "Article introuvable." });
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Chantier D, Tâche 6 — LE PAYOFF côté génération : `o.format` relayoute (relayoutToFormat, T2) le
+  // gabarit RÉSOLU avant rendu. Scénario RÉALISTE : un gabarit "social_post" par défaut pour cette
+  // CATÉGORIE (channel null, categoryId fraîchement généré — portée DISTINCTE, voir tests/studio-
+  // fixtures.ts : « un test qui a besoin d'une portée distincte pour un appel renderForArticle doit
+  // varier categoryId, pas channel »), natif "x_landscape" (1600×900), avec une bande `leftRight` qui
+  // s'étire sur presque toute la largeur (marge 40px). AVANT cette tâche, renderForArticle rendait
+  // TOUJOURS ce gabarit à 1600×900, quel que soit le format cible demandé par l'appelant (`o.format`
+  // n'existait tout simplement pas) — exactement le défaut que ce test prouve corrigé, EN PIXELS
+  // (même discipline que tests/studio-shape-render.test.ts : « ça n'a pas levé » ne prouve rien, un
+  // canevas KO produirait quand même un PNG valide). `channel` volontairement OMIS dans les deux
+  // appels ci-dessous (comme lib/wp/publish.ts, qui ne le fournit jamais) : router par canal est le
+  // travail de lib/diffusion/send-core.ts (déjà couvert par tests/diffusion-send.test.ts), pas de
+  // renderForArticle — ce test isole `o.format`, le seul fil que cette tâche ajoute à CETTE fonction.
+  it("relayoute le gabarit vers `o.format` AVANT rendu : le canevas ET le cadre leftRight reflètent le format CIBLE, pas les dimensions natives du gabarit", async () => {
+    const [c] = await db.insert(wpCategories).values({
+      name: "Relayout génération test", slug: `relayout-gen-test-${Date.now()}`,
+    }).returning();
+    catIds2.push(c.id);
+
+    const scene = {
+      schemaVersion: 1 as const,
+      canvas: { width: 1600, height: 900, background: "#0000FF" }, // fond BLEU pur
+      layers: [{
+        id: "banner", name: "Bandeau", visible: true, locked: false,
+        frame: { x: 40, y: 40, w: 1520, h: 200 },
+        constraints: { h: "leftRight" as const, v: "top" as const },
+        type: "shape" as const, shape: "rect" as const, fill: "#FF0000", // remplissage ROUGE pur
+      }],
+    };
+    const [t] = await db.insert(renderTemplates).values({
+      name: "gabarit large partagé", context: "social_post", channel: null, categoryId: c.id,
+      format: "x_landscape", width: 1600, height: 900, scene,
+    }).returning();
+    templateIds.push(t.id);
+    await db.insert(renderTemplateVersions).values({ templateId: t.id, version: 1, scene });
+    await db.update(renderTemplates).set({ publishedVersion: 1 }).where(eq(renderTemplates.id, t.id));
+
+    const id = await mkArticle({ title: "Article relayout génération", categoryId: c.id });
+    const store = new MemoryRenderStore();
+
+    // "wa_square" (1080×1080, lib/studio/formats.ts) — CARRÉ, sans rapport avec 1600×900 : si le
+    // relayout n'avait pas lieu, le rendu resterait 1600×900 (comportement d'avant cette tâche).
+    const res = await renderForArticle(id, { context: "social_post", format: "wa_square", store });
+    if (!res.ok || res.url === null) throw new Error(`rendu attendu réussi : ${JSON.stringify(res)}`);
+
+    const [row] = await db.select({ width: renders.width, height: renders.height }).from(renders).where(eq(renders.id, res.renderId));
+    expect(row.width).toBe(1080);
+    expect(row.height).toBe(1080);
+
+    // EN PIXELS : leftRight relayoute le cadre à { x:40, w: 1520+(1080-1600)=1000 } -> le bandeau
+    // s'arrête à x=1040. Une colonne bien AU-DELÀ (x=1060, dans les 40px encore couverts par le
+    // fond avant le bord droit du canevas 1080) doit donc être FOND (bleu), pas remplissage (rouge)
+    // — la preuve que le CADRE, pas seulement le CANEVAS, a été relayouté.
+    const key = res.url.replace("memory://", "");
+    const bytes = store.objects.get(key)!;
+    const { data, info } = await sharp(Buffer.from(bytes)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) => {
+      const i = (y * info.width + x) * info.channels;
+      return [data[i], data[i + 1], data[i + 2]];
+    };
+    const isNear = (p: number[], t: number[]) => t.every((v, k) => Math.abs(p[k]! - v) <= 24);
+    expect(isNear(pixel(500, 100), [255, 0, 0])).toBe(true);  // dans le bandeau relayouté : remplissage
+    expect(isNear(pixel(1060, 100), [0, 0, 255])).toBe(true); // au-delà de x=1040 : fond, pas remplissage
+  });
+
+  // Chantier D, Tâche 6 — le correctif de computeInputHash (lib/studio/store.ts) : SANS `format` dans
+  // l'empreinte, ce test rougirait (le second appel trouverait le rendu 1080×1080 du premier en
+  // cache et le SERVIRAIT tel quel pour "story", 1080×1920 — mauvaises dimensions).
+  it("deux formats CIBLES différents pour le MÊME gabarit produisent deux rendus DISTINCTS (pas de collision de cache par inputHash)", async () => {
+    const [c] = await db.insert(wpCategories).values({
+      name: "Relayout cache test", slug: `relayout-cache-test-${Date.now()}`,
+    }).returning();
+    catIds2.push(c.id);
+
+    const scene = {
+      schemaVersion: 1 as const,
+      canvas: { width: 1600, height: 900, background: "#000000" },
+      layers: [{
+        id: "banner", name: "Bandeau", visible: true, locked: false,
+        frame: { x: 40, y: 40, w: 1520, h: 200 },
+        constraints: { h: "leftRight" as const, v: "top" as const },
+        type: "shape" as const, shape: "rect" as const, fill: "#FF0000",
+      }],
+    };
+    const [t] = await db.insert(renderTemplates).values({
+      name: "gabarit large partagé (cache)", context: "social_post", channel: null, categoryId: c.id,
+      format: "x_landscape", width: 1600, height: 900, scene,
+    }).returning();
+    templateIds.push(t.id);
+    await db.insert(renderTemplateVersions).values({ templateId: t.id, version: 1, scene });
+    await db.update(renderTemplates).set({ publishedVersion: 1 }).where(eq(renderTemplates.id, t.id));
+
+    const id = await mkArticle({ title: "Article cache multi-format", categoryId: c.id });
+    const store = new MemoryRenderStore();
+
+    // Même article, même gabarit résolu (categoryId identique, `channel` omis dans les deux appels —
+    // voir le commentaire du test précédent) : SEUL `format` diffère entre les deux appels.
+    const wa = await renderForArticle(id, { context: "social_post", format: "wa_square", store });
+    const tk = await renderForArticle(id, { context: "social_post", format: "story", store });
+    if (!wa.ok || wa.url === null) throw new Error(`rendu wa attendu réussi : ${JSON.stringify(wa)}`);
+    if (!tk.ok || tk.url === null) throw new Error(`rendu tiktok attendu réussi : ${JSON.stringify(tk)}`);
+
+    expect(wa.renderId).not.toBe(tk.renderId); // DEUX lignes `renders` distinctes, pas un cache hit croisé
+    const [waRow] = await db.select({ width: renders.width, height: renders.height }).from(renders).where(eq(renders.id, wa.renderId));
+    const [tkRow] = await db.select({ width: renders.width, height: renders.height }).from(renders).where(eq(renders.id, tk.renderId));
+    expect(waRow).toEqual({ width: 1080, height: 1080 });
+    expect(tkRow).toEqual({ width: 1080, height: 1920 });
   });
 });

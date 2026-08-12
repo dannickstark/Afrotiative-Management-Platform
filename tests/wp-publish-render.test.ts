@@ -7,7 +7,7 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { publishArticle, republishArticle, renderFailureOutcome } from "@/lib/wp/publish";
 import type { RenderStore } from "@/lib/studio";
-import { ARTICLE_IMAGE_TEMPLATE } from "@/db/studio-templates";
+import { ARTICLE_IMAGE_TEMPLATE, FB_TEMPLATE } from "@/db/studio-templates";
 
 // tests/wp-publish-render.test.ts — V3 Tâche 3 : buildPublishPayload (lib/wp/publish.ts) demande
 // désormais à V1 le rendu article_image AVANT de téléverser l'image à la une. Trois issues (spec
@@ -308,6 +308,68 @@ describe("gabarit résolu — c'est le RENDU qui est téléversé à WordPress, 
 
     const [row] = await db.select().from(renders).where(eq(renders.subjectId, articleForRenderId));
     expect(row).toBeDefined(); // une seule ligne `renders` pour cet article (contrainte unique sur inputHash)
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 6 — LE PAYOFF côté image à la une : buildPublishPayload (lib/wp/publish.ts)
+// appelle désormais renderForArticle avec `format: "website_featured"`. `templateOkId` ci-dessus
+// (ARTICLE_IMAGE_TEMPLATE, 1200×675) est DÉJÀ nativement "website_featured" — une identité, qui ne
+// prouverait RIEN de neuf. Ce describe possède sa PROPRE portée (categoryId frais, jamais réutilisée
+// par le beforeAll/afterAll du fichier) avec un gabarit natif "fb_link" (FB_TEMPLATE, 1200×630) —
+// DIFFÉRENT de "website_featured" (1200×675) — pour prouver, en pixels réels via sharp, que l'image
+// finalement téléversée à WordPress a bien les dimensions CIBLES, pas les dimensions natives du
+// gabarit résolu.
+describe("Chantier D, Tâche 6 — l'image à la une est RELAYOUTÉE vers « website_featured » avant téléversement", () => {
+  const store = new FakeCdnRenderStore();
+  let categoryId: string;
+  let templateId: string;
+  let articleId: string;
+
+  beforeAll(async () => {
+    const [cat] = await db.insert(wpCategories).values({
+      name: "Relayout image à la une", slug: `relayout-featured-${Date.now()}`, color: "#4A1B7F",
+    }).returning();
+    categoryId = cat.id;
+
+    const [t] = await db.insert(renderTemplates).values({
+      name: "gabarit natif fb_link (mésadapté)", context: "article_image", channel: null,
+      categoryId, format: "fb_link", width: 1200, height: 630, scene: FB_TEMPLATE,
+    }).returning();
+    templateId = t.id;
+    await db.insert(renderTemplateVersions).values({ templateId, version: 1, scene: FB_TEMPLATE });
+    await db.update(renderTemplates).set({ publishedVersion: 1 }).where(eq(renderTemplates.id, templateId));
+
+    const [a] = await db.insert(articles).values({
+      title: "Article gabarit mésadapté", bodyHtml: "<p>Contenu.</p>", excerpt: "Extrait.",
+      categoryId, featuredImageUrl: RAW_IMAGE_URL,
+      imageCredit: "Crédit Test Rendu", imageSourceUrl: "https://example.com/credit-rendu",
+      status: "approved" as const,
+    }).returning();
+    articleId = a.id;
+    await db.insert(articleSources).values({ articleId, mediaName: "Source Test", url: "https://example.com/source" });
+  });
+
+  afterAll(async () => {
+    await db.delete(renders).where(eq(renders.subjectId, articleId));
+    await db.delete(articleSources).where(eq(articleSources.articleId, articleId));
+    await db.delete(articles).where(eq(articles.id, articleId));
+    await db.delete(renderTemplates).where(eq(renderTemplates.id, templateId));
+    await db.delete(wpCategories).where(eq(wpCategories.id, categoryId));
+  });
+
+  it("l'image téléversée à WordPress mesure 1200×675 (website_featured), PAS 1200×630 (les dimensions natives du gabarit résolu)", async () => {
+    latestRenderStore = store;
+    const before = mediaCalls.length;
+
+    const res = await publishArticle(articleId, null, store);
+    expect(res.ok).toBe(true);
+
+    const uploaded = mediaCalls.slice(before);
+    expect(uploaded).toHaveLength(1);
+    const meta = await sharp(Buffer.from(uploaded[0]!.body)).metadata();
+    expect(meta.width).toBe(1200);
+    expect(meta.height).toBe(675); // PAS 630 : la preuve que le relayout a bien eu lieu
   });
 });
 

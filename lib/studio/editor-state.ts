@@ -47,6 +47,11 @@
 //     `select`/`toggleSelection` continuent de NE PAS s'empiler : changer de sélection n'est pas une
 //     modification annulable, seulement une modification de la scène l'est.
 import { parseScene, SceneError, type Scene, type Layer, type Frame } from "./scene";
+// Chantier D, Tâche 5 — `FormatKey` (la clé externe de `scene.formatOverrides`, voir Tâche 1) vient
+// de formats.ts, la SEULE source de vérité des clés de format (`FORMAT_PRESETS`) : la réutiliser ici
+// plutôt que d'accepter une `string` nue évite qu'un appelant écrive `setFrameOverride("storry", …)`
+// sans que le compilateur ne le voie.
+import type { FormatKey } from "./formats";
 // Tâche 4 (U2) : `FrameChange` et `sameFrame` viennent du module d'alignement — une FEUILLE pure
 // (aucun import de valeur, voir son en-tête), donc l'importer ici n'ajoute rien au graphe d'exécution
 // des composants client. Les réutiliser plutôt que de redéclarer une paire {id, frame} et une
@@ -102,8 +107,20 @@ export type EditorAction =
   // Tâche 4 (U2, spec §4) : UN lot de cadres, UNE entrée d'historique — voir son cas dans le
   // réducteur et le commentaire de `setFrames` plus bas.
   | { type: "setFrames"; changes: readonly FrameChange[] }
+  // Chantier D, Tâche 5 — l'échappatoire manuelle par format : écrit
+  // `scene.formatOverrides[format][layerId]`, JAMAIS `layer.frame` (voir son cas dans le réducteur
+  // et le commentaire de `setFrameOverride`/`frameEditAction` plus bas). C'est l'action que doit
+  // recevoir un geste d'édition de cadre exécuté pendant qu'un format NON-accueil est prévisualisé —
+  // `resizeLayer`/`setFrames` ci-dessus restent, eux, les actions du format d'accueil.
+  | { type: "setFrameOverride"; format: FormatKey; layerId: string; frame: Frame }
   | { type: "rotateLayer"; id: string; deg: number }
   | { type: "setLayerProp"; id: string; patch: LayerPatch }
+  // Chantier D, Tâche 4 — le pendant PLURIEL de `setLayerProp` : le MÊME correctif superficiel
+  // appliqué à PLUSIEURS calques comme UNE SEULE entrée d'historique, sur le modèle de `setFrames`
+  // ci-dessus (un lot = une entrée). Le widget de contraintes de l'inspecteur (ConstraintsField,
+  // components/studio/constraints-field.tsx) en a besoin pour son geste « Maj-clic » : appliquer le
+  // même ancrage à toute la sélection multiple sans empiler N annulations pour un seul geste.
+  | { type: "setLayerProps"; ids: readonly string[]; patch: LayerPatch }
   | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
   | { type: "deleteLayer"; id: string }
   | { type: "reorderLayer"; id: string; toIndex: number }
@@ -154,11 +171,68 @@ export function resizeLayer(id: string, frame: Frame): EditorAction {
 export function setFrames(changes: readonly FrameChange[]): EditorAction {
   return { type: "setFrames", changes };
 }
+// Chantier D, Tâche 5 : voir le commentaire de `"setFrameOverride"` sur `EditorAction` ci-dessus —
+// écrit une surcharge de cadre pour CE calque, à CE format, sans toucher `layer.frame`.
+export function setFrameOverride(format: FormatKey, layerId: string, frame: Frame): EditorAction {
+  return { type: "setFrameOverride", format, layerId, frame };
+}
+
+// Chantier D, Tâche 5 — LE routeur home-vs-surcharge, l'invariant que réclame le plan (« editing a
+// frame at the HOME format still edits layer.frame ; overrides only for non-home formats »).
+//
+// SEAM CONNU, documenté honnêtement plutôt que masqué (même posture que la Tâche 3 pour sa note) :
+// aucune surface d'édition non-accueil n'existe ENCORE dans l'interface. Le mode Montage n'édite
+// toujours QUE le format d'accueil (`layer.frame`, via resizeLayer/setFrames) ; le mode Rendu
+// (render-mode.tsx) n'affiche les autres formats qu'en APERÇU lecture seule — `sceneForFormat` y
+// substitue juste les dimensions de canevas pour le rendu, sans jamais déclencher la moindre action
+// du réducteur (voir son commentaire d'en-tête : « aucune affordance adapter/réagencer n'apparaît
+// nulle part »). Câbler CE routeur sur un geste réel de canevas exigerait donc d'inventer une surface
+// éditable qui n'existe pas — précisément ce que le brief demande de NE PAS fabriquer.
+//
+// Cette fonction est donc, pour l'instant, la SEULE consommatrice testée de l'invariant — exercée
+// directement par tests/studio-editor-state.test.ts.
+//
+// CE QUE CE ROUTEUR NE DÉCIDE PAS (revue Tâche 5, Important) : le VERROU. `setFrameOverride`
+// lui-même n'a délibérément AUCUNE garde de verrou (voir son commentaire) — et ce routeur n'en ajoute
+// pas non plus. La raison n'est PAS un oubli : le bon comportement dépend de la NATURE du futur
+// appelant, que ce fichier ne connaît pas encore.
+//   • Un glisser sur un CANEVAS (mécanisme souris, comme `resizeLayer`/`moveLayer` aujourd'hui) DOIT
+//     respecter le verrou — c'est la distinction que documente déjà l'en-tête du module (« un calque
+//     locked ne répond ni au clic ni au glisser »).
+//   • Un champ NUMÉRIQUE de panneau (édition explicite, comme `setLayerProp`/`toggleVisible`
+//     aujourd'hui) ne le doit PAS, par la même distinction.
+// Puisqu'on ne sait pas ENCORE laquelle des deux surfaces appellera ce routeur (voire les deux, pour
+// des gestes différents), câbler une garde ICI la rendrait FAUSSE pour l'un des deux cas d'usage
+// possibles. C'est donc au FUTUR appelant de trancher — un appelant « glisser » enveloppera son geste
+// d'une vérification `layer.locked` avant de dispatcher, exactement comme le canevas actuel le fait
+// déjà pour `resizeLayer`/`moveLayer` (voir canvas.tsx) ; un appelant « panneau » n'aura rien à
+// ajouter, comme `setLayerProp` aujourd'hui.
+//
+// TODO(next-UI-task) : quand une tâche future rend un format non-accueil éditable (ex. un canevas
+// Montage qui suit `view.selectedId` comme render-mode.tsx le fait déjà pour l'aperçu), c'est CETTE
+// fonction qu'elle appellera pour décider quelle action dispatcher — elle n'aura pas à être réécrite,
+// seulement branchée sur un `onFrameChange` réel, AVEC la garde de verrou tranchée ci-dessus posée
+// côté appelant si ce dernier est un geste de glisser sur le canevas.
+export function frameEditAction(
+  homeFormat: FormatKey,
+  activeFormat: FormatKey,
+  layerId: string,
+  frame: Frame,
+): EditorAction {
+  return activeFormat === homeFormat
+    ? resizeLayer(layerId, frame)
+    : setFrameOverride(activeFormat, layerId, frame);
+}
 export function rotateLayer(id: string, deg: number): EditorAction {
   return { type: "rotateLayer", id, deg };
 }
 export function setLayerProp(id: string, patch: LayerPatch): EditorAction {
   return { type: "setLayerProp", id, patch };
+}
+// Chantier D, Tâche 4 : voir le commentaire de `"setLayerProps"` sur `EditorAction` ci-dessus — le
+// MÊME correctif appliqué à CHAQUE id de `ids`, en une seule entrée d'historique.
+export function setLayerProps(ids: readonly string[], patch: LayerPatch): EditorAction {
+  return { type: "setLayerProps", ids: [...ids], patch };
 }
 // `layer` (Tâche 3, U1 spec §4) : quand fourni, ce calque DÉJÀ CONSTRUIT (ex.
 // dynamic-text.ts:buildDynamicTextLayer, un TextLayer déjà lié à un jeton et stylé depuis un
@@ -364,6 +438,33 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return commit(state, { ...state.scene, layers });
     }
 
+    // Chantier D, Tâche 5 — l'échappatoire manuelle : écrit
+    // `scene.formatOverrides[format][layerId] = frame`, IMMUABLEMENT (deux niveaux d'objet neufs,
+    // jamais de mutation en place de la carte existante), et NE TOUCHE PAS `layers` — c'est ce qui
+    // garantit `layer.frame` intact pour le calque édité, l'invariant central de cette tâche.
+    //
+    // Le calque doit exister dans la scène (même garde que `setLayerProp` : un id absent est un
+    // no-op, pas une erreur). PAS de garde de verrou ici, délibérément — mais PAS parce que cette
+    // action serait catégoriquement une « édition de panneau » : elle n'a ENCORE aucun appelant réel
+    // (voir `frameEditAction` ci-dessus), donc rien ne dit si son futur appelant sera un glisser sur
+    // le canevas (devrait respecter le verrou, comme `resizeLayer`) ou un champ de panneau (ne le
+    // devrait pas, comme `setLayerProp`). Câbler la garde ICI la rendrait fausse pour l'un des deux
+    // cas. La décision est donc reportée au futur appelant — voir le commentaire de `frameEditAction`
+    // pour le détail de ce partage de responsabilité (revue Tâche 5, Important).
+    //
+    // AUCUN code de nettoyage dédié pour l'annulation : `commit()` empile l'entrée d'historique
+    // habituelle, et l'`undo` générique (cas "undo" plus bas) restaure la scène ENTIÈRE d'avant CETTE
+    // action — surcharge y compris. Une surcharge ajoutée puis annulée ne laisse donc jamais
+    // d'entrée orpheline dans `formatOverrides` : il n'y a simplement rien de spécifique à nettoyer,
+    // le mécanisme générique suffit (voir tests/studio-editor-state.test.ts, « SANS ORPHELIN »).
+    case "setFrameOverride": {
+      const index = layerIndex(state.scene, action.layerId);
+      if (index === -1) return state;
+      const forFormat = { ...(state.scene.formatOverrides?.[action.format] ?? {}), [action.layerId]: { ...action.frame } };
+      const formatOverrides = { ...(state.scene.formatOverrides ?? {}), [action.format]: forFormat };
+      return commit(state, { ...state.scene, formatOverrides });
+    }
+
     case "rotateLayer":
       return updateUnlockedLayer(state, action.id, (layer, layers, index) =>
         replaceAt(layers, index, { ...layer, rotation: action.deg }));
@@ -376,6 +477,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       // (dans commit()) est le vrai garde-fou, ce cast ne fait qu'exprimer l'intention.
       const updated = { ...layer, ...action.patch } as unknown as Layer;
       return commit(state, { ...state.scene, layers: replaceAt(state.scene.layers, index, updated) });
+    }
+
+    // Chantier D, Tâche 4 — le même correctif superficiel que "setLayerProp" ci-dessus, appliqué à
+    // CHAQUE id du lot, sur le modèle de "setFrames" plus haut : une seule entrée d'historique pour
+    // tout le lot, aucune entrée fantôme si aucun id ne matche (l'état revient tel quel, même
+    // référence — même garantie que "setFrames"). Un id absent est ignoré ligne à ligne, jamais
+    // rejeté en bloc.
+    case "setLayerProps": {
+      let layers = state.scene.layers;
+      let touched = false;
+      for (const id of action.ids) {
+        const index = layers.findIndex((l) => l.id === id);
+        if (index === -1) continue;
+        const layer = layers[index];
+        const updated = { ...layer, ...action.patch } as unknown as Layer;
+        layers = replaceAt(layers, index, updated);
+        touched = true;
+      }
+      if (!touched) return state;
+      return commit(state, { ...state.scene, layers });
     }
 
     case "addLayer": {

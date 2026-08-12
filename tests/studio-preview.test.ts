@@ -37,6 +37,35 @@ const fixtureFetch: typeof fetch = (() => fetch(`${base}/x.png`)) as unknown as 
 //   (social_post, "test-preview-fail", null)
 const CH_ACTIONS = "test-preview-actions";
 const CH_FAIL = "test-preview-fail";
+const CH_OVERFLOW = "test-preview-overflow";
+
+// Chantier D, Tâche 6 (handoff H1) — MÊME fixture que tests/studio-relayout.test.ts (« constrainedTextOverflows
+// — un texte contraint qui déborde maxLines dans un format, MESURÉ AU RENDU ») : titre choisi
+// empiriquement pour rendre EXACTEMENT 1 ligne à 1520px (le format d'accueil "x_landscape",
+// 1600×900, moins 40px de marge de chaque côté) et EXACTEMENT 2 lignes à 1000px (la largeur qu'il
+// obtient une fois relayouté vers "story" — leftRight : 1520 + (1080-1600) = 1000). Reprise ICI plutôt
+// que réimportée : ce fichier construit ses gabarits en BASE (render_templates), pas en mémoire —
+// previewTemplateCore doit résoudre un VRAI templateId, previewTemplateCore + overflowingLayerIds ne
+// se contentent donc pas de rejouer constrainedTextOverflows en mémoire (Tâche 3), mais l'exercent à
+// travers le chemin complet Server-Action-like (previewTemplateCore, sans le RBAC).
+const OVERFLOW_TITLE = "Le cacao camerounais bat un record d'exportation";
+function overflowScene(): Scene {
+  return parseScene({
+    schemaVersion: 1,
+    canvas: { width: 1600, height: 900, background: "#101010" },
+    layers: [
+      {
+        id: "title", name: "Titre", visible: true, locked: false,
+        frame: { x: 40, y: 40, w: 1520, h: 300 },
+        constraints: { h: "leftRight", v: "top" },
+        type: "text", content: OVERFLOW_TITLE,
+        font: { family: "Noto Sans", size: 48, weight: 700 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+        maxLines: 1,
+      },
+    ],
+  });
+}
 
 function recapScene(): Scene {
   // AUCUN calque image — délibéré : ce gabarit sert à prouver l'absence d'écriture ET le chemin
@@ -72,9 +101,12 @@ const templateIds: string[] = [];
 let actionsTemplateId: string;
 let failTemplateId: string;
 
+let overflowTemplateId: string;
+
 beforeAll(async () => {
   await deleteTemplateScope("recap_card", CH_ACTIONS, null);
   await deleteTemplateScope("social_post", CH_FAIL, null);
+  await deleteTemplateScope("social_post", CH_OVERFLOW, null);
 
   const [actionsRow] = await db.insert(renderTemplates).values({
     name: "Gabarit Aperçu — écriture", context: "recap_card", channel: CH_ACTIONS, categoryId: null,
@@ -89,6 +121,13 @@ beforeAll(async () => {
   }).returning({ id: renderTemplates.id });
   failTemplateId = failRow.id;
   templateIds.push(failTemplateId);
+
+  const [overflowRow] = await db.insert(renderTemplates).values({
+    name: "Gabarit Aperçu — débordement filmstrip", context: "social_post", channel: CH_OVERFLOW, categoryId: null,
+    format: "x_landscape", width: 1600, height: 900, scene: overflowScene(),
+  }).returning({ id: renderTemplates.id });
+  overflowTemplateId = overflowRow.id;
+  templateIds.push(overflowTemplateId);
 });
 
 afterAll(async () => {
@@ -134,6 +173,42 @@ describe("previewTemplateCore — n'écrit RIEN (spec §4)", () => {
     await previewTemplateCore({ templateId: actionsTemplateId, fetchImpl: fixtureFetch });
     const after = await rendersCount();
     expect(after).toBe(before);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier D, Tâche 6 (handoff H1) — la note « texte tronqué » du filmstrip (components/studio/
+// render-mode.tsx#FilmstripThumb) EST previewTemplateCore's `overflowingLayerIds`, mesuré ici à
+// travers un VRAI rendu (satori + loadFallbackFonts), pas rejoué en mémoire (déjà fait par
+// tests/studio-relayout.test.ts, qui teste constrainedTextOverflows directement). Anti-vacuité par
+// construction : le MÊME templateId, dans DEUX formats — un où il tient, un où il déborde.
+describe("previewTemplateCore — overflowingLayerIds (chantier D, Tâche 6, handoff H1)", () => {
+  it("format d'accueil (« x_landscape ») : identité (relayoutToFormat ne change rien) — le titre tient en 1 ligne, AUCUN calque signalé", async () => {
+    const res = await previewTemplateCore({ templateId: overflowTemplateId, format: "x_landscape" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.overflowingLayerIds).toEqual([]);
+  });
+
+  it("format « story » (plus étroit — leftRight rétrécit le titre à 1000px) : le titre déborde à 2 lignes > maxLines:1 — SIGNALÉ", async () => {
+    const res = await previewTemplateCore({ templateId: overflowTemplateId, format: "story" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.overflowingLayerIds).toEqual(["title"]);
+  });
+
+  it("SANS `format` (aucun appelant qui le fournit avant cette tâche) : `overflowingLayerIds` reste `[]` — comportement inchangé, rien n'est mesuré sans savoir POUR QUEL format", async () => {
+    const res = await previewTemplateCore({ templateId: overflowTemplateId });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.overflowingLayerIds).toEqual([]);
+  });
+
+  it("MUTATION témoin : le rendu (dataUri) reste produit normalement dans les DEUX formats — la mesure de débordement ne fait jamais échouer ni dégrader le rendu lui-même", async () => {
+    const home = await previewTemplateCore({ templateId: overflowTemplateId, format: "x_landscape" });
+    const story = await previewTemplateCore({ templateId: overflowTemplateId, format: "story" });
+    expect(home.ok && home.dataUri.length).toBeGreaterThan(200);
+    expect(story.ok && story.dataUri.length).toBeGreaterThan(200);
   });
 });
 

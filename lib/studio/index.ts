@@ -14,6 +14,10 @@ import { SceneError } from "./scene";
 import type { TemplateContext, Channel } from "./tokens";
 import type { AssetLoader } from "./fonts";
 import { DbAssetLoader } from "./asset-loader";
+// Chantier D, Tâche 6 — LE point où le moteur de génération consomme enfin `relayout` (T2) : voir
+// le commentaire sur `o.format` plus bas.
+import { relayoutToFormat } from "./relayout";
+import type { FormatKey } from "./formats";
 
 // `reason` (revue finale V3, Important 1) discrimine les DEUX familles d'échec par leur NATURE,
 // pas par le texte affiché : "storage_unconfigured" est un réglage d'OPÉRATEUR (le studio visuel
@@ -49,6 +53,23 @@ export async function renderForArticle(
     // Toujours overridable via cette option — les tests y injectent leurs propres implémentations
     // (NullAssetLoader, un magasin REJETANT…) sans jamais toucher à la vraie base de données.
     assets?: AssetLoader;
+    // Chantier D, Tâche 6 (spec §5) — LE format CIBLE vers lequel adapter (relayoutToFormat, T2) le
+    // gabarit RÉSOLU avant rendu. C'EST le fil qui manquait : `resolveTemplate` peut retomber sur un
+    // gabarit dont le canevas natif n'a RIEN À VOIR avec le format que l'appelant veut produire — le
+    // cas le plus courant étant le repli sur le gabarit PAR DÉFAUT du contexte (aucun canal/catégorie
+    // dédié), partagé par tous les canaux qui n'ont pas leur propre ligne. AVANT cette option,
+    // `renderScene` recevait `template.scene` tel quel : chaque canal produisait donc une image aux
+    // dimensions du gabarit d'ORIGINE, jamais adaptée à son propre format — exactement le défaut que
+    // ce chantier corrige (voir components/studio/render-mode.tsx#sceneForFormat, le même correctif
+    // côté aperçu). Optionnel, et volontairement SANS repli implicite (ex. déduire un format depuis
+    // `o.channel`) : ce module ne doit PAS connaître `lib/diffusion/channels.ts` (qui importe déjà
+    // CE barrel — un import inverse créerait un cycle), donc c'est à l'APPELANT de fournir le format
+    // qu'il connaît (lib/wp/publish.ts : "website_featured" ; lib/diffusion/send-core.ts :
+    // SOCIAL_CHANNELS[channel].format). Absent, AUCUN relayout n'a lieu — comportement STRICTEMENT
+    // inchangé pour les contextes qui n'ont encore aucune notion de format cible (quote_card,
+    // recap_card manuels — lib/studio/manual-core.ts n'appelle d'ailleurs pas cette fonction du
+    // tout — et l'ancien appel nu à previewArticleImage avant que cette même tâche ne le câble).
+    format?: FormatKey;
   },
 ): Promise<RenderForArticleResult> {
   const store = o.store ?? new R2RenderStore();
@@ -70,17 +91,24 @@ export async function renderForArticle(
 
   try {
     const values = await articleTokenValues(articleId, o.context);
+    // LE relayout (T2) : identité si `o.format` est absent OU déjà le format d'accueil du gabarit
+    // (relayoutToFormat, T2 — « identité au format d'accueil »), une VRAIE adaptation sinon. C'est
+    // cette `scene` (pas `template.scene`) qui atteint `renderScene` plus bas.
+    const scene = o.format ? relayoutToFormat(template.scene, o.format) : template.scene;
     const inputHash = computeInputHash({
-      templateId: template.templateId, templateVersion: template.version, values,
+      templateId: template.templateId, templateVersion: template.version, values, format: o.format,
     });
 
     // Court-circuit AVANT tout rendu : un appel identique (même gabarit, même version, mêmes
-    // valeurs) renvoie la ligne déjà en cache plutôt que de re-rendre.
+    // valeurs, même format cible) renvoie la ligne déjà en cache plutôt que de re-rendre. `format`
+    // fait partie de l'empreinte (voir le commentaire de computeInputHash, store.ts) : sans lui, deux
+    // canaux de formats différents partageant le même gabarit par défaut se voleraient mutuellement
+    // leur rendu en cache.
     const cached = await findCachedRender(inputHash);
     if (cached) return { ok: true, url: cached.url, renderId: cached.id, degraded: cached.degraded };
 
     const out = await renderScene({
-      scene: template.scene, values, fetchImpl: o.fetchImpl, assets: o.assets ?? new DbAssetLoader(),
+      scene, values, fetchImpl: o.fetchImpl, assets: o.assets ?? new DbAssetLoader(),
     });
     const key = storageKeyFor(inputHash, out.mime, new Date());
     const url = await store.put(key, out.bytes, out.mime);

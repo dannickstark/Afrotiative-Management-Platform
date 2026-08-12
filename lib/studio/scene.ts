@@ -40,6 +40,21 @@ const frame = z.object({
   w: z.number().positive(), h: z.number().positive(),
 });
 
+// Chantier D, Tâche 1 — LES CONTRAINTES d'ancrage d'un calque à travers un redimensionnement de
+// canevas (par ex. un même gabarit décliné du format « site » au format « story »). `h` régit le
+// bord/l'étirement horizontal, `v` le vertical ; les deux se combinent indépendamment (un calque
+// peut être ancré à gauche horizontalement et centré verticalement).
+export const H_CONSTRAINTS = ["left", "right", "leftRight", "center", "scale"] as const;
+export const V_CONSTRAINTS = ["top", "bottom", "topBottom", "center", "scale"] as const;
+export type HConstraint = (typeof H_CONSTRAINTS)[number];
+export type VConstraint = (typeof V_CONSTRAINTS)[number];
+export type LayerConstraints = { h: HConstraint; v: VConstraint };
+
+const layerConstraints = z.object({
+  h: z.enum(H_CONSTRAINTS),
+  v: z.enum(V_CONSTRAINTS),
+});
+
 const layerBase = {
   id: z.string().min(1),
   name: z.string(),
@@ -48,6 +63,10 @@ const layerBase = {
   frame,
   rotation: z.number().optional(),
   opacity: z.number().min(0).max(1).optional(),
+  // NOUVEAU et OPTIONNEL : MIGRATION NO-OP. Un calque déjà écrit n'a pas cette clé, et l'absence est
+  // LÉGALE — `constraintsOf` ci-dessous retombe alors sur { h: "left", v: "top" }, le comportement
+  // d'aujourd'hui (un calque garde sa position/taille en pixels, ancré en haut à gauche).
+  constraints: layerConstraints.optional(),
 };
 
 const imageSource = z.discriminatedUnion("kind", [
@@ -247,6 +266,11 @@ export const sceneSchema = z.object({
   // L'ORDRE EST L'ORDRE DE PEINTURE : index 0 = arrière-plan. Satori n'a pas de z-index, et une
   // liste de calques exprime déjà exactement cela.
   layers: z.array(layer),
+  // Chantier D, Tâche 1 — SURCHARGES DE CADRE par format. Clé externe = FormatKey (ex.
+  // "ig_square"), clé interne = l'`id` du calque surchargé, valeur = un `frame` complet (RÉUTILISE
+  // le schéma `frame` existant — pas une seconde définition). NOUVEAU et OPTIONNEL : MIGRATION
+  // NO-OP, une scène déjà écrite n'a pas cette clé et se relit à l'identique.
+  formatOverrides: z.record(z.string(), z.record(z.string(), frame)).optional(),
 });
 
 // U4 Tâche 1 (spike) — LE marcheur candidat pour la Tâche 2. Il descend un nœud de schéma EN
@@ -376,6 +400,13 @@ export type ShapeLayer = z.infer<typeof shapeLayer>;
 export type QrLayer = z.infer<typeof qrLayer>;
 export type Layer = z.infer<typeof layer>;
 export type Scene = z.infer<typeof sceneSchema>;
+
+/** Les contraintes EFFECTIVES d'un calque — la valeur stockée si présente, sinon le défaut
+ *  { h: "left", v: "top" } qui EST le comportement d'aujourd'hui (position/taille en pixels,
+ *  ancrées en haut à gauche). Chantier D, Tâche 1 : c'est ce défaut qui rend la migration NO-OP. */
+export function constraintsOf(layer: Layer): LayerConstraints {
+  return layer.constraints ?? { h: "left", v: "top" };
+}
 
 // U4 Tâche 4 — le premier identifiant de calque VU DEUX FOIS dans `layers`, ou `null` s'il n'y en
 // a pas. Prend un `unknown` (pas un `Layer[]` typé) exprès : appelée à la fois sur l'entrée BRUTE

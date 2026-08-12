@@ -80,6 +80,7 @@
 //   tests/studio-autosave.test.ts → (recap_card, "test-autosave-publish-refuse", null)
 //   tests/studio-preview.test.ts  → (recap_card, "test-preview-actions", null)
 //                                    (social_post, "test-preview-fail", null)
+//                                    (social_post, "test-preview-overflow", null)
 //   tests/studio-manual.test.ts   → (recap_card, null, <categoryId frais>) pour le gabarit publié du
 //                                    chemin heureux — sans risque de collision (categoryId frais à
 //                                    chaque exécution, comme (article_image, null, <categoryId>)

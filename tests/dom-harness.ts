@@ -180,10 +180,15 @@ export async function mount(element: React.ReactElement): Promise<Mounted> {
  * effets déclenchés par le gestionnaire React aient le temps de tourner avant de résoudre. Ce n'est
  * PAS un raccourci qui invoque une prop `onClick` trouvée par introspection — la remontée DOM réelle
  * est le point même du harnais (spec §2 : « calling a handler directly is what the five uncovered
- * seams already fail to catch »). */
-export async function click(el: Element): Promise<void> {
+ * seams already fail to catch »).
+ *
+ * `init` (Chantier D, Tâche 4, additif — le défaut reproduit l'appel d'origine bit à bit, donc aucun
+ * appelant existant ne change de comportement) : permet à un test de poser des modificateurs, par ex.
+ * `{ shiftKey: true }` pour le geste « Maj-clic applique le réglage à toute la sélection » du widget
+ * de contraintes — même besoin que `pointer()` un peu plus bas, qui accepte déjà un `MouseEventInit`. */
+export async function click(el: Element, init: MouseEventInit = {}): Promise<void> {
   await act(async () => {
-    const event = new MouseEvent("click", { bubbles: true, cancelable: true, view: window });
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, view: window, ...init });
     el.dispatchEvent(event);
   });
 }
