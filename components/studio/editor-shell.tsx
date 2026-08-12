@@ -336,10 +336,36 @@ function EditorShellInner({
 
   return (
     <div className="flex h-full flex-col gap-3" data-testid="editor-shell">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+      {/* Chantier A Tâche 2 : cet en-tête EST désormais la seule barre supérieure de l'éditeur —
+          la coque admin (SidebarProvider/AppSidebar/Breadcrumbs/SidebarTrigger, app/(app)/layout.tsx)
+          a quitté cet arbre dès la Tâche 1 (app/(studio-editor)/layout.tsx, plein écran, requireUser()
+          seul), rendant CET en-tête le haut visuel de tout l'écran plutôt qu'un second bandeau sous
+          un en-tête admin. Trois colonnes (grid, pas flex-wrap justify-between comme avant cette
+          tâche) : GAUCHE retour + nom + SaveIndicator, CENTRE ModeSwitch, DROITE slot zoom
+          (chantier B) + undo/redo + Historique + Publier — plutôt que deux colonnes aux extrémités,
+          pour que ModeSwitch reste visuellement CENTRÉ même quand la colonne gauche (nom du gabarit)
+          ou la colonne droite change de largeur, tel que la brief de tâche le nomme (« CENTER : le
+          ModeSwitch »). ModeSwitch + SaveIndicator vivaient avant cette tâche en position absolue
+          au-dessus du CANEVAS (Tâches 5/7, spec §5/§8, indépendant de la coque admin) — un FRÈRE du
+          contenu de mode, jamais de cet en-tête. Les remonter ICI, dans l'unique en-tête de la barre
+          supérieure, tient la même promesse (« les DEUX états », « à côté du sélecteur de mode »)
+          sans plus jamais dépendre d'un positionnement absolu ni d'un pad (`pt-11`) réservé pour lui
+          — voir le conteneur juste en dessous, qui ne porte plus ni l'un ni l'autre. */}
+      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b pb-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href="/studio" className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }))} aria-label="Retour aux gabarits">
+          {/* Correctif chantier A T2 : AVANT cette tâche, ce lien portait déjà `href="/studio"` (donc
+              naviguait réellement) mais SANS texte visible — une simple flèche icône, `aria-label`
+              seul. La brief de tâche nomme explicitement la forme cible « ← Gabarits » : le texte
+              devient visible (`data-testid="editor-back-to-templates"`, verrouillé par le test U0 —
+              voir tests/studio-editor-shell.test.ts), l'`aria-label` de secours n'étant donc plus
+              nécessaire (le nom accessible vient désormais du texte du lien lui-même). */}
+          <Link
+            href="/studio"
+            data-testid="editor-back-to-templates"
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "shrink-0 gap-1 px-2")}
+          >
             <ArrowLeft />
+            Gabarits
           </Link>
           <div className="min-w-0">
             <h1 className="truncate text-base font-semibold">{template.name}</h1>
@@ -356,9 +382,32 @@ function EditorShellInner({
               <Badge variant="secondary" data-testid="unpublished-badge">Modifications non publiées</Badge>
             )}
           </div>
+          <SaveIndicator
+            status={autosaveState.status}
+            message={autosaveState.message}
+            onRetry={() => void autosave.retry()}
+            className="shrink-0"
+          />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-center">
+          <ModeSwitch mode={mode} onChange={changeMode} />
+        </div>
+
+        <div className="flex items-center justify-end gap-2">
+          {/* Slot chantier B (spec Studio Pro chantier A, Tâche 2) : affordance de zoom
+              DÉLIBÉRÉMENT inerte — `disabled`, aucun `onClick` — juste un emplacement réservé dans la
+              barre. Le vrai contrôle (lecture/écriture du zoom réel du canevas, `scale` ci-dessus)
+              est câblé par le chantier B, pas ici ; ce bouton n'affiche que "100%" en dur pour occuper
+              la place et fixer la forme attendue (`data-testid="zoom-slot"`, verrouillé par le test
+              U0 ci-dessous). */}
+          <Button
+            type="button" variant="outline" size="sm" disabled
+            data-testid="zoom-slot" aria-label="Zoom (à venir)"
+            className="tabular-nums"
+          >
+            100%
+          </Button>
           <Button
             type="button" variant="ghost" size="icon-sm" title="Annuler"
             disabled={state.past.length === 0} onClick={() => dispatch(undo())}
@@ -403,23 +452,14 @@ function EditorShellInner({
           RenderMode (Tâche 5, spec §5) prend TOUT cet espace en Rendu réel — aucun des quatre
           (Rail/PanelHost/Canvas/colonne propriétés) n'est rendu dans ce second mode, voir
           components/studio/render-mode.tsx pour la preuve testée (tests/studio-render-mode.test.ts).
-          ModeSwitch (le contrôle segmenté flottant) est un FRÈRE du contenu propre au mode, PAS un
-          enfant de l'une ou l'autre branche — spec §5 : « centré au-dessus du canevas, présent dans
-          les DEUX états » — positionné en absolu sur ce conteneur `relative`, `pt-11` lui réservant
-          de la place plutôt que de chevaucher le haut du rail/canevas/case large. SaveIndicator
-          (Tâche 7, spec §8) est désormais son FRÈRE dans le même groupe centré — « il se pose à côté
-          du sélecteur de mode » — plutôt qu'un enfant du bandeau d'en-tête ci-dessus, où il vivait
-          avant cette tâche (`data-testid="autosave-status"`, retiré). */}
-      <div className="relative flex flex-1 gap-3 overflow-hidden pt-11">
-        <div className="absolute left-1/2 top-0 z-10 flex -translate-x-1/2 items-center gap-3">
-          <ModeSwitch mode={mode} onChange={changeMode} />
-          <SaveIndicator
-            status={autosaveState.status}
-            message={autosaveState.message}
-            onRetry={() => void autosave.retry()}
-          />
-        </div>
-
+          ModeSwitch et SaveIndicator ne sont PLUS ici depuis le chantier A Tâche 2 — ils vivaient en
+          position absolue sur ce conteneur (`relative` + `pt-11`, retirés avec eux) pour rester
+          visibles au-dessus du canevas dans « les DEUX états » (spec §5/§8). Ils vivent désormais
+          dans l'en-tête ci-dessus (editor-shell.tsx:353), frères dans sa colonne gauche/centrale, et
+          y restent visibles quel que soit `mode` puisque cet en-tête n'est jamais conditionné par
+          lui — la même garantie « les deux états », sans plus jamais dépendre d'un positionnement
+          absolu ni d'un pad réservé sur CE conteneur. */}
+      <div className="flex flex-1 gap-3 overflow-hidden">
         {mode === "montage" ? (
           <>
             <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />

@@ -65,6 +65,35 @@ function render() {
   );
 }
 
+// Chantier A Tâche 2 — la coque admin (SidebarProvider/AppSidebar/header, app/(app)/layout.tsx)
+// a quitté l'arbre de l'éditeur dès la Tâche 1 (app/(studio-editor)/layout.tsx, plein écran, SANS
+// Breadcrumbs ni SidebarTrigger) : l'en-tête d'EditorShell (editor-shell.tsx:339) DEVIENT donc la
+// seule barre supérieure de l'éditeur. Ce test verrouille sa forme cible — retour `/studio` (PAS une
+// simple flèche visuelle, spec Tâche 2 : « aujourd'hui la flèche peut n'être que visuelle ; la faire
+// naviguer »), nom du gabarit, ModeSwitch désormais VISIBLE dans cette barre (avant cette tâche il
+// vivait en position absolue au-dessus du canevas, jamais dans l'en-tête — voir editor-shell.tsx
+// avant ce correctif) et le slot zoom (chantier B, inerte ici) — et l'ABSENCE de toute pièce de la
+// coque admin, qu'EditorShell ne monte de toute façon jamais lui-même (aucun import de
+// components/shell/breadcrumbs.tsx ni components/ui/sidebar.tsx dans ce fichier) : cette assertion
+// est donc une preuve NÉGATIVE directe sur le HTML rendu, pas une simple déduction depuis les imports.
+describe("EditorShell — barre supérieure d'éditeur (chantier A T2)", () => {
+  it("le retour VISE /studio (pas une flèche sans destination), affiche le nom du gabarit, le sélecteur de mode et le slot zoom — sans Breadcrumbs ni SidebarTrigger", () => {
+    const html = render();
+    // Anti-vacuité : c'est bien la CIBLE de navigation qui est vérifiée, pas seulement la présence
+    // d'une flèche. Un mutant qui pointerait ce lien ailleurs (ex. "/" ou "#") fait rougir ce test.
+    expect(html).toContain('data-testid="editor-back-to-templates"');
+    expect(html).toContain('href="/studio"');
+    expect(html).toContain(template.name);
+    expect(html).toContain('data-testid="mode-switch"');
+    expect(html).toContain('data-testid="zoom-slot"');
+    // La coque admin n'existe pas dans cet arbre — ni Breadcrumbs (components/shell/breadcrumbs.tsx,
+    // data-slot="breadcrumb") ni SidebarTrigger (components/ui/sidebar.tsx, data-slot=
+    // "sidebar-trigger").
+    expect(html).not.toContain('data-slot="breadcrumb"');
+    expect(html).not.toContain('data-slot="sidebar-trigger"');
+  });
+});
+
 describe("EditorShell — mode Montage (revue Tâche 6, spec §2/§5)", () => {
   it("ne rend PLUS PreviewPane — l'aperçu vit désormais UNIQUEMENT dans Rendu réel", () => {
     const html = render();
