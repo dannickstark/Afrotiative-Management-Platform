@@ -466,7 +466,11 @@ describe("PropertyPanel — calque image", () => {
 describe("PropertyPanel — calque forme", () => {
   it("remplissage uni : affiche un champ couleur, pas l'éditeur de dégradé", () => {
     const html = render([shapeLayerSolid], "s1", "recap_card");
-    expect(html).toContain('value="#123456"');
+    // Chantier C, Tâche 4 : `ColorField` ne rend plus un `<input value="…">` nu — la couleur
+    // committée apparaît désormais comme TEXTE dans le déclencheur du sélecteur
+    // (`<span>{value}</span>`, components/studio/color-picker.tsx), d'où `>#hex<` plutôt que
+    // `value="#hex"` pour toutes les assertions de couleur de ce fichier.
+    expect(html).toContain(">#123456<");
     expect(html).not.toContain("Ajouter une étape");
   });
 
@@ -479,7 +483,7 @@ describe("PropertyPanel — calque forme", () => {
   it("bordure activée : reflète l'épaisseur, la couleur et les côtés cochés", () => {
     const html = render([shapeLayerSolid], "s1", "recap_card");
     expect(html).toContain('value="2"'); // épaisseur bordure
-    expect(html).toContain('value="#FFFFFF"'); // couleur bordure
+    expect(html).toContain(">#FFFFFF<"); // couleur bordure (Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`)
   });
 });
 
@@ -532,7 +536,7 @@ describe("PropertyPanel — la bordure d'une forme découpée (réserve 3)", () 
       // Épaisseur et couleur de bordure : présentes uniquement là où la bordure est peinte. Un contrôle
       // grisé au-dessus de trois contrôles actifs n'aurait rien empêché.
       expect(`${kind} épaisseur : ${html.includes('value="2"')}`).toBe(`${kind} épaisseur : ${!découpée}`);
-      expect(`${kind} couleur : ${html.includes('value="#FFFFFF"')}`).toBe(`${kind} couleur : ${!découpée}`);
+      expect(`${kind} couleur : ${html.includes(">#FFFFFF<")}`).toBe(`${kind} couleur : ${!découpée}`);
     }
   });
 
@@ -856,10 +860,10 @@ describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
     // Les trois valeurs numériques sont uniques dans cette fixture (le calque porte radius 4 et une
     // bordure de 2 : 5, 7 et 9 n'y apparaissent nulle part ailleurs — vérifié champ par champ).
     for (const v of ["5", "7", "9"]) expect(avec).toContain(`value="${v}"`);
-    expect(avec).toContain('value="#ABCDEF"');
+    expect(avec).toContain(">#ABCDEF<"); // Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`
     const sans = render([shapeOf("rect")], "s1", "recap_card");
     for (const v of ["5", "7", "9"]) expect(sans).not.toContain(`value="${v}"`);
-    expect(sans).not.toContain('value="#ABCDEF"');
+    expect(sans).not.toContain(">#ABCDEF<");
   });
 
   it("l'interrupteur d'ombre est GRISÉ pour une forme découpée, actif pour les autres", () => {
@@ -886,7 +890,7 @@ describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
       const html = render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card");
       const découpée = descriptorFor(kind).clipped;
       expect(`${kind} note : ${html.includes('data-testid="shape-shadow-none"')}`).toBe(`${kind} note : ${découpée}`);
-      expect(`${kind} champs : ${html.includes('value="#ABCDEF"')}`).toBe(`${kind} champs : ${!découpée}`);
+      expect(`${kind} champs : ${html.includes(">#ABCDEF<")}`).toBe(`${kind} champs : ${!découpée}`);
       expect(`${kind} flou : ${html.includes('value="9"')}`).toBe(`${kind} flou : ${!découpée}`);
     }
   });
@@ -1038,8 +1042,8 @@ describe("PropertyPanel — le sélecteur de forme", () => {
 describe("PropertyPanel — calque QR", () => {
   it("rend les champs slot/fg/bg/margin", () => {
     const html = render([qrLayer], "q", "social_post");
-    expect(html).toContain('value="#000000"');
-    expect(html).toContain('value="#FFFFFF"');
+    expect(html).toContain(">#000000<"); // Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`
+    expect(html).toContain(">#FFFFFF<");
     expect(html).toContain('value="4"');
   });
 
@@ -1247,8 +1251,8 @@ describe("PropertyPanel — sections repliables, mémorisées par type de calque
     const closed = render([textLayer], "t", "social_post", [], { "text.ombre": false });
     const open = render([textLayer], "t", "social_post", [], { "text.ombre": true });
     expect(closed).not.toContain('value="3"');
-    expect(closed).not.toContain('value="#000000"');
+    expect(closed).not.toContain(">#000000<"); // Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`
     expect(open).toContain('value="3"');
-    expect(open).toContain('value="#000000"');
+    expect(open).toContain(">#000000<");
   });
 });

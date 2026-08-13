@@ -33,6 +33,7 @@ import { type EditorAction, setLayerProp, singleSelectedId } from "@/lib/studio/
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, pickerRowsFor } from "./token-picker";
+import { ColorPicker } from "./color-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { alignParticipants } from "@/lib/studio/align";
@@ -136,18 +137,25 @@ function TextField({
 // (schema hexColor, lib/studio/scene.ts) — jamais un mélange : sélectionner un jeton REMPLACE donc
 // tout le champ, contrairement au contenu texte (voir TextFields.content plus bas, où l'insertion
 // se fait au contraire par CONCATÉNATION).
+//
+// Chantier C, Tâche 4 : le contrôle interne (pastille + `<Input>` hex nu) est REMPLACÉ par
+// `<ColorPicker>` (components/studio/color-picker.tsx) — un carré SV/curseurs teinte-alpha/hex/
+// pipette/nuancier/récents, PLUS un onglet « Jeton » qui reprend `pickerRowsFor` en interne. Le
+// bouton `action` (`TokenPicker`, U4 Tâche 5) est VOLONTAIREMENT conservé tel quel plutôt que
+// retiré : le brief de la Tâche 4 permet son retrait (« peut disparaître de l'action puisque
+// l'onglet Jeton le remplace ») mais NE L'EXIGE PAS, et l'audit de couverture U4
+// (tests/studio-property-panel.test.ts, `data-kind="color"`, un décompte par calque/champ) compte
+// PRÉCISÉMENT sa présence sur chacun des dix appels de `ColorField` — le retirer romprait cet audit
+// pour un gain d'affordance nul (l'onglet Jeton du nouveau sélecteur fait déjà strictement la même
+// chose). Les deux chemins restent donc côte à côte, redondants mais tous deux fonctionnels — même
+// contrat de liaison U4 qu'avant cette tâche.
 function ColorField({
   label, value, context, onCommit, action = true, dataField,
 }: {
   label: string; value: string; context: TemplateContext; onCommit: (v: string) => void;
   action?: boolean; dataField?: string;
 }) {
-  const { local, setLocal, editing, setEditing } = useCommitBuffer(value);
-  function commit() {
-    setEditing(false);
-    if (local !== value) onCommit(local);
-  }
-  const isToken = local.startsWith("{{");
+  const { local, setLocal } = useCommitBuffer(value);
   return (
     <FieldRow
       label={label}
@@ -160,29 +168,12 @@ function ColorField({
         />
       ) : undefined}
     >
-      <div className="flex items-center gap-1.5">
-        <span
-          aria-hidden="true"
-          className="size-6 shrink-0 rounded border border-input"
-          style={
-            isToken || local === "transparent" || local === ""
-              ? { background: "repeating-linear-gradient(45deg, #999 0, #999 3px, #ccc 3px, #ccc 6px)" }
-              : { backgroundColor: local }
-          }
-        />
-        <Input
-          value={local}
-          data-field={dataField}
-          onFocus={() => setEditing(true)}
-          onChange={(e) => setLocal(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-            else if (e.key === "Escape") { setLocal(value); setEditing(false); e.currentTarget.blur(); }
-          }}
-          placeholder="#RRGGBB"
-        />
-      </div>
+      <ColorPicker
+        value={local}
+        context={context}
+        onCommit={(v) => { setLocal(v); onCommit(v); }}
+        dataField={dataField}
+      />
     </FieldRow>
   );
 }
