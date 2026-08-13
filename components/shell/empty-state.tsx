@@ -9,7 +9,14 @@ export function EmptyState({
 }: {
   icon?: ReactNode;
   title: string;
-  hint?: string;
+  // Chantier E Tâche 3 : élargi de `string` à `ReactNode` pour que les surfaces vides du studio
+  // (property-panel.tsx) puissent y ancrer un `data-testid` verrouillé par des tests existants
+  // (ex. `<span data-testid="property-panel-empty-hint">…</span>`) sans que ce composant partagé lui
+  // -même ait besoin de connaître cette contrainte. Élargissement rétrocompatible : `string` reste un
+  // `ReactNode` valide, donc tous les appelants actuels (members-table.tsx, feeds-table.tsx,
+  // taxonomy-tables.tsx, runs-view.tsx, pending-list.tsx, error-list.tsx — tous passent une chaîne)
+  // continuent de typechecker sans modification.
+  hint?: ReactNode;
   action?: ReactNode;
 }) {
   return (

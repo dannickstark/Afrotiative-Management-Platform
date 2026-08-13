@@ -309,6 +309,11 @@ describe("EditorShell — réactif : editorLayoutMode pilote la composition rée
     // Le libellé EXACT du brief — un mutant qui reformulerait ce message sans y toucher structurellement
     // (ex. en retirant « aperçu seulement ») ferait rougir cette assertion précise.
     expect(tooSmall!.textContent).toContain("Écran trop petit pour l’édition — aperçu seulement");
+    // Chantier E Tâche 3 : cette carte de titre/hint est désormais la primitive PARTAGÉE EmptyState
+    // (components/shell/empty-state.tsx) — même bordure pointillée que les autres états vides du
+    // produit — au lieu d'une carte ad-hoc locale (`border` plein + `shadow-sm`, sans le motif
+    // pointillé commun). Preuve structurelle ajoutée SANS toucher aux assertions verrouillées ci-dessus.
+    expect(tooSmall!.innerHTML).toContain("border-dashed");
     // Anti-vacuité — LA preuve que ce n'est pas un simple bandeau AJOUTÉ par-dessus la coque
     // d'édition habituelle : Rail/canevas d'édition/panneau accosté n'existent PLUS du tout dans cet
     // arbre, quel que soit `mode` (Montage par défaut ici).

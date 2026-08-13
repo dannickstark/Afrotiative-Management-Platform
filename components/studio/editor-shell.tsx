@@ -4,9 +4,10 @@ import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNod
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, Undo2, Redo2, PanelRight, Minus, Plus } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, PanelRight, Minus, Plus, Smartphone } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/shell/empty-state";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -1149,9 +1150,18 @@ function TooSmallState({ scene, width, height }: { scene: Scene; width: number; 
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-hidden" data-testid="editor-too-small">
-      <div className="max-w-[280px] rounded-lg border bg-card p-4 text-center shadow-sm">
-        <p className="text-sm font-medium">Écran trop petit pour l&rsquo;édition — aperçu seulement</p>
-        <p className="mt-1 text-xs text-muted-foreground">Agrandissez la fenêtre pour retrouver les outils d&rsquo;édition.</p>
+      {/* Chantier E Tâche 3 : la carte ad-hoc (border plein + shadow-sm) est remplacée par la
+          primitive PARTAGÉE `EmptyState` — même bordure pointillée que les autres états vides du
+          produit. Le libellé EXACT « Écran trop petit pour l'édition — aperçu seulement » (verrouillé
+          par tests/studio-editor-shell.test.ts comme une phrase CONTIGUË) reste intégralement dans
+          `title` — le scinder entre `title` et `hint` briserait cette assertion, puisque `textContent`
+          ne réinsère aucun espace entre deux éléments distincts. */}
+      <div className="max-w-[280px]">
+        <EmptyState
+          icon={<Smartphone className="size-8 text-muted-foreground" aria-hidden />}
+          title="Écran trop petit pour l’édition — aperçu seulement"
+          hint="Agrandissez la fenêtre pour retrouver les outils d’édition."
+        />
       </div>
       <div
         ref={wrapRef}

@@ -1,7 +1,7 @@
 "use client";
 
 import type { Dispatch, ReactNode } from "react";
-import { ChevronDown, Trash2, Plus } from "lucide-react";
+import { ChevronDown, Trash2, Plus, MousePointerSquareDashed } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { EmptyState } from "@/components/shell/empty-state";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
 // Import de VALEUR (U3 Tâche 3) : la grammaire du rayon vit dans le schéma, et ce panneau la DEMANDE
 // plutôt que d'en écrire une seconde qui pourrait dériver. scene.ts est un module de schéma pur : ses
@@ -986,14 +987,27 @@ export function PropertyPanel({
   // `data-testid="property-panel-empty"` (verrouillé par tests/studio-editor-shell.test.ts et
   // tests/studio-property-panel.test.ts) — seule la STRUCTURE change, jamais le message ni son
   // adressage pour un test existant.
+  //
+  // Chantier E Tâche 3 : la carte ad-hoc ci-dessus est remplacée par la primitive PARTAGÉE
+  // `EmptyState` (components/shell/empty-state.tsx) — même carte à bordure pointillée que les autres
+  // états vides du produit (feeds/members/taxonomy/runs). Les DEUX `data-testid` verrouillés sont
+  // préservés en ENVELOPPANT : le testid extérieur reste sur le conteneur (comme avant), et le testid
+  // du hint est posé sur un `<span>` passé comme `hint` d'EmptyState (son prop `hint` a été élargi de
+  // `string` à `ReactNode` — voir components/shell/empty-state.tsx — un élargissement rétrocompatible
+  // qui ne change rien pour ses autres appelants).
   if (!layer) {
     return (
       <div className="flex h-full flex-col items-center p-3" data-testid="property-panel-empty">
-        <div
-          className="w-full max-w-[220px] rounded-lg border border-dashed bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground"
-          data-testid="property-panel-empty-hint"
-        >
-          Sélectionnez un calque pour modifier ses propriétés.
+        <div className="w-full max-w-[220px]">
+          <EmptyState
+            icon={<MousePointerSquareDashed className="size-8 text-muted-foreground" aria-hidden />}
+            title="Aucun calque sélectionné"
+            hint={
+              <span data-testid="property-panel-empty-hint">
+                Sélectionnez un calque pour modifier ses propriétés.
+              </span>
+            }
+          />
         </div>
       </div>
     );
