@@ -406,7 +406,13 @@ describe("parseScene — le cadrage avancé d'une image (Properties Pro P1, Tâc
 
   it("sizing accepte les cinq modes, refuse l'inconnu", () => {
     for (const s of ["cover", "contain", "stretch", "tile", "custom"]) {
-      expect(() => parseScene(imageWith({ sizing: s }))).not.toThrow();
+      // "custom" EXIGE customSize (garde parseScene, Tâche 3) ; "tile" a besoin d'un tile valide pour
+      // n'être rejeté par RIEN d'autre. Les trois autres modes se valident seuls.
+      const extra =
+        s === "custom" ? { sizing: s, customSize: { w: 200, h: 100 } }
+        : s === "tile" ? { sizing: s, tile: { scale: 1, axis: "both" } }
+        : { sizing: s };
+      expect(() => parseScene(imageWith(extra))).not.toThrow();
     }
     expect(() => parseScene(imageWith({ sizing: "bogus" }))).toThrow(SceneError);
   });
@@ -436,6 +442,22 @@ describe("parseScene — le cadrage avancé d'une image (Properties Pro P1, Tâc
     expect(() => parseScene(imageWith({ customSize: { w: 100, h: 50 } }))).not.toThrow();
     expect(() => parseScene(imageWith({ customSize: { w: 0, h: 50 } }))).toThrow(SceneError);
     expect(() => parseScene(imageWith({ customSize: { w: 100, h: -10 } }))).toThrow(SceneError);
+  });
+
+  // Properties Pro P1, Tâche 3 (revue) — `sizing:"custom"` SANS `customSize` est refusé. Le schéma
+  // laisse `customSize` optionnel (le rendre requis via `imageLayer.refine` transformerait le membre
+  // en ZodEffects et casserait la discriminatedUnion) : la garde vit donc dans parseScene, comme le
+  // contrôle de double-id. Elle empêche un couple {custom, sans taille} qui serait AMBIGU au rendu.
+  it("sizing:\"custom\" SANS customSize est REJETÉ ; AVEC customSize il est accepté", () => {
+    expect(() => parseScene(imageWith({ sizing: "custom" }))).toThrow(SceneError);
+    expect(() => parseScene(imageWith({ sizing: "custom", customSize: { w: 200, h: 100 } }))).not.toThrow();
+    // Le message nomme le champ manquant — actionnable pour un rédacteur/appelant.
+    expect(() => parseScene(imageWith({ sizing: "custom" }))).toThrow(/customSize/);
+    // Et la garde ne se déclenche QUE pour "custom" : les autres modes n'exigent pas customSize.
+    for (const s of ["cover", "contain", "stretch", "tile"]) {
+      const extra = s === "tile" ? { sizing: s, tile: { scale: 1, axis: "both" } } : { sizing: s };
+      expect(() => parseScene(imageWith(extra))).not.toThrow();
+    }
   });
 
   it("aucun champ `blend` — adjudiqué à la Tâche 1 (spike), Satori ne le peint pas", () => {

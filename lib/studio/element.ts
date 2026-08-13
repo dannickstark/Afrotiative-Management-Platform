@@ -1,6 +1,6 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
 import { layerBorder, layerBoxShadow, layerRotation, shapeCssFor } from "./shapes";
-import { imageCss, focalToPositionPx } from "./image-css";
+import { focalToPositionPx, tileToRepeat } from "./image-css";
 import type { PreparedImage } from "./images";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
@@ -154,10 +154,16 @@ function effectiveImage(
     case "stretch":
       return { effImg: { w: fw, h: fh }, backgroundSize: "100% 100%" };
     case "custom": {
-      // customSize absent malgré sizing:"custom" — repli sûr sur le cadre (ne devrait pas arriver, le
-      // schéma le laisse optionnel). imageCss retombe pareillement sur "contain" ; ici on remplit.
-      const cw = layer.customSize?.w ?? fw;
-      const ch = layer.customSize?.h ?? fh;
+      // customSize absent malgré sizing:"custom" : le schéma le laisse optionnel (scene.ts, discriminated
+      // union), donc c'est LÉGAL même si parseScene le rejette désormais. Ce repli DOIT s'accorder à
+      // celui d'`imageCss` (image-css.ts, "contain") sinon l'aperçu (navigateur) et l'export (ce chemin)
+      // PEINDRAIENT DIFFÉREMMENT ce cas-limite — exactement le désaccord WYSIWYG que §0 interdit. On
+      // retombe donc sur le calcul CONTAIN (letterbox, aspect préservé), identique à imageCss.
+      if (!layer.customSize) {
+        const s = Math.min(fw / iw, fh / ih);
+        return { effImg: { w: iw * s, h: ih * s }, backgroundSize: "contain" };
+      }
+      const { w: cw, h: ch } = layer.customSize;
       return { effImg: { w: cw, h: ch }, backgroundSize: `${cw}px ${ch}px` };
     }
     case "tile": {
@@ -198,6 +204,11 @@ function imageNode(layer: Layer, prepared: PreparedImage): SatoriNode {
     // ferait diviser par zéro dans `effectiveImage`) : retombe sur le cadre, inoffensif.
     const intrinsic = { w: prepared.w || layer.frame.w, h: prepared.h || layer.frame.h };
     const { effImg, backgroundSize } = effectiveImage(sizing, layer.frame, intrinsic, layer);
+    // `background-repeat` : répétition SEULEMENT en mosaïque (tileToRepeat → repeat/repeat-x/repeat-y
+    // selon l'axe), `no-repeat` partout ailleurs — même règle qu'imageCss, mais on appelle directement
+    // `tileToRepeat` plutôt qu'imageCss pour ne pas calculer au passage la taille/position en `%` qu'on
+    // jette de toute façon (la position part en PIXELS via focalToPositionPx).
+    const backgroundRepeat = sizing === "tile" ? tileToRepeat(layer.tile).backgroundRepeat : "no-repeat";
     return {
       type: "div",
       props: {
@@ -208,9 +219,7 @@ function imageNode(layer: Layer, prepared: PreparedImage): SatoriNode {
           ...radius,
           backgroundImage: `url(${prepared.uri})`,
           backgroundSize,
-          // `backgroundRepeat` d'imageCss (repeat/repeat-x/repeat-y pour tile, no-repeat sinon) est
-          // valable tel quel ; seul `backgroundPosition` est ÉCRASÉ par la version pixels ci-dessous.
-          backgroundRepeat: imageCss(layer).backgroundRepeat,
+          backgroundRepeat,
           backgroundPosition: focalToPositionPx(layer, effImg),
         },
       },

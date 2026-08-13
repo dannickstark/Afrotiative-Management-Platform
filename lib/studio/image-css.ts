@@ -135,7 +135,11 @@ export function imageCss(layer: ImageLayer): ImageCss {
     case "custom":
       backgroundSize = layer.customSize
         ? `${layer.customSize.w}px ${layer.customSize.h}px`
-        : "contain"; // customSize absent malgré sizing:"custom" — repli sûr, ne devrait pas arriver.
+        // customSize absent malgré sizing:"custom" — le schéma le laisse optionnel (donc légal, même si
+        // parseScene le rejette). Repli sur "contain" (letterbox) : ce MÊME repli est reproduit à
+        // l'identique par element.ts#effectiveImage (chemin export) pour que l'aperçu et l'export ne
+        // PEIGNENT PAS différemment ce cas-limite (§0, désaccord WYSIWYG interdit).
+        : "contain";
       break;
   }
 
