@@ -515,8 +515,17 @@ describe("ImageFields — le point focal déplaçable (Properties Pro P1, T6)", 
   );
 
   it.skipIf(!popoverEffectsLive)(
-    "mode étirer/perso : la vignette du point focal est ABSENTE (le point focal n'y change rien de visible)",
+    "mode ajuster/étirer/perso : la vignette du point focal est ABSENTE (le point focal n'y change rien de visible)",
     async () => {
+      // Revue coordinateur (couverture) : le garde-fou du montage est
+      // `sizingMode === "cover" || sizingMode === "tile"` — "contain" ("Ajuster") tombe côté ABSENT
+      // exactement comme "stretch"/"custom", et n'était pas encore couvert.
+      const { container: containContainer, unmount: unmountContain } = await mountImageFields(
+        baseImageLayer({ sizing: "contain" }),
+      );
+      expect(containContainer.querySelector('[data-testid="focal-point-field"]')).toBeNull();
+      unmountContain();
+
       const { container: stretchContainer, unmount: unmountStretch } = await mountImageFields(
         baseImageLayer({ sizing: "stretch" }),
       );
@@ -555,6 +564,35 @@ describe("ImageFields — le point focal déplaçable (Properties Pro P1, T6)", 
 
       expect(layer().focal).toEqual({ x: 1, y: 0 }); // clampé à [0,1] : fx=2→1, fy=-0.5→0
       expect(box.state.past).toHaveLength(1); // UNE SEULE entrée d'historique pour tout le geste
+
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "source jeton (slot) : `imageSrc` ne résout à rien — la vignette reste peinte (placeholder) et le glisser committe quand même",
+    async () => {
+      // `focalImageSrc` (property-panel.tsx#ImageFields) ne résout une URL affichable QUE pour une
+      // source `url`/`asset` — une source `slot` (aucun aperçu résolu ici, voir le commentaire posé
+      // sur `focalImageSrc`) doit laisser `FocalPointField` fonctionner à l'identique avec son
+      // placeholder neutre, jamais planter sur un `imageSrc` `undefined`.
+      const { box, container, layer, unmount } = await mountImageFields(
+        baseImageLayer({ sizing: "cover", source: { kind: "slot", slot: "article.image" } }),
+      );
+
+      const field = container.querySelector('[data-testid="focal-point-field"]') as HTMLElement;
+      expect(field).not.toBeNull(); // toujours peinte, malgré l'absence d'aperçu résolu
+
+      field.getBoundingClientRect = () => ({
+        left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}),
+      });
+
+      await pointer(field, "pointerdown", { clientX: 30, clientY: 70 });
+      await pointer(field, "pointermove", { clientX: 30, clientY: 70 });
+      await pointer(field, "pointerup", { clientX: 30, clientY: 70 });
+
+      expect(layer().focal).toEqual({ x: 0.3, y: 0.7 }); // le glisser committe normalement
+      expect(box.state.past).toHaveLength(1);
 
       unmount();
     },
