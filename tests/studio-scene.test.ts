@@ -373,6 +373,80 @@ describe("parseScene — groupId (chantier B, Tâche 5)", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Properties Pro P1, Tâche 2 — CADRAGE avancé d'une image : `sizing`/`focal`/`tile`/`customSize`,
+// tous NOUVEAUX et OPTIONNELS (adjudiqué à la Tâche 1 (spike) : PAS de `blend`, Satori ne sait pas
+// le peindre). MIGRATION NO-OP, même épreuve que `constraints`/`groupId` plus haut : une scène déjà
+// écrite (qui ne connaît que `fit`) fait un aller-retour par parseScene strictement inchangée.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("parseScene — le cadrage avancé d'une image (Properties Pro P1, Tâche 2)", () => {
+  function imageWith(extra: Record<string, unknown>) {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 800, height: 400, background: "#000000" },
+      layers: [{
+        id: "img", name: "Image", visible: true, locked: false,
+        frame: { x: 0, y: 0, w: 800, h: 400 },
+        type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover",
+        ...extra,
+      }],
+    };
+  }
+
+  it("migration no-op : une image sans sizing/focal/tile/customSize round-trip inchangée", () => {
+    const stored = imageWith({});
+    const parsed = parseScene(structuredClone(stored));
+    expect(parsed.layers[0]).not.toHaveProperty("sizing");
+    expect(parsed.layers[0]).not.toHaveProperty("focal");
+    expect(parsed.layers[0]).not.toHaveProperty("tile");
+    expect(parsed.layers[0]).not.toHaveProperty("customSize");
+    // Aller-retour JSON deep-equal : la migration ne fait apparaître AUCUNE clé.
+    expect(JSON.parse(JSON.stringify(parsed))).toEqual(stored);
+  });
+
+  it("sizing accepte les cinq modes, refuse l'inconnu", () => {
+    for (const s of ["cover", "contain", "stretch", "tile", "custom"]) {
+      expect(() => parseScene(imageWith({ sizing: s }))).not.toThrow();
+    }
+    expect(() => parseScene(imageWith({ sizing: "bogus" }))).toThrow(SceneError);
+  });
+
+  it("tile.axis accepte both/x/y, refuse space/round", () => {
+    for (const axis of ["both", "x", "y"]) {
+      expect(() => parseScene(imageWith({ tile: { scale: 0.5, axis } }))).not.toThrow();
+    }
+    for (const axis of ["space", "round"]) {
+      expect(() => parseScene(imageWith({ tile: { scale: 0.5, axis } }))).toThrow(SceneError);
+    }
+  });
+
+  it("tile.scale doit être strictement positif", () => {
+    expect(() => parseScene(imageWith({ tile: { scale: 0, axis: "both" } }))).toThrow(SceneError);
+    expect(() => parseScene(imageWith({ tile: { scale: -1, axis: "both" } }))).toThrow(SceneError);
+  });
+
+  it("focal se clampe au refus : hors [0,1] est REJETÉ, pas silencieusement clampé", () => {
+    expect(() => parseScene(imageWith({ focal: { x: 0.5, y: 0.5 } }))).not.toThrow();
+    expect(() => parseScene(imageWith({ focal: { x: 0, y: 1 } }))).not.toThrow();
+    expect(() => parseScene(imageWith({ focal: { x: 1.5, y: 0.5 } }))).toThrow(SceneError);
+    expect(() => parseScene(imageWith({ focal: { x: 0.5, y: -0.2 } }))).toThrow(SceneError);
+  });
+
+  it("customSize exige des dimensions strictement positives", () => {
+    expect(() => parseScene(imageWith({ customSize: { w: 100, h: 50 } }))).not.toThrow();
+    expect(() => parseScene(imageWith({ customSize: { w: 0, h: 50 } }))).toThrow(SceneError);
+    expect(() => parseScene(imageWith({ customSize: { w: 100, h: -10 } }))).toThrow(SceneError);
+  });
+
+  it("aucun champ `blend` — adjudiqué à la Tâche 1 (spike), Satori ne le peint pas", () => {
+    const parsed = parseScene(imageWith({ blend: "multiply" }));
+    // zod refuse par défaut les clés inconnues sur un z.object non-strict ? Non : elles sont
+    // simplement IGNORÉES (comportement par défaut de zod). Le test épingle donc l'ABSENCE de la
+    // clé en sortie, preuve qu'aucun schéma ne la reconnaît.
+    expect(parsed.layers[0]).not.toHaveProperty("blend");
+  });
+});
+
 describe("FORMAT_PRESETS", () => {
   it("expose les huit préréglages avec des dimensions positives", () => {
     const keys = Object.keys(FORMAT_PRESETS);

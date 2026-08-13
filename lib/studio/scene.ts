@@ -84,6 +84,20 @@ const imageSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("url"), url: z.string().url() }),
 ]);
 
+// Properties Pro P1, Tâche 2 — CADRAGE avancé d'une image (mode, point focal, mosaïque, taille
+// personnalisée). MÊME style que `constraints`/`groupId` ci-dessus : chaque champ est NOUVEAU et
+// OPTIONNEL, donc une scène déjà écrite (qui ne connaît que `fit`) se relit à l'identique — la
+// migration est purement additive, épinglée par le test « migration no-op » de
+// tests/studio-scene.test.ts. `fit` reste le champ HISTORIQUE (cover/contain uniquement) ; `sizing`
+// le remplace pour tout gabarit qui l'écrit, avec trois modes de plus (stretch/tile/custom) que `fit`
+// ne pourra jamais exprimer. lib/studio/image-css.ts#imageCss retombe sur `fit` quand `sizing` est
+// absent — voir son commentaire pour le détail du repli.
+//
+// PAS de champ `blend` (adjudiqué à la Tâche 1 (spike) : Satori ne sait pas peindre de
+// background-blend-mode, l'ajouter ferait mentir l'aperçu). `tile.axis` n'a QUE `"both"|"x"|"y"` —
+// ni `space` ni `round`, qui n'ont pas de sens pour une répétition CSS de fond.
+//
+// Aucun de ces champs n'est un nœud couleur : pas de `.register(COLOR_REGISTRY, …)` ici.
 const imageLayer = z.object({
   ...layerBase,
   type: z.literal("image"),
@@ -92,6 +106,19 @@ const imageLayer = z.object({
   radius: z.number().nonnegative().optional(),
   blur: z.number().nonnegative().max(200).optional(),
   overlay: hexColor.optional(),
+  sizing: z.enum(["cover", "contain", "stretch", "tile", "custom"]).optional(),
+  focal: z.object({
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+  }).optional(),
+  tile: z.object({
+    scale: z.number().positive(),
+    axis: z.enum(["both", "x", "y"]),
+  }).optional(),
+  customSize: z.object({
+    w: z.number().positive(),
+    h: z.number().positive(),
+  }).optional(),
 });
 
 /**
