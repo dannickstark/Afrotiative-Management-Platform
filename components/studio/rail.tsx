@@ -52,11 +52,9 @@ export function Rail({ selected, onSelect }: RailProps) {
               // Chantier E Tâche 5 (finition de marque) : la pastille pleine passe de `bg-primary`
               // (neutre) à `--accent-brand` (terracotta, « actions only » — globals.css) — CETTE
               // pastille EST une action (choisir une catégorie), l'affordance que le token distingue
-              // précisément. `mode-switch.tsx` PORTE LA MÊME phrase de spec (voir ci-dessus) mais
-              // GARDE `bg-primary` : son état actif est verrouillé littéralement par
-              // tests/studio-mode-switch.test.ts (`toContain("bg-primary")`) — un test PRÉ-EXISTANT
-              // hors du périmètre de fichiers de cette tâche, que la migrer romprait sans raison
-              // suffisante pour la retoucher ici (voir le rapport de tâche).
+              // précisément. `mode-switch.tsx` PORTE LA MÊME phrase de spec (voir ci-dessus) ET
+              // PORTE DÉSORMAIS LE MÊME ACCENT (correctif revue) — les deux pastilles actives
+              // restent donc visuellement identiques, comme voulu ici depuis le départ.
               isSelected && "bg-accent-brand text-accent-brand-foreground hover:bg-accent-brand hover:text-accent-brand-foreground",
             )}
           >

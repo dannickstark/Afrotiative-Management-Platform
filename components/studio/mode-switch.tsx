@@ -81,7 +81,11 @@ export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
         onClick={() => onChange("montage")}
         className={cn(
           "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
-          mode === "montage" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+          // Chantier E Tâche 5, correctif revue : accent de marque — EXACTEMENT le même changement
+          // que rail.tsx (bg-primary -> bg-accent-brand/text-accent-brand-foreground) pour que les
+          // deux pastilles actives restent visuellement identiques, comme une revue antérieure les
+          // avait délibérément alignées (voir le commentaire de rail.tsx).
+          mode === "montage" ? "bg-accent-brand text-accent-brand-foreground" : "text-muted-foreground hover:text-foreground",
         )}
       >
         Montage
@@ -93,7 +97,7 @@ export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
         onClick={() => onChange("rendu")}
         className={cn(
           "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",
-          mode === "rendu" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
+          mode === "rendu" ? "bg-accent-brand text-accent-brand-foreground" : "text-muted-foreground hover:text-foreground",
         )}
       >
         Rendu réel
