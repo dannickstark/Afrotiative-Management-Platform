@@ -1,7 +1,7 @@
 "use client";
 
 import type { Dispatch, ReactNode } from "react";
-import { ChevronDown, Trash2, Plus } from "lucide-react";
+import { ChevronDown, Trash2, Plus, MousePointerSquareDashed } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { EmptyState } from "@/components/shell/empty-state";
 import type { Layer, Scene, TextLayer, ImageLayer, ShapeLayer, QrLayer, Gradient } from "@/lib/studio/scene";
 // Import de VALEUR (U3 Tâche 3) : la grammaire du rayon vit dans le schéma, et ce panneau la DEMANDE
 // plutôt que d'en écrire une seconde qui pourrait dériver. scene.ts est un module de schéma pur : ses
@@ -44,6 +45,12 @@ import { FieldRow, NumberField, SelectField, SliderField, useCommitBuffer, type 
 // deux fonctions sont le SEUL point de conversion ; aucune arithmétique de pourcentage n'est
 // recopiée à la main dans les quatre appels ci-dessous.
 import { opacityToPercent, percentToOpacity } from "@/lib/studio/field-scrub";
+// Chantier E, Tâche 5 — la convention d'icône PARTAGÉE (voir son en-tête) : appliquée ici aux deux
+// icônes qui portent une VRAIE action (supprimer une étape de dégradé, en ajouter une) — pas au
+// chevron de repli des sections (glyphe de DIVULGATION, pas d'action, déjà plus petit — 3.5 — pour
+// rester discret sous un libellé text-xs) ni à l'icône de l'état vide de l'inspecteur
+// (MousePointerSquareDashed, délibérément plus grande — 8 — pour porter seule un panneau vide).
+import { STUDIO_ICON, STUDIO_ICON_STROKE } from "@/lib/studio/studio-icons";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
 // les champs que l'union Layer autorise (spec Tâche 8). Deux principes traversent tout ce fichier :
@@ -354,7 +361,10 @@ function TypeSection({
       data-section={sectionId}
       className="border-b pb-3 last:border-0"
     >
-      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-1 text-left text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+      {/* Chantier E Tâche 5 (finition de marque) : `font-heading` (l'éditoriale/Lora, globals.css)
+          sur le TITRE de chaque section repliable de l'inspecteur — un « titre de panneau/section »
+          au sens de la tâche, au même titre que le libellé de panel-host.tsx. */}
+      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-1 text-left font-heading text-xs font-semibold tracking-wide text-muted-foreground uppercase">
         {title}
         <ChevronDown aria-hidden="true" className="size-3.5 shrink-0 transition-transform group-data-panel-open:rotate-180" />
       </CollapsibleTrigger>
@@ -699,7 +709,7 @@ function GradientEditor({ gradient, context, onChange }: { gradient: Gradient; c
             disabled={gradient.stops.length <= 2}
             onClick={() => onChange({ ...gradient, stops: gradient.stops.filter((_, j) => j !== i) })}
           >
-            <Trash2 />
+            <Trash2 className={STUDIO_ICON} strokeWidth={STUDIO_ICON_STROKE} />
           </Button>
         </div>
       ))}
@@ -707,7 +717,7 @@ function GradientEditor({ gradient, context, onChange }: { gradient: Gradient; c
         type="button" variant="outline" size="sm"
         onClick={() => onChange({ ...gradient, stops: [...gradient.stops, { color: "#FFFFFF", at: 1 }] })}
       >
-        <Plus />Ajouter une étape
+        <Plus className={STUDIO_ICON} strokeWidth={STUDIO_ICON_STROKE} />Ajouter une étape
       </Button>
     </div>
   );
@@ -986,14 +996,28 @@ export function PropertyPanel({
   // `data-testid="property-panel-empty"` (verrouillé par tests/studio-editor-shell.test.ts et
   // tests/studio-property-panel.test.ts) — seule la STRUCTURE change, jamais le message ni son
   // adressage pour un test existant.
+  //
+  // Chantier E Tâche 3 : la carte ad-hoc ci-dessus est remplacée par la primitive PARTAGÉE
+  // `EmptyState` (components/shell/empty-state.tsx) — même carte à bordure pointillée que les autres
+  // états vides du produit (feeds/members/taxonomy/runs). Les DEUX `data-testid` verrouillés sont
+  // préservés en ENVELOPPANT : le testid extérieur reste sur le conteneur (comme avant), et le testid
+  // du hint est posé sur un `<span>` passé comme `hint` d'EmptyState (son prop `hint` a été élargi de
+  // `string` à `ReactNode` — voir components/shell/empty-state.tsx — un élargissement rétrocompatible
+  // qui ne change rien pour ses autres appelants).
   if (!layer) {
     return (
       <div className="flex h-full flex-col items-center p-3" data-testid="property-panel-empty">
-        <div
-          className="w-full max-w-[220px] rounded-lg border border-dashed bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground"
-          data-testid="property-panel-empty-hint"
-        >
-          Sélectionnez un calque pour modifier ses propriétés.
+        <div className="w-full max-w-[220px]">
+          <EmptyState
+            icon={<MousePointerSquareDashed className="size-8 text-muted-foreground" aria-hidden />}
+            title="Aucun calque sélectionné"
+            titleClassName="font-heading"
+            hint={
+              <span data-testid="property-panel-empty-hint">
+                Sélectionnez un calque pour modifier ses propriétés.
+              </span>
+            }
+          />
         </div>
       </div>
     );

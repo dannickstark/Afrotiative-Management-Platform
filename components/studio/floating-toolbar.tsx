@@ -15,6 +15,7 @@ import {
 import { cloneLayersWithNewIds, PASTE_OFFSET } from "@/lib/studio/clipboard";
 import { nextGroupId } from "@/lib/studio/groups";
 import { toolbarActionsFor, type ToolbarAction, type ToolbarActionKind } from "@/lib/studio/toolbar-actions";
+import { STUDIO_ICON, STUDIO_ICON_STROKE } from "@/lib/studio/studio-icons";
 
 // components/studio/floating-toolbar.tsx — Chantier B, Tâche 6 : la barre contextuelle flottante,
 // ancrée AU-DESSUS de la sélection (spec §4). Rendue par canvas.tsx comme un FRÈRE des calques, à
@@ -223,6 +224,17 @@ export function FloatingToolbar({ selection, layers, bounds, scale, dispatch }: 
   return (
     <div
       data-testid="floating-toolbar"
+      // Chantier E Tâche 4 : `studio-motion-pop` (globals.css) posée ICI, sur l'ANCRE 0×0 — jamais
+      // sur le sous-arbre intérieur, qui porte déjà son propre `transform: scale(1/scale)` ESSENTIEL
+      // (le counter-scale documenté en tête de fichier). Poser l'animation sur ce même élément
+      // animerait la propriété CSS `transform` par-dessus ce style en ligne PENDANT toute la durée du
+      // pop (les keyframes l'emportent sur l'inline), corrompant le counter-scale le temps de
+      // l'apparition. Cette ancre-ci ne porte AUCUN `transform` inline — animer `transform` dessus
+      // (0.96 -> aucun) ne touche donc RIEN d'existant, et se termine SANS saut visuel (l'état final
+      // des keyframes, « aucun transform », est EXACTEMENT l'état non-animé). Coupé sous
+      // `prefers-reduced-motion: reduce` (globals.css) ; additif — AUCUNE géométrie ci-dessous ne
+      // change (§0 du plan).
+      className="studio-motion-pop"
       style={{ position: "absolute", left: bounds.x, top: bounds.y, width: 0, height: 0, pointerEvents: "none" }}
     >
       <div
@@ -260,7 +272,11 @@ export function FloatingToolbar({ selection, layers, bounds, scale, dispatch }: 
               className="text-white hover:bg-white/15 hover:text-white"
               onClick={() => handleAction(action)}
             >
-              <Icon />
+              {/* Chantier E Tâche 5 : convention d'icône partagée (lib/studio/studio-icons.ts) — même
+                  taille/trait que le rail et l'inspecteur, plutôt que la taille implicite (`size-4`
+                  par défaut de <Button>, buttonVariants) et le trait lucide par défaut (2) que ce
+                  bouton rendait déjà à l'identique par accident, sans le dire. */}
+              <Icon className={STUDIO_ICON} strokeWidth={STUDIO_ICON_STROKE} />
             </Button>
           );
         })}

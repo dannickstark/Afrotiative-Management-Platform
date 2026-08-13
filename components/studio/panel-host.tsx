@@ -51,7 +51,9 @@ export function PanelHost({ open, onOpenChange, search, primaryAction, children,
       className="flex shrink-0 flex-col gap-2 overflow-hidden rounded-lg border"
     >
       <div className="flex items-center justify-between border-b px-2 py-1.5">
-        <span className="text-sm font-medium">{RAIL_LABELS[open]}</span>
+        {/* Chantier E Tâche 5 (finition de marque) : `font-heading` — le TITRE du panneau accosté,
+            au même titre typographique que h1/h2 de PageHeader (globals.css, « Type scale »). */}
+        <span className="font-heading text-sm font-medium">{RAIL_LABELS[open]}</span>
         <Button
           type="button"
           variant="ghost"

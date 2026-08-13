@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { FORMAT_PRESETS, type FormatKey } from "@/lib/studio/formats";
 import { safeAreaBandsFor, type SafeAreaBand } from "@/lib/studio/safe-areas";
 import type { EditorPrefs } from "@/lib/studio/editor-prefs";
+// Chantier E Tâche 2 — SOURCE UNIQUE des couleurs de surcouches (voir aussi canvas.tsx).
+import { SAFE_TINT, SAFE_LINE, SAFE_LABEL_FG } from "@/lib/studio/overlay-theme";
 
 // components/studio/canvas-chrome.tsx — Tâche 7 (U1, spec §7) : le CHROME autour de l'artboard —
 // pastilles flottantes (format + zoom), règles et grille, et le TOGGLE des zones sûres. La ligne de
@@ -79,12 +81,11 @@ function rulerTicks(lengthNative: number): number[] {
 }
 
 // ── Bandes de zones sûres (Tâche 6, U2) ──────────────────────────────────────
-// L'ambre : DÉLIBÉRÉMENT différent du bleu de sélection (#2563eb, poignées/contours de canvas.tsx) et
-// du rose des guides d'accrochage (#e11d48, Tâche 5). Une zone sûre n'est ni une sélection ni une
-// relation temporaire : c'est une contrainte permanente du format, et la confondre visuellement avec
-// l'une des deux autres surcouches serait le seul vrai risque de lisibilité de cette tâche.
-const SAFE_TINT = "rgba(245,158,11,0.14)";
-const SAFE_LINE = "1px dashed rgba(245,158,11,0.85)";
+// L'ambre : DÉLIBÉRÉMENT différent du rôle `selection` (poignées/contours de canvas.tsx) et du rôle
+// `snapGuide` (Tâche 5). Une zone sûre n'est ni une sélection ni une relation temporaire : c'est une
+// contrainte permanente du format, et la confondre visuellement avec l'une des deux autres surcouches
+// serait le seul vrai risque de lisibilité de cette tâche. Chantier E Tâche 2 : `SAFE_TINT`/
+// `SAFE_LINE` viennent désormais d'`overlay-theme.ts`, SOURCE UNIQUE partagée avec canvas.tsx.
 
 // Les bandes vivent dans l'artboard de CE fichier (pixels ÉCRAN, conteneur JAMAIS mis à l'échelle),
 // pas dans le conteneur `transform: scale(k)` de canvas.tsx : `boxWidth`/`boxHeight` intègrent déjà le
@@ -120,7 +121,7 @@ function safeLabelStyle(edge: SafeAreaBand["edge"]): CSSProperties {
     lineHeight: 1,
     fontWeight: 500,
     whiteSpace: "nowrap",
-    color: "rgba(245,158,11,0.95)",
+    color: SAFE_LABEL_FG,
     textShadow: "0 1px 2px rgba(0,0,0,0.55)",
   };
   if (edge === "top") return { ...base, left: 4, bottom: 3 };
@@ -375,7 +376,7 @@ export function CanvasChrome({
             >
               <span
                 className="rounded bg-black/55 px-2 py-1 text-[10px] font-medium"
-                style={{ color: "rgba(245,158,11,0.95)" }}
+                style={{ color: SAFE_LABEL_FG }}
               >
                 Zones sûres : aucune donnée publiée pour ce format.
               </span>

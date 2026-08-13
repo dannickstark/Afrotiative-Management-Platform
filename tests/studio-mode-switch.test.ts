@@ -86,11 +86,14 @@ describe("ModeSwitch — le rendu suit RÉELLEMENT la prop `mode` (Important 3, 
     const rendu = buttonFragment(html, "mode-rendu");
 
     expect(montage).toContain('aria-pressed="true"');
-    expect(montage).toContain("bg-primary");
+    // Chantier E Tâche 5, correctif revue : le style actif est désormais l'accent de marque
+    // (`--accent-brand`, terracotta) plutôt que `bg-primary` — MÊME changement que rail.tsx, pour
+    // que les deux pastilles actives restent visuellement identiques (voir son en-tête).
+    expect(montage).toContain("bg-accent-brand");
     expect(montage).toContain(">Montage<");
 
     expect(rendu).toContain('aria-pressed="false"');
-    expect(rendu).not.toContain("bg-primary");
+    expect(rendu).not.toContain("bg-accent-brand");
     expect(rendu).toContain(">Rendu réel<");
   });
 
@@ -100,10 +103,10 @@ describe("ModeSwitch — le rendu suit RÉELLEMENT la prop `mode` (Important 3, 
     const rendu = buttonFragment(html, "mode-rendu");
 
     expect(rendu).toContain('aria-pressed="true"');
-    expect(rendu).toContain("bg-primary");
+    expect(rendu).toContain("bg-accent-brand");
 
     expect(montage).toContain('aria-pressed="false"');
-    expect(montage).not.toContain("bg-primary");
+    expect(montage).not.toContain("bg-accent-brand");
   });
 
   it("témoin de sabotage : les deux boutons ne sont JAMAIS aria-pressed=\"true\" en même temps, dans aucun des deux modes", () => {

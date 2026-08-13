@@ -118,14 +118,16 @@ describe("EditorShell — mode Montage (revue Tâche 6, spec §2/§5)", () => {
 // STRUCTURE/les CLASSES rendues au premier rendu (`prefs` vaut DEFAULT_PREFS ici, useEffect de
 // useEditorPrefs n'ayant jamais tourné sous ce mode de rendu — voir le commentaire d'en-tête).
 describe("EditorShell — corps trois zones : fond neutre, état vide compact, poignées de glisser (chantier A Tâche 3)", () => {
-  it("le conteneur du canevas porte un fond d'atelier NETTEMENT visible (bg-neutral-100 dark:bg-neutral-900), pas l'ancien bg-muted/40 quasi blanc", () => {
+  it("le conteneur du canevas porte un fond d'atelier NETTEMENT visible (jeton --canvas-backdrop, chantier E Tâche 1), pas l'ancien bg-muted/40 quasi blanc", () => {
     const html = render();
     const openTag = html.slice(
       html.indexOf('data-testid="canvas-backdrop"') - 400,
       html.indexOf('data-testid="canvas-backdrop"') + 200,
     );
-    expect(openTag).toContain("bg-neutral-100");
-    expect(openTag).toContain("dark:bg-neutral-900");
+    // Chantier E Tâche 1 : le neutre en dur (bg-neutral-100 / dark:bg-neutral-900) est remplacé par
+    // le jeton --canvas-backdrop (globals.css), qui porte la même intention (fond nettement visible)
+    // mais chaud plutôt que froid, et défini une seule fois pour clair+sombre au lieu de deux classes.
+    expect(openTag).toContain("bg-[var(--canvas-backdrop)]");
     // Anti-vacuité : l'ANCIEN fond (bg-muted/40, ~1.4% d'écart du blanc pur — ne se distinguait pas
     // franchement des panneaux blancs, revue de branche) ne doit plus apparaître SUR CE conteneur précis.
     expect(openTag).not.toContain("bg-muted/40");
@@ -307,6 +309,11 @@ describe("EditorShell — réactif : editorLayoutMode pilote la composition rée
     // Le libellé EXACT du brief — un mutant qui reformulerait ce message sans y toucher structurellement
     // (ex. en retirant « aperçu seulement ») ferait rougir cette assertion précise.
     expect(tooSmall!.textContent).toContain("Écran trop petit pour l’édition — aperçu seulement");
+    // Chantier E Tâche 3 : cette carte de titre/hint est désormais la primitive PARTAGÉE EmptyState
+    // (components/shell/empty-state.tsx) — même bordure pointillée que les autres états vides du
+    // produit — au lieu d'une carte ad-hoc locale (`border` plein + `shadow-sm`, sans le motif
+    // pointillé commun). Preuve structurelle ajoutée SANS toucher aux assertions verrouillées ci-dessus.
+    expect(tooSmall!.innerHTML).toContain("border-dashed");
     // Anti-vacuité — LA preuve que ce n'est pas un simple bandeau AJOUTÉ par-dessus la coque
     // d'édition habituelle : Rail/canevas d'édition/panneau accosté n'existent PLUS du tout dans cet
     // arbre, quel que soit `mode` (Montage par défaut ici).

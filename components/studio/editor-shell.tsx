@@ -4,9 +4,10 @@ import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNod
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, Undo2, Redo2, PanelRight, Minus, Plus } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, PanelRight, Minus, Plus, Smartphone } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/shell/empty-state";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -722,7 +723,10 @@ function EditorShellInner({
             Gabarits
           </Link>
           <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold">{template.name}</h1>
+            {/* Chantier E Tâche 5 (finition de marque) : `font-heading` — le titre de gabarit tient
+                le même rôle que le h1 de PageHeader (globals.css, « Type scale »), qui porte déjà
+                cette police ailleurs dans le produit ; il ne l'avait pas encore ici. */}
+            <h1 className="truncate font-heading text-base font-semibold">{template.name}</h1>
             <p className="truncate text-xs text-muted-foreground">
               {CONTEXT_LABEL[template.context]} · {template.width}×{template.height}
             </p>
@@ -851,10 +855,18 @@ function EditorShellInner({
                   déjà enregistré) — replié malgré tout, pour la même cohérence « rien d'actionnable »
                   qu'annuler/rétablir/restaurer, plutôt que de laisser un seul bouton d'action survivre
                   seul dans un en-tête par ailleurs inerte. */}
+              {/* Chantier E Tâche 5 (finition de marque) : `--accent-brand` (terracotta, « actions
+                  only » — globals.css) plutôt que le `bg-primary` neutre par défaut de <Button> —
+                  MÊME motif que components/login-form.tsx (le seul autre bouton primaire de premier
+                  plan du produit à porter déjà cet accent) : `bg-accent-brand text-accent-brand-
+                  foreground` en className, sans toucher `hover:bg-primary/80` (hérité de
+                  buttonVariants, jamais en conflit de PROPRIÉTÉ avec `bg-accent-brand` — seul l'état
+                  :hover diverge légèrement de la couleur de repos, comme login-form.tsx déjà). */}
               <Button
                 type="button" data-action="publish" disabled={!storageConfigured || publishing}
                 title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
                 onClick={() => void handlePublish()}
+                className="bg-accent-brand text-accent-brand-foreground"
               >
                 {publishing ? "Publication…" : "Publier"}
               </Button>
@@ -924,18 +936,29 @@ function EditorShellInner({
                 n'est ouvert. */}
             {layout === "all-drawers" ? (
               <Sheet open={prefs.openPanel !== null} onOpenChange={(next) => { if (!next) collapsePanel(null); }}>
+                {/* Chantier E Tâche 4 : `studio-motion-slide` (globals.css) EN PLUS de la transition
+                    d'entrée/sortie déjà pilotée par base-ui (`data-starting-style`/`data-ending-style`,
+                    components/ui/sheet.tsx) — même mécanisme d'apparition, mais avec le ressort du
+                    studio plutôt que le `ease-in-out` générique du composant partagé. Coupé sous
+                    `prefers-reduced-motion: reduce`. */}
                 <SheetContent
                   side="left"
                   data-testid="panel-drawer"
                   showCloseButton={false}
-                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:w-auto"
+                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:w-auto studio-motion-slide"
                 >
                   {panelContent}
                 </SheetContent>
               </Sheet>
             ) : (
               <>
-                {panelContent}
+                {/* Chantier E Tâche 4 : `studio-motion-slide` sur le panneau accosté LUI-MÊME (pas la
+                    poignée de redimensionnement, en dehors de ce wrapper) — additif : la largeur/le
+                    contenu de `panelContent` (PanelHost ou l'un des panneaux qui l'enrobent
+                    eux-mêmes) ne changent pas, ce simple `<div>` ne fait qu'ajouter la classe de
+                    transition autour. `panelContent && …` évite de monter un `<div>` vide quand aucun
+                    panneau n'est ouvert (`panelBody()` rend alors `null`). */}
+                {panelContent && <div className="studio-motion-slide">{panelContent}</div>}
                 {prefs.openPanel !== null && (
                   <PanelResizeHandle
                     currentWidth={prefs.railPanelWidth}
@@ -958,13 +981,19 @@ function EditorShellInner({
                 consommateur avant cette tâche, voir le commentaire de canvas-chrome.tsx).
 
                 Chantier A Tâche 3 (spec §2/§3) puis revue de branche (fix wave) : `bg-muted/20` ->
-                `bg-muted/40` -> `bg-neutral-100 dark:bg-neutral-900` — `bg-muted/40` restait un TOKEN,
+                `bg-muted/40` -> un neutre EN DUR (clair/sombre) — `bg-muted/40` restait un TOKEN,
                 mais à ~1.4% d'écart du blanc pur il ne se distinguait pas franchement des panneaux
-                blancs qui l'entourent (spec : « kill the white void »). `bg-neutral-100
-                dark:bg-neutral-900` donne un fond d'atelier NETTEMENT visible — gris perceptible en
-                clair, presque noir en sombre — pour que l'artboard (son propre box-shadow, canvas.tsx,
-                inchangé) se lise comme une SURFACE posée sur un espace de travail plutôt que comme un
-                rectangle flottant sur un fond resté visuellement proche du blanc.
+                blancs qui l'entourent (spec : « kill the white void »). Ce neutre en dur donnait un
+                fond d'atelier NETTEMENT visible — gris perceptible en clair, presque noir en sombre —
+                pour que l'artboard (son propre box-shadow, canvas.tsx, inchangé) se lise comme une
+                SURFACE posée sur un espace de travail plutôt que comme un rectangle flottant sur un
+                fond resté visuellement proche du blanc.
+
+                Chantier E Tâche 1 : ce neutre EN DUR (clair/sombre) est remplacé par le jeton
+                `--canvas-backdrop` (globals.css, blocs `:root` et `.dark`) — même intention visuelle
+                (fond d'atelier nettement visible), mais un neutre éditorial CHAUD (teinte ~75) au lieu
+                du gris froid utilitaire, et pilotable comme n'importe quel autre jeton de thème plutôt
+                qu'une paire de classes Tailwind figées.
 
                 Chantier A Tâche 4 (spec §2/§9) : `min-w-[240px]` hors `full` — le brief nomme
                 explicitement « canvas full-bleed with a minimum width » pour `all-drawers` ; la même
@@ -975,7 +1004,7 @@ function EditorShellInner({
               ref={canvasWrapRef}
               data-testid="canvas-backdrop"
               className={cn(
-                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900",
+                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-[var(--canvas-backdrop)] p-4",
                 layout !== "full" && "min-w-[240px]",
               )}
               // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur, posée IMPÉRATIVEMENT en effet —
@@ -1084,7 +1113,10 @@ function EditorShellInner({
                 >
                   <PanelRight />
                 </Button>
-                <SheetContent data-testid="inspector-drawer">
+                {/* Chantier E Tâche 4 : voir le commentaire jumeau sur `panel-drawer` ci-dessus — même
+                    principe (`studio-motion-slide` en plus de la transition base-ui déjà en place,
+                    coupée sous `prefers-reduced-motion: reduce`). */}
+                <SheetContent data-testid="inspector-drawer" className="studio-motion-slide">
                   <SheetHeader>
                     <SheetTitle>Propriétés</SheetTitle>
                   </SheetHeader>
@@ -1143,9 +1175,19 @@ function TooSmallState({ scene, width, height }: { scene: Scene; width: number; 
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-hidden" data-testid="editor-too-small">
-      <div className="max-w-[280px] rounded-lg border bg-card p-4 text-center shadow-sm">
-        <p className="text-sm font-medium">Écran trop petit pour l&rsquo;édition — aperçu seulement</p>
-        <p className="mt-1 text-xs text-muted-foreground">Agrandissez la fenêtre pour retrouver les outils d&rsquo;édition.</p>
+      {/* Chantier E Tâche 3 : la carte ad-hoc (border plein + shadow-sm) est remplacée par la
+          primitive PARTAGÉE `EmptyState` — même bordure pointillée que les autres états vides du
+          produit. Le libellé EXACT « Écran trop petit pour l'édition — aperçu seulement » (verrouillé
+          par tests/studio-editor-shell.test.ts comme une phrase CONTIGUË) reste intégralement dans
+          `title` — le scinder entre `title` et `hint` briserait cette assertion, puisque `textContent`
+          ne réinsère aucun espace entre deux éléments distincts. */}
+      <div className="max-w-[280px]">
+        <EmptyState
+          icon={<Smartphone className="size-8 text-muted-foreground" aria-hidden />}
+          title="Écran trop petit pour l’édition — aperçu seulement"
+          titleClassName="font-heading"
+          hint="Agrandissez la fenêtre pour retrouver les outils d’édition."
+        />
       </div>
       <div
         ref={wrapRef}

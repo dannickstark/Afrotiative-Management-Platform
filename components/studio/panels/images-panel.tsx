@@ -128,7 +128,7 @@ export function ImagesPanel({ context, assets, scene, selectedId, dispatch, onOp
     >
       <div className="flex flex-col gap-4" data-testid="images-panel">
         <section className="space-y-1.5">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">Assets importés</h3>
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Assets importés</h3>
           <ImageAssetPicker
             assets={filteredAssets}
             value={currentAssetId}
@@ -143,7 +143,7 @@ export function ImagesPanel({ context, assets, scene, selectedId, dispatch, onOp
         </section>
 
         <section className="space-y-1.5">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">
             Emplacements d&rsquo;image de ce contexte
           </h3>
           {slots.length === 0 ? (

@@ -6,6 +6,7 @@ import { textStyleFor, gradientCss } from "@/lib/studio/element";
 import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
 import { resolveLayerColorsForDisplay } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
+import { SELECTION, LOCKED_OUTLINE } from "@/lib/studio/overlay-theme";
 
 // Rendu PUREMENT visuel d'UN calque, en pixels du gabarit (le parent — canvas.tsx — applique déjà
 // `transform: scale(k)` sur son conteneur, donc ce composant ne connaît pas l'échelle) — À UNE
@@ -215,12 +216,29 @@ export function LayerView({
       data-locked={layer.locked || undefined}
       onPointerDown={interactive ? onPointerDown : undefined}
       onContextMenu={interactive ? onContextMenu : undefined}
+      // Chantier E Tâche 4 : `studio-motion-outline` (globals.css) — transitionne SEULEMENT
+      // `outline-color`/`opacity` en douceur ; la GÉOMÉTRIE (largeur `2/scale`, décalage `1/scale`)
+      // reste EXACTEMENT celle d'avant cette tâche (§0 du plan), posée juste en dessous par le style
+      // en ligne — cette classe n'ajoute qu'une transition, jamais une valeur. §0 fige la GÉOMÉTRIE et
+      // les data-testid, PAS la couleur : « seule la couleur bouge » y est explicitement permis, et
+      // c'est ce qui se produit ci-dessous — l'outline SOURCE désormais sa couleur depuis
+      // `lib/studio/overlay-theme.ts` (rôle `SELECTION`, revue de branche chantier E : les poignées de
+      // canvas.tsx utilisaient déjà ce jeton, l'outline de CE MÊME calque sélectionné dessinait encore
+      // un bleu différent en dur — la sélection n'était pas single-sourcée tant que ce fichier restait
+      // à l'écart).
+      // CONDITIONNÉE à `selected || layer.locked` (exactement le cas où `outline` ci-dessous porte
+      // une vraie valeur, jamais `undefined`) — jamais posée inconditionnellement : les témoins HTML
+      // figés (tests/studio-shapes.test.ts « identité de sortie avant/après refactor », rendus avec
+      // `selected: false`) épinglent l'ABSENCE de tout `class=` sur ce div ; une classe posée pour
+      // TOUT calque, sélectionné ou non, romprait ces témoins sans le moindre changement de pixel.
+      // Coupée sous `prefers-reduced-motion: reduce`.
+      className={selected || layer.locked ? "studio-motion-outline" : undefined}
       style={{
         ...frameStyle(frame, rotation, layer),
         // `2 / scale` (revue Lot 2, Important 3) : voir le commentaire en tête de fichier — sans
         // cette compensation, le contour de sélection s'amenuise avec l'échelle du canevas jusqu'à
         // devenir un liseré à peine visible pour les formats étroits (`story`).
-        outline: selected ? `${2 / scale}px solid #2563eb` : layer.locked ? "1px dashed #9ca3af" : undefined,
+        outline: selected ? `${2 / scale}px solid ${SELECTION}` : layer.locked ? `1px dashed ${LOCKED_OUTLINE}` : undefined,
         outlineOffset: selected ? 1 / scale : undefined,
         cursor: interactive ? "move" : "not-allowed",
         // Un calque verrouillé « ne répond ni au clic ni au glisser » (spec §2) — appliqué au

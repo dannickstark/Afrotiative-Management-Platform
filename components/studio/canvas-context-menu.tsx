@@ -21,6 +21,11 @@
 // `lib/studio/context-menu-actions.ts` calcule QUELLES entrées afficher (aucun DOM) ; CE fichier
 // décide seul de l'ICÔNE (aucune ici — le menu contextuel est du texte, pas d'icônes, contrairement
 // à la barre flottante compacte) et du DISPATCH (kind -> action de réducteur).
+//
+// Chantier E Tâche 5 (convention d'icône partagée, lib/studio/studio-icons.ts) : ce fichier n'a
+// STRUCTURELLEMENT rien à unifier — la ligne ci-dessus est vraie depuis la Tâche 7, pas seulement une
+// omission que cette tâche découvrirait. Importer `STUDIO_ICON` ici sans jamais l'utiliser serait un
+// import mort, pas une consommation de la convention.
 import { Fragment, type Dispatch } from "react";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator,
@@ -159,6 +164,13 @@ export function CanvasContextMenu({
     <ContextMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <ContextMenuContent
         data-testid="canvas-context-menu"
+        // Chantier E Tâche 4 : `studio-motion-pop` (globals.css) — apparition en ressort léger à
+        // chaque clic droit, coupée sous `prefers-reduced-motion: reduce`. Cette classe est HORS
+        // `@layer` (globals.css) donc l'emporte sur l'animation `data-open:animate-in`/`data-closed:
+        // animate-out` de tw-animate-css déjà posée par components/ui/context-menu.tsx — remplacement
+        // ASSUMÉ (le pop-ressort du studio plutôt que le fade/zoom générique du composant partagé),
+        // jamais une seconde animation qui s'ajouterait par-dessus.
+        className="studio-motion-pop"
         anchor={virtualAnchorAt(anchor)}
         side="bottom"
         align="start"

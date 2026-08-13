@@ -139,7 +139,7 @@ export function ElementsPanel({ context, canvas, recentShapes, dispatch, onShape
     <div className="flex flex-col gap-4" data-testid="elements-panel">
       {recentTiles.length > 0 && (
         <section className="space-y-1.5">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">Utilisés récemment</h3>
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Utilisés récemment</h3>
           <div className="grid grid-cols-3 gap-1.5" data-testid="elements-recent">
             {recentTiles.map((row) => (
               <ShapeTileButton key={`recent-${row.id}`} row={row} onClick={() => insert(row)} />
@@ -149,7 +149,7 @@ export function ElementsPanel({ context, canvas, recentShapes, dispatch, onShape
       )}
 
       <section className="space-y-1.5">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase">Formes</h3>
+        <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Formes</h3>
         <div className="grid grid-cols-3 gap-1.5" data-testid="elements-shapes">
           {rows.map((row) => (
             <ShapeTileButton key={row.id} row={row} onClick={() => insert(row)} />
