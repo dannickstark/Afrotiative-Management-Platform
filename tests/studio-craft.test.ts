@@ -5,11 +5,17 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene, Layer } from "@/lib/studio/scene";
 import { PropertyPanel } from "@/components/studio/property-panel";
-import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
+import { Rail } from "@/components/studio/rail";
+import { EmptyState } from "@/components/shell/empty-state";
+import { RAIL_CATEGORIES, DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
+import { STUDIO_ICON, STUDIO_ICON_STROKE } from "@/lib/studio/studio-icons";
 const ROOT = join(import.meta.dir, "..");
 const css = readFileSync(join(ROOT, "app/globals.css"), "utf8");
 const shell = readFileSync(join(ROOT, "components/studio/editor-shell.tsx"), "utf8");
 const propertyPanelSource = readFileSync(join(ROOT, "components/studio/property-panel.tsx"), "utf8");
+const railSource = readFileSync(join(ROOT, "components/studio/rail.tsx"), "utf8");
+const floatingToolbarSource = readFileSync(join(ROOT, "components/studio/floating-toolbar.tsx"), "utf8");
+const panelHostSource = readFileSync(join(ROOT, "components/studio/panel-host.tsx"), "utf8");
 
 describe("chantier E · --canvas-backdrop", () => {
   it("le jeton est défini en clair ET en sombre", () => {
@@ -140,5 +146,111 @@ describe("chantier E · jetons de mouvement + micro-interactions (Tâche 4)", ()
     // porte la classe, jamais une seconde implémentation dans canvas.tsx qui divergerait.
     const layerView = readFileSync(join(ROOT, "components/studio/layer-view.tsx"), "utf8");
     expect(layerView).toMatch(/studio-motion-outline/);
+  });
+});
+
+// ── Chantier E Tâche 5 (convention d'icône partagée + finition accent/titre éditorial) ────────────
+// Deux volets, testés séparément : (1) `lib/studio/studio-icons.ts` existe et est CONSOMMÉ, jamais
+// juste défini à côté (le rail ET au moins une barre, comme le brief l'exige verbatim) ; (2) l'accent
+// de marque (`--accent-brand`) remplace le neutre sur les affordances d'ACTION nommées par la tâche
+// (Publier, pastille active du rail), et `font-heading` habille les titres de panneau/section + les
+// titres d'EmptyState du studio — jamais la cohérence visuelle RÉELLE (jugée en Playwright, T6),
+// seulement la PRÉSENCE et la bonne CONSOMMATION des jetons/classes attendus.
+describe("chantier E · convention d'icône partagée (Tâche 5)", () => {
+  it("la convention d'icône partagée existe", () => {
+    expect(typeof STUDIO_ICON).toBe("string");
+    expect(typeof STUDIO_ICON_STROKE).toBe("number");
+  });
+
+  it("le rail et la barre flottante consomment la convention (pas de taille ad-hoc)", () => {
+    expect(railSource).toContain("STUDIO_ICON");
+    expect(floatingToolbarSource).toContain("STUDIO_ICON");
+  });
+
+  it("property-panel.tsx consomme aussi la convention (icônes d'action du dégradé)", () => {
+    expect(propertyPanelSource).toContain("STUDIO_ICON");
+  });
+
+  it("le rail n'a plus de taille d'icône codée en dur (\"size-4\" en LITTÉRAL, hors de la convention)", () => {
+    // La classe "size-4" ne doit plus apparaître comme littéral autonome sur l'icône — seule la
+    // RÉFÉRENCE à la constante (STUDIO_ICON) doit rester, jamais les deux à la fois pour la même icône.
+    expect(railSource).not.toContain('<Icon className="size-4"');
+  });
+
+  it("les six icônes du rail portent bien STUDIO_ICON + STUDIO_ICON_STROKE au rendu", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(Rail, { selected: RAIL_CATEGORIES[0], onSelect: () => {} }),
+    );
+    // Une preuve directe sur le DOM RENDU, pas seulement la source : chaque <svg> du rail porte la
+    // classe de taille ET l'attribut stroke-width que la convention prescrit (lucide rend
+    // `strokeWidth` en `stroke-width` sur le SVG final).
+    const svgCount = [...html.matchAll(/<svg[^>]*>/g)].length;
+    expect(svgCount).toBe(RAIL_CATEGORIES.length);
+    for (const svgTag of html.matchAll(/<svg[^>]*>/g)) {
+      // lucide préfixe toujours `lucide lucide-<nom>` avant le className fourni (vérifié sur le
+      // rendu réel) — STUDIO_ICON est donc un TOKEN de la classe, pas forcément le premier.
+      const classAttr = /class="([^"]*)"/.exec(svgTag[0]);
+      expect(classAttr).not.toBeNull();
+      expect(classAttr![1].split(" ")).toContain(STUDIO_ICON);
+      expect(svgTag[0]).toContain(`stroke-width="${STUDIO_ICON_STROKE}"`);
+    }
+  });
+});
+
+describe("chantier E · finition de marque — accent (Tâche 5)", () => {
+  it("le bouton « Publier » porte l'accent de marque, plus le bleu/neutre `bg-primary` par défaut", () => {
+    // Isole le FRAGMENT du bouton Publier (data-action="publish") — jamais une recherche de
+    // sous-chaîne sur tout le fichier, qui pourrait retomber sur bg-accent-brand ailleurs.
+    const m = /<Button[\s\S]*?data-action="publish"[\s\S]*?<\/Button>/.exec(shell);
+    expect(m).not.toBeNull();
+    const publishButton = m![0];
+    expect(publishButton).toContain("bg-accent-brand");
+    expect(publishButton).toContain("text-accent-brand-foreground");
+  });
+
+  it("la pastille sélectionnée du rail porte l'accent de marque au rendu (pas bg-primary)", () => {
+    const selected = RAIL_CATEGORIES[1];
+    const html = renderToStaticMarkup(React.createElement(Rail, { selected, onSelect: () => {} }));
+    const re = new RegExp(`<button[^>]*data-category="${selected}"[^>]*>`);
+    const m = re.exec(html);
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain("bg-accent-brand");
+    expect(m![0]).toContain("text-accent-brand-foreground");
+    expect(m![0]).not.toContain("bg-primary");
+  });
+});
+
+describe("chantier E · finition de marque — titre éditorial (Tâche 5)", () => {
+  it("le titre du panneau accosté (panel-host.tsx) porte font-heading", () => {
+    expect(panelHostSource).toMatch(/font-heading[^"]*"\s*>\s*\{RAIL_LABELS\[open\]\}/);
+  });
+
+  it("les titres de section repliables de l'inspecteur (TypeSection) portent font-heading", () => {
+    expect(propertyPanelSource).toContain("font-heading text-xs font-semibold tracking-wide");
+  });
+
+  it("les DEUX EmptyState du studio (inspecteur vide, écran trop petit) portent font-heading sur leur titre", () => {
+    expect(propertyPanelSource).toContain('titleClassName="font-heading"');
+    expect(shell).toContain('titleClassName="font-heading"');
+  });
+
+  it("l'inspecteur vide RENDU porte bien font-heading sur son titre (pas seulement dans la source)", () => {
+    const html = renderPropertyPanelEmpty();
+    // Le titre "Aucun calque sélectionné" est le texte du <p> qui suit immédiatement l'icône dans
+    // EmptyState — on vérifie que CE <p> précis porte la classe, jamais une recherche globale sur
+    // tout le HTML qui pourrait retomber sur une autre occurrence de "font-heading" ailleurs dans
+    // l'arbre (ex. le futur h1 du gabarit, hors de ce composant ici).
+    const m = /<p class="[^"]*">Aucun calque sélectionné<\/p>/.exec(html);
+    expect(m).not.toBeNull();
+    expect(m![0]).toContain("font-heading");
+  });
+
+  it("EmptyState (composant partagé) reste inchangé pour les appelants hors studio — titleClassName est optionnel", () => {
+    // Non-régression explicite : un appelant qui NE passe PAS titleClassName (tous les tableaux
+    // settings/pipeline existants) doit continuer à rendre exactement le même <p class="font-medium">
+    // qu'avant cette tâche — cf. tests/empty-state.test.ts, qu'on ne duplique pas ici, juste une
+    // preuve locale que l'ajout est bien optionnel et additif.
+    const html = renderToStaticMarkup(React.createElement(EmptyState, { title: "Sans classe de titre" }));
+    expect(html).toContain('<p class="font-medium">Sans classe de titre</p>');
   });
 });

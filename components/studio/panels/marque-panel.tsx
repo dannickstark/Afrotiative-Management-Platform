@@ -43,7 +43,7 @@ export function MarquePanel({ assets, brandLogoUrl, categories }: MarquePanelPro
     <div className="flex flex-col gap-4" data-testid="marque-panel">
       <section className="space-y-1.5">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">Polices ({fonts.length})</h3>
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Polices ({fonts.length})</h3>
           <Link href="/studio/assets" className="text-xs text-muted-foreground underline underline-offset-2">
             Gérer
           </Link>
@@ -66,7 +66,7 @@ export function MarquePanel({ assets, brandLogoUrl, categories }: MarquePanelPro
       </section>
 
       <section className="space-y-1.5">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase">Logo de la marque</h3>
+        <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Logo de la marque</h3>
         {brandLogoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -82,7 +82,7 @@ export function MarquePanel({ assets, brandLogoUrl, categories }: MarquePanelPro
 
       <section className="space-y-1.5">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">Couleurs des catégories</h3>
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Couleurs des catégories</h3>
           <Link href="/settings/taxonomy" className="text-xs text-muted-foreground underline underline-offset-2">
             Gérer
           </Link>

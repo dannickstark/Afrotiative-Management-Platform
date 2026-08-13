@@ -723,7 +723,10 @@ function EditorShellInner({
             Gabarits
           </Link>
           <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold">{template.name}</h1>
+            {/* Chantier E Tâche 5 (finition de marque) : `font-heading` — le titre de gabarit tient
+                le même rôle que le h1 de PageHeader (globals.css, « Type scale »), qui porte déjà
+                cette police ailleurs dans le produit ; il ne l'avait pas encore ici. */}
+            <h1 className="truncate font-heading text-base font-semibold">{template.name}</h1>
             <p className="truncate text-xs text-muted-foreground">
               {CONTEXT_LABEL[template.context]} · {template.width}×{template.height}
             </p>
@@ -852,10 +855,18 @@ function EditorShellInner({
                   déjà enregistré) — replié malgré tout, pour la même cohérence « rien d'actionnable »
                   qu'annuler/rétablir/restaurer, plutôt que de laisser un seul bouton d'action survivre
                   seul dans un en-tête par ailleurs inerte. */}
+              {/* Chantier E Tâche 5 (finition de marque) : `--accent-brand` (terracotta, « actions
+                  only » — globals.css) plutôt que le `bg-primary` neutre par défaut de <Button> —
+                  MÊME motif que components/login-form.tsx (le seul autre bouton primaire de premier
+                  plan du produit à porter déjà cet accent) : `bg-accent-brand text-accent-brand-
+                  foreground` en className, sans toucher `hover:bg-primary/80` (hérité de
+                  buttonVariants, jamais en conflit de PROPRIÉTÉ avec `bg-accent-brand` — seul l'état
+                  :hover diverge légèrement de la couleur de repos, comme login-form.tsx déjà). */}
               <Button
                 type="button" data-action="publish" disabled={!storageConfigured || publishing}
                 title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
                 onClick={() => void handlePublish()}
+                className="bg-accent-brand text-accent-brand-foreground"
               >
                 {publishing ? "Publication…" : "Publier"}
               </Button>
@@ -1174,6 +1185,7 @@ function TooSmallState({ scene, width, height }: { scene: Scene; width: number; 
         <EmptyState
           icon={<Smartphone className="size-8 text-muted-foreground" aria-hidden />}
           title="Écran trop petit pour l’édition — aperçu seulement"
+          titleClassName="font-heading"
           hint="Agrandissez la fenêtre pour retrouver les outils d’édition."
         />
       </div>

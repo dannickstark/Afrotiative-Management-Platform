@@ -71,7 +71,7 @@ export function TextePanel({ context, canvas, dispatch, onOpenChange = () => {},
     >
       <div className="flex flex-col gap-4" data-testid="texte-panel">
         <section className="space-y-1.5">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">Styles</h3>
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Styles</h3>
           <ul className="flex flex-col gap-1.5">
             {TEXT_PRESET_IDS.map((id) => {
               const preset = TEXT_PRESETS[id];
@@ -93,7 +93,7 @@ export function TextePanel({ context, canvas, dispatch, onOpenChange = () => {},
         </section>
 
         <section className="space-y-1.5">
-          <h3 className="text-xs font-semibold text-muted-foreground uppercase">Texte dynamique</h3>
+          <h3 className="font-heading text-xs font-semibold text-muted-foreground uppercase">Texte dynamique</h3>
           <ul className="flex flex-col gap-1">
             {rows.map((row) => {
               const reasonId = `dynamic-text-reason-${row.tokenId}`;

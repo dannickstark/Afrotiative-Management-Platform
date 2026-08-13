@@ -3,6 +3,7 @@
 import { LayoutTemplate, Shapes, Type, Image as ImageIcon, Palette, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { RAIL_CATEGORIES, RAIL_LABELS, type RailCategory } from "@/lib/studio/editor-prefs";
+import { STUDIO_ICON, STUDIO_ICON_STROKE } from "@/lib/studio/studio-icons";
 
 // components/studio/rail.tsx — Tâche 1 (U1, spec §3) : le rail d'icônes libellées, ~62px, état
 // sélectionné = pastille pleine. Boutons natifs plutôt que le composant `Button` partagé : ce
@@ -42,15 +43,24 @@ export function Rail({ selected, onSelect }: RailProps) {
             aria-pressed={isSelected}
             onClick={() => onSelect(category)}
             className={cn(
-              "flex w-14 flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] leading-tight font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50",
+              "flex w-14 flex-col items-center gap-1 rounded-lg px-1 py-2 text-center text-[11px] leading-tight font-medium text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent-brand/50",
               // Correctif revue finale (Minor) : la même phrase de spec §3 (« selected state a
               // filled pill ») avait deux lectures différentes ici et dans mode-switch.tsx:56,
               // visibles côte à côte à l'écran (rail à gauche, sélecteur de mode flottant au-dessus
               // du canevas). Alignée sur le style plein de mode-switch.tsx plutôt que l'inverse.
-              isSelected && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
+              //
+              // Chantier E Tâche 5 (finition de marque) : la pastille pleine passe de `bg-primary`
+              // (neutre) à `--accent-brand` (terracotta, « actions only » — globals.css) — CETTE
+              // pastille EST une action (choisir une catégorie), l'affordance que le token distingue
+              // précisément. `mode-switch.tsx` PORTE LA MÊME phrase de spec (voir ci-dessus) mais
+              // GARDE `bg-primary` : son état actif est verrouillé littéralement par
+              // tests/studio-mode-switch.test.ts (`toContain("bg-primary")`) — un test PRÉ-EXISTANT
+              // hors du périmètre de fichiers de cette tâche, que la migrer romprait sans raison
+              // suffisante pour la retoucher ici (voir le rapport de tâche).
+              isSelected && "bg-accent-brand text-accent-brand-foreground hover:bg-accent-brand hover:text-accent-brand-foreground",
             )}
           >
-            <Icon className="size-4" aria-hidden="true" />
+            <Icon className={STUDIO_ICON} strokeWidth={STUDIO_ICON_STROKE} aria-hidden="true" />
             <span>{RAIL_LABELS[category]}</span>
           </button>
         );
