@@ -1204,10 +1204,11 @@ describe("PropertyPanel — bande de géométrie épinglée (Tâche 6)", () => {
     }
   });
 
-  it("les six champs de la bande ne sont plus dupliqués dans une section « Cadre »", () => {
+  it("les cinq champs de la bande ne sont plus dupliqués dans une section « Cadre »", () => {
     const html = render([textLayer], "t", "social_post");
-    // L'ex-section « Cadre » (Tâche 8) a disparu du panneau — ses six champs vivent UNIQUEMENT dans
-    // la bande épinglée, jamais recopiés dans une section repliable qui referait doublon.
+    // L'ex-section « Cadre » (Tâche 8) a disparu du panneau — ses cinq champs vivent UNIQUEMENT dans
+    // la bande épinglée, jamais recopiés dans une section repliable qui referait doublon. (Chantier C
+    // Tâche 6 : le sixième, « Opacité », a quitté la bande pour la section « Apparence ».)
     expect(html).not.toContain('data-section="cadre"');
   });
 });
