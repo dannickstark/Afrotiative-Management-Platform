@@ -486,3 +486,77 @@ describe("ImageFields — le menu « Ajustement » écrit sizing ; les contrôle
     },
   );
 });
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// Properties Pro P1, Tâche 6 — le point focal DÉPLAÇABLE (`FocalPointField`, focal-point-field.tsx),
+// monté dans `ImageFields` UNIQUEMENT pour les modes où il change quelque chose de visible (cover/
+// tile — voir le commentaire posé sur son montage, property-panel.tsx). Même harnais que le bloc
+// « Ajustement » ci-dessus : le VRAI `PropertyPanel` derrière le VRAI `editorReducer`, un geste de
+// glisser DOM réel (`pointer()`, dom-harness.ts) plutôt qu'un appel direct à `onCommit`.
+describe("ImageFields — le point focal déplaçable (Properties Pro P1, T6)", () => {
+  it.skipIf(!popoverEffectsLive)(
+    "mode cover : la vignette du point focal est peinte",
+    async () => {
+      const { container, unmount } = await mountImageFields(baseImageLayer({ sizing: "cover" }));
+      expect(container.querySelector('[data-testid="focal-point-field"]')).not.toBeNull();
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "mode mosaïque : la vignette du point focal est peinte",
+    async () => {
+      const { container, unmount } = await mountImageFields(
+        baseImageLayer({ sizing: "tile", tile: { scale: 1, axis: "both" } }),
+      );
+      expect(container.querySelector('[data-testid="focal-point-field"]')).not.toBeNull();
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "mode étirer/perso : la vignette du point focal est ABSENTE (le point focal n'y change rien de visible)",
+    async () => {
+      const { container: stretchContainer, unmount: unmountStretch } = await mountImageFields(
+        baseImageLayer({ sizing: "stretch" }),
+      );
+      expect(stretchContainer.querySelector('[data-testid="focal-point-field"]')).toBeNull();
+      unmountStretch();
+
+      const { container: customContainer, unmount: unmountCustom } = await mountImageFields(
+        baseImageLayer({ sizing: "custom", customSize: { w: 300, h: 200 } }),
+      );
+      expect(customContainer.querySelector('[data-testid="focal-point-field"]')).toBeNull();
+      unmountCustom();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "glisser le point focal hors bornes écrit focal x/y CLAMPÉ [0,1], UNE SEULE entrée d'historique, au relâchement seulement",
+    async () => {
+      const { box, container, layer, unmount } = await mountImageFields(baseImageLayer({ sizing: "cover" }));
+
+      const field = container.querySelector('[data-testid="focal-point-field"]') as HTMLElement;
+      expect(field).not.toBeNull();
+      // jsdom ne mesure jamais de layout réel (getBoundingClientRect toujours à zéro) — même recette
+      // que tests/studio-color-picker.test.ts (carré SV/curseur teinte) : un rectangle explicite rend
+      // le ratio position->fraction déterministe.
+      field.getBoundingClientRect = () => ({
+        left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}),
+      });
+
+      await pointer(field, "pointerdown", { clientX: 50, clientY: 50 });
+      expect(box.state.past).toHaveLength(0); // le pointerdown seul ne committe rien
+
+      await pointer(field, "pointermove", { clientX: 200, clientY: -50 }); // hors bornes des deux côtés
+      expect(box.state.past).toHaveLength(0); // ni le pointermove — jamais avant le relâchement
+
+      await pointer(field, "pointerup", { clientX: 200, clientY: -50 });
+
+      expect(layer().focal).toEqual({ x: 1, y: 0 }); // clampé à [0,1] : fx=2→1, fy=-0.5→0
+      expect(box.state.past).toHaveLength(1); // UNE SEULE entrée d'historique pour tout le geste
+
+      unmount();
+    },
+  );
+});

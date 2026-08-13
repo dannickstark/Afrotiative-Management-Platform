@@ -36,6 +36,7 @@ import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, pickerRowsFor } from "./token-picker";
 import { ColorPicker } from "./color-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
+import { FocalPointField } from "./focal-point-field";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { alignParticipants } from "@/lib/studio/align";
 import { FieldRow, NumberField, SelectField, SliderField, useCommitBuffer, type Patch } from "./property-fields";
@@ -571,6 +572,17 @@ function ImageFields({
   // `source.kind === "asset"` reste autorisé pour PRÉSERVER un choix déjà valide (calque chargé
   // avec un assetId existant), jamais pour en fabriquer un nouveau à partir de rien.
   const canUseAssetTab = !!firstImageAssetId || source.kind === "asset";
+  // Tâche 6 : la vignette du point focal (FocalPointField ci-dessous) veut l'URL AFFICHABLE de la
+  // source actuelle — résolue ici à partir de ce qu'ImageFields connaît déjà (aucune nouvelle donnée
+  // récupérée, un composant purement présentationnel) : une source `url` la porte directement, une
+  // source `asset` se résout via `assets` (déjà chargé par l'appelant) ; une source `slot` n'a pas
+  // d'aperçu résolu ici — `undefined`, que FocalPointField affiche comme un placeholder neutre.
+  const focalImageSrc =
+    source.kind === "url" ? source.url : source.kind === "asset" ? assets.find((a) => a.id === source.assetId)?.url : undefined;
+  // Repli centre partagé par les TROIS lecteurs du point focal (imageCss.ts, element.ts, et ici) —
+  // un calque sans `focal` (tout calque écrit avant cette tâche) affiche le point au centre.
+  const focalValue = layer.focal ?? { x: 0.5, y: 0.5 };
+  const sizingMode = layer.sizing ?? layer.fit;
   return (
     <>
       <TypeSection title="Source de l'image" sectionId="source" layerType="image" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
@@ -689,6 +701,20 @@ function ImageFields({
             patch(next);
           }}
         />
+        {/* Tâche 6 : le point focal ne compte QUE pour les modes qui laissent l'image déborder de son
+            cadre — cover (recadrage) et tile (origine de la mosaïque) ; contain/stretch/custom
+            remplissent le cadre exactement (ou le déforment), un point focal n'y change rien de
+            visible (imageCss.ts#focalToPosition reste appelé pour ces modes, mais son résultat est
+            sans effet observable — inutile d'exposer un contrôle qui ne ferait rien). */}
+        {(sizingMode === "cover" || sizingMode === "tile") && (
+          <FieldRow label="Point focal">
+            <FocalPointField
+              value={focalValue}
+              imageSrc={focalImageSrc}
+              onCommit={(v) => patch({ focal: v })}
+            />
+          </FieldRow>
+        )}
         {(layer.sizing ?? layer.fit) === "tile" && (
           <>
             <SliderField
