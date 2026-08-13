@@ -130,14 +130,26 @@ function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" 
   // (dont le `%` de `background-position` est bogué, spike Tâche 1). Les deux formules sont
   // équivalentes en principe ; ce sont les DEUX SEULS points de divergence volontaires de tout ce
   // fichier, documentés ici pour qu'un futur lecteur ne les prenne pas pour un oubli de parité.
-  if (layer.source.kind === "slot") return <Placeholder label={`{{${layer.source.slot}}}`} />;
+  // RÈGLE DES HOOKS (correctif revue) — `useNaturalSize` DOIT s'exécuter à CHAQUE rendu de ce
+  // composant, quelle que soit la branche qui retourne ensuite : `LayerView` est keyée par
+  // `layer.id` (même fibre React d'un rendu à l'autre), et un calque `source.kind === "asset"` peint
+  // souvent avec `image` encore `undefined` au premier rendu (résolution ASYNC via
+  // `images?.get(layer.id)`, canvas.tsx) avant qu'un rendu suivant ne lui passe l'URL résolue.
+  // Poser ce hook APRÈS les `return` de placeholder (comme la première version de cette tâche le
+  // faisait) le fait tantôt s'exécuter (rendu avec `src`), tantôt PAS (rendu sans `src`, ou calque
+  // `slot`) sur cette même fibre — exactement le nombre de hooks qui varie d'un rendu à l'autre que
+  // React interdit (« Rendered more hooks than during the previous render »). `src`/`needsNaturalSize`
+  // se calculent donc AVANT tout `return`, en code ordinaire (pas des hooks), et le hook les consomme
+  // inconditionnellement ; il gère déjà `!active || !src` en interne (repli `null`), donc l'appeler
+  // avec un `src` encore `undefined` ou `needsNaturalSize` à `false` est sans danger.
   const src = layer.source.kind === "url" ? layer.source.url : image;
-  if (!src) return <Placeholder label={layer.name || "Image"} />;
-
   const sizing = layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain");
   const scale = layer.tile?.scale ?? 1;
   const needsNaturalSize = sizing === "tile" && scale !== 1;
   const natural = useNaturalSize(src, needsNaturalSize);
+
+  if (layer.source.kind === "slot") return <Placeholder label={`{{${layer.source.slot}}}`} />;
+  if (!src) return <Placeholder label={layer.name || "Image"} />;
 
   const css = imageCss(layer);
   // Voir useNaturalSize ci-dessus : LE SEUL cas où `imageCss` ne suffit pas — `"auto"` (sa réponse

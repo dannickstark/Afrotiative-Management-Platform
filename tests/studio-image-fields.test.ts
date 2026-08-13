@@ -13,6 +13,8 @@
 // une inspection de props React.
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import React from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { installDom, mount } from "./dom-harness";
 import type { Layer } from "@/lib/studio/scene";
 import { LayerView } from "@/components/studio/layer-view";
@@ -146,5 +148,81 @@ describe("ImageContent — §0 : l'aperçu peint un <div> de fond, comme le mote
     expect(container.querySelector('[data-testid="image-content"]')).toBeNull();
     expect(container.querySelector('[data-layer-id="img"]')!.textContent).toContain("article.image");
     unmount();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// RÉGRESSION (revue) — Règle des Hooks : `useNaturalSize` doit s'exécuter à CHAQUE rendu de
+// `ImageContent`, jamais seulement quand une branche `return`-placeholder n'a pas déjà eu lieu.
+//
+// SCÉNARIO REPRODUIT PAR LA REVUE : un calque `source.kind === "asset"` peint SOUVENT avec la prop
+// `image` encore `undefined` au premier rendu — sa résolution passe par `images?.get(layer.id)`
+// (canvas.tsx), ASYNCHRONE — puis un rendu SUIVANT, sur la MÊME fibre React (`LayerView` est keyée
+// par `layer.id`, jamais remontée pour ce même calque), lui passe l'URL enfin résolue. Si le hook est
+// posé APRÈS les `return` de placeholder (comme la première version de cette tâche le faisait), le
+// premier rendu (sans `src`) ne l'exécute PAS du tout, le second (avec `src`) l'exécute — le NOMBRE
+// de hooks appelés diverge d'un rendu à l'autre sur la même fibre, ce que React interdit
+// (« Rendered more hooks than during the previous render »). Reproduit ci-dessous SANS `mount()` du
+// harnais (qui crée une fibre fraîche par appel) : un `createRoot` brut, ré-utilisé pour DEUX
+// `root.render()` successifs sur le MÊME conteneur — exactement ce que fait React en production pour
+// deux rendus de la même instance.
+describe("ImageContent — régression Règle des Hooks : un calque asset dont l'image résout APRÈS le premier rendu", () => {
+  it("undefined → URL sur la MÊME fibre ne lève PAS d'erreur React (ordre de hooks stable)", async () => {
+    // `sizing:\"tile\", scale:2` — le cas qui déclenche `useNaturalSize` (`needsNaturalSize`), donc le
+    // seul où la présence/absence du hook peut concrètement varier entre les deux rendus ci-dessous.
+    const layer = imageLayer({
+      source: { kind: "asset", assetId: "a1" },
+      sizing: "tile",
+      tile: { scale: 2, axis: "both" },
+    });
+
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    let caught: unknown = null;
+
+    // React ne fait pas TOUJOURS remonter une violation de l'ordre des hooks comme une exception qui
+    // traverse `act()` — reproduit à la main (voir task-4-report.md) : contre le code d'AVANT ce
+    // correctif, la même séquence de rendus n'a PAS levé, mais a émis
+    // « Internal React error: Expected static flag was missing. Please notify the React team. » via
+    // `console.error`. Un `try/catch` seul aurait donc laissé passer une régression FUTURE qui
+    // reproduirait le même défaut sans (re)lever — on capture aussi la sortie `console.error`.
+    const originalConsoleError = console.error;
+    const consoleErrors: string[] = [];
+    console.error = (...args: unknown[]) => {
+      consoleErrors.push(args.map((a) => (typeof a === "string" ? a : String(a))).join(" "));
+    };
+
+    try {
+      // Premier rendu : `image` ABSENT (asset pas encore résolu) — `ImageContent` retourne le
+      // `Placeholder` (source manquante).
+      await act(async () => {
+        root.render(
+          React.createElement(LayerView, { layer, frame: FRAME, rotation: 0, selected: false, image: undefined }),
+        );
+      });
+
+      // Second rendu, MÊME `root` (donc même fibre) : l'asset a résolu, `image` porte maintenant une
+      // URL — `ImageContent` peint désormais le `<div>` de fond, ET son hook `useNaturalSize`.
+      await act(async () => {
+        root.render(
+          React.createElement(LayerView, { layer, frame: FRAME, rotation: 0, selected: false, image: "https://x.test/asset.png" }),
+        );
+      });
+    } catch (e) {
+      caught = e;
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    // Avant le correctif : soit `caught` porte l'invariant React (hook order), soit — le cas
+    // OBSERVÉ en pratique pour ce scénario précis — React récupère silencieusement en interne mais
+    // consigne « Internal React error: Expected static flag was missing » sur `console.error`. Après
+    // le correctif : ni l'un ni l'autre, et le second rendu a bien peint le contenu attendu — pas
+    // seulement « n'a rien levé ».
+    expect(caught).toBeNull();
+    expect(consoleErrors.join("\n")).not.toMatch(/hook|static flag|Rendered (more|fewer)/i);
+    expect(container.querySelector('[data-testid="image-content"]')).not.toBeNull();
+
+    act(() => { root.unmount(); });
   });
 });
