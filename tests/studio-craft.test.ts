@@ -90,3 +90,55 @@ describe("chantier E · états vides du studio via EmptyState (Tâche 3)", () =>
     expect(shell).toContain('import { EmptyState } from "@/components/shell/empty-state"');
   });
 });
+
+// ── Chantier E Tâche 4 (jetons de mouvement + micro-interactions) ─────────────────────────────────
+// §0 non-régression : ces tests vérifient uniquement la PRÉSENCE des jetons/classes et leur COUPURE
+// sous `prefers-reduced-motion` (règle mandatée) + le fait que chaque composant chrome porte bien la
+// classe attendue — jamais la fluidité RÉELLE de l'animation (vérifiée séparément en Playwright, voir
+// task-4-brief.md).
+describe("chantier E · jetons de mouvement + micro-interactions (Tâche 4)", () => {
+  it("les jetons de mouvement + la classe existent et sont coupés par prefers-reduced-motion", () => {
+    expect(css).toMatch(/--ease-spring\s*:/);
+    expect(css).toMatch(/--motion-fast\s*:/);
+    expect(css).toMatch(/--motion-base\s*:/);
+    expect(css).toContain("prefers-reduced-motion: reduce");
+    // au moins une classe de mouvement studio est définie ET neutralisée sous reduced-motion
+    expect(css).toMatch(/\.studio-motion-pop/);
+    expect(css).toMatch(/\.studio-motion-slide/);
+  });
+
+  it("le bloc reduced-motion neutralise bien CHAQUE classe de mouvement studio définie", () => {
+    // Toute classe `.studio-motion-*` référencée dans le fichier doit aussi apparaître DANS le bloc
+    // @media (prefers-reduced-motion: reduce) — sinon la coupe d'accessibilité serait partielle.
+    const reducedMotionBlock = css.slice(css.indexOf("prefers-reduced-motion: reduce"));
+    const motionClassNames = new Set(
+      [...css.matchAll(/\.(studio-motion-[a-z-]+)\s*\{/g)].map((m) => m[1]),
+    );
+    expect(motionClassNames.size).toBeGreaterThan(0);
+    for (const name of motionClassNames) {
+      expect(reducedMotionBlock).toContain(`.${name}`);
+    }
+  });
+
+  it("la barre flottante porte la classe de mouvement (apparition pop)", () => {
+    const tb = readFileSync(join(ROOT, "components/studio/floating-toolbar.tsx"), "utf8");
+    expect(tb).toContain("studio-motion-pop");
+  });
+
+  it("le menu clic-droit (popup) porte la classe de mouvement (apparition pop)", () => {
+    const menu = readFileSync(join(ROOT, "components/studio/canvas-context-menu.tsx"), "utf8");
+    expect(menu).toContain("studio-motion-pop");
+  });
+
+  it("editor-shell.tsx applique une transition (studio-motion-slide) au panneau accosté / aux tiroirs (Sheet)", () => {
+    expect(shell).toContain("studio-motion-slide");
+  });
+
+  it("le contour de sélection porte une transition douce (classe de mouvement studio)", () => {
+    // La géométrie réelle du contour de sélection par calque vit dans layer-view.tsx (rendu par
+    // canvas.tsx) — voir son en-tête (`outline: selected ? ... 2/scale ...`) : c'est CE fichier qui
+    // porte la classe, jamais une seconde implémentation dans canvas.tsx qui divergerait.
+    const layerView = readFileSync(join(ROOT, "components/studio/layer-view.tsx"), "utf8");
+    expect(layerView).toMatch(/studio-motion-outline/);
+  });
+});

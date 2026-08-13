@@ -215,6 +215,17 @@ export function LayerView({
       data-locked={layer.locked || undefined}
       onPointerDown={interactive ? onPointerDown : undefined}
       onContextMenu={interactive ? onContextMenu : undefined}
+      // Chantier E Tâche 4 : `studio-motion-outline` (globals.css) — transitionne SEULEMENT
+      // `outline-color`/`opacity` en douceur ; la GÉOMÉTRIE (largeur `2/scale`, décalage `1/scale`,
+      // couleur `#2563eb`) reste EXACTEMENT celle d'avant cette tâche (§0 du plan), posée juste en
+      // dessous par le style en ligne — cette classe n'ajoute qu'une transition, jamais une valeur.
+      // CONDITIONNÉE à `selected || layer.locked` (exactement le cas où `outline` ci-dessous porte
+      // une vraie valeur, jamais `undefined`) — jamais posée inconditionnellement : les témoins HTML
+      // figés (tests/studio-shapes.test.ts « identité de sortie avant/après refactor », rendus avec
+      // `selected: false`) épinglent l'ABSENCE de tout `class=` sur ce div ; une classe posée pour
+      // TOUT calque, sélectionné ou non, romprait ces témoins sans le moindre changement de pixel.
+      // Coupée sous `prefers-reduced-motion: reduce`.
+      className={selected || layer.locked ? "studio-motion-outline" : undefined}
       style={{
         ...frameStyle(frame, rotation, layer),
         // `2 / scale` (revue Lot 2, Important 3) : voir le commentaire en tête de fichier — sans

@@ -223,6 +223,17 @@ export function FloatingToolbar({ selection, layers, bounds, scale, dispatch }: 
   return (
     <div
       data-testid="floating-toolbar"
+      // Chantier E Tâche 4 : `studio-motion-pop` (globals.css) posée ICI, sur l'ANCRE 0×0 — jamais
+      // sur le sous-arbre intérieur, qui porte déjà son propre `transform: scale(1/scale)` ESSENTIEL
+      // (le counter-scale documenté en tête de fichier). Poser l'animation sur ce même élément
+      // animerait la propriété CSS `transform` par-dessus ce style en ligne PENDANT toute la durée du
+      // pop (les keyframes l'emportent sur l'inline), corrompant le counter-scale le temps de
+      // l'apparition. Cette ancre-ci ne porte AUCUN `transform` inline — animer `transform` dessus
+      // (0.96 -> aucun) ne touche donc RIEN d'existant, et se termine SANS saut visuel (l'état final
+      // des keyframes, « aucun transform », est EXACTEMENT l'état non-animé). Coupé sous
+      // `prefers-reduced-motion: reduce` (globals.css) ; additif — AUCUNE géométrie ci-dessous ne
+      // change (§0 du plan).
+      className="studio-motion-pop"
       style={{ position: "absolute", left: bounds.x, top: bounds.y, width: 0, height: 0, pointerEvents: "none" }}
     >
       <div

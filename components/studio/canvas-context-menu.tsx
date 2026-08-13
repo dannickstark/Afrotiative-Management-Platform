@@ -159,6 +159,13 @@ export function CanvasContextMenu({
     <ContextMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <ContextMenuContent
         data-testid="canvas-context-menu"
+        // Chantier E Tâche 4 : `studio-motion-pop` (globals.css) — apparition en ressort léger à
+        // chaque clic droit, coupée sous `prefers-reduced-motion: reduce`. Cette classe est HORS
+        // `@layer` (globals.css) donc l'emporte sur l'animation `data-open:animate-in`/`data-closed:
+        // animate-out` de tw-animate-css déjà posée par components/ui/context-menu.tsx — remplacement
+        // ASSUMÉ (le pop-ressort du studio plutôt que le fade/zoom générique du composant partagé),
+        // jamais une seconde animation qui s'ajouterait par-dessus.
+        className="studio-motion-pop"
         anchor={virtualAnchorAt(anchor)}
         side="bottom"
         align="start"

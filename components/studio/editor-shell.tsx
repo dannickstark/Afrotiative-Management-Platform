@@ -925,18 +925,29 @@ function EditorShellInner({
                 n'est ouvert. */}
             {layout === "all-drawers" ? (
               <Sheet open={prefs.openPanel !== null} onOpenChange={(next) => { if (!next) collapsePanel(null); }}>
+                {/* Chantier E Tâche 4 : `studio-motion-slide` (globals.css) EN PLUS de la transition
+                    d'entrée/sortie déjà pilotée par base-ui (`data-starting-style`/`data-ending-style`,
+                    components/ui/sheet.tsx) — même mécanisme d'apparition, mais avec le ressort du
+                    studio plutôt que le `ease-in-out` générique du composant partagé. Coupé sous
+                    `prefers-reduced-motion: reduce`. */}
                 <SheetContent
                   side="left"
                   data-testid="panel-drawer"
                   showCloseButton={false}
-                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:w-auto"
+                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:w-auto studio-motion-slide"
                 >
                   {panelContent}
                 </SheetContent>
               </Sheet>
             ) : (
               <>
-                {panelContent}
+                {/* Chantier E Tâche 4 : `studio-motion-slide` sur le panneau accosté LUI-MÊME (pas la
+                    poignée de redimensionnement, en dehors de ce wrapper) — additif : la largeur/le
+                    contenu de `panelContent` (PanelHost ou l'un des panneaux qui l'enrobent
+                    eux-mêmes) ne changent pas, ce simple `<div>` ne fait qu'ajouter la classe de
+                    transition autour. `panelContent && …` évite de monter un `<div>` vide quand aucun
+                    panneau n'est ouvert (`panelBody()` rend alors `null`). */}
+                {panelContent && <div className="studio-motion-slide">{panelContent}</div>}
                 {prefs.openPanel !== null && (
                   <PanelResizeHandle
                     currentWidth={prefs.railPanelWidth}
@@ -1091,7 +1102,10 @@ function EditorShellInner({
                 >
                   <PanelRight />
                 </Button>
-                <SheetContent data-testid="inspector-drawer">
+                {/* Chantier E Tâche 4 : voir le commentaire jumeau sur `panel-drawer` ci-dessus — même
+                    principe (`studio-motion-slide` en plus de la transition base-ui déjà en place,
+                    coupée sous `prefers-reduced-motion: reduce`). */}
+                <SheetContent data-testid="inspector-drawer" className="studio-motion-slide">
                   <SheetHeader>
                     <SheetTitle>Propriétés</SheetTitle>
                   </SheetHeader>
