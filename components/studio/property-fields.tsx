@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+// Chantier C, Tâche 3 : `scrubValue`/`ScrubModifier` (Tâche 2, lib/studio/field-scrub.ts) sont les
+// SEULES maths de balayage — ce fichier ne recalcule rien, il relaie `dxPx`/Maj/Alt bruts d'un VRAI
+// `PointerEvent` DOM à la fonction pure et affiche son résultat dans le tampon local existant.
+import { scrubValue, type ScrubModifier } from "@/lib/studio/field-scrub";
 
 // components/studio/property-fields.tsx — Correctif revue finale (Minor) : `FieldRow`,
 // `useCommitBuffer` et `NumberField` vivaient dans property-panel.tsx, importées EN RETOUR par
@@ -26,11 +31,26 @@ export type Patch = (p: Record<string, unknown>) => void;
 // ─────────────────────────────────────────────────────────────────────────────
 // Primitives de champ — chacune tamponne localement, résout au blur/Entrée, et Échap annule.
 
-export function FieldRow({ label, action, children }: { label: string; action?: ReactNode; children: ReactNode }) {
+export function FieldRow({
+  label, action, children, labelProps,
+}: {
+  label: string; action?: ReactNode; children: ReactNode;
+  /** Chantier C, Tâche 3 (additif) : porte des gestionnaires (pointeur/clavier) et une classe sur le
+   * `<Label>` rendu ici, pour que `NumberField` puisse en faire une poignée de balayage SANS que
+   * `FieldRow` connaisse quoi que ce soit du balayage — il relaie seulement des props génériques.
+   * Optionnel : `TextField`/`ColorField`/`SelectField` (et tout futur appelant) n'en passent aucune et
+   * gardent un `<Label>` nu, comportement bit à bit inchangé. `className` est FUSIONNÉE (jamais
+   * remplacée) avec la classe existante — un appelant ne peut donc pas effacer accidentellement
+   * `text-xs font-normal text-muted-foreground`. */
+  labelProps?: HTMLAttributes<HTMLLabelElement>;
+}) {
+  const { className: labelClassName, ...restLabelProps } = labelProps ?? {};
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-1">
-        <Label className="text-xs font-normal text-muted-foreground">{label}</Label>
+        <Label className={cn("text-xs font-normal text-muted-foreground", labelClassName)} {...restLabelProps}>
+          {label}
+        </Label>
         {action}
       </div>
       {children}
@@ -60,6 +80,7 @@ export function NumberField({
 }) {
   const strValue = Number.isFinite(value) ? String(value) : "0";
   const { local, setLocal, editing, setEditing } = useCommitBuffer(strValue);
+  const inputRef = useRef<HTMLInputElement>(null);
   function commit() {
     setEditing(false);
     const n = Number(local);
@@ -67,9 +88,105 @@ export function NumberField({
     if (n !== value) onCommit(n);
     else setLocal(strValue);
   }
+
+  // Chantier C, Tâche 3 — le label devient une poignée de balayage (Figma/After Effects) : glisser
+  // dessus change la valeur sans passer par le clavier. `scrub` (une ref, pas un state — son
+  // changement ne doit PAS provoquer de rendu à lui seul) mémorise le point de départ du geste EN
+  // COURS ; `null` signifie « aucun geste en cours », lu par les trois gestionnaires ci-dessous pour
+  // ignorer un `pointermove`/`pointerup` orphelin (ex. un `pointerup` qui suit un `pointerdown` sur un
+  // AUTRE champ, capture de pointeur oblige ce n'est normalement pas observable, mais la garde ne
+  // coûte rien). Le SEUIL de 3px (§0, épinglé par un test de mutation) distingue un clic-pour-taper
+  // d'un glisser réel — sans lui, tout clic sur l'étiquette committrait une valeur non voulue au lieu
+  // de laisser passer le focus à l'`<input>`.
+  const scrub = useRef<{ startX: number; startValue: number } | null>(null);
+  const MOVE_THRESHOLD_PX = 3;
+
+  function modifierOf(e: { shiftKey: boolean; altKey: boolean }): ScrubModifier {
+    return e.shiftKey ? "shift" : e.altKey ? "alt" : "none";
+  }
+
+  function onLabelPointerDown(e: PointerEvent<HTMLLabelElement>) {
+    if (disabled) return;
+    // jsdom ne fournit pas `setPointerCapture` sur les éléments (voir tests/dom-harness.ts#pointer) —
+    // l'appel optionnel se contourne lui-même en test, et capture réellement le pointeur en navigateur
+    // pour que le geste continue de recevoir des `pointermove` même si le curseur quitte l'étiquette.
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    document.body.style.cursor = "ew-resize";
+    scrub.current = { startX: e.clientX, startValue: value };
+  }
+
+  function onLabelPointerMove(e: PointerEvent<HTMLLabelElement>) {
+    if (!scrub.current) return;
+    const v = scrubValue(scrub.current.startValue, e.clientX - scrub.current.startX, {
+      step, min, max, modifier: modifierOf(e),
+    });
+    // Le tampon d'AFFICHAGE local uniquement — jamais `onCommit` ici : un `pointermove` tire à chaque
+    // pixel, et `onCommit` -> `patch` -> `setLayerProp` pousse UNE entrée d'historique par appel (§0).
+    // En pousser une par mouvement rendrait ⌘Z inutilisable après un seul geste de balayage.
+    setEditing(true);
+    setLocal(String(v));
+  }
+
+  function onLabelPointerUp(e: PointerEvent<HTMLLabelElement>) {
+    if (!scrub.current) return;
+    const dxPx = e.clientX - scrub.current.startX;
+    const moved = Math.abs(dxPx) >= MOVE_THRESHOLD_PX;
+    const v = scrubValue(scrub.current.startValue, dxPx, { step, min, max, modifier: modifierOf(e) });
+    scrub.current = null;
+    document.body.style.cursor = "";
+    setEditing(false);
+    if (moved) {
+      // UNE SEULE entrée d'historique par geste : `onCommit` n'est appelé qu'ICI, au relâchement —
+      // jamais pendant `onLabelPointerMove`. Le mutant « supprimer ce garde-fou de seuil » (§0) est
+      // épinglé par tests/studio-scrub-field.test.ts : appeler `onCommit` pendant les `pointermove`
+      // ferait rougir l'assertion « appelé UNE fois ».
+      if (v !== value) onCommit(v);
+      else setLocal(strValue);
+    } else {
+      // Pas de mouvement franchissant le seuil : un CLIC, pas un glisser. Ne rien committer (aucune
+      // valeur n'a réellement changé sous le doigt de l'utilisateur) et laisser le focus tomber dans
+      // l'`<input>` — le clic-pour-taper reste possible depuis l'étiquette.
+      setLocal(strValue);
+      inputRef.current?.focus();
+    }
+  }
+
+  function onLabelPointerCancel() {
+    if (!scrub.current) return;
+    scrub.current = null;
+    document.body.style.cursor = "";
+    setLocal(strValue);
+    setEditing(false);
+  }
+
+  function onLabelKeyDown(e: KeyboardEvent<HTMLLabelElement>) {
+    // Échap PENDANT le glisser annule : revient à la valeur de départ, aucun commit. Le clavier de
+    // l'`<input>` lui-même (flèches, Entrée, Échap, blur -> commit) est un chemin ENTIÈREMENT séparé,
+    // inchangé plus bas.
+    if (e.key === "Escape" && scrub.current) {
+      scrub.current = null;
+      document.body.style.cursor = "";
+      setLocal(strValue);
+      setEditing(false);
+    }
+  }
+
   return (
-    <FieldRow label={label} action={action}>
+    <FieldRow
+      label={label}
+      action={action}
+      labelProps={{
+        className: "cursor-ew-resize select-none",
+        "data-scrub": "true",
+        onPointerDown: onLabelPointerDown,
+        onPointerMove: onLabelPointerMove,
+        onPointerUp: onLabelPointerUp,
+        onPointerCancel: onLabelPointerCancel,
+        onKeyDown: onLabelKeyDown,
+      } as HTMLAttributes<HTMLLabelElement>}
+    >
       <Input
+        ref={inputRef}
         type="number"
         inputMode="decimal"
         step={step}
