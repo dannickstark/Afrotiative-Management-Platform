@@ -42,7 +42,7 @@ export const BRAND_SWATCHES: string[] = [
   "#c9822f", // ambre foncé/orangé — --chart-3 oklch(0.681 0.162 75.834)
   "#a8623a", // brun-orangé — --chart-4 oklch(0.554 0.135 66.442)
   "#7a4a30", // brun profond — --chart-5 oklch(0.476 0.114 61.907)
-  "#f5f2ec", // neutre chaud très clair — --muted/--background oklch(~0.966/1 0.005 106.5)
+  "#f5f2ec", // neutre chaud très clair — --muted oklch(0.966 0.005 106.5) (PAS --background, oklch(1 0 0) : chroma nulle, un blanc pur sans le grain chaud du reste de la rampe)
   "#e6e1d6", // neutre chaud clair — --border/--input oklch(0.93 0.007 106.5)
   "#26221c", // neutre chaud très foncé — --foreground/--card-foreground oklch(0.153 0.006 107.1)
   "#000000",
@@ -256,7 +256,16 @@ export function ColorPicker({ value, context, onCommit, dataField }: ColorPicker
         }
       />
       <PopoverContent className="w-72 p-2.5" data-testid="color-picker-content">
-        <Tabs defaultValue={isToken ? "jeton" : "couleur"}>
+        {/* `key` (revue coordinateur, Important 1) : `Tabs` est NON contrôlé — `defaultValue` ne
+            choisit l'onglet actif qu'AU PREMIER MONTAGE de `Tabs` lui-même. Si CETTE MÊME instance de
+            `ColorPicker` reste montée et que `value` bascule d'un littéral à un `{{jeton}}` (ex. un
+            annuler/rétablir qui change `layer.color` sans démonter le panneau), rouvrir le Popover
+            gardait alors le DERNIER onglet actif au lieu de montrer l'onglet Jeton pour la valeur
+            désormais liée — le §0 « une valeur {{jeton}} affiche… l'onglet Jeton » l'exige à CHAQUE
+            ouverture, pas seulement au premier montage. Poser `isToken` en `key` REMONTE `Tabs` dès
+            que la « jetonnité » change, ce qui réapplique `defaultValue` — voir
+            tests/studio-color-picker.test.ts (« rerendre la MÊME instance… »), RED sans cette clé. */}
+        <Tabs key={isToken ? "jeton" : "couleur"} defaultValue={isToken ? "jeton" : "couleur"}>
           <TabsList className="w-full">
             <TabsTrigger value="couleur" className="flex-1">Couleur</TabsTrigger>
             <TabsTrigger value="jeton" className="flex-1" data-testid="color-token-tab">Jeton</TabsTrigger>

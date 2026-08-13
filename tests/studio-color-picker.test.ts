@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import React from "react";
 import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { installDom, mount, click, flush, pointer } from "./dom-harness";
 import type { TemplateContext } from "@/lib/studio/tokens";
 
@@ -241,6 +242,65 @@ describe("ColorPicker — Chantier C, Tâche 4", () => {
       // noir opaque sans lien apparent avec la valeur réellement liée).
       const tokenTab = document.body.querySelector('[data-testid="color-token-tab"]') as HTMLElement;
       expect(tokenTab.getAttribute("data-active")).not.toBeNull();
+    },
+  );
+
+  // Revue coordinateur (Important 1) : `Tabs` (components/ui/tabs.tsx, @base-ui/react) est NON
+  // contrôlé — `defaultValue` ne choisit l'onglet actif qu'AU PREMIER MONTAGE de `Tabs` lui-même. Le
+  // test §0 ci-dessus MONTE une nouvelle instance avec une valeur `{{jeton}}` DÈS le départ — il ne
+  // peut donc pas épingler la régression réelle : la MÊME instance de `ColorPicker`, restée montée
+  // ET LE POPOVER RESTANT OUVERT (fermer puis rouvrir démonte déjà `PopoverContent` — donc `Tabs` —
+  // et réapplique `defaultValue` de toute façon, quelle que soit la clé ; vérifié directement en
+  // retirant `key` : le scénario « fermer/rouvrir » reste vert même SANS le correctif, un faux
+  // témoin qu'une première version de ce test a failli garder), dont `value` bascule d'un littéral à
+  // un `{{jeton}}` PENDANT que le Popover est ouvert (ex. un ⌘Z/⌘⇧Z qui change `layer.color` pendant
+  // que l'utilisateur regarde le sélecteur). Ce test-ci REND (`root.render`, jamais un remontage) le
+  // MÊME arbre React avec une nouvelle prop `value` SANS fermer le Popover entre les deux.
+  it.skipIf(!popoverEffectsLive)(
+    "un ColorPicker OUVERT dont la valeur bascule littéral -> {{jeton}} (sans fermer/rouvrir) affiche l'onglet Jeton (jamais le dernier onglet actif)",
+    async () => {
+      const onCommit = mock((_v: string) => {});
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root: Root = createRoot(container);
+      // Enregistré AVANT toute assertion (jamais seulement en fin de test) : un `expect` qui rougit
+      // au milieu de ce test ne doit PAS laisser ce Popover/`root` orphelin dans `document.body` —
+      // une fuite qui polluerait les `document.body.querySelector` des tests SUIVANTS (vécu : une
+      // première version de ce test, RED sur l'assertion clé, faisait aussi rougir le test du glisser
+      // teinte qui le suit, par pollution de `document.body`, pas par un vrai défaut du glisser).
+      currentUnmount = () => { act(() => { root.unmount(); }); container.remove(); };
+
+      await act(async () => {
+        root.render(React.createElement(ColorPickerC, { value: "#ffffff", context: "article_image", onCommit }));
+      });
+
+      const trigger = container.querySelector('[data-testid="color-picker-trigger"]') as HTMLButtonElement;
+      expect(trigger).not.toBeNull();
+
+      // Ouvre avec la valeur LITTÉRALE — l'onglet Couleur (défaut) est actif, jamais Jeton, ce que
+      // l'assertion ci-dessous vérifie AVANT de considérer prouvé quoi que ce soit sur l'après.
+      await click(trigger);
+      await flush();
+      const couleurTab = document.body.querySelector('[role="tab"]:not([data-testid="color-token-tab"])') as HTMLElement;
+      const tokenTabBefore = document.body.querySelector('[data-testid="color-token-tab"]') as HTMLElement;
+      expect(couleurTab).not.toBeNull();
+      expect(couleurTab.getAttribute("data-active")).not.toBeNull();
+      expect(tokenTabBefore.getAttribute("data-active")).toBeNull();
+
+      // MÊME instance, MÊME Popover OUVERT (aucun clic de fermeture entre les deux `render`) : la
+      // valeur bascule vers un jeton — le geste qu'un ⌘Z produirait sur ce même calque pendant que le
+      // sélecteur reste affiché.
+      await act(async () => {
+        root.render(React.createElement(ColorPickerC, { value: "{{category.color}}", context: "article_image", onCommit }));
+      });
+      await flush();
+
+      const tokenTabAfter = document.body.querySelector('[data-testid="color-token-tab"]') as HTMLElement;
+      expect(tokenTabAfter).not.toBeNull();
+      // Sans la clé `key={isToken ? "jeton" : "couleur"}` sur `<Tabs>`, `defaultValue` n'est jamais
+      // ré-évalué pour un `Tabs` déjà monté et l'onglet Couleur resterait actif ici — RED sans le
+      // correctif (vérifié directement : ce test rougit si on retire la clé).
+      expect(tokenTabAfter.getAttribute("data-active")).not.toBeNull();
     },
   );
 
