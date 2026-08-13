@@ -164,7 +164,20 @@ function effectiveImage(
         return { effImg: { w: iw * s, h: ih * s }, backgroundSize: "contain" };
       }
       const { w: cw, h: ch } = layer.customSize;
-      return { effImg: { w: cw, h: ch }, backgroundSize: `${cw}px ${ch}px` };
+      // effImg = min(custom, cadre) PAR AXE — jamais `cw`/`ch` bruts (suivi de revue, MIROIR de `cover`).
+      // Un axe qui DÉBORDE (custom > cadre) donnait une position NÉGATIVE ((cadre−custom)·focal), que
+      // Satori 0.29 PLAFONNE à 0 : l'export figeait le débordement sur le coin haut-gauche, focal inerte,
+      // alors que l'aperçu navigateur positionnait correctement — le désaccord WYSIWYG que §0 interdit.
+      // Le recadrage de l'axe débordant vit DÉSORMAIS dans images.ts#prepareImage (fenêtre focale extraite
+      // dans sharp, extent peint borné au cadre) — exactement comme `cover`. Avec effImg = (min(cw,fw),
+      // min(ch,fh)), focalToPositionPx recalcule (fw−min)·fx, (fh−min)·fy ≥ 0 sur CHAQUE axe : 0 sur un
+      // axe débordant (recadrage cuit dans sharp), letterbox positif sur un axe en retrait (que Satori
+      // gère). CUSTOM est ANISOTROPE : un axe peut déborder pendant que l'autre est en retrait, d'où le
+      // `min` par axe indépendant. NON-débordant (cw≤fw ET ch≤fh) : min = cw,ch → effImg/backgroundSize
+      // IDENTIQUES à avant (position positive letterbox), comportement INCHANGÉ.
+      const ew = Math.min(cw, fw);
+      const eh = Math.min(ch, fh);
+      return { effImg: { w: ew, h: eh }, backgroundSize: `${ew}px ${eh}px` };
     }
     case "tile": {
       // `scale` est une fraction de la taille INTRINSÈQUE (image-css.ts). La taille de tuile est donc

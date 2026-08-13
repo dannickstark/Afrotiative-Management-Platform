@@ -71,6 +71,33 @@ beforeAll(async () => {
   const blurA = await mkHalfRedGreen(300);
   const blurB = await mkHalfRedGreen(1200);
 
+  // /cquad.png (1000×1000) — TÉMOIN À QUATRE QUADRANTS pour locker le recadrage `custom` DÉBORDANT sur
+  // les DEUX axes. TL [0,500)² BLEU, BR [500,1000)² VERT, un carré central [430,570)² ROUGE ; le reste
+  // (TR, BL) noir. En `custom` customSize 600×600 sur un cadre 300×300 (déborde les deux axes), sharp
+  // extrait une fenêtre 500×500 au point focal : focal {0,0} → [0,500)² (le CENTRE tombe sur le BLEU),
+  // {0.5,0.5} → [250,750)² (CENTRE = carré ROUGE), {1,1} → [500,1000)² (CENTRE = VERT). C'est ce qui
+  // prouve, au pixel, que l'export `custom` débordant suit le point focal par axe (comme `cover`).
+  const cquad = await sharp({
+    create: { width: 1000, height: 1000, channels: 3, background: { r: 0, g: 0, b: 0 } },
+  }).composite([
+    { input: await sharp({ create: { width: 500, height: 500, channels: 3, background: { r: 0, g: 0, b: 255 } } }).png().toBuffer(), left: 0, top: 0 },
+    { input: await sharp({ create: { width: 500, height: 500, channels: 3, background: { r: 0, g: 255, b: 0 } } }).png().toBuffer(), left: 500, top: 500 },
+    { input: await sharp({ create: { width: 140, height: 140, channels: 3, background: { r: 255, g: 0, b: 0 } } }).png().toBuffer(), left: 430, top: 430 },
+  ]).png().toBuffer();
+
+  // /cstripe.png (1200×300) — TÉMOIN pour le cas MIXTE (un axe déborde, l'autre est en retrait). Trois
+  // tiers verticaux pleine hauteur : BLEU [0,400) | ROUGE [400,800) | VERT [800,1200). En `custom`
+  // customSize 800×150 sur un cadre 400×300 : X DÉBORDE (800>400) → sharp recadre une tranche focale en
+  // x ; Y est en RETRAIT (150<300) → hauteur PLEINE, letterbox vertical 75px haut/bas (position y
+  // (300−150)·0.5=75). focal {0.5,·} centre la tranche sur le tiers ROUGE ; focal {0,·} la tire sur le
+  // BLEU. C'est ce qui prouve l'anisotropie : X recadré au focal, Y non recadré et centré.
+  const cstripe = await sharp({
+    create: { width: 1200, height: 300, channels: 3, background: { r: 0, g: 0, b: 255 } },
+  }).composite([
+    { input: await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 255, g: 0, b: 0 } } }).png().toBuffer(), left: 400, top: 0 },
+    { input: await sharp({ create: { width: 400, height: 300, channels: 3, background: { r: 0, g: 255, b: 0 } } }).png().toBuffer(), left: 800, top: 0 },
+  ]).png().toBuffer();
+
   server = Bun.serve({
     port: 0,
     fetch(req) {
@@ -79,6 +106,8 @@ beforeAll(async () => {
       if (p === "/crop.png") return new Response(crop, { headers: { "content-type": "image/png" } });
       if (p === "/blurA.png") return new Response(blurA, { headers: { "content-type": "image/png" } });
       if (p === "/blurB.png") return new Response(blurB, { headers: { "content-type": "image/png" } });
+      if (p === "/cquad.png") return new Response(cquad, { headers: { "content-type": "image/png" } });
+      if (p === "/cstripe.png") return new Response(cstripe, { headers: { "content-type": "image/png" } });
       return new Response(cover, { headers: { "content-type": "image/png" } });
     },
   });
@@ -91,6 +120,8 @@ const tileFetch: typeof fetch = (() => fetch(`${base}/tile.png`)) as unknown as 
 const cropFetch: typeof fetch = (() => fetch(`${base}/crop.png`)) as unknown as typeof fetch;
 const blurAFetch: typeof fetch = (() => fetch(`${base}/blurA.png`)) as unknown as typeof fetch;
 const blurBFetch: typeof fetch = (() => fetch(`${base}/blurB.png`)) as unknown as typeof fetch;
+const cquadFetch: typeof fetch = (() => fetch(`${base}/cquad.png`)) as unknown as typeof fetch;
+const cstripeFetch: typeof fetch = (() => fetch(`${base}/cstripe.png`)) as unknown as typeof fetch;
 
 // Échantillonneur à trois couleurs primaires saturées — tolérance très supérieure au bruit JPEG.
 const TOLERANCE = 24;
@@ -246,6 +277,142 @@ describe("renderScene() — §0 pixel : cover recadre au POINT FOCAL — l'expor
     expect(px(270, 150)).toBe("vert");
     expect(px(150, 150)).not.toBe("rouge");
     expect(px(150, 150)).not.toBe("bleu");
+  });
+});
+
+// ============================================================================
+// §0 (suivi de revue) — LE RECADRAGE `custom` DÉBORDANT SUIT LE POINT FOCAL PAR AXE, MESURÉ AU PIXEL.
+//
+// Un `sizing:"custom"` dont customSize dépasse le cadre sur un axe débordait DU MÊME bug que `cover`
+// avant son correctif : element.ts calculait une `background-position` NÉGATIVE (= (cadre−custom)·focal
+// quand custom>cadre), que Satori 0.29 PLAFONNE à 0 — l'export figeait le débordement sur le coin
+// HAUT-GAUCHE, point focal INERTE, alors que l'aperçu navigateur (layer-view.tsx, `background-size:
+// <cw>px <ch>px` + `background-position:<focal>%`) positionnait correctement, y compris en négatif.
+// Montage et Rendu réel DIVERGEAIENT. La correction MIRROIR de `cover` : prepareImage (images.ts)
+// recadre la source DANS sharp au point focal, PAR AXE — mais `custom` est ANISOTROPE, un axe peut
+// déborder pendant que l'autre est en RETRAIT. Axe débordant → fenêtre focale extraite, extent peint =
+// cadre, position 0 (recadrage cuit dans sharp). Axe en retrait → image ENTIÈRE, extent peint = custom,
+// position (cadre−custom)·focal ≥ 0 (letterbox positif, que Satori gère). element.ts pose donc
+// effImg = (min(cw,fw), min(ch,fh)) et le recadrage de l'axe débordant vit dans prepareImage.
+//
+// Ces tests LOCKENT la région réellement conservée par l'EXPORT avec des témoins hors-centre, en
+// balayant le point focal (+ un cas MIXTE débordement/retrait), et ANTI-VACUITÉ : la mauvaise région
+// n'est NULLE PART visible. WYSIWYG : ce que l'export conserve à focal F est ce que le CSS de l'aperçu
+// montre pour la même customSize.
+// ============================================================================
+
+describe("renderScene() — §0 pixel : custom DÉBORDANT recadre au POINT FOCAL par axe — l'export suit le focal et rejoint l'aperçu", () => {
+  // Cadre 300×300, customSize 600×600 : DÉBORDE les deux axes. sharp extrait une fenêtre 500×500 au
+  // point focal (srcW=round(300·1000/600)=500 ; origine=clamp(round(500·focal),0,500)). Le témoin
+  // cquad.png (TL bleu, BR vert, carré central rouge) rend chaque quadrant lisible.
+  function bothOverflowScene(focal?: { x: number; y: number }): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 300, height: 300, background: "#111111" },
+      layers: [{
+        ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 300, h: 300 },
+        type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover",
+        sizing: "custom", customSize: { w: 600, h: 600 },
+        ...(focal ? { focal } : {}),
+      }],
+    };
+  }
+
+  it("focal {0,0} → la fenêtre HAUT-GAUCHE (bleu) remplit le cadre — le focal tire le recadrage vers l'origine, sur les DEUX axes", async () => {
+    // origine=(clamp(round(500·0)),·)=(0,0) : sharp extrait [0,500)² = le quadrant BLEU. Le centre du
+    // cadre échantillonne le cœur de cette fenêtre (source ~250,250) → bleu.
+    const out = await renderScene({ scene: bothOverflowScene({ x: 0, y: 0 }), values: { "article.image": "https://cdn.test/cquad.png" }, fetchImpl: cquadFetch });
+    const px = await sampler(out.bytes);
+    expect(px(150, 150)).toBe("bleu"); // centre → cœur de la fenêtre focale = quadrant TL
+    expect(px(60, 60)).toBe("bleu");   // et une bonne part de la fenêtre est ce quadrant
+    // ANTI-VACUITÉ : le vert (BR) et le rouge (centre source) sont HORS de la fenêtre focale {0,0}.
+    expect(px(150, 150)).not.toBe("vert");
+    expect(px(150, 150)).not.toBe("rouge");
+  });
+
+  it("focal {0.5,0.5} → la fenêtre CENTRALE (carré rouge) — recadrage centré, WYSIWYG avec background-position:50%", async () => {
+    // origine=(clamp(round(500·0.5)),·)=(250,250) : sharp extrait [250,750)². Le centre du cadre tombe
+    // sur source (500,500) = le carré ROUGE central. C'est ce que l'aperçu montre à 50%.
+    const out = await renderScene({ scene: bothOverflowScene({ x: 0.5, y: 0.5 }), values: { "article.image": "https://cdn.test/cquad.png" }, fetchImpl: cquadFetch });
+    const px = await sampler(out.bytes);
+    expect(px(150, 150)).toBe("rouge");
+    expect(px(150, 150)).not.toBe("bleu");
+    expect(px(150, 150)).not.toBe("vert");
+  });
+
+  it("focal {1,1} → la fenêtre BAS-DROITE (vert) — le focal tire le recadrage vers la fin, sur les DEUX axes", async () => {
+    // origine=(clamp(round(500·1)),·)=(500,500) : sharp extrait [500,1000)² = le quadrant VERT.
+    const out = await renderScene({ scene: bothOverflowScene({ x: 1, y: 1 }), values: { "article.image": "https://cdn.test/cquad.png" }, fetchImpl: cquadFetch });
+    const px = await sampler(out.bytes);
+    expect(px(150, 150)).toBe("vert"); // centre → cœur de la fenêtre focale = quadrant BR
+    expect(px(240, 240)).toBe("vert");
+    expect(px(150, 150)).not.toBe("bleu");
+    expect(px(150, 150)).not.toBe("rouge");
+  });
+
+  // CAS MIXTE — X déborde (recadré au focal), Y en retrait (hauteur pleine + letterbox positif). Cadre
+  // 400×300, customSize 800×150. Le canevas est gris (#111) pour que le letterbox se DISTINGUE des trois
+  // couleurs témoins : une bande de letterbox NE DOIT PAS lire rouge/vert/bleu.
+  function mixedScene(focal: { x: number; y: number }): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 400, height: 300, background: "#111111" },
+      layers: [{
+        ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 400, h: 300 },
+        type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover",
+        sizing: "custom", customSize: { w: 800, h: 150 }, focal,
+      }],
+    };
+  }
+
+  it("MIXTE focal {0.5,0.5} : X recadré sur le tiers ROUGE, Y non recadré et LETTERBOXÉ (75px haut/bas)", async () => {
+    // X : srcW=round(400·1200/800)=600, origine=clamp(round((800−400)·0.5·1200/800),0,600)=300 →
+    //     tranche source-x [300,900], centrée sur le tiers ROUGE ([400,800)).
+    // Y : 150≤300 → hauteur PLEINE (srcH=300, top=0), extent peint 150, position y=(300−150)·0.5=75 :
+    //     l'image occupe le cadre y∈[75,225], le reste (y<75, y>225) est le canevas.
+    const out = await renderScene({ scene: mixedScene({ x: 0.5, y: 0.5 }), values: { "article.image": "https://cdn.test/cstripe.png" }, fetchImpl: cstripeFetch });
+    const px = await sampler(out.bytes);
+    expect(px(200, 150)).toBe("rouge"); // centre : la tranche focale X, dans la bande image Y
+    // LETTERBOX vertical : bandes haute (y=30<75) et basse (y=270>225) = le CANEVAS, pas l'image.
+    for (const y of [30, 270]) {
+      expect(px(200, y)).not.toBe("rouge");
+      expect(px(200, y)).not.toBe("vert");
+      expect(px(200, y)).not.toBe("bleu");
+    }
+  });
+
+  it("MIXTE focal {0,0.5} : la tranche X glisse sur le BLEU — le focal PILOTE l'axe qui déborde", async () => {
+    // origine X=clamp(round((800−400)·0·1200/800),0,600)=0 → tranche source-x [0,600] : le centre du
+    // cadre (source-x 300) tombe désormais sur le tiers BLEU ([0,400)), là où focal 0.5 montrait le rouge.
+    const out = await renderScene({ scene: mixedScene({ x: 0, y: 0.5 }), values: { "article.image": "https://cdn.test/cstripe.png" }, fetchImpl: cstripeFetch });
+    const px = await sampler(out.bytes);
+    expect(px(200, 150)).toBe("bleu");
+    expect(px(200, 150)).not.toBe("rouge");
+  });
+
+  // NON-DÉBORDANT — cw≤fw ET ch≤fh : AUCUN axe ne déborde, donc AUCUN recadrage sharp (comportement
+  // INCHANGÉ). L'image entière est letterboxée sur les deux axes à position positive. Cadre 400×400,
+  // customSize 200×200, source cover.png (400×200 rouge). L'image occupe une boîte 200×200 centrée
+  // (focal 0.5 → position (400−200)·0.5=100), entourée de canevas sur les quatre côtés.
+  it("NON-débordant (cw≤fw, ch≤fh) : letterbox positif sur les deux axes — inchangé, aucun recadrage", async () => {
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 400, height: 400, background: "#0000FF" },
+      layers: [{
+        ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 400, h: 400 },
+        type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover",
+        sizing: "custom", customSize: { w: 200, h: 200 }, focal: { x: 0.5, y: 0.5 },
+      }],
+    };
+    const out = await renderScene({ scene, values: { "article.image": "https://cdn.test/cover.png" }, fetchImpl: coverFetch });
+    const px = await sampler(out.bytes);
+    // cover.png est rouge : la boîte 200×200 centrée (frame [100,300)²) est rouge…
+    expect(px(200, 200)).toBe("rouge");
+    // …et les quatre marges de letterbox sont le FOND bleu (position positive, pas de plafonnement).
+    expect(px(200, 40)).toBe("bleu");  // marge haute
+    expect(px(200, 360)).toBe("bleu"); // marge basse
+    expect(px(40, 200)).toBe("bleu");  // marge gauche
+    expect(px(360, 200)).toBe("bleu"); // marge droite
   });
 });
 

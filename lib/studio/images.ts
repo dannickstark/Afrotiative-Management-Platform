@@ -65,7 +65,11 @@ function paintedScale(
     case "custom":
       // customSize absent malgré sizing:"custom" : repli CONTAIN, identique à element.ts#effectiveImage.
       if (!customSize) return Math.min(fw / iw, fh / ih);
-      return Math.sqrt((customSize.w / iw) * (customSize.h / ih));
+      // La taille logique PEINTE d'un `custom` est min(custom, cadre) PAR AXE (element.ts#effectiveImage,
+      // suivi de revue) — PAS `cw`/`ch` bruts : un axe débordant est recadré dans sharp à l'extent du
+      // cadre. `iw`/`ih` sont les dims PRÉPARÉES (= cet extent peint × outScale pour un axe débordant, la
+      // source bornée pour un axe en retrait). Moyenne géométrique des deux ratios d'axe (flou isotrope) :
+      return Math.sqrt((Math.min(customSize.w, fw) / iw) * (Math.min(customSize.h, fh) / ih));
     case "cover":
     default:
       return Math.max(fw / iw, fh / ih);
@@ -103,14 +107,21 @@ function parseHex(hex: string): { r: number; g: number; b: number; alpha: number
 // image mise à l'échelle `cover` : fenêtre visible (fw/s, fh/s) avec s=max(fw/iw, fh/ih), origine
 // (iw−cw)·fx / (ih−ch)·fy bornée aux limites de la source.
 //
-// Les AUTRES modes (contain/stretch/tile/custom) NE débordent pas le cadre de la même manière (contain
-// tient dedans ; stretch = cadre ; les décalages de tuile sont POSITIFS) : ils gardent l'image à sa
-// taille NATURELLE, seulement BORNÉE à un plafond (côté long ≤ 2×max(cadre)) en préservant l'aspect,
-// et leur recadrage/positionnement reste au fond CSS de Satori (element.ts#imageNode).
-//   TODO (custom débordant) : un `sizing:"custom"` dont customSize dépasse le cadre sur un axe retombe
-// dans le MÊME plafonnement de position négative par Satori (coin haut-gauche). Non corrigé ici : le
-// recadrage focal `custom` a une sémantique distincte (taille de fond explicite) et sort du périmètre
-// de ce correctif `cover`. Voir le rapport de branche.
+// RECADRAGE FOCAL `custom` DÉBORDANT (suivi de revue), MIROIR de `cover` mais PAR AXE. Un `sizing:
+// "custom"` peint un fond de taille EXPLICITE (cw×ch) positionné au point focal. Sur un axe qui DÉBORDE
+// le cadre (custom > cadre), la position vaut (cadre−custom)·focal < 0 — Satori 0.29 la plafonne à 0,
+// même bug que `cover`. On recadre donc ICI la fenêtre focale de l'axe débordant (voir la branche
+// `sizing==="custom"` plus bas), pour que l'image préparée arrive à l'extent PEINT min(custom,cadre) et
+// qu'element.ts recalcule une position 0 sur cet axe. `custom` est ANISOTROPE : chaque axe est traité
+// INDÉPENDAMMENT — un axe EN RETRAIT (custom ≤ cadre) n'est PAS recadré (source entière) et sera
+// simplement letterboxé à position POSITIVE (que Satori gère). Un `custom` dont AUCUN axe ne déborde
+// (ou sans customSize) reste dans le régime « taille naturelle bornée » ci-dessous, OCTET pour OCTET
+// l'ancien comportement.
+//
+// Les modes contain/stretch/tile NE débordent pas le cadre (contain tient dedans ; stretch = cadre ;
+// les décalages de tuile sont POSITIFS) : ils gardent l'image à sa taille NATURELLE, seulement BORNÉE à
+// un plafond (côté long ≤ 2×max(cadre)) en préservant l'aspect, et leur recadrage/positionnement reste
+// au fond CSS de Satori (element.ts#imageNode).
 export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedImage> {
   const { url, width, height, blur, overlay } = opts;
   const doFetch = opts.fetchImpl ?? fetch;
@@ -180,8 +191,46 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedI
         .extract({ left, top, width: cw, height: ch })
         .resize(tw, th, { fit: "fill" })
         .png().toBuffer({ resolveWithObject: true });
+    } else if (sizing === "custom" && opts.customSize && (opts.customSize.w > fw || opts.customSize.h > fh)) {
+      // RECADRAGE FOCAL `custom` DÉBORDANT (suivi de revue), MIROIR de `cover` mais PAR AXE. `custom`
+      // peint un fond de taille EXPLICITE (cw×ch) positionné au point focal. Un axe qui DÉBORDE le cadre
+      // (custom > cadre) calcule une `background-position` NÉGATIVE, que Satori 0.29 plafonne à 0 (coin
+      // haut-gauche, focal inerte) — même bug que `cover`, même remède : on extrait ICI la fenêtre focale
+      // de l'axe débordant, pour que l'image préparée arrive à l'extent PEINT (min(custom,cadre)) et que
+      // element.ts recalcule une position 0 sur cet axe. CUSTOM est ANISOTROPE : chaque axe est traité
+      // INDÉPENDAMMENT — un axe en retrait (custom ≤ cadre) n'est PAS recadré (fenêtre = source entière),
+      // il sera simplement letterboxé à position POSITIVE par element.ts. On n'entre ici QUE si customSize
+      // existe ET qu'au moins un axe déborde ; sinon (pas de customSize, ou aucun débordement) on retombe
+      // dans l'`else` ci-dessous (aspect naturel borné) — non-débordant reste donc OCTET pour OCTET l'ancien.
+      const meta = await sharp(bytes).metadata();
+      const iw = Math.max(1, meta.width ?? fw);
+      const ih = Math.max(1, meta.height ?? fh);
+      const fx = Math.min(1, Math.max(0, opts.focal?.x ?? 0.5));
+      const fy = Math.min(1, Math.max(0, opts.focal?.y ?? 0.5));
+      const { w: cw, h: ch } = opts.customSize;
+      const overflowX = cw > fw;
+      const overflowY = ch > fh;
+      // Fenêtre source par axe : sur un axe débordant, la portion visible du fond (cw×ch) dans le cadre
+      // vaut cadre/custom de sa largeur, ancrée au focal — reprojetée en pixels source (× i/custom). Sur
+      // un axe en retrait, la source ENTIÈRE (l'image tient dans son extent, pas de recadrage).
+      const srcW = overflowX ? Math.max(1, Math.round((fw * iw) / cw)) : iw;
+      const srcH = overflowY ? Math.max(1, Math.round((fh * ih) / ch)) : ih;
+      const left = overflowX ? Math.min(Math.max(Math.round(((cw - fw) * fx * iw) / cw), 0), iw - srcW) : 0;
+      const top = overflowY ? Math.min(Math.max(Math.round(((ch - fh) * fy * ih) / ch), 0), ih - srcH) : 0;
+      // Extent PEINT par axe = min(custom, cadre) (le `effImg` d'element.ts) : sortie à cet aspect via
+      // `fit:"fill"` (fige la dérive sous-pixel), bornée retina (≤ 2×) et jamais agrandie au-delà de la
+      // fenêtre extraite (petite source : Satori l'agrandira au rendu, sans coût mémoire ici).
+      const ptx = Math.min(cw, fw);
+      const pty = Math.min(ch, fh);
+      const outScale = Math.min(2, srcW / ptx, srcH / pty);
+      const tw = Math.max(1, Math.round(ptx * outScale));
+      const th = Math.max(1, Math.round(pty * outScale));
+      bounded = await sharp(bytes)
+        .extract({ left, top, width: srcW, height: srcH })
+        .resize(tw, th, { fit: "fill" })
+        .png().toBuffer({ resolveWithObject: true });
     } else {
-      // contain/stretch/tile/custom : aspect NATUREL préservé, seulement borné au plafond `cap`.
+      // contain/stretch/tile/custom NON débordant : aspect NATUREL préservé, seulement borné au plafond `cap`.
       bounded = await sharp(bytes)
         .resize(cap, cap, { fit: "inside", withoutEnlargement: true })
         .png().toBuffer({ resolveWithObject: true });
