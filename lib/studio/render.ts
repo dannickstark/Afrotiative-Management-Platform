@@ -223,6 +223,11 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
       prepared.set(layer.id, await prepareImage({
         url, width: layer.frame.w, height: layer.frame.h,
         blur: layer.blur, overlay: layer.overlay, fetchImpl: opts.fetchImpl,
+        // Le mode de cadrage — nécessaire UNIQUEMENT pour corriger la force du flou (images.ts, sigma
+        // indépendant du plafond). Même repli `sizing ?? (fit === "cover" ? …)` que le reste du chemin.
+        sizing: layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain"),
+        tileScale: layer.tile?.scale,
+        customSize: layer.customSize,
       }));
     } else if (layer.type === "qr") {
       // Pas de garde `if (!value)` ici : resolveTokens (values.ts) a déjà levé MissingTokensError

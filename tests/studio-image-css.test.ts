@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import {
-  imageCss, focalToPosition, focalToPositionPx, tileToRepeat, type ImageLayer,
+  imageCss, focalToPosition, focalToPositionPx, tileBackgroundSize, tileToRepeat, type ImageLayer,
 } from "@/lib/studio/image-css";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,6 +55,36 @@ describe("tileToRepeat", () => {
   it("« x » et « y » ne sont PAS interchangeables", () => {
     expect(tileToRepeat({ scale: 1, axis: "x" }).backgroundRepeat)
       .not.toBe(tileToRepeat({ scale: 1, axis: "y" }).backgroundRepeat);
+  });
+});
+
+describe("tileBackgroundSize — la taille de tuile de l'APERÇU, bornée au MÊME plafond que l'export (revue de branche)", () => {
+  // Le cœur du correctif §0 : l'aperçu doit tuiler à l'intrinsèque BORNÉE (côté long ≤ 2×max(cadre)),
+  // pas à la taille ORIGINALE de la source — sinon Montage (source originale) et Rendu réel (bornée)
+  // tuilent à des tailles différentes dès qu'une photo dépasse le plafond.
+  it("REPRO du brief : source 1200×800, cadre 300×300 (plafond 600), scale 1 → « 600px 400px » (bornée), PAS « 1200px 800px »", () => {
+    const size = tileBackgroundSize({ w: 1200, h: 800 }, { w: 300, h: 300 }, 1);
+    expect(size).toBe("600px 400px");
+    // ANTI-VACUITÉ : ce n'est PAS la taille originale (que l'ancien "auto" aurait tuilée).
+    expect(size).not.toBe("1200px 800px");
+  });
+
+  it("source SOUS le plafond : pas de bornage (facteur 1), tuile à la taille naturelle × scale", () => {
+    // Cadre 300×300 → plafond 600 ; source 400×300 (côté long 400 < 600) reste telle quelle.
+    expect(tileBackgroundSize({ w: 400, h: 300 }, { w: 300, h: 300 }, 1)).toBe("400px 300px");
+  });
+
+  it("le scale multiplie APRÈS le bornage (comme element.ts : intrinsèque bornée × scale)", () => {
+    // Bornée 600×400, puis ×2.
+    expect(tileBackgroundSize({ w: 1200, h: 800 }, { w: 300, h: 300 }, 2)).toBe("1200px 800px");
+    // Bornée 400×300 (sous plafond), puis ×0.5.
+    expect(tileBackgroundSize({ w: 400, h: 300 }, { w: 300, h: 300 }, 0.5)).toBe("200px 150px");
+  });
+
+  it("le plafond suit le CÔTÉ LONG du cadre (2×max(w,h)) et borne le côté long de la source", () => {
+    // Cadre 100×300 → plafond 600 ; source 3000×1500 (côté long 3000) → facteur 600/3000 = 0.2 →
+    // 600×300, arrondi à l'entier avant ×scale.
+    expect(tileBackgroundSize({ w: 3000, h: 1500 }, { w: 100, h: 300 }, 1)).toBe("600px 300px");
   });
 });
 

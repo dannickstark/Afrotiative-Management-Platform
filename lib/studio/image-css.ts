@@ -86,6 +86,38 @@ export function focalToPositionPx(
 }
 
 /**
+ * La taille de fond (`background-size`) d'une MOSAÏQUE dans l'APERÇU navigateur (layer-view.tsx),
+ * calculée à partir de la taille NATURELLE sondée de l'asset — bornée EXACTEMENT comme
+ * images.ts#prepareImage borne l'intrinsèque côté export (côté long ≤ 2×max(cadre), rapport d'aspect
+ * préservé, JAMAIS agrandie), puis multipliée par `scale`.
+ *
+ * POURQUOI ce helper existe (§0 WYSIWYG). `imageCss` renvoie `"auto"` pour une mosaïque parce qu'il est
+ * PUR (il ne reçoit jamais l'image, donc ne connaît pas sa taille naturelle). Or Satori (element.ts#
+ * effectiveImage, cas "tile") tuile à `prepared.w/h × scale`, où `prepared` est BORNÉE au plafond
+ * `cap = 2×max(cadre)`. Pour une vraie photo dont le côté long dépasse ce plafond (le cas courant),
+ * `"auto"` fait tuiler l'aperçu à la taille ORIGINALE de la source et l'export à la taille bornée —
+ * donc des compteurs de répétition ET une origine de tuile DIFFÉRENTS entre Montage et Rendu réel.
+ * Ce helper reproduit le bornage de sharp pour que l'aperçu tuile au MÊME intrinsèque borné que
+ * l'export. Un écart sous-pixel (sharp arrondit à l'entier, ici aussi) reste visuellement invisible.
+ */
+export function tileBackgroundSize(
+  natural: { w: number; h: number },
+  frame: { w: number; h: number },
+  scale: number,
+): string {
+  const cap = 2 * Math.max(frame.w, frame.h);
+  const long = Math.max(natural.w, natural.h);
+  // `fit: "inside", withoutEnlargement: true` : on RÉDUIT au plafond si le côté long le dépasse, jamais
+  // on n'agrandit (facteur ≤ 1) — identique à `sharp.resize(cap, cap, …)` dans prepareImage.
+  const factor = long > cap ? cap / long : 1;
+  // Arrondi à l'ENTIER avant ×scale : sharp borne l'intrinsèque à des dimensions entières, puis
+  // element.ts multiplie par scale — on reproduit le même ordre pour rester au pixel près de l'export.
+  const bw = Math.round(natural.w * factor);
+  const bh = Math.round(natural.h * factor);
+  return `${bw * scale}px ${bh * scale}px`;
+}
+
+/**
  * `background-repeat` pour un réglage de mosaïque. `"x"`/`"y"` restreignent la répétition à un seul
  * axe (`repeat-x`/`repeat-y`), `"both"` — ou l'ABSENCE de réglage — répète sur les deux (`repeat`).
  * PAS de `space`/`round` : ces deux valeurs CSS n'ont pas d'équivalent dans le schéma (adjudiqué à la

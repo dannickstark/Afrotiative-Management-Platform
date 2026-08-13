@@ -4,7 +4,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
 import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
-import { imageCss } from "@/lib/studio/image-css";
+import { imageCss, tileBackgroundSize } from "@/lib/studio/image-css";
 import { resolveLayerColorsForDisplay } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { SELECTION, LOCKED_OUTLINE } from "@/lib/studio/overlay-theme";
@@ -86,12 +86,18 @@ function Placeholder({ label }: { label: string }) {
 // La taille INTRINSÈQUE d'un asset, lue au runtime (Properties Pro P1, Tâche 4) — SEUL endroit du
 // composant qui a besoin de connaître la vraie taille de l'image : `imageCss` (image-css.ts) est un
 // module PUR, zéro import, qui ne reçoit jamais l'image elle-même (voir son commentaire de tête) et
-// renvoie donc `backgroundSize: "auto"` pour `sizing:"tile"`, quel que soit `scale`. `"auto"` est
-// EXACT pour `scale === 1` (le navigateur peint alors l'image à sa taille intrinsèque et la répète —
-// rien à corriger), mais FAUX pour `scale !== 1` : la mosaïque doit être peinte à `intrinsèque ×
-// scale`, exactement ce que fait le moteur d'export (element.ts#effectiveImage, cas "tile") pour la
-// parité WYSIWYG (§0). Ce hook ne se déclenche donc QUE dans ce cas précis (`needsNatural`) — pas de
-// chargement d'image superflu pour cover/contain/stretch/custom/tile-scale-1, qui n'en ont pas besoin.
+// renvoie donc `backgroundSize: "auto"` pour `sizing:"tile"`, quel que soit `scale`.
+//
+// PARITÉ MOSAÏQUE (correctif revue de branche). `"auto"` fait tuiler le navigateur à la taille
+// ORIGINALE de la source, alors que l'export (Satori) tuile à la taille BORNÉE au plafond
+// `cap = 2×max(cadre)` — `prepared.w/h × scale` (element.ts#effectiveImage, images.ts#prepareImage).
+// Pour toute vraie photo dont le côté long dépasse ce plafond (le cas COURANT), ces deux tailles
+// DIFFÈRENT — donc des compteurs de répétition et une origine de tuile différents entre Montage et
+// Rendu réel (§0 WYSIWYG). L'aperçu doit donc tuiler au MÊME intrinsèque borné : on sonde la taille
+// naturelle pour TOUTE mosaïque (plus seulement `scale !== 1` — le bornage peut changer la taille même
+// à `scale === 1`) et on la borne via `tileBackgroundSize` (image-css.ts, la MÊME arithmétique que
+// sharp). Ce hook ne se déclenche donc QUE pour `sizing === "tile"` — pas de chargement d'image
+// superflu pour cover/contain/stretch/custom, qui n'ont pas besoin de la taille naturelle.
 function useNaturalSize(src: string | undefined, active: boolean): { w: number; h: number } | null {
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
   useEffect(() => {
@@ -145,19 +151,23 @@ function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" 
   const src = layer.source.kind === "url" ? layer.source.url : image;
   const sizing = layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain");
   const scale = layer.tile?.scale ?? 1;
-  const needsNaturalSize = sizing === "tile" && scale !== 1;
+  // TOUTE mosaïque a besoin de la taille naturelle (voir `useNaturalSize` ci-dessus) : le bornage au
+  // plafond peut changer la taille de tuile même à `scale === 1`, dès que la source dépasse le plafond.
+  const needsNaturalSize = sizing === "tile";
   const natural = useNaturalSize(src, needsNaturalSize);
 
   if (layer.source.kind === "slot") return <Placeholder label={`{{${layer.source.slot}}}`} />;
   if (!src) return <Placeholder label={layer.name || "Image"} />;
 
   const css = imageCss(layer);
-  // Voir useNaturalSize ci-dessus : LE SEUL cas où `imageCss` ne suffit pas — `"auto"` (sa réponse
-  // pour toute mosaïque) reste correct pour `scale === 1`, donc `natural` n'est utilisé QUE quand
-  // `needsNaturalSize` est vrai ET que le chargement a déjà résolu (sinon on garde "auto" le temps
-  // d'un rendu, plutôt qu'un flash à 0×0 px).
+  // Voir useNaturalSize ci-dessus : LE SEUL cas où `imageCss` ne suffit pas — pour une mosaïque, il
+  // renvoie `"auto"`, qui tuile à la taille ORIGINALE de la source et diverge de l'export dès qu'elle
+  // dépasse le plafond. On la remplace par l'intrinsèque BORNÉE × scale (`tileBackgroundSize`, la même
+  // arithmétique que sharp côté export), MAIS seulement une fois la sonde résolue : tant que `natural`
+  // est `null` (premier rendu, chargement async), on garde `"auto"` le temps d'un rendu plutôt qu'un
+  // flash à 0×0 px — le rendu suivant, avec la taille naturelle connue, pose la valeur bornée exacte.
   const backgroundSize = needsNaturalSize && natural
-    ? `${natural.w * scale}px ${natural.h * scale}px`
+    ? tileBackgroundSize(natural, layer.frame, scale)
     : css.backgroundSize;
 
   return (

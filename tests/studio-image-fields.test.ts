@@ -142,7 +142,14 @@ describe("ImageContent — §0 : l'aperçu peint un <div> de fond, comme le mote
     unmount();
   });
 
-  it("sizing:\"tile\", scale 1 : background-size: auto (taille intrinsèque, aucune lecture async nécessaire)", async () => {
+  it("sizing:\"tile\", scale 1 : background-size « auto » en REPLI tant que la sonde de taille n'a pas résolu", async () => {
+    // Correctif revue de branche : TOUTE mosaïque sonde désormais la taille naturelle (le bornage au
+    // plafond peut changer la taille de tuile même à scale 1). Sous jsdom, la sonde `<img>` ne résout
+    // jamais (aucun décodage réel), donc `natural` reste `null` et l'aperçu garde le repli « auto »
+    // d'`imageCss` le temps de ce rendu — c'est CE repli qu'on observe ici. Dans un vrai navigateur, le
+    // rendu suivant remplacerait « auto » par l'intrinsèque BORNÉE × scale (`tileBackgroundSize`), la
+    // valeur au pixel près de l'export ; cette arithmétique est couverte, à l'unité, par
+    // tests/studio-image-css.test.ts#tileBackgroundSize (le vrai contrat de parité mosaïque).
     const layer = imageLayer({ sizing: "tile", tile: { scale: 1, axis: "x" } });
     const { el, unmount } = await mountImageContent(layer);
 
