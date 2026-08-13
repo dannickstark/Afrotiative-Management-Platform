@@ -8,6 +8,15 @@
 
 **Tech Stack :** Next.js 16.3, Zod v4, Satori 0.29 + resvg, sharp, `bun test` (jsdom + rasterisation pixel), Playwright (contrôleur).
 
+## Adjudication post-spike (Tâche 1 faite — le contrôleur a tranché ; ceci PRIME sur toute mention contraire ci-dessous)
+
+Le spike (commit `2c7f297`, rapport `spike-satori-background-report.md`) a mesuré Satori 0.29. Décision utilisateur : **livrer le périmètre natif-Satori, différer le reste.**
+- **DANS P1 :** `sizing` = `cover | contain | stretch | tile | custom` ; `tile.axis` = **`both | x | y` UNIQUEMENT** ; `focal` (point focal déplaçable) ; `customSize`. **CHEMIN DE RENDU UNIQUE** (pas de soupape `<img>` permanente).
+- **RETIRÉ de P1 (Satori ne les rend pas) :** `background-blend-mode` (pas de champ `blend` du tout) ET `background-repeat: space`/`round` (pas dans l'enum `axis`). Différés à un futur chantier « effets raster » (repli sharp).
+- **LE POINT CLÉ du spike — `background-position` :** Satori a un BOGUE de pourcentage (`cadre × pct` au lieu de `(cadre − image_effective) × pct`, et `100%` boucle). Donc :
+  - **APERÇU navigateur (`layer-view.tsx`, Tâche 4) :** émettre `background-position` en **POURCENTAGE** (`"x% y%"` depuis `focalToPosition`) — le CSS navigateur le calcule CORRECTEMENT.
+  - **MOTEUR Satori (`element.ts`, Tâche 3) :** émettre `background-position` en **PIXELS CALCULÉS** = `(dimCadre − dimImageEffective) × focal`, JAMAIS un pourcentage brut. La dimension effective dépend du mode (cover/contain/stretch/custom/tile) et de la taille INTRINSÈQUE de l'image — que `element.ts` obtient via les métadonnées passées par `prepareImage`/`render.ts` (métadonnées sharp). C'est le cœur technique de la Tâche 3.
+
 ## Global Constraints
 
 - **§0 (mesuré, pas affirmé) :** les gabarits image cover/contain EXISTANTS rendent VISUELLEMENT à l'identique — comparaison AU PIXEL via `renderScene`. Soupape : si cover/contain via CSS `background-size` diverge de l'ancien `objectFit` (sharp pré-recadré) au-delà d'une tolérance stricte, GARDER l'ancien chemin `<img objectFit>` pour cover/contain (`sizing` absent inclus) et n'utiliser le `<div>` de fond QUE pour les modes NOUVEAUX. La Tâche 3 tranche selon ce que le pixel dit.
@@ -69,12 +78,13 @@ git commit -m "spike(studio): modèle de fond Satori 0.29 — ce qui rend au pix
 - Test: `tests/studio-scene.test.ts` (migration no-op), `tests/studio-image-css.test.ts` (pur)
 
 **Interfaces:**
-- Produces (schéma) : `imageLayer` gagne `sizing?`, `focal?: {x,y}`, `tile?: {scale, axis}`, `customSize?: {w,h}`, `blend?` (OPTIONNELS).
-- Produces (`image-css.ts`) :
-  - `type ImageCss = { backgroundSize: string; backgroundRepeat: string; backgroundPosition: string; backgroundBlendMode?: string }`.
-  - `imageCss(layer: ImageLayer): ImageCss` — le mappage complet.
+- Produces (schéma) : `imageLayer` gagne `sizing?: enum(cover,contain,stretch,tile,custom)`, `focal?: {x,y}` (0–1), `tile?: {scale: number.positive, axis: enum("both","x","y")}`, `customSize?: {w,h}` (OPTIONNELS). **PAS de champ `blend`** (retiré, cf. adjudication). `tile.axis` n'a QUE both/x/y (pas space/round).
+- Produces (`image-css.ts`, PUR — le CSS de l'APERÇU, position en POURCENTAGE) :
+  - `type ImageCss = { backgroundSize: string; backgroundRepeat: string; backgroundPosition: string }` (pas de `backgroundBlendMode`).
+  - `imageCss(layer: ImageLayer): ImageCss` — mappage complet, `backgroundPosition` en `%` (correct dans le navigateur).
   - `focalToPosition(focal?: {x:number;y:number}): string` — `{0.5,0.5}`/absent → `"50% 50%"` ; `{0,1}` → `"0% 100%"`.
-  - `tileToRepeat(tile?: {scale:number; axis:string}): { backgroundRepeat: string }` — `axis "x"` → `"repeat-x"`, `"both"` → `"repeat"`, etc.
+  - `tileToRepeat(tile?: {scale:number; axis:"both"|"x"|"y"}): { backgroundRepeat: string }` — `"x"` → `"repeat-x"`, `"y"` → `"repeat-y"`, `"both"` → `"repeat"`. (space/round n'existent pas.)
+  - `focalToPositionPx(layer, effImg:{w:number;h:number}): string` — la variante PIXELS pour le MOTEUR Satori (Tâche 3) : `((frame.w − effImg.w) × focal.x)px ((frame.h − effImg.h) × focal.y)px`. PURE, testée sur la formule CSS.
 
 - [ ] **Step 1 : Tests qui échouent.** Migration no-op dans `tests/studio-scene.test.ts` :
 
@@ -136,9 +146,7 @@ git commit -m "feat(studio): schéma image avancé (sizing/focal/tile/custom/ble
 - [ ] **Step 1 : Test §0 pixel qui échoue** (`tests/studio-image-render.test.ts`) — modelé sur `tests/studio-shape-render.test.ts` : rendre un gabarit à UN calque image `sizing:"cover"` (ou legacy `fit:"cover"`) via `renderScene`, et vérifier des pixels-sondes attendus (le carré rouge de l'image témoin occupe la zone cover attendue). AJOUTER une sonde pour un mode NOUVEAU rendu par le spike (ex. `tile`). Le test PROUVE au pixel que le nouveau chemin rend cover comme avant ET rend la mosaïque.
 
 - [ ] **Step 2 : Lancer → échec.**
-- [ ] **Step 3 : Implémenter** selon le VERDICT DU SPIKE (le contrôleur l'aura tranché) :
-  - CHEMIN UNIQUE (si cover-via-CSS = cover-via-objectFit au pixel) : `imageNode` (pour `layer.type==="image"`) rend `{ type:"div", props:{ style:{ ...frameStyle, overflow:"hidden", ...radius, backgroundImage:`url(${uri})`, ...imageCss(layer) } } }` (plus d'`<img>` interne pour l'image ; le QR garde son `<img>`). `prepareImage` prépare l'image SANS recadrage forcé pour les nouveaux modes.
-  - SOUPAPE (si divergence) : GARDER l'`<img objectFit>` pour `sizing` cover/contain/absent ; n'utiliser le `<div>` de fond QUE pour `tile`/`stretch`/`custom`. Documenter les deux chemins.
+- [ ] **Step 3 : Implémenter (CHEMIN UNIQUE — verdict du spike).** `imageNode` (pour `layer.type==="image"` UNIQUEMENT ; le QR garde son `<img>`) rend `{ type:"div", props:{ style:{ ...frameStyle, overflow:"hidden", ...radius, backgroundImage:`url(${uri})`, ...imageCss(layer), backgroundPosition: focalToPositionPx(layer, effImg) } } }` — noter que `backgroundPosition` d'`imageCss` (en `%`) est ÉCRASÉ par la version PIXELS `focalToPositionPx(layer, effImg)` (le bogue de `%` de Satori l'exige). `effImg` = la taille EFFECTIVE de l'image après `background-size` (dérivée du mode + la taille INTRINSÈQUE, obtenue via les métadonnées sharp de `prepareImage`). `prepareImage` prépare l'image SANS recadrage forcé au cadre (les nouveaux modes en ont besoin à leur taille naturelle/tuile) et RENVOIE aussi la taille intrinsèque (métadonnées) pour que `element.ts` calcule `effImg`. Le flou/overlay restent dans `prepareImage`.
 - [ ] **Step 4 : Lancer → succès** ; puis `bun test tests/studio-*.test.ts` (les tests de rendu image existants — `studio-render`, `studio-preview` — DOIVENT rester verts, c'est le §0 ; seul le flake autosave toléré) ; `bun run test:pure` ; `bunx tsc --noEmit`. **§0 : si un test de rendu image existant rougit, le nouveau chemin a changé le rendu — c'est un échec, pas à contourner.**
 - [ ] **Step 5 : Commit.**
 ```bash
@@ -198,7 +206,7 @@ it("le menu Ajustement écrit sizing ; les contrôles mosaïque n'apparaissent q
 ```
 
 - [ ] **Step 2 : Lancer → échec.**
-- [ ] **Step 3 : Implémenter** dans `ImageFields` : remplacer le `SelectField` cover/contain par un « Ajustement » à 5 options (Remplir/Ajuster/Étirer/Mosaïque/Taille perso) écrivant `sizing` (et gardant `fit` cohérent pour la rétrocompat : `sizing==="cover"|"contain"` met à jour `fit`) ; afficher conditionnellement : mosaïque → `SliderField` « Échelle » (`tile.scale`) + `SelectField` « Répétition » (`tile.axis`) ; perso → deux `NumberField` (`customSize.w/h`) ; sous un repli « Avancé » (le patron des sections repliables) → `NumberField` de décalage (si non couvert par le point focal) + `SelectField` « Fondu » (`blend`, options selon le spike). `data-field` sur chacun.
+- [ ] **Step 3 : Implémenter** dans `ImageFields` : remplacer le `SelectField` cover/contain par un « Ajustement » à 5 options (Remplir/Ajuster/Étirer/Mosaïque/Taille perso) écrivant `sizing` (et gardant `fit` cohérent pour la rétrocompat : `sizing==="cover"|"contain"` met à jour `fit`) ; afficher conditionnellement : mosaïque → `SliderField` « Échelle » (`tile.scale`) + `SelectField` « Répétition » (`tile.axis`, options **Les deux / Horizontale / Verticale** = both/x/y) ; perso → deux `NumberField` (`customSize.w/h`). PAS de contrôle « Fondu » (blend retiré du périmètre). Le positionnement est couvert par le point focal (Tâche 6), pas un champ de décalage séparé. `data-field` sur chacun.
 - [ ] **Step 4 : Lancer → succès** + suite studio + `tsc`.
 - [ ] **Step 5 : Commit.**
 ```bash
