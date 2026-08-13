@@ -46,8 +46,22 @@ const nextConfig: NextConfig = {
   // même d'atteindre uploadAssetCore — un échec qu'aucun test `bun test` ne peut détecter (bun
   // exécute lib/studio/asset-core.ts nativement, jamais à travers le serveur Next.js), seulement une
   // vérification en navigateur réel.
+  // Désactive la génération des source maps du build Turbopack. `next build` (Turbopack 16.3.0)
+  // plante en phase d'ÉMISSION avec « <Code as GenerateSourceMap>::generate_source_map was
+  // canceled » (emit_all_output_assets → emit_assets → SourceMapAsset::content) : la génération des
+  // source maps consomme de la mémoire en plus (doc Next : 01-app/02-guides/memory-usage.md
+  // « Disable source maps ») et la tâche est ANNULÉE sous la pression mémoire du conteneur de build
+  // Railway — déterministe là-bas (RAM plus serrée), seulement intermittent en local. Ce ne sont que
+  // des aides au débogage prod : `productionBrowserSourceMaps` est déjà à false par défaut (les
+  // source maps navigateur ne sont donc pas en cause) ; on coupe ici les DEUX restantes —
+  // `turbopackSourceMaps` (les chunks émis par Turbopack, la tâche qui plante) et `serverSourceMaps`
+  // (le bundle serveur). Repéré uniquement sur le build Railway réel, jamais par `bun test` ni `bun
+  // run build` local (voir AGENTS.md : lire node_modules/next/dist/docs avant de toucher la config).
+  productionBrowserSourceMaps: false,
   experimental: {
     serverActions: { bodySizeLimit: "6mb" },
+    turbopackSourceMaps: false,
+    serverSourceMaps: false,
   },
 };
 
