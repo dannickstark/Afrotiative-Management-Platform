@@ -332,6 +332,47 @@ describe("l'ombre d'une forme — le schéma (U3 Tâche 4)", () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 5 — `groupId`, NOUVEAU et OPTIONNEL sur CHAQUE type de calque (`layerBase`, sur le
+// modèle EXACT de `constraints` : voir tests/studio-constraints.test.ts pour le même trio d'épreuves
+// sur ce champ-là). MIGRATION NO-OP : une scène déjà écrite (aucun calque n'a cette clé) se relit
+// EXACTEMENT comme avant — aucun designer qui n'a jamais groupé quoi que ce soit ne voit sa scène
+// changer d'un octet.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("parseScene — groupId (chantier B, Tâche 5)", () => {
+  it("accepte un calque SANS groupId — l'absence est le comportement d'aujourd'hui, pas une régression", () => {
+    expect(() => parseScene(structuredClone(valid))).not.toThrow();
+    const parsed = parseScene(structuredClone(valid));
+    // ANTI-VACUITÉ : ne pas juste vérifier « ça ne lève pas » — prouver que zod n'a RIEN inventé.
+    expect("groupId" in parsed.layers[0]).toBe(false);
+    expect("groupId" in parsed.layers[1]).toBe(false);
+  });
+
+  it("accepte un calque avec un groupId", () => {
+    const withGroup = structuredClone(valid);
+    (withGroup.layers[0] as { groupId?: string }).groupId = "g1";
+    (withGroup.layers[1] as { groupId?: string }).groupId = "g1";
+    const parsed = parseScene(withGroup);
+    expect(parsed.layers[0].groupId).toBe("g1");
+    expect(parsed.layers[1].groupId).toBe("g1");
+  });
+
+  it("refuse un groupId qui n'est pas une chaîne — preuve que le champ EST validé, pas juste toléré", () => {
+    const bad = structuredClone(valid);
+    (bad.layers[0] as unknown as { groupId: number }).groupId = 42;
+    expect(() => parseScene(bad)).toThrow(/Scène invalide/);
+  });
+
+  // MIGRATION NO-OP (load-bearing, même épreuve que constraints/formatOverrides) : une scène stockée
+  // SANS groupId fait un aller-retour par parseScene strictement inchangée (deep-equal), preuve que
+  // l'ajout du champ est purement additif.
+  it("migration no-op : une scène sans groupId round-trip inchangée", () => {
+    const stored = structuredClone(valid);
+    const roundTripped = parseScene(structuredClone(stored));
+    expect(roundTripped).toEqual(stored);
+  });
+});
+
 describe("FORMAT_PRESETS", () => {
   it("expose les huit préréglages avec des dimensions positives", () => {
     const keys = Object.keys(FORMAT_PRESETS);

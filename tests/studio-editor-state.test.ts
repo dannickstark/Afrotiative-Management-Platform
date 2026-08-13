@@ -16,6 +16,7 @@ import {
   rotateLayer,
   setLayerProp,
   addLayer,
+  addLayers,
   deleteLayer,
   reorderLayer,
   toggleVisible,
@@ -23,6 +24,7 @@ import {
   setFrames,
   setFrameOverride,
   frameEditAction,
+  setGroup,
   undo,
   redo,
   toCanvasCoords,
@@ -270,6 +272,211 @@ describe("addLayer", () => {
     const invalid = { ...state.scene.layers[1], frame: { x: 0, y: 0, w: -1, h: 100 } } as Layer;
     const next = editorReducer(state, addLayer("text", invalid));
     expect(next).toBe(state);
+  });
+});
+
+// ── Chantier B, Tâche 2 — `addLayers` : le pendant PLURIEL de `addLayer`, pour le presse-papiers en
+// session (copier/coller/dupliquer). Sur le modèle de `setFrames`/`setLayerProps` : un LOT de
+// calques, UNE SEULE entrée d'historique — voir le commentaire de `"addLayers"` sur `EditorAction`
+// (lib/studio/editor-state.ts) pour le détail. Contrairement à `addLayer`, qui REMPLACE la
+// sélection par le seul calque ajouté, `addLayers` la remplace par TOUS les ids ajoutés (c'est ce
+// qui fait qu'un coller sélectionne ce qu'on vient de coller).
+describe("addLayers — le LOT d'ajout, UNE entrée d'historique (chantier B, tâche 2)", () => {
+  function extra(id: string): Layer {
+    return {
+      id, name: "Collé", visible: true, locked: false,
+      frame: { x: 16, y: 16, w: 80, h: 80 },
+      type: "shape", shape: "rect", fill: "#123456",
+    };
+  }
+
+  it("ajoute N calques À LA FIN de scene.layers (avant-plan) en UNE SEULE entrée d'historique", () => {
+    const state = makeState();
+    const before = state.scene.layers.length;
+    const next = editorReducer(state, addLayers([extra("p1"), extra("p2"), extra("p3")]));
+    expect(next.scene.layers).toHaveLength(before + 3);
+    expect(next.scene.layers.slice(-3).map((l) => l.id)).toEqual(["p1", "p2", "p3"]);
+    expect(next.past).toHaveLength(1);
+    expect(next.future).toEqual([]);
+  });
+
+  it("sélectionne TOUS les calques ajoutés, dans l'ordre fourni", () => {
+    const state = makeState();
+    const next = editorReducer(state, addLayers([extra("p1"), extra("p2")]));
+    expect(next.selectedIds).toEqual(["p1", "p2"]);
+  });
+
+  it("UN SEUL undo retire les N calques à la fois — pas un par un", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
+    const before = state.scene.layers.length;
+    const next = editorReducer(state, addLayers([extra("p1"), extra("p2"), extra("p3")]));
+    const afterUndo = editorReducer(next, undo());
+    expect(afterUndo.scene.layers).toHaveLength(before);
+    expect(afterUndo.scene.layers.some((l) => l.id === "p1" || l.id === "p2" || l.id === "p3")).toBe(false);
+    // …et restaure la sélection D'AVANT le coller (même contrat que le reste de l'historique).
+    expect(afterUndo.selectedIds).toEqual(["title"]);
+
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(afterRedo.scene).toEqual(next.scene);
+    expect(afterRedo.selectedIds).toEqual(["p1", "p2", "p3"]);
+  });
+
+  // Anti-vacuité (brief) : « paste avec un presse-papiers VIDE est un no-op — aucune entrée
+  // d'historique, état inchangé PAR RÉFÉRENCE ». C'est le module clipboard (lib/studio/clipboard.ts)
+  // qui décide QUAND appeler addLayers([]), mais le réducteur lui-même doit être sûr sur ce cas :
+  // sans cette garde, un coller à vide empilerait une entrée d'annulation fantôme.
+  it("un lot VIDE est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, addLayers([]))).toBe(state);
+  });
+
+  it("un calque invalide dans le lot fait refuser TOUT le lot (commit() valide la scène entière)", () => {
+    const state = makeState();
+    const invalid = { ...extra("bad"), frame: { x: 0, y: 0, w: -1, h: 10 } } as Layer;
+    const next = editorReducer(state, addLayers([extra("ok"), invalid]));
+    expect(next).toBe(state);
+  });
+
+  it("un id qui collide avec un calque déjà présent dans la scène est refusé — parseScene rejette les doublons", () => {
+    const state = makeState();
+    // "title" existe déjà dans makeScene() : ajouter un calque partageant cet id doit être refusé,
+    // exactement comme setLayerProp qui créerait un doublon (voir « garde-fou scène invalide »).
+    const next = editorReducer(state, addLayers([extra("title")]));
+    expect(next).toBe(state);
+  });
+});
+
+// ── Chantier B, Tâche 5 — `setGroup` : grouper/dégrouper, modèle FLAT (lib/studio/groups.ts). Sur le
+// modèle EXACT de `setFrames`/`setLayerProps`/`addLayers` ci-dessus : un LOT d'ids, UNE SEULE entrée
+// d'historique, AUCUNE ENTRÉE FANTÔME si rien ne change réellement.
+describe("setGroup — grouper/dégrouper, UNE entrée d'historique (chantier B, Tâche 5)", () => {
+  it("assigne le MÊME groupId à tous les ids donnés, en UNE SEULE entrée d'historique", () => {
+    const state = makeState();
+    const next = editorReducer(state, setGroup(["title", "badge", "qr1"], "g1"));
+    expect(find(next, "title").groupId).toBe("g1");
+    expect(find(next, "badge").groupId).toBe("g1");
+    expect(find(next, "qr1").groupId).toBe("g1");
+    // Les calques HORS du lot restent intacts, y compris SANS groupId.
+    expect("groupId" in find(next, "bg")).toBe(false);
+    expect(next.past).toHaveLength(1);
+  });
+
+  it("groupId: null DÉGROUPE — retire la clé (pas une valeur undefined) de chaque membre du lot", () => {
+    const grouped = editorReducer(makeState(), setGroup(["title", "badge"], "g1"));
+    const ungrouped = editorReducer(grouped, setGroup(["title", "badge"], null));
+    expect("groupId" in find(ungrouped, "title")).toBe(false);
+    expect("groupId" in find(ungrouped, "badge")).toBe(false);
+    expect(ungrouped.past).toHaveLength(2); // grouper PUIS dégrouper : deux gestes, deux entrées.
+  });
+
+  // ANTI-VACUITÉ (brief, Step 4) : « dropping one-history-entry on setGroup reddens the undo test » —
+  // ce test EST ce garde-fou. Une implémentation qui empilerait une entrée PAR calque (une boucle sur
+  // une action à un seul id) laisserait `past` à 3, pas 1, et UN SEUL undo ne suffirait pas à tout
+  // annuler.
+  it("UN SEUL undo annule TOUT le lot, quel que soit son nombre de membres", () => {
+    const state = { ...makeState(), selectedIds: ["title"] };
+    const next = editorReducer(state, setGroup(["title", "badge", "qr1"], "g1"));
+    expect(next.past).toHaveLength(1);
+
+    const afterUndo = editorReducer(next, undo());
+    expect("groupId" in find(afterUndo, "title")).toBe(false);
+    expect("groupId" in find(afterUndo, "badge")).toBe(false);
+    expect("groupId" in find(afterUndo, "qr1")).toBe(false);
+    expect(afterUndo.selectedIds).toEqual(["title"]); // la sélection D'AVANT le geste est restaurée.
+
+    const afterRedo = editorReducer(afterUndo, redo());
+    expect(find(afterRedo, "title").groupId).toBe("g1");
+    expect(find(afterRedo, "badge").groupId).toBe("g1");
+    expect(find(afterRedo, "qr1").groupId).toBe("g1");
+  });
+
+  it("un lot VIDE est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setGroup([], "g1"))).toBe(state);
+  });
+
+  it("réassigner le MÊME groupId ne produit AUCUNE entrée fantôme — état inchangé, même référence", () => {
+    const grouped = editorReducer(makeState(), setGroup(["title", "badge"], "g1"));
+    const again = editorReducer(grouped, setGroup(["title", "badge"], "g1"));
+    expect(again).toBe(grouped);
+  });
+
+  it("dégrouper des calques SANS groupId est un no-op — même référence, aucune entrée d'historique", () => {
+    const state = makeState();
+    expect(editorReducer(state, setGroup(["title", "badge"], null))).toBe(state);
+  });
+
+  it("un id absent de la scène est sauté ligne à ligne — les autres du lot sont quand même groupés", () => {
+    const state = makeState();
+    const next = editorReducer(state, setGroup(["title", "inexistant", "badge"], "g1"));
+    expect(find(next, "title").groupId).toBe("g1");
+    expect(find(next, "badge").groupId).toBe("g1");
+    expect(next.past).toHaveLength(1);
+  });
+
+  // INVARIANT CONSTRAINTS-INTACTES (chantier D) — voir le commentaire du cas "setGroup" dans
+  // editor-state.ts : grouper/dégrouper ne doit JAMAIS toucher `layer.constraints`, présent ou absent.
+  it("CONSTRAINTS-INTACTES : grouper/dégrouper ne change JAMAIS layer.constraints", () => {
+    const scene = makeScene();
+    scene.layers = scene.layers.map((l) =>
+      l.id === "title" ? { ...l, constraints: { h: "leftRight" as const, v: "center" as const } } : l);
+    const state = initEditorState(scene);
+    const before = constraintsOf(find(state, "title"));
+
+    const grouped = editorReducer(state, setGroup(["title", "badge"], "g1"));
+    expect(constraintsOf(find(grouped, "title"))).toEqual(before);
+    // "badge" n'avait pas de constraints avant grouper — il n'en gagne pas une au passage.
+    expect("constraints" in find(grouped, "badge")).toBe(false);
+
+    const ungrouped = editorReducer(grouped, setGroup(["title", "badge"], null));
+    expect(constraintsOf(find(ungrouped, "title"))).toEqual(before);
+    expect("constraints" in find(ungrouped, "badge")).toBe(false);
+  });
+
+  it("un calque VERROUILLÉ peut quand même être groupé — le verrou protège la position/taille, pas l'appartenance à un groupe", () => {
+    const state = makeState();
+    const next = editorReducer(state, setGroup(["locked1", "badge"], "g1"));
+    expect(find(next, "locked1").groupId).toBe("g1");
+    expect(find(next, "locked1").locked).toBe(true);
+  });
+
+  // ── Revue (Important 3) — l'invariant « < 2 = no-op » est appliqué DANS LE RÉDUCTEUR lui-même, pas
+  // seulement côté hook (hooks/use-editor-keymap.ts) : un futur appelant (chantiers B T6/T7) qui
+  // dispatcherait `setGroup` directement, sans repasser par le hook, ne doit pas pouvoir marquer un
+  // calque SEUL comme « groupe ». Seul le chemin ASSIGNATION est concerné — dégrouper reste valide
+  // quel que soit le compte (déjà couvert par « dégrouper des calques SANS groupId est un no-op » et
+  // par le test d'undo ci-dessus, qui dégroupe deux membres à la fois sans qu'aucune borne basse
+  // n'intervienne).
+  describe("invariant < 2 = no-op, appliqué DANS LE RÉDUCTEUR (revue, Important 3)", () => {
+    it("grouper UN SEUL calque est un no-op — même référence, aucun groupId posé, aucune entrée d'historique", () => {
+      const state = makeState();
+      const next = editorReducer(state, setGroup(["title"], "g1"));
+      expect(next).toBe(state);
+      expect("groupId" in find(next, "title")).toBe(false);
+      expect(next.past).toEqual([]);
+    });
+
+    it("grouper un lot VIDE reste un no-op (déjà couvert par la garde générale, mais l'invariant <2 ne doit pas non plus lever)", () => {
+      const state = makeState();
+      expect(editorReducer(state, setGroup([], "g1"))).toBe(state);
+    });
+
+    // Un lot de deux ids dont UN SEUL résout réellement à un calque de la scène compte comme UN
+    // membre RÉEL, pas deux — l'id fantôme ne doit pas suffire à franchir le seuil.
+    it("un id fantôme dans le lot ne compte pas comme un second membre — toujours un no-op", () => {
+      const state = makeState();
+      const next = editorReducer(state, setGroup(["title", "inexistant"], "g1"));
+      expect(next).toBe(state);
+      expect("groupId" in find(next, "title")).toBe(false);
+    });
+
+    it("DEUX calques RÉELS franchissent le seuil normalement — le groupe se forme", () => {
+      const state = makeState();
+      const next = editorReducer(state, setGroup(["title", "badge"], "g1"));
+      expect(next).not.toBe(state);
+      expect(find(next, "title").groupId).toBe("g1");
+      expect(find(next, "badge").groupId).toBe("g1");
+    });
   });
 });
 

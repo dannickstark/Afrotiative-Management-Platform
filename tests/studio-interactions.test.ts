@@ -1,9 +1,11 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:test";
 import React from "react";
-import { installDom, mount, click, pressKey, flush, pointer } from "./dom-harness";
+import { installDom, mount, click, pressKey, releaseKey, flush, pointer, wheel } from "./dom-harness";
 import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
 import { dynamicTextRowsFor } from "@/lib/studio/dynamic-text";
 import { DEFAULT_PREFS } from "@/lib/studio/editor-prefs";
+import { clearClipboard } from "@/lib/studio/clipboard";
+import { wheelZoomScale, clampZoom, zoomAtCursor } from "@/lib/studio/zoom";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
 import type { AssetRow } from "@/lib/queries/assets";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
@@ -902,6 +904,175 @@ describe("Canvas — tirer un calque d'une sélection multiple déplace TOUT LE 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 5 — GROUPER/DÉGROUPER au canevas, à travers de VRAIS événements pointeur DOM.
+// tests/studio-groups.test.ts prouve `expandSelectionToGroups` en pur ; ce fichier-ci prouve que
+// canvas.tsx l'appelle RÉELLEMENT au clic (une mutation qui laisserait `dispatch(select(layer.id))`
+// inconditionnel dans le chemin « pas déjà sélectionné » laisserait ce bloc rouge) — et que le
+// glisser de groupe (déjà prouvé ci-dessus pour une sélection Maj-cliquée) fonctionne IDENTIQUEMENT
+// pour une sélection issue d'un clic sur un membre de groupe, SANS mécanisme de glisser séparé.
+function sceneWithGroupedPair(): Scene {
+  const scene = sceneWithThreeShapesOnCanvas();
+  scene.layers = [
+    { ...scene.layers[0], groupId: "g1" }, // "a"
+    { ...scene.layers[1], groupId: "g1" }, // "b"
+    scene.layers[2],                       // "c", hors groupe
+  ];
+  return scene;
+}
+
+describe("Canvas — un clic sur un MEMBRE de groupe sélectionne TOUT LE GROUPE (chantier B, Tâche 5)", () => {
+  it("clic sur un membre HORS sélection sélectionne LUI ET tous ses co-membres, jamais lui seul", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+    expect(layerEl(container, "a").getAttribute("data-selected")).toBe("true");
+    expect(layerEl(container, "b").getAttribute("data-selected")).toBe("true");
+    // Le troisième calque, HORS groupe, n'est pas entraîné dans la sélection.
+    expect(layerEl(container, "c").getAttribute("data-selected")).toBeNull();
+
+    unmount();
+  });
+
+  it("clic sur L'AUTRE membre du même groupe sélectionne le MÊME ensemble — peu importe lequel est cliqué", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+
+    await pointer(layerEl(container, "b"), "pointerdown", { clientX: 250, clientY: 250, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    unmount();
+  });
+
+  it("clic sur un calque SANS groupe ne sélectionne QUE lui-même — comportement d'avant intact", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+
+    await pointer(layerEl(container, "c"), "pointerdown", { clientX: 520, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["c"]);
+
+    unmount();
+  });
+
+  it("clic sur un membre REMPLACE une sélection PRÉCÉDENTE (sur un autre calque) par le groupe ENTIER, jamais un mélange", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), ["c"]);
+
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    unmount();
+  });
+
+  // ANTI-VACUITÉ (brief, Step 4) : « expandSelectionToGroups returning only the clicked id reddens
+  // this test ». Une régression qui repasserait à `dispatch(select(layer.id))` (remplacement par UN
+  // seul id) laisserait "b" hors sélection ici — c'est exactement ce que ce test surveille.
+  it("anti-vacuité : la sélection après clic est PLUS GRANDE qu'un seul id pour un membre de groupe", async () => {
+    const { box, container, unmount } = await mountCanvasWithReducer(sceneWithGroupedPair(), []);
+    await pointer(layerEl(container, "a"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+    expect(box.state.selectedIds.length).toBeGreaterThan(1);
+  });
+});
+
+// Chantier B, Tâche 5 (revue, Critique 1) — LE GLISSER DE GROUPE DÈS LE TOUT PREMIER CLIC, en UN
+// SEUL geste continu (pointerdown -> pointermove -> pointerup, SANS relâcher entre la sélection et
+// le glisser). `selectedIds` (la prop) est encore l'ANCIENNE sélection au moment de ce pointerdown —
+// React ne réapplique pas le dispatch synchrones dans le même gestionnaire — donc un correctif qui
+// dériverait `groupe` de `selectedIds` plutôt que de la MÊME expansion que celle dispatchée armerait
+// un glisser À UN SEUL calque sur ce premier clic : le membre cliqué bougerait seul, le reste du
+// groupe resterait planté. Le bloc précédent (« tirer un membre de groupe DÉJÀ sélectionné ») ne
+// couvre PAS ce cas : il pré-remplit `selectedIds` au montage, ce qui masque exactement ce défaut.
+describe("Canvas — le TOUT PREMIER geste (sélection + glisser en UN seul pointerdown/move/up) déplace le groupe ENTIER (chantier B, Tâche 5, revue)", () => {
+  it("clic + glisser continu sur un membre depuis une sélection VIDE déplace TOUS les membres, pas seulement celui tiré", async () => {
+    const scene = sceneWithGroupedPairFarFromGuides();
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, []);
+    const a = layerEl(container, "a");
+
+    await pointer(a, "pointerdown", { clientX: 30, clientY: 30, button: 0 });
+    // La sélection s'est bien étendue au groupe entier dès ce premier pointerdown.
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    await pointer(a, "pointermove", { clientX: 130, clientY: 130 });
+    await pointer(a, "pointerup", { clientX: 130, clientY: 130 });
+
+    expect(box.state.scene.layers.map((l) => l.frame)).toEqual([
+      { x: 110, y: 110, w: 50, h: 50 }, // "a" : +100, +100
+      { x: 300, y: 300, w: 50, h: 50 }, // "b" : +100, +100 aussi — le groupe entier a suivi, PAS resté planté
+      { x: 900, y: 900, w: 50, h: 50 }, // "c" : hors groupe ET hors sélection, INTACT
+    ]);
+    // UN LOT (`setFrames`), jamais un `moveLayer` isolé — la signature même du glisser de GROUPE,
+    // par opposition au glisser à un seul calque que le défaut produisait.
+    expect(box.actions.some((a) => a.type === "setFrames")).toBe(true);
+    expect(box.actions.some((a) => a.type === "moveLayer")).toBe(false);
+    expect(box.state.past).toHaveLength(1);
+
+    unmount();
+  });
+});
+
+// Canevas et cadres DÉDIÉS à ce test (2000×2000, coordonnées à trois chiffres bien espacées) —
+// PAS `sceneWithGroupedPair()`/`sceneWithThreeShapesOnCanvas()` : ce dernier a été calibré pour un
+// glisser qui déplace les TROIS calques (aucune référence d'accrochage ne reste sur place, voir son
+// commentaire). Ici « c » reste délibérément HORS du groupe et HORS sélection — donc candidat
+// d'accrochage RÉEL (lib/studio/snap.ts, décision 2) — et les marges ci-dessous (>50px de tout bord/
+// centre de « c » et de tout tiers/bord/centre du plan de travail) sont volontairement larges pour
+// que le test affirme la TRANSLATION BRUTE du geste, sans que l'accrochage n'y ajoute un pixel.
+function sceneWithGroupedPairFarFromGuides(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 2000, height: 2000, background: "#000000" },
+    layers: [
+      {
+        id: "a", name: "Calque A", visible: true, locked: false, groupId: "g1",
+        frame: { x: 10, y: 10, w: 50, h: 50 },
+        type: "shape", shape: "rect", fill: "#AAAAAA",
+      },
+      {
+        id: "b", name: "Calque B", visible: true, locked: false, groupId: "g1",
+        frame: { x: 200, y: 200, w: 50, h: 50 },
+        type: "shape", shape: "rect", fill: "#BBBBBB",
+      },
+      {
+        id: "c", name: "Calque C", visible: true, locked: false,
+        frame: { x: 900, y: 900, w: 50, h: 50 },
+        type: "shape", shape: "rect", fill: "#CCCCCC",
+      },
+    ],
+  };
+}
+
+describe("Canvas — tirer un membre de groupe DÉJÀ sélectionné (par clic groupe) déplace TOUT LE GROUPE (chantier B, Tâche 5)", () => {
+  it("le glisser de groupe, réutilisé SANS mécanisme séparé, déplace « a » et « b » ensemble et laisse « c » sur place", async () => {
+    const scene = sceneWithGroupedPairFarFromGuides();
+    // La sélection ["a","b"] simule ICI l'état obtenu APRÈS le clic qui sélectionne le groupe (bloc
+    // précédent) — ce test-ci prouve le glisser d'un SECOND geste sur cette sélection déjà groupée,
+    // exactement comme le fait déjà « Canvas — tirer un calque d'une sélection multiple » plus haut
+    // pour une sélection construite par Maj-clic : le MÊME mécanisme de glisser, aucun code neuf.
+    const { box, container, unmount } = await mountCanvasWithReducer(scene, ["a", "b"]);
+    const a = layerEl(container, "a");
+
+    await pointer(a, "pointerdown", { clientX: 30, clientY: 30, button: 0 });
+    // Le pointerdown ne re-sélectionne pas : la sélection groupe survit intacte au début du geste.
+    expect(box.state.selectedIds).toEqual(["a", "b"]);
+
+    await pointer(a, "pointermove", { clientX: 130, clientY: 130 });
+    await pointer(a, "pointerup", { clientX: 130, clientY: 130 });
+
+    expect(box.state.scene.layers.map((l) => l.frame)).toEqual([
+      { x: 110, y: 110, w: 50, h: 50 },  // "a" : +100, +100
+      { x: 300, y: 300, w: 50, h: 50 },  // "b" : +100, +100 aussi — le groupe entier a suivi
+      { x: 900, y: 900, w: 50, h: 50 },  // "c" : hors groupe ET hors sélection, INTACT
+    ]);
+    // UNE seule entrée d'historique pour tout le geste — même garantie que le glisser Maj-cliqué.
+    expect(box.state.past).toHaveLength(1);
+    expect(box.actions.filter((a) => a.type === "setFrames")).toHaveLength(1);
+
+    unmount();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tâche 3, M4 (revue finale U0+U2) — LA GARDE DE BOUTON AVANT LES EFFETS DE BORD.
 //
 // Le gestionnaire du corps d'un calque appelait `stopPropagation()`/`preventDefault()` AVANT de tester
@@ -1398,4 +1569,917 @@ describe("SelectField (emplacement image/QR) — une option ILLÉGALE reste dans
       unmount();
     },
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Seam 10 — Chantier B, Tâche 1 : le KEYMAP CENTRAL (lib/studio/keymap.ts + hooks/use-editor-
+// keymap.ts), à travers de VRAIS événements clavier `window`. tests/studio-keymap.test.ts prouve
+// `resolveShortcut`/`isEditingText` en PUR (littéraux, aucun DOM) ; ni lui ni les tests unitaires du
+// hook (il n'y en a pas — un hook n'a de sens qu'attaché à un composant) ne disent un mot du CÂBLAGE
+// réel : que EditorShell monte bien l'écouteur `window`, que Suppr/flèches ont RÉELLEMENT migré hors
+// de Canvas (et pas simplement dupliqués en plus), et que la garde de focus s'applique à un VRAI
+// `<input>` du panneau de calques — pas à un littéral `{ tagName: "INPUT" }` de complaisance.
+//
+// Chaque test ci-dessous RATTACHE son conteneur à `document.body` (même recette que
+// tests/studio-mode-switch.test.ts#mountAttached) : un événement dispatché dans un arbre DÉTACHÉ
+// n'atteint jamais `window`, où vit l'écouteur central (hooks/use-editor-keymap.ts).
+//
+// `shellLayerEl` (et non le `layerEl` partagé plus haut) : dès qu'un calque est sélectionné et que
+// le panneau « calques » est ouvert, `RenameField` (layer-panel.tsx) pose lui aussi un
+// `data-layer-id` sur son `<Input>` de renommage — un `layerEl` non scopé au canevas peut donc
+// résoudre vers CE `<input>` plutôt que vers le nœud du calque sur le canevas, selon l'ordre du DOM.
+// Trouvé PAR la Tâche 1 elle-même (un premier jet de ce fichier ciblait le mauvais nœud et lisait un
+// `style.left` vide) — scopé ici pour de bon.
+function shellLayerEl(container: HTMLElement, id: string): HTMLElement {
+  const el = container.querySelector(`[data-testid="studio-canvas"] [data-layer-id="${id}"]`) as HTMLElement | null;
+  if (!el) throw new Error(`nœud CANEVAS du calque « ${id} » absent du DOM monté`);
+  return el;
+}
+
+function shellSceneTwoLayers(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 1080, height: 1080, background: "#111111" },
+    layers: [
+      {
+        id: "t", name: "Texte", visible: true, locked: false,
+        frame: { x: 10, y: 10, w: 200, h: 80 },
+        type: "text", content: "Contenu",
+        font: { family: "Noto Sans", size: 24, weight: 400 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      },
+      {
+        id: "u", name: "Autre texte", visible: true, locked: false,
+        frame: { x: 300, y: 300, w: 150, h: 80 },
+        type: "text", content: "Second",
+        font: { family: "Noto Sans", size: 24, weight: 400 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      },
+    ],
+  };
+}
+
+/** Monte le VRAI `EditorShell` sur `scene`, RATTACHÉ à `document.body` (nécessaire pour que les
+ * événements clavier ciblés sur un calque ou un `<input>` du panneau atteignent l'écouteur `window`
+ * du keymap central). `cleanup()` démonte ET détache, sur le modèle de
+ * tests/studio-mode-switch.test.ts#mountAttached. */
+async function mountShellAttached(scene: Scene) {
+  const { container, unmount } = await mount(
+    React.createElement(EditorShellC, {
+      template: TEMPLATE, initialScene: scene, publishedScene: null, versions: [], previewArticles: [],
+    }),
+  );
+  document.body.appendChild(container);
+  return {
+    container,
+    cleanup: () => { unmount(); container.remove(); },
+  };
+}
+
+function sceneWithOneShapeLayer(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 1080, height: 1080, background: "#111111" },
+    layers: [{
+      id: "sh", name: "Forme", visible: true, locked: false,
+      frame: { x: 10, y: 10, w: 200, h: 200 },
+      type: "shape", shape: "rect", fill: "#CCCCCC",
+    }],
+  };
+}
+
+describe("EditorShell — le keymap central câble ⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches sur `window` (Chantier B, Tâche 1)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("⌘A RÉEL sur `window` sélectionne TOUS les calques", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBeNull();
+
+      await pressKey({ key: "a", metaKey: true });
+
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // CRITIQUE (revue post-livraison) — c'est CE test, sur le VRAI EditorShell (avec son VRAI
+  // PropertyPanel), qui manquait au premier jet : celui-ci utilisait un harnais Canvas+réducteur SANS
+  // PropertyPanel qui MASQUAIT le défaut réel. Vérifié RED avant le correctif (phase de capture +
+  // garde de popup, hooks/use-editor-keymap.ts + lib/studio/keymap.ts) : avec l'ancien écouteur en
+  // bouillonnement, ce test-ci échouait — `shellLayerEl(container, "t").getAttribute("data-selected")`
+  // restait `"true"` après Échap, un `<SelectField>` du panneau de propriétés (posé dès qu'un calque
+  // est sélectionné, quel que soit son type) interceptant l'événement avant `window`.
+  it("Échap RÉEL efface la sélection — à travers le VRAI EditorShell (PropertyPanel COMPRIS)", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "Escape" });
+
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // LA GARDE DE POPUP (revue post-livraison) — le corollaire du passage en capture ci-dessus : un
+  // `<Select>` RÉELLEMENT ouvert (pas seulement monté fermé, comme le test précédent) doit encore
+  // pouvoir se fermer sur Échap SANS que le keymap central ne désélectionne le calque en même temps.
+  //
+  // `it.skipIf(!popoverEffectsLive)` — MÊME garde que les seams Images/TokenPicker/SelectField en
+  // tête de fichier (Seam 1 et suivants) : ouvrir RÉELLEMENT un `<Select>` (le tiroir inspecteur en
+  // `Sheet`, PUIS le popup du `SelectField` lui-même) dépend du même `useIsoLayoutEffect` qu'eux —
+  // sans `--isolate`, un fichier voisin peut l'avoir figé en no-op AVANT ce fichier-ci, et le
+  // déclencheur `[data-field="shape"]` n'atteint alors jamais le DOM (`bun run test:pure`, qui
+  // agrège tous les fichiers dans le même processus, l'a montré rouge — voir task-1-report.md).
+  it.skipIf(!popoverEffectsLive)("Échap avec un VRAI <Select> OUVERT ferme le POPUP au lieu de désélectionner (garde de popup)", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBe("true");
+
+      // Cherché dans `document`, jamais `container` : sous 1280px (largeur par défaut de jsdom, ici),
+      // le panneau de propriétés vit dans le tiroir inspecteur (`Sheet`, base-ui `Dialog`), PORTALÉ
+      // dans `document.body` — un `container.querySelector` ne le trouve pas à cette largeur.
+      const trigger = document.querySelector('[data-field="shape"]') as HTMLButtonElement | null;
+      expect(trigger).not.toBeNull();
+      await click(trigger!);
+      await flush();
+      expect(trigger!.getAttribute("aria-expanded")).toBe("true");
+      // Le popup est RÉELLEMENT ouvert selon le signal EXACT que `lib/studio/keymap.ts#isPopupOpen`
+      // regarde (`aria-haspopup` + `aria-expanded="true"` sur le déclencheur) — pas `[data-open]`, qui
+      // se serait AUSSI révélé vrai avant ce clic (sections repliables ouvertes par défaut, tiroir
+      // inspecteur déjà ouvert) et n'aurait donc rien prouvé de spécifique à CE popup.
+      expect(document.querySelector('[aria-haspopup][aria-expanded="true"]')).not.toBeNull();
+
+      await pressKey({ key: "Escape" });
+
+      // Le POPUP s'est fermé (base-ui a bien reçu l'événement — notre écouteur, en capture, s'est
+      // effacé devant lui via la garde de popup)…
+      expect(trigger!.getAttribute("aria-expanded")).toBe("false");
+      // …et la sélection du calque N'A PAS été effacée par le keymap central au même geste.
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBe("true");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("une flèche RÉELLE déplace le calque sélectionné — Suppr/flèches ont RÉELLEMENT migré hors de Canvas#handleKeyDown", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      // Sélectionne « t » par un VRAI pointerdown (sans pointerup — aucun geste de glisser à committer,
+      // même recette que les tests de sélection simple plus haut dans ce fichier).
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "ArrowRight" });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11); // 10 + NUDGE_STEP(1)
+
+      await pressKey({ key: "ArrowDown", shiftKey: true });
+      expect(parseFloat(shellLayerEl(container, "t").style.top)).toBe(20); // 10 + NUDGE_STEP_SHIFT(10)
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Suppr RÉEL supprime le calque sélectionné", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, button: 0 });
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "Delete" });
+
+      expect(container.querySelector('[data-testid="studio-canvas"] [data-layer-id="u"]')).toBeNull();
+      // « t », lui, n'a pas bougé — Suppr n'agit que sur la sélection, jamais sur le reste de la scène.
+      expect(shellLayerEl(container, "t")).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘Z RÉEL annule le dernier geste committé, ⌘⇧Z RÉEL le rétablit", async () => {
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pressKey({ key: "ArrowRight" }); // UN geste committé (moveLayer -> une entrée d'historique)
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11);
+
+      await pressKey({ key: "z", metaKey: true });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(10); // annulé
+
+      await pressKey({ key: "z", metaKey: true, shiftKey: true });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11); // rétabli
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("LA GARDE DE FOCUS : ⌘Z et ⌘A ciblés sur un VRAI <input> de renommage (layer-panel.tsx) ne dispatchent RIEN (mutation : sans la garde, ce test rougit)", async () => {
+    // Panneau « calques » ouvert au montage — seul chemin non interactif pour obtenir le VRAI
+    // <input data-action="rename"> de RenameField (même recette que le test ⌘/ plus haut).
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      // Un geste committé D'ABORD : si la garde de ⌘Z ci-dessous ne tenait pas, il y aurait quelque
+      // chose de RÉEL à annuler, et ce test le verrait.
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pressKey({ key: "ArrowRight" });
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11);
+
+      const renameInput = container.querySelector(
+        '[data-action="rename"][data-layer-id="u"]',
+      ) as HTMLInputElement | null;
+      expect(renameInput).not.toBeNull();
+      // Sélectionne « u » par un VRAI pointerdown sur le canevas (même geste que les autres tests de
+      // ce fichier) plutôt que par `renameInput.focus()` : jsdom + le suivi de valeur des champs
+      // contrôlés de React (`handleEventsForInputEventPolyfill`, cherchant un `attachEvent` propre à
+      // IE, absent de jsdom) rend un VRAI `.focus()` imprévisible dans ce harnais — repéré en
+      // instrumentant le montage, voir task-1-report.md. `isEditingText` (lib/studio/keymap.ts) ne
+      // regarde de toute façon que `e.target` de l'événement clavier, jamais `document.activeElement` :
+      // CIBLER `renameInput` avec `pressKey` ci-dessous prouve la garde exactement de la même façon,
+      // sans dépendre d'un focus DOM réel.
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, button: 0 });
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+
+      await pressKey({ key: "z", metaKey: true }, renameInput!);
+      // ⌘Z gardé : la position de « t » (annulable) N'A PAS bougé.
+      expect(parseFloat(shellLayerEl(container, "t").style.left)).toBe(11);
+
+      await pressKey({ key: "a", metaKey: true }, renameInput!);
+      // ⌘A gardé : « t » reste NON sélectionné.
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 2 — le presse-papiers en session (⌘C/⌘V/⌘D), câblé à travers le VRAI EditorShell
+// (même discipline que le bloc ⌘Z/⌘A/Échap/Suppr/flèches ci-dessus : un VRAI KeyboardEvent sur
+// `window`, un VRAI réducteur derrière). Ce que ce fichier prouve que tests/studio-clipboard.test.ts
+// (le clonage et le module clipboard, en pur) et tests/studio-keymap.test.ts (resolveShortcut, en
+// pur) ne peuvent PAS prouver à eux seuls : que le hook (hooks/use-editor-keymap.ts) résout
+// RÉELLEMENT la sélection courante en calques, appelle RÉELLEMENT `copyToClipboard`/
+// `cloneLayersWithNewIds`, et dispatche RÉELLEMENT `addLayers` — jusqu'au DOM rendu par le VRAI
+// Canvas.
+//
+// `clearClipboard()` entre chaque test : le presse-papiers est un singleton de MODULE, partagé par
+// tout le processus `bun test` — sans ce nettoyage, un test laisserait son contenu fuiter vers le
+// suivant (exactement le risque que documente déjà `afterEach` de `window.localStorage` plus haut
+// dans ce fichier, pour la même raison structurelle).
+describe("EditorShell — le presse-papiers en session câble ⌘C/⌘V/⌘D sur `window` (Chantier B, Tâche 2)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    clearClipboard();
+  });
+
+  it("⌘D RÉEL sur un calque sélectionné ajoute UN second calque, décalé de {16,16}, et le SÉLECTIONNE — UN SEUL undo revient à un seul calque", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "d", metaKey: true });
+
+      const layerNodes = container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]');
+      expect(layerNodes).toHaveLength(2);
+      // La source n'a PAS bougé…
+      expect(parseFloat(shellLayerEl(container, "sh").style.left)).toBe(10);
+      // …et exactement UN autre nœud est apparu, décalé de {16,16} par rapport à la source, ET
+      // sélectionné à la place d'elle (⌘D transfère la sélection au nouveau calque).
+      const clone = Array.from(layerNodes).find((el) => el.getAttribute("data-layer-id") !== "sh")!;
+      expect(parseFloat((clone as HTMLElement).style.left)).toBe(26); // 10 + 16
+      expect(parseFloat((clone as HTMLElement).style.top)).toBe(26);
+      expect(clone.getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBeNull();
+
+      await pressKey({ key: "z", metaKey: true }); // UN SEUL undo
+
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(1);
+      expect(shellLayerEl(container, "sh")).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘C puis ⌘V RÉELS : colle un clone décalé de {16,16}, sélectionné, sans toucher la source", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      await pressKey({ key: "c", metaKey: true });
+
+      // Copier seul n'ajoute RIEN à la scène — c'est un geste de LECTURE.
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(1);
+
+      await pressKey({ key: "v", metaKey: true });
+
+      const layerNodes = container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]');
+      expect(layerNodes).toHaveLength(2);
+      expect(parseFloat(shellLayerEl(container, "sh").style.left)).toBe(10); // source intacte
+      const pasted = Array.from(layerNodes).find((el) => el.getAttribute("data-layer-id") !== "sh")!;
+      expect(parseFloat((pasted as HTMLElement).style.left)).toBe(26);
+      expect(pasted.getAttribute("data-selected")).toBe("true");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("coller DEUX FOIS de suite ajoute deux clones aux ids DISTINCTS — pas le même clone réappliqué", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      await pressKey({ key: "c", metaKey: true });
+      await pressKey({ key: "v", metaKey: true });
+      await pressKey({ key: "v", metaKey: true });
+
+      const ids = Array.from(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]'))
+        .map((el) => el.getAttribute("data-layer-id"));
+      expect(ids).toHaveLength(3);
+      expect(new Set(ids).size).toBe(3); // aucun doublon
+
+      // Le SECOND collage reste sélectionné seul (⌘V remplace la sélection par ce qu'il vient de
+      // coller) — la preuve que les deux collages sont deux gestes indépendants, pas un geste dupliqué.
+      const selected = container.querySelectorAll('[data-testid="studio-canvas"] [data-selected="true"]');
+      expect(selected).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘V avec le presse-papiers VIDE ne dispatche RIEN — aucun calque ajouté, AUCUNE entrée d'historique (⌘Z reste sans effet)", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      // Aucun ⌘C avant : le presse-papiers du module est vide (nettoyé par afterEach ci-dessus).
+      await pressKey({ key: "v", metaKey: true });
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(1);
+
+      // Anti-vacuité : PAS d'entrée d'historique fantôme à défaire — un ⌘Z ici ne fait RIEN, la scène
+      // reste identique (si un `commit()` fantôme avait eu lieu, ce ⌘Z « annulerait » silencieusement
+      // un vrai geste précédent au lieu de ne rien faire).
+      await pressKey({ key: "z", metaKey: true });
+      expect(shellLayerEl(container, "sh").style.left).toBe("10px");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("le presse-papiers TRAVERSE deux gabarits (deux montages EditorShell distincts) — module-level, pas un état de composant", async () => {
+    // Gabarit A : copie « sh ».
+    const shellA = await mountShellAttached(sceneWithOneShapeLayer());
+    await pointer(shellLayerEl(shellA.container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+    await pressKey({ key: "c", metaKey: true });
+    shellA.cleanup(); // démonte ENTIÈREMENT le premier EditorShell — plus aucun état React vivant
+
+    // Gabarit B : une scène DIFFÉRENTE (id de calque différent, gabarit vide au départ pour ce calque).
+    const otherScene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 1080, height: 1080, background: "#222222" },
+      layers: [],
+    };
+    const shellB = await mountShellAttached(otherScene);
+    try {
+      await pressKey({ key: "v", metaKey: true });
+
+      const nodes = shellB.container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]');
+      expect(nodes).toHaveLength(1);
+      // Le calque collé est bien un CLONE de « sh » (même style de départ, un id NEUF, décalé) — pas
+      // le calque original du gabarit A ni un id partagé avec lui.
+      expect(nodes[0].getAttribute("data-layer-id")).not.toBe("sh");
+      expect(parseFloat((nodes[0] as HTMLElement).style.left)).toBe(26); // 10 + 16
+    } finally {
+      shellB.cleanup();
+    }
+  });
+
+  it("LA GARDE DE FOCUS : ⌘C/⌘V/⌘D ciblés sur un VRAI <input> de renommage ne dispatchent RIEN (le navigateur garde la main sur son propre copier/coller)", async () => {
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      const renameInput = container.querySelector(
+        '[data-action="rename"][data-layer-id="t"]',
+      ) as HTMLInputElement | null;
+      expect(renameInput).not.toBeNull();
+
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "c", metaKey: true }, renameInput!);
+      await pressKey({ key: "d", metaKey: true }, renameInput!);
+      await pressKey({ key: "v", metaKey: true }, renameInput!);
+
+      // Toujours DEUX calques (« t », « u ») — aucun ajout, la garde a bloqué les trois raccourcis.
+      expect(container.querySelectorAll('[data-testid="studio-canvas"] [data-layer-id]')).toHaveLength(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 5 — grouper/dégrouper (⌘G/⌘⇧G), câblé à travers le VRAI EditorShell (même
+// discipline que le bloc ⌘Z/⌘A/Échap/Suppr/flèches et le bloc presse-papiers ci-dessus : un VRAI
+// KeyboardEvent sur `window`, un VRAI réducteur derrière, jusqu'au panneau des calques RÉEL —
+// tests/studio-keymap.test.ts (resolveShortcut, en pur) et tests/studio-editor-state.test.ts
+// (setGroup, en pur) ne peuvent pas prouver à eux seuls que hooks/use-editor-keymap.ts résout
+// RÉELLEMENT la sélection courante, appelle RÉELLEMENT `nextGroupId()`, et dispatche RÉELLEMENT
+// `setGroup` — jusqu'au nœud groupe RENDU par le VRAI LayerPanel.
+//
+// Panneau « calques » ouvert au montage (même recette que la garde de focus du bloc ⌘Z/⌘A) : seul
+// chemin non interactif pour observer `data-group-row-id` sans dépendre d'un clic supplémentaire sur
+// l'onglet du panneau.
+describe("EditorShell — le keymap central câble ⌘G/⌘⇧G sur `window` (Chantier B, Tâche 5)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  function openLayerPanel() {
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+  }
+
+  it("⌘G RÉEL sur DEUX calques Maj-cliqués les fusionne en un nœud groupe DANS LE VRAI LayerPanel", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, shiftKey: true, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+      expect(container.querySelector("[data-group-row-id]")).toBeNull();
+
+      await pressKey({ key: "g", metaKey: true });
+
+      const groupNode = container.querySelector("[data-group-row-id]");
+      expect(groupNode).not.toBeNull();
+      expect(groupNode!.textContent).toContain("Groupe (2)");
+      expect(container.querySelector('[data-layer-row-id="t"]')).not.toBeNull();
+      expect(container.querySelector('[data-layer-row-id="u"]')).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘⇧G RÉEL après ⌘G dégroupe — le nœud groupe DISPARAÎT, les deux lignes redeviennent ordinaires", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, shiftKey: true, button: 0 });
+      await pressKey({ key: "g", metaKey: true });
+      expect(container.querySelector("[data-group-row-id]")).not.toBeNull();
+
+      await pressKey({ key: "g", metaKey: true, shiftKey: true });
+
+      expect(container.querySelector("[data-group-row-id]")).toBeNull();
+      expect(container.querySelector('[data-layer-row-id="t"]')).not.toBeNull();
+      expect(container.querySelector('[data-layer-row-id="u"]')).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⌘G RÉEL SANS au moins deux calques sélectionnés est un no-op — aucun nœud groupe n'apparaît", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+
+      await pressKey({ key: "g", metaKey: true });
+
+      expect(container.querySelector("[data-group-row-id]")).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Un clic sur UN des deux calques désormais groupés sélectionne les DEUX — la même intégration
+  // que tests/studio-groups.test.ts (pur) et le bloc canvas plus haut (Canvas seul + réducteur nu),
+  // mais ici à travers le VRAI EditorShell, VRAI LayerPanel compris. Échap (déjà câblé, Tâche 1) sert
+  // à repartir d'une sélection VIDE sans dépendre d'un clic « canevas vide » dont la géométrie réelle
+  // (échelle d'ajustement mesurée par ResizeObserver) n'est pas fiable sous jsdom.
+  it("après ⌘G, cliquer sur UN SEUL des deux calques désormais groupés les sélectionne TOUS LES DEUX", async () => {
+    openLayerPanel();
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      await pointer(shellLayerEl(container, "t"), "pointerdown", { clientX: 50, clientY: 30, button: 0 });
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, shiftKey: true, button: 0 });
+      await pressKey({ key: "g", metaKey: true });
+
+      await pressKey({ key: "Escape" });
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBeNull();
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBeNull();
+
+      await pointer(shellLayerEl(container, "u"), "pointerdown", { clientX: 320, clientY: 320, button: 0 });
+
+      expect(shellLayerEl(container, "t").getAttribute("data-selected")).toBe("true");
+      expect(shellLayerEl(container, "u").getAttribute("data-selected")).toBe("true");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chantier B, Tâche 4 — pan (Espace-glisser) + zoom molette centré curseur, à travers de VRAIS
+// événements DOM sur `editor-shell.tsx#canvasWrapRef` (data-testid="canvas-backdrop") — PAS
+// canvas.tsx, qui ne porte pas le conteneur `overflow-auto` (voir le commentaire de tête de ce
+// conteneur dans editor-shell.tsx). `mountShellAttached`/`shellLayerEl`/`sceneWithOneShapeLayer`
+// viennent du bloc « presse-papiers » juste au-dessus.
+
+function backdropEl(container: HTMLElement): HTMLElement {
+  const el = container.querySelector('[data-testid="canvas-backdrop"]') as HTMLElement | null;
+  if (!el) throw new Error('« canvas-backdrop » absent du DOM monté');
+  return el;
+}
+
+function artboardEl(container: HTMLElement): HTMLElement {
+  const el = container.querySelector('[data-testid="artboard"]') as HTMLElement | null;
+  if (!el) throw new Error('« artboard » absent du DOM monté');
+  return el;
+}
+
+describe("EditorShell — molette ⌘/Ctrl : zoom centré sur le curseur, défilement corrigé DANS LA MÊME FRAME que la nouvelle échelle (Chantier B, Tâche 4)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("⌘-molette AGRANDIT et garde le point CANEVAS sous le curseur EXACTEMENT fixe — le défilement corrigé atteint le VRAI DOM", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      // §0 non-régression : avant toute interaction molette/Espace, rien de spécial.
+      expect(backdrop.style.cursor).toBe("");
+      expect(backdrop.scrollLeft).toBe(0);
+      expect(backdrop.scrollTop).toBe(0);
+
+      backdrop.scrollLeft = 40;
+      backdrop.scrollTop = 20;
+
+      // `fitScale` reste à sa valeur par défaut (1) — jsdom ne mesure aucun `clientWidth` réel, donc
+      // `computeCanvasScale` (editor-shell.tsx) n'a jamais de quoi produire une valeur différente ; et
+      // `getBoundingClientRect()` d'un élément jsdom vaut toujours {top:0,left:0,…}, donc `cursor` égale
+      // `clientX`/`clientY` bruts. `prevScale` = fitScale(1) × facteur "fit"(1) = 1 : EXACTEMENT ce que
+      // `scale` vaut dans editor-shell.tsx au moment de ce test.
+      const prevScale = 1;
+      const cursor = { x: 130, y: 90 };
+      const scroll = { x: backdrop.scrollLeft, y: backdrop.scrollTop };
+      // Le MÊME calcul que le gestionnaire réel (editor-shell.tsx#handleCanvasWheel), à partir des
+      // MÊMES fonctions PURES importées — ce test prouve le CÂBLAGE (le vrai DOM reçoit-il le résultat
+      // ?), pas une redécouverte indépendante de la formule.
+      const rawNextScale = wheelZoomScale(prevScale, -100);
+      const nextFactor = clampZoom(rawNextScale / 1); // fitScale = 1
+      const nextScale = 1 * nextFactor;
+      const expected = zoomAtCursor(prevScale, nextScale, cursor, scroll, { width: 0, height: 0 });
+
+      await wheel(backdrop, { ctrlKey: true, deltaY: -100, clientX: cursor.x, clientY: cursor.y });
+
+      // (a) l'échelle a RÉELLEMENT changé — l'artboard a grandi : la preuve que `setZoom` a bien été
+      // appelé avec le facteur attendu, pas seulement calculé sans jamais être appliqué.
+      expect(nextScale).toBeGreaterThan(prevScale); // deltaY négatif -> agrandit (sinon ce test ne prouverait rien)
+      expect(parseFloat(artboardEl(container).style.width)).toBeCloseTo(1080 * nextScale, 6);
+
+      // (b) le défilement CORRIGÉ (pas l'ancien, pas un défilement quelconque) a atterri au VRAI DOM —
+      // c'est ce qui garde le point pointé fixe à l'écran malgré le changement d'échelle. MUTATION
+      // (brief Tâche 4, Étape 3) : abandonner la correction de `zoomAtCursor` (renvoyer `scroll`
+      // inchangé) ferait rougir CETTE assertion — `expected.scroll` différerait alors de `scroll`.
+      expect(backdrop.scrollLeft).toBeCloseTo(expected.scroll.x, 6);
+      expect(backdrop.scrollTop).toBeCloseTo(expected.scroll.y, 6);
+
+      // (c) et le point canevas sous le curseur est bien IDENTIQUE avant/après — recalculé directement
+      // à partir de ce qui a atterri au DOM, pas à partir d'`expected` (qui pourrait, en théorie,
+      // partager un bug avec le code testé) : la vraie propriété que la Tâche 4 promet.
+      const canvasPtBefore = { x: (scroll.x + cursor.x) / prevScale, y: (scroll.y + cursor.y) / prevScale };
+      const canvasPtAfter = {
+        x: (backdrop.scrollLeft + cursor.x) / nextScale,
+        y: (backdrop.scrollTop + cursor.y) / nextScale,
+      };
+      expect(canvasPtAfter.x).toBeCloseTo(canvasPtBefore.x, 6);
+      expect(canvasPtAfter.y).toBeCloseTo(canvasPtBefore.y, 6);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("molette SEULE (sans ⌘/Ctrl) ne touche PAS le zoom — pan NATIF, AUCUN preventDefault (spec §2 du brief)", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      const widthBefore = artboardEl(container).style.width;
+
+      const event = await wheel(backdrop, { deltaY: -100, clientX: 100, clientY: 100 }); // pas de ctrlKey/metaKey
+
+      // Le navigateur garde la main sur son propre défilement natif — un `preventDefault()` ici
+      // BLOQUERAIT le pan natif que le brief demande explicitement de laisser faire.
+      expect(event.defaultPrevented).toBe(false);
+      expect(artboardEl(container).style.width).toBe(widthBefore); // aucun changement d'échelle
+      expect(backdrop.scrollLeft).toBe(0); // et rien n'a été écrit dans scrollLeft/Top non plus
+      expect(backdrop.scrollTop).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("le pincement trackpad (un `wheel` avec `ctrlKey` synthétisé par le navigateur) emprunte le MÊME chemin — pas de double traitement", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      const widthBefore = parseFloat(artboardEl(container).style.width);
+
+      const event = await wheel(backdrop, { ctrlKey: true, deltaY: -50, clientX: 60, clientY: 40 });
+
+      expect(event.defaultPrevented).toBe(true); // intercepté, comme ⌘/Ctrl-molette — le MÊME chemin
+      expect(parseFloat(artboardEl(container).style.width)).toBeGreaterThan(widthBefore);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("un défilement de molette OBSOLÈTE (facteur déjà au CLAMP, la molette continue de tourner) ne corrompt PAS un zoom RÉEL et SANS RAPPORT survenant plus tard (revue chantier B T4, Important)", async () => {
+    // LE BUG (trouvé en revue) : `handleCanvasWheel` écrivait `pendingWheelScrollRef` et appelait
+    // `setZoom` INCONDITIONNELLEMENT, même quand `nextFactor` retombe sur la MÊME valeur que `factor`
+    // (le facteur est déjà au clamp 8×/0,1×, ou un `deltaY` nul) — un geste parfaitement ORDINAIRE
+    // (l'utilisateur continue de tourner la molette sans savoir qu'il a atteint la borne). Puisque
+    // `scale` ne change alors PAS numériquement, le `useLayoutEffect` keyed sur `[scale]` ne se
+    // redéclenche JAMAIS (`Object.is` sur une valeur inchangée) — la correction reste ORPHELINE dans
+    // la ref jusqu'au PROCHAIN changement RÉEL de `scale`, par un chemin complètement différent (ici,
+    // le bouton « − » du slot), qui l'appliquerait alors À TORT, écrasant un défilement entre-temps
+    // devenu obsolète pour un curseur/geste qui n'a plus rien à voir.
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+
+      // 1) ⌘-molette avec un `deltaY` énorme -> facteur immédiatement CLAMPÉ au maximum (8×) en un
+      // seul événement (déterministe quelle que soit `WHEEL_ZOOM_SENSITIVITY`, un réglage produit
+      // explicitement non figé — voir lib/studio/zoom.ts). Un défilement corrigé, RÉEL, est appliqué
+      // ici : l'échelle a RÉELLEMENT changé, l'effet se déclenche.
+      await wheel(backdrop, { ctrlKey: true, deltaY: -5000, clientX: 60, clientY: 40 });
+      expect(parseFloat(artboardEl(container).style.width)).toBeCloseTo(1080 * 8, 6); // bien au clamp (ZOOM_STEPS max)
+
+      // 2) La molette continue de tourner DANS LE MÊME SENS alors que le facteur est DÉJÀ au clamp —
+      // `nextFactor` vaut encore 8 : AUCUN changement d'échelle ne doit avoir lieu (la garde). Un
+      // curseur DÉLIBÉRÉMENT différent de l'étape 1, pour qu'une correction calculée à partir de LUI
+      // (si elle était écrite à tort) soit clairement distinguable d'un no-op véritable.
+      const widthAtClamp = artboardEl(container).style.width;
+      await wheel(backdrop, { ctrlKey: true, deltaY: -5000, clientX: 999, clientY: 777 });
+      expect(artboardEl(container).style.width).toBe(widthAtClamp); // no-op confirmé : rien n'a bougé
+
+      // 3) Puis quelque chose d'AUTRE fait défiler le conteneur — un pan natif (molette SANS ⌘/Ctrl,
+      // Espace-glisser, une poignée de barre de défilement…) : SANS RAPPORT avec le zoom, jamais câblé
+      // pour corriger quoi que ce soit. Simulé ICI directement sur `scrollLeft`/`scrollTop` — le
+      // MÉCANISME exact importe peu, seul compte qu'un défilement RÉEL a eu lieu entre le no-op de
+      // l'étape 2 et le zoom SANS RAPPORT de l'étape 4.
+      backdrop.scrollLeft = 500;
+      backdrop.scrollTop = 300;
+
+      // 4) Un zoom RÉEL et SANS RAPPORT avec la molette : le bouton « − » du slot
+      // (lib/studio/zoom.ts#nextZoom), un chemin qui NE touche JAMAIS `scrollLeft`/`scrollTop` lui-même.
+      const zoomOut = container.querySelector('[data-testid="zoom-out"]') as HTMLButtonElement;
+      expect(zoomOut).not.toBeNull();
+      await click(zoomOut);
+      expect(parseFloat(artboardEl(container).style.width)).toBeCloseTo(1080 * 6, 6); // nextZoom(8,-1) = 6 : l'échelle a bien changé
+
+      // Le défilement de l'étape 3 doit SURVIVRE intact — AUCUNE correction de molette obsolète ne
+      // doit l'écraser. AVANT le correctif : le `pendingWheelScrollRef` laissé par l'étape 2
+      // s'appliquerait ICI (premier changement RÉEL de `scale` après son écriture), ramenant le
+      // défilement à une valeur calculée pour un curseur/geste qui n'a plus rien à voir.
+      expect(backdrop.scrollLeft).toBe(500);
+      expect(backdrop.scrollTop).toBe(300);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("EditorShell — l'écouteur `wheel` est posé NON PASSIF (revue chantier B T4, Important — passage réel navigateur)", () => {
+  // Ce que le contrôleur a trouvé en conditions RÉELLES (jsdom ne simule pas la passivité d'un
+  // écouteur, donc AUCUN test contre le COMPORTEMENT — molette bloquée, page qui ne zoome pas — ne
+  // peut détecter ce défaut-là ici) : `onWheel={handleCanvasWheel}` (une prop JSX React) délègue au
+  // SEUL écouteur `wheel` racine que React pose, PASSIF par défaut — `e.preventDefault()` y est un
+  // no-op silencieux. Le canevas zoomait bien au bon endroit, mais le NAVIGATEUR zoomait AUSSI la
+  // page entière. Ce test épingle donc le CÂBLAGE (comment l'écouteur est posé), pas le symptôme
+  // (que jsdom ne peut pas observer) — la seule façon de garder ce correctif honnête sous `bun test`.
+  it("`canvasWrapRef` reçoit un VRAI `addEventListener('wheel', …, { passive: false })` natif — pas une prop `onWheel` React", async () => {
+    // `spyOn` seul ne rapporte pas `this` (bun:test) — un monkey-patch manuel le capture, pour SCOPER
+    // l'assertion au SEUL `canvasWrapRef` (data-testid="canvas-backdrop"). Nécessaire : l'arbre
+    // EditorShell monte d'autres composants base-ui qui posent LEUR PROPRE écouteur "wheel" ailleurs
+    // (ex. `ScrollAreaViewport`, `NumberFieldRoot` du panneau de propriétés — `NumberFieldRoot`
+    // documente d'ailleurs LE MÊME piège dans son propre code source : « React attaches onWheel as a
+    // passive listener, so calling preventDefault there is ignored ») — un simple filtre sur le TYPE
+    // d'événement compterait AUSSI leurs écouteurs à eux, dont certains sont légitimement passifs (ce
+    // ne sont pas les nôtres, pas notre affaire), et ferait planter ce test pour une raison qui n'a
+    // rien à voir avec le correctif vérifié ici.
+    const calls: Array<{ target: EventTarget; options: unknown }> = [];
+    const original = HTMLElement.prototype.addEventListener;
+    HTMLElement.prototype.addEventListener = function (
+      this: HTMLElement,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) {
+      if (type === "wheel") calls.push({ target: this, options });
+      return original.call(this, type, listener, options);
+    } as typeof HTMLElement.prototype.addEventListener;
+
+    try {
+      const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+      try {
+        const backdrop = backdropEl(container);
+        const ourCalls = calls.filter((c) => c.target === backdrop);
+        // AU MOINS un écouteur "wheel" sur `canvasWrapRef` lui-même — l'effet de
+        // editor-shell.tsx#handleCanvasWheel doit avoir tourné (conteneur monté, `layout !==
+        // "too-small"` en jsdom par défaut) — sinon ce test ne prouverait rien (anti-vacuité).
+        expect(ourCalls.length).toBeGreaterThan(0);
+        for (const call of ourCalls) {
+          // MUTATION (revue) : omettre `{ passive: false }`, ou le poser à `true`/`undefined`/`false`
+          // (arg booléen legacy = `useCapture`, PAS `passive`), doit rougir CETTE assertion — c'est
+          // exactement le défaut réel trouvé par le contrôleur.
+          expect(typeof call.options).toBe("object");
+          expect((call.options as AddEventListenerOptions).passive).toBe(false);
+        }
+      } finally {
+        cleanup();
+      }
+    } finally {
+      HTMLElement.prototype.addEventListener = original;
+    }
+  });
+
+  it("un aller-retour Montage -> Rendu réel -> Montage (ModeSwitch) RÉ-ATTACHE l'écouteur `wheel` sur le NOUVEAU nœud — régression trouvée en repassage navigateur", async () => {
+    // LE BUG (trouvé en repassage navigateur, PAS par bun test) : `canvas-backdrop` est démonté par
+    // DEUX conditions indépendantes, pas une seule — `layout !== "too-small"` ET `mode === "montage"`
+    // (`mode === "rendu"` monte `<RenderMode>` à la place, un arbre ENTIÈREMENT différent). Le premier
+    // jet de l'effet ne dépendait que de `[layout]` : un aller-retour de MODE (ModeSwitch, ou le
+    // raccourci « R ») démonte l'ancien `canvas-backdrop` et en monte un NOUVEAU nœud DOM SANS jamais
+    // faire varier `layout` — l'effet ne se redéclenchait donc JAMAIS, le nouveau nœud n'avait AUCUN
+    // écouteur `wheel`, et le bug d'origine (⌘/Ctrl-molette zoome la PAGE, pas le canevas) revenait
+    // silencieusement après un aller-retour de mode pourtant tout à fait ordinaire.
+    const calls: Array<{ target: EventTarget; options: unknown }> = [];
+    const original = HTMLElement.prototype.addEventListener;
+    HTMLElement.prototype.addEventListener = function (
+      this: HTMLElement,
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) {
+      if (type === "wheel") calls.push({ target: this, options });
+      return original.call(this, type, listener, options);
+    } as typeof HTMLElement.prototype.addEventListener;
+
+    try {
+      const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+      try {
+        const firstBackdrop = backdropEl(container);
+        expect(calls.some((c) => c.target === firstBackdrop)).toBe(true); // le PREMIER nœud a bien reçu son écouteur
+
+        const modeRendu = container.querySelector('[data-action="mode-rendu"]') as HTMLElement | null;
+        const modeMontage = container.querySelector('[data-action="mode-montage"]') as HTMLElement | null;
+        expect(modeRendu).not.toBeNull();
+        expect(modeMontage).not.toBeNull();
+
+        await click(modeRendu!); // Montage -> Rendu réel : `canvas-backdrop` DÉMONTÉ (RenderMode à la place)
+        expect(container.querySelector('[data-testid="canvas-backdrop"]')).toBeNull();
+
+        await click(modeMontage!); // Rendu réel -> Montage : un NOUVEAU `canvas-backdrop` est monté
+
+        const secondBackdrop = backdropEl(container);
+        expect(secondBackdrop).not.toBe(firstBackdrop); // bien un NŒUD DOM DIFFÉRENT, pas le même réutilisé
+
+        const ourCallsOnSecondNode = calls.filter((c) => c.target === secondBackdrop);
+        // LE cœur du correctif : le NOUVEAU nœud, lui aussi, a reçu un `addEventListener("wheel", …,
+        // { passive: false })` — pas zéro appel (ce qu'un effet keyed sur `[layout]` seul laisserait,
+        // puisque `layout` n'a jamais changé pendant tout cet aller-retour).
+        expect(ourCallsOnSecondNode.length).toBeGreaterThan(0);
+        for (const call of ourCallsOnSecondNode) {
+          expect(typeof call.options).toBe("object");
+          expect((call.options as AddEventListenerOptions).passive).toBe(false);
+        }
+      } finally {
+        cleanup();
+      }
+    } finally {
+      HTMLElement.prototype.addEventListener = original;
+    }
+  });
+});
+
+describe("EditorShell — Espace-glisser : pan du conteneur, curseur grab/grabbing, SANS toucher aucun calque (Chantier B, Tâche 4)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("Espace maintenu -> curseur « grab » ; pointer-drag DÉMARRÉ SUR UN CALQUE change scrollLeft/scrollTop SANS le déplacer ni le sélectionner", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+      expect(backdrop.style.cursor).toBe(""); // §0 : rien de spécial avant Espace
+
+      await pressKey({ key: " ", code: "Space" }); // bubbling document -> window, même chemin que ⌘/ (voir plus haut)
+      expect(backdrop.style.cursor).toBe("grab");
+
+      const layerBefore = {
+        x: parseFloat(shellLayerEl(container, "sh").style.left),
+        y: parseFloat(shellLayerEl(container, "sh").style.top),
+      };
+
+      // Le pointerdown démarre SUR LE CALQUE lui-même (pas sur le fond vide) — la preuve la plus
+      // dure : ce même geste, SANS Espace, sélectionnerait/déplacerait « sh » (voir le bloc « tirer un
+      // calque » plus haut dans ce fichier). En mode pan, la CAPTURE de canvasWrapRef doit intercepter
+      // l'événement avant qu'il n'atteigne le gestionnaire de Canvas.
+      await pointer(shellLayerEl(container, "sh"), "pointerdown", { clientX: 50, clientY: 50, button: 0 });
+      expect(backdrop.style.cursor).toBe("grabbing");
+      // Le pointerdown n'a NI sélectionné NI armé de glisser sur le calque — la garde de capture a
+      // bien fonctionné.
+      expect(shellLayerEl(container, "sh").getAttribute("data-selected")).toBeNull();
+
+      // Les événements suivants du MÊME geste (capture pointeur réelle en navigateur) sont dispatchés
+      // sur `canvasWrapRef` lui-même — c'est LUI qui porte les écouteurs natifs posés au pointerdown
+      // (voir editor-shell.tsx#handleCanvasPointerDownCapture).
+      await pointer(backdrop, "pointermove", { clientX: 90, clientY: 65 }); // +40 en x, +15 en y
+
+      // « glisser à droite -> le contenu se déplace à droite -> scrollLeft DIMINUE » (spec §2 du brief)
+      expect(backdrop.scrollLeft).toBe(-40);
+      expect(backdrop.scrollTop).toBe(-15);
+
+      await pointer(backdrop, "pointerup", { clientX: 90, clientY: 65 });
+      expect(backdrop.style.cursor).toBe("grab"); // le GLISSER finit ; Espace reste maintenu -> retombe sur « grab »
+
+      // Et surtout : AUCUN calque n'a bougé, malgré 40×15px de glisser — le geste a changé la VUE
+      // (scroll), jamais `state.scene`.
+      const layerAfter = {
+        x: parseFloat(shellLayerEl(container, "sh").style.left),
+        y: parseFloat(shellLayerEl(container, "sh").style.top),
+      };
+      expect(layerAfter).toEqual(layerBefore);
+
+      await releaseKey({ key: " ", code: "Space" });
+      expect(backdrop.style.cursor).toBe(""); // Espace relâché -> retour au curseur par défaut
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("relâcher Espace PENDANT un glisser sort du mode pan — un pointermove qui suit ne défile plus", async () => {
+    const { container, cleanup } = await mountShellAttached(sceneWithOneShapeLayer());
+    try {
+      const backdrop = backdropEl(container);
+
+      await pressKey({ key: " ", code: "Space" });
+      await pointer(backdrop, "pointerdown", { clientX: 0, clientY: 0, button: 0 });
+      await pointer(backdrop, "pointermove", { clientX: 20, clientY: 10 });
+      expect(backdrop.scrollLeft).toBe(-20);
+      expect(backdrop.scrollTop).toBe(-10);
+
+      await releaseKey({ key: " ", code: "Space" }); // relâché AVANT le pointerup
+      // Le curseur retombe IMMÉDIATEMENT au relâchement d'Espace, même glisser en cours — le signal
+      // visible que le brief nomme (« Release Space … exits pan mode »). La capture pointeur native
+      // (hors de portée de jsdom) peut continuer de router le geste jusqu'au pointerup/pointercancel
+      // réel ; ce test porte délibérément sur le CURSEUR, pas sur le défilement, pour cette raison.
+      expect(backdrop.style.cursor).toBe("");
+
+      await pointer(backdrop, "pointerup", { clientX: 20, clientY: 10 }); // nettoie le geste en attente
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("Espace ciblé sur un VRAI champ de texte n'arme PAS le pan — la garde de focus (isEditingText) protège un espace tapé dans un nom de calque", async () => {
+    window.localStorage.setItem(
+      "studio.editor-prefs",
+      JSON.stringify({ ...DEFAULT_PREFS, openPanel: "calques", lastOpenPanel: "calques" }),
+    );
+    const { container, cleanup } = await mountShellAttached(shellSceneTwoLayers());
+    try {
+      const backdrop = backdropEl(container);
+      const renameInput = container.querySelector(
+        '[data-action="rename"][data-layer-id="t"]',
+      ) as HTMLInputElement | null;
+      expect(renameInput).not.toBeNull();
+
+      const event = await pressKey({ key: " ", code: "Space" }, renameInput!);
+
+      expect(backdrop.style.cursor).toBe(""); // AUCUN mode pan armé
+      expect(event.defaultPrevented).toBe(false); // le champ garde la main : un espace tapé doit rester un espace
+    } finally {
+      cleanup();
+    }
+  });
 });

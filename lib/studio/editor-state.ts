@@ -122,10 +122,25 @@ export type EditorAction =
   // même ancrage à toute la sélection multiple sans empiler N annulations pour un seul geste.
   | { type: "setLayerProps"; ids: readonly string[]; patch: LayerPatch }
   | { type: "addLayer"; layerType: Layer["type"]; layer?: Layer }
+  // Chantier B, Tâche 2 — le pendant PLURIEL de `addLayer` : le presse-papiers en session
+  // (lib/studio/clipboard.ts) l'utilise pour coller/dupliquer. Sur le modèle de `setFrames`/
+  // `setLayerProps` : un LOT de calques DÉJÀ CONSTRUITS (typiquement la sortie de
+  // `cloneLayersWithNewIds`, ids déjà neufs et cadres déjà décalés — cette action ne clone ni ne
+  // décale rien elle-même), ajoutés en UNE SEULE entrée d'historique. Voir son cas dans le réducteur
+  // pour la sélection produite (TOUS les ids ajoutés, contrairement à `addLayer` qui n'en sélectionne
+  // qu'un).
+  | { type: "addLayers"; layers: readonly Layer[] }
   | { type: "deleteLayer"; id: string }
   | { type: "reorderLayer"; id: string; toIndex: number }
   | { type: "toggleVisible"; id: string }
   | { type: "toggleLocked"; id: string }
+  // Chantier B, Tâche 5 — grouper/dégrouper, modèle FLAT (lib/studio/groups.ts). Sur le modèle de
+  // `setLayerProps`/`setFrames` ci-dessus : un LOT d'ids, UNE SEULE entrée d'historique. `groupId:
+  // string` GROUPE `ids` (leur assigne ce `groupId` partagé, neuf — voir `groups.ts#nextGroupId`) ;
+  // `groupId: null` DÉGROUPE (efface la clé `groupId` de chacun). Voir son cas dans le réducteur pour
+  // l'invariant CONSTRAINTS-INTACTES (chantier D) : cette action ne lit ni n'écrit JAMAIS
+  // `layer.constraints`.
+  | { type: "setGroup"; ids: readonly string[]; groupId: string | null }
   | { type: "undo" }
   | { type: "redo" };
 
@@ -243,6 +258,10 @@ export function setLayerProps(ids: readonly string[], patch: LayerPatch): Editor
 export function addLayer(type: Layer["type"], layer?: Layer): EditorAction {
   return { type: "addLayer", layerType: type, layer };
 }
+// Chantier B, Tâche 2 : voir le commentaire de `"addLayers"` sur `EditorAction` ci-dessus.
+export function addLayers(layers: Layer[]): EditorAction {
+  return { type: "addLayers", layers: [...layers] };
+}
 export function deleteLayer(id: string): EditorAction {
   return { type: "deleteLayer", id };
 }
@@ -254,6 +273,10 @@ export function toggleVisible(id: string): EditorAction {
 }
 export function toggleLocked(id: string): EditorAction {
   return { type: "toggleLocked", id };
+}
+// Chantier B, Tâche 5 : voir le commentaire de `"setGroup"` sur `EditorAction` ci-dessus.
+export function setGroup(ids: string[], groupId: string | null): EditorAction {
+  return { type: "setGroup", ids: [...ids], groupId };
 }
 export function undo(): EditorAction {
   return { type: "undo" };
@@ -273,6 +296,19 @@ function replaceAt<T>(arr: readonly T[], index: number, value: T): T[] {
   const copy = arr.slice();
   copy[index] = value;
   return copy;
+}
+
+// Chantier B, Tâche 5 — écrit OU RETIRE `groupId`, et RIEN d'autre du calque (voir l'invariant
+// CONSTRAINTS-INTACTES sur le cas "setGroup" plus bas). `null` retire vraiment la CLÉ (déstructuration)
+// plutôt que de la poser à `undefined` : un calque dégroupé redevient bit-pour-bit un calque qui n'a
+// jamais eu de `groupId`, comme `constraintsOf`/`colorFieldPaths` (scene.ts) l'attendent déjà d'un
+// champ optionnel absent.
+function withGroupId(layer: Layer, groupId: string | null): Layer {
+  if (groupId === null) {
+    const { groupId: _drop, ...rest } = layer as Layer & { groupId?: string };
+    return rest as Layer;
+  }
+  return { ...layer, groupId };
 }
 
 function pushHistory(past: readonly HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
@@ -507,6 +543,24 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return next === state ? state : { ...next, selectedIds: [layer.id] };
     }
 
+    // Chantier B, Tâche 2 — le LOT d'ajout : sur le modèle de `setFrames`/`setLayerProps`, un lot
+    // vide est un no-op SANS ENTRÉE FANTÔME (même garde que ces deux actions) — c'est ce qui rend
+    // « coller avec un presse-papiers vide » un no-op au niveau du réducteur lui-même, pas seulement
+    // au niveau de l'appelant qui choisirait de ne pas dispatcher. Sinon, TOUS les calques fournis
+    // sont ajoutés À LA FIN de `scene.layers` (avant-plan, comme `addLayer`) EN UN SEUL `commit()` —
+    // undo retire donc les N calques d'un coup, jamais un par un.
+    //
+    // Sélection : REMPLACE la sélection par TOUS les ids ajoutés, dans l'ordre fourni — pas un seul
+    // comme `addLayer` (qui n'ajoute jamais qu'un calque à la fois). C'est ce qui fait qu'un coller
+    // sélectionne exactement ce qu'on vient de coller, et qu'un ⌘D (dupliquer = copier + coller en
+    // place avec décalage, en UN geste) sélectionne le(s) nouveau(x) calque(s) plutôt que de laisser
+    // la sélection sur la source.
+    case "addLayers": {
+      if (action.layers.length === 0) return state;
+      const next = commit(state, { ...state.scene, layers: [...state.scene.layers, ...action.layers] });
+      return next === state ? state : { ...next, selectedIds: action.layers.map((l) => l.id) };
+    }
+
     case "deleteLayer": {
       const index = layerIndex(state.scene, action.id);
       if (index === -1) return state;
@@ -551,6 +605,49 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         ...state.scene,
         layers: replaceAt(state.scene.layers, index, { ...layer, locked: !layer.locked }),
       });
+    }
+
+    // Chantier B, Tâche 5 — grouper/dégrouper. Sur le modèle EXACT de "setLayerProps"/"setFrames" :
+    // un LOT d'ids, UNE SEULE entrée d'historique, ligne à ligne TOLÉRANT (un id absent est
+    // simplement sauté), AUCUNE ENTRÉE FANTÔME si rien ne change réellement.
+    //
+    // `action.groupId === null` DÉGROUPE : la clé `groupId` est RETIRÉE (déstructuration, pas mise à
+    // `undefined`) — exactement ce que `constraintsOf` et `colorFieldPaths` (scene.ts) attendent déjà
+    // d'un champ optionnel absent, et ce que `parseScene` valide de toute façon en dernier ressort.
+    //
+    // INVARIANT CONSTRAINTS-INTACTES (chantier D, revue de la brief T5) : cette action ne lit ni
+    // n'écrit JAMAIS `layer.constraints` — `withGroupId` ci-dessus ne touche QUE `groupId`, tout le
+    // reste du calque (donc `constraints`, présent ou absent) traverse par la copie superficielle
+    // `{ ...layer }`. tests/studio-editor-state.test.ts épingle `constraints` identique avant/après.
+    //
+    // INVARIANT « < 2 = NO-OP » (revue, Important 3) — APPLIQUÉ ICI, pas seulement côté hook
+    // (hooks/use-editor-keymap.ts#case "group") : un futur appelant (chantiers B T6/T7) qui
+    // dispatcherait `setGroup` directement, sans repasser par le hook, ne doit PAS pouvoir marquer un
+    // calque SEUL comme « groupe » — un groupe à un membre n'a rien à faire suivre ni à sélectionner
+    // ensemble. Compté sur les ids qui RÉSOLVENT réellement à un calque de la scène (pas
+    // `action.ids.length` brut) : `setGroup(["title","inexistant"], "g1")` ne doit pas non plus
+    // passer en comptant un id fantôme. Seul le chemin ASSIGNATION (`groupId` non nul) est concerné —
+    // DÉGROUPER (`groupId: null`) reste valide quel que soit le nombre de membres visés, y compris un
+    // seul ou zéro : la garde `touched` plus bas le rend déjà inoffensif (aucune entrée fantôme) sans
+    // qu'il faille lui interdire quoi que ce soit.
+    case "setGroup": {
+      if (action.groupId !== null) {
+        const resolvedCount = action.ids.filter((id) => layerIndex(state.scene, id) !== -1).length;
+        if (resolvedCount < 2) return state;
+      }
+      let layers = state.scene.layers;
+      let touched = false;
+      for (const id of action.ids) {
+        const index = layers.findIndex((l) => l.id === id);
+        if (index === -1) continue;
+        const layer = layers[index];
+        const current = layer.groupId ?? null;
+        if (current === action.groupId) continue; // déjà à cette valeur : rien à faire pour ce calque.
+        layers = replaceAt(layers, index, withGroupId(layer, action.groupId));
+        touched = true;
+      }
+      if (!touched) return state;
+      return commit(state, { ...state.scene, layers });
     }
 
     // undo/redo restaurent la SCÈNE **et** la SÉLECTION portées par l'entrée dépilée, et empilent
