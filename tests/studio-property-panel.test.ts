@@ -392,7 +392,11 @@ describe("PropertyPanel — calque texte", () => {
     expect(html).toContain("Bonjour {{article.title}}");
     expect(html).toContain('value="40"'); // taille de police
     expect(html).toContain('value="10"'); // frame.x
-    expect(html).toContain('value="0.9"'); // opacité
+    // Chantier C, Tâche 6 (correctif d'intégration) : cette assertion visait `value="0.9"`, la fraction
+    // brute qu'écrivait l'ancien `NumberField` d'opacité de la bande de géométrie — supprimé (voir
+    // geometry-strip.tsx). L'opacité (0.9) ne vit plus que dans `OpacityField` (Apparence), qui
+    // affiche un POURCENTAGE (`opacityToPercent(0.9) === 90`) dans son `<input>` numérique dédié.
+    expect(openingTag(html, "data-testid", "appearance-opacity-input")).toContain('value="90"');
     // Ombre et contour sont activés sur ce calque : leurs champs détaillés doivent apparaître.
     expect(html).toContain("Épaisseur");
     expect(html).toContain("Ajustement auto");
@@ -466,7 +470,11 @@ describe("PropertyPanel — calque image", () => {
 describe("PropertyPanel — calque forme", () => {
   it("remplissage uni : affiche un champ couleur, pas l'éditeur de dégradé", () => {
     const html = render([shapeLayerSolid], "s1", "recap_card");
-    expect(html).toContain('value="#123456"');
+    // Chantier C, Tâche 4 : `ColorField` ne rend plus un `<input value="…">` nu — la couleur
+    // committée apparaît désormais comme TEXTE dans le déclencheur du sélecteur
+    // (`<span>{value}</span>`, components/studio/color-picker.tsx), d'où `>#hex<` plutôt que
+    // `value="#hex"` pour toutes les assertions de couleur de ce fichier.
+    expect(html).toContain(">#123456<");
     expect(html).not.toContain("Ajouter une étape");
   });
 
@@ -479,7 +487,7 @@ describe("PropertyPanel — calque forme", () => {
   it("bordure activée : reflète l'épaisseur, la couleur et les côtés cochés", () => {
     const html = render([shapeLayerSolid], "s1", "recap_card");
     expect(html).toContain('value="2"'); // épaisseur bordure
-    expect(html).toContain('value="#FFFFFF"'); // couleur bordure
+    expect(html).toContain(">#FFFFFF<"); // couleur bordure (Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`)
   });
 });
 
@@ -532,7 +540,7 @@ describe("PropertyPanel — la bordure d'une forme découpée (réserve 3)", () 
       // Épaisseur et couleur de bordure : présentes uniquement là où la bordure est peinte. Un contrôle
       // grisé au-dessus de trois contrôles actifs n'aurait rien empêché.
       expect(`${kind} épaisseur : ${html.includes('value="2"')}`).toBe(`${kind} épaisseur : ${!découpée}`);
-      expect(`${kind} couleur : ${html.includes('value="#FFFFFF"')}`).toBe(`${kind} couleur : ${!découpée}`);
+      expect(`${kind} couleur : ${html.includes(">#FFFFFF<")}`).toBe(`${kind} couleur : ${!découpée}`);
     }
   });
 
@@ -856,10 +864,10 @@ describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
     // Les trois valeurs numériques sont uniques dans cette fixture (le calque porte radius 4 et une
     // bordure de 2 : 5, 7 et 9 n'y apparaissent nulle part ailleurs — vérifié champ par champ).
     for (const v of ["5", "7", "9"]) expect(avec).toContain(`value="${v}"`);
-    expect(avec).toContain('value="#ABCDEF"');
+    expect(avec).toContain(">#ABCDEF<"); // Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`
     const sans = render([shapeOf("rect")], "s1", "recap_card");
     for (const v of ["5", "7", "9"]) expect(sans).not.toContain(`value="${v}"`);
-    expect(sans).not.toContain('value="#ABCDEF"');
+    expect(sans).not.toContain(">#ABCDEF<");
   });
 
   it("l'interrupteur d'ombre est GRISÉ pour une forme découpée, actif pour les autres", () => {
@@ -886,7 +894,7 @@ describe("PropertyPanel — l'ombre d'une forme (U3 Tâche 4)", () => {
       const html = render([shapeOf(kind, { shadow: { ...OMBRE } })], "s1", "recap_card");
       const découpée = descriptorFor(kind).clipped;
       expect(`${kind} note : ${html.includes('data-testid="shape-shadow-none"')}`).toBe(`${kind} note : ${découpée}`);
-      expect(`${kind} champs : ${html.includes('value="#ABCDEF"')}`).toBe(`${kind} champs : ${!découpée}`);
+      expect(`${kind} champs : ${html.includes(">#ABCDEF<")}`).toBe(`${kind} champs : ${!découpée}`);
       expect(`${kind} flou : ${html.includes('value="9"')}`).toBe(`${kind} flou : ${!découpée}`);
     }
   });
@@ -1038,8 +1046,8 @@ describe("PropertyPanel — le sélecteur de forme", () => {
 describe("PropertyPanel — calque QR", () => {
   it("rend les champs slot/fg/bg/margin", () => {
     const html = render([qrLayer], "q", "social_post");
-    expect(html).toContain('value="#000000"');
-    expect(html).toContain('value="#FFFFFF"');
+    expect(html).toContain(">#000000<"); // Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`
+    expect(html).toContain(">#FFFFFF<");
     expect(html).toContain('value="4"');
   });
 
@@ -1161,9 +1169,20 @@ describe("PropertyPanel — bande de géométrie épinglée (Tâche 6)", () => {
   // Correctif revue finale (Minor) : ce titre affirmait « quel que soit le type de calque » mais ne
   // rendait QUE textLayer — les trois autres fixtures de ce fichier (imageLayer, shapeLayerSolid,
   // qrLayer) n'étaient jamais exercées ici, alors que GeometryStrip (geometry-strip.tsx) est monté
-  // pour LES QUATRE (elle ne lit que `layer.frame`/`layer.rotation`/`layer.opacity`, communs à
-  // l'union Layer entière — rien de spécifique au texte). La boucle rend le titre vrai.
-  it("la bande de géométrie porte les six champs de cadre, quel que soit le type de calque", () => {
+  // pour LES QUATRE (elle ne lit que `layer.frame`/`layer.rotation`, communs à l'union Layer entière —
+  // rien de spécifique au texte). La boucle rend le titre vrai.
+  //
+  // CORRECTIF D'INTÉGRATION (chantier C, Tâche 6, revue C5) : ce test affirmait « les six champs »,
+  // opacité comprise — plus vrai depuis que le `NumberField` d'opacité brut de la bande a été retiré
+  // (voir le commentaire posé sur « Rotation (°) », geometry-strip.tsx) : la propriété §0-INCORRECTE
+  // qu'il écrivait (toujours une valeur bornée, jamais `undefined`) vit désormais UNIQUEMENT dans le
+  // curseur `OpacityField` de la section « Apparence » (property-panel.tsx), en pourcentage. La bande
+  // n'a donc plus que CINQ champs de cadre — et ce test le prouve dans les deux sens : les cinq
+  // champs RESTANTS sont bien dans la bande (`stripHtml`, isolée par les mêmes bornes d'index que le
+  // test « FRÈRE placé AVANT » ci-dessus), `data-field="opacity"` en a disparu, et
+  // `appearance-opacity` (le SEUL porteur restant de l'opacité) est bien présent quelque part dans le
+  // panneau — une mutation qui ferait réapparaître le doublon rougirait ce test.
+  it("la bande de géométrie porte les cinq champs de cadre (opacité en a été retirée), quel que soit le type de calque", () => {
     const fixtures: [Layer, string, Parameters<typeof PropertyPanel>[0]["context"]][] = [
       [textLayer, "t", "social_post"],
       [imageLayer, "i", "article_image"],
@@ -1172,16 +1191,24 @@ describe("PropertyPanel — bande de géométrie épinglée (Tâche 6)", () => {
     ];
     for (const [layer, id, context] of fixtures) {
       const html = render([layer], id, context);
-      for (const f of ["frame.x", "frame.y", "frame.w", "frame.h", "rotation", "opacity"]) {
-        expect(html).toContain(`data-field="${f}"`);
+      const stripIdx = html.indexOf('data-testid="geometry-strip"');
+      const scrollIdx = html.indexOf('data-testid="property-sections"');
+      expect(stripIdx).toBeGreaterThan(-1);
+      expect(scrollIdx).toBeGreaterThan(-1);
+      const stripHtml = html.slice(stripIdx, scrollIdx);
+      for (const f of ["frame.x", "frame.y", "frame.w", "frame.h", "rotation"]) {
+        expect(stripHtml).toContain(`data-field="${f}"`);
       }
+      expect(stripHtml).not.toContain('data-field="opacity"');
+      expect(html).toContain('data-testid="appearance-opacity"');
     }
   });
 
-  it("les six champs de la bande ne sont plus dupliqués dans une section « Cadre »", () => {
+  it("les cinq champs de la bande ne sont plus dupliqués dans une section « Cadre »", () => {
     const html = render([textLayer], "t", "social_post");
-    // L'ex-section « Cadre » (Tâche 8) a disparu du panneau — ses six champs vivent UNIQUEMENT dans
-    // la bande épinglée, jamais recopiés dans une section repliable qui referait doublon.
+    // L'ex-section « Cadre » (Tâche 8) a disparu du panneau — ses cinq champs vivent UNIQUEMENT dans
+    // la bande épinglée, jamais recopiés dans une section repliable qui referait doublon. (Chantier C
+    // Tâche 6 : le sixième, « Opacité », a quitté la bande pour la section « Apparence ».)
     expect(html).not.toContain('data-section="cadre"');
   });
 });
@@ -1247,8 +1274,8 @@ describe("PropertyPanel — sections repliables, mémorisées par type de calque
     const closed = render([textLayer], "t", "social_post", [], { "text.ombre": false });
     const open = render([textLayer], "t", "social_post", [], { "text.ombre": true });
     expect(closed).not.toContain('value="3"');
-    expect(closed).not.toContain('value="#000000"');
+    expect(closed).not.toContain(">#000000<"); // Tâche 4 : texte du déclencheur ColorPicker, plus un `value=` d'`<input>`
     expect(open).toContain('value="3"');
-    expect(open).toContain('value="#000000"');
+    expect(open).toContain(">#000000<");
   });
 });
