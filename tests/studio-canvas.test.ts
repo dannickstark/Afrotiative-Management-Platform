@@ -199,7 +199,10 @@ describe("Canvas — image, forme, QR", () => {
     expect(html).toContain("article.image");
   });
 
-  it("une image avec une URL littérale s'affiche directement", () => {
+  // Properties Pro P1, Tâche 4 : `ImageContent` peint un `<div>` de FOND (`background-image`), plus
+  // un `<img src>` — le CHEMIN UNIQUE qui aligne l'aperçu sur le moteur d'export (element.ts#imageNode,
+  // Tâche 3). Le témoin cherche donc l'URL dans `background-image`, pas dans un attribut `src`.
+  it("une image avec une URL littérale s'affiche directement (background-image, pas <img>)", () => {
     const scene = makeScene();
     scene.layers.push({
       id: "img2", name: "Image", visible: true, locked: false,
@@ -207,7 +210,8 @@ describe("Canvas — image, forme, QR", () => {
       type: "image", source: { kind: "url", url: "https://example.com/x.png" }, fit: "cover",
     });
     const html = render(scene);
-    expect(html).toContain('src="https://example.com/x.png"');
+    expect(layerNode(html, "img2")).toContain("background-image:url(https://example.com/x.png)");
+    expect(layerNode(html, "img2")).not.toContain("<img");
   });
 
   it("une forme peint sa couleur de remplissage", () => {

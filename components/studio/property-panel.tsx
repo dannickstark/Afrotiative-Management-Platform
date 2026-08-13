@@ -36,6 +36,7 @@ import type { AssetRow } from "@/lib/queries/assets";
 import { TokenPicker, pickerRowsFor } from "./token-picker";
 import { ColorPicker } from "./color-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
+import { FocalPointField } from "./focal-point-field";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { alignParticipants } from "@/lib/studio/align";
 import { FieldRow, NumberField, SelectField, SliderField, useCommitBuffer, type Patch } from "./property-fields";
@@ -571,6 +572,17 @@ function ImageFields({
   // `source.kind === "asset"` reste autorisé pour PRÉSERVER un choix déjà valide (calque chargé
   // avec un assetId existant), jamais pour en fabriquer un nouveau à partir de rien.
   const canUseAssetTab = !!firstImageAssetId || source.kind === "asset";
+  // Tâche 6 : la vignette du point focal (FocalPointField ci-dessous) veut l'URL AFFICHABLE de la
+  // source actuelle — résolue ici à partir de ce qu'ImageFields connaît déjà (aucune nouvelle donnée
+  // récupérée, un composant purement présentationnel) : une source `url` la porte directement, une
+  // source `asset` se résout via `assets` (déjà chargé par l'appelant) ; une source `slot` n'a pas
+  // d'aperçu résolu ici — `undefined`, que FocalPointField affiche comme un placeholder neutre.
+  const focalImageSrc =
+    source.kind === "url" ? source.url : source.kind === "asset" ? assets.find((a) => a.id === source.assetId)?.url : undefined;
+  // Repli centre partagé par les TROIS lecteurs du point focal (imageCss.ts, element.ts, et ici) —
+  // un calque sans `focal` (tout calque écrit avant cette tâche) affiche le point au centre.
+  const focalValue = layer.focal ?? { x: 0.5, y: 0.5 };
+  const sizingMode = layer.sizing ?? layer.fit;
   return (
     <>
       <TypeSection title="Source de l'image" sectionId="source" layerType="image" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
@@ -652,12 +664,92 @@ function ImageFields({
 
       <TypeSection title="Apparence" sectionId="apparence" layerType="image" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
         <OpacityField layer={layer} patch={patch} />
+        {/* Properties Pro P1, Tâche 5 — « Ajustement » remplace l'ancien sélecteur cover/contain à DEUX
+            options par un sélecteur à CINQ (T2, schema.ts#imageLayer.sizing) : Remplir/Ajuster/Étirer/
+            Mosaïque/Taille perso. §0 (repli legacy) : un calque déjà écrit AVANT cette tâche ne porte
+            que `fit` (jamais `sizing`) — la valeur affichée retombe donc sur `layer.fit` quand `sizing`
+            est absent, EXACTEMENT le même repli que lib/studio/image-css.ts#imageCss (moteur d'export)
+            et layer-view.tsx#ImageContent (aperçu), pour que les TROIS lectures de "quel mode ce calque
+            porte-t-il" restent d'accord entre elles.
+            `fit` reste écrit EN PLUS de `sizing` quand le nouveau mode choisi est cover/contain — pour
+            la rétrocompat d'un lecteur qui ne connaîtrait que `fit` (aucun aujourd'hui dans ce dépôt,
+            mais `fit` reste un champ du schéma, jamais retiré) ; pour stretch/tile/custom, `fit` est
+            laissé TEL QUEL (un champ historique désormais ignoré dès que `sizing` est présent — voir
+            imageCss.ts). Basculer vers `tile`/`custom` pose aussi, DANS LE MÊME correctif, la valeur
+            par défaut requise par le schéma (T3 : `parseScene` REJETTE `sizing:"custom"` SANS
+            `customSize`) — jamais en absence, jamais en DEUX correctifs séparés (une seule entrée
+            d'historique par choix de menu, même règle que partout ailleurs dans ce fichier, §0 d'en-tête). */}
         <SelectField
           label="Ajustement"
-          value={layer.fit}
-          options={[{ value: "cover", label: "Recadrer (cover)" }, { value: "contain", label: "Contenir (contain)" }]}
-          onCommit={(v) => patch({ fit: v })}
+          value={layer.sizing ?? layer.fit}
+          options={[
+            { value: "cover", label: "Remplir" },
+            { value: "contain", label: "Ajuster" },
+            { value: "stretch", label: "Étirer" },
+            { value: "tile", label: "Mosaïque" },
+            { value: "custom", label: "Taille perso" },
+          ]}
+          dataField="sizing"
+          onCommit={(v) => {
+            const sizing = v as ImageLayer["sizing"];
+            const next: Record<string, unknown> = { sizing };
+            if (sizing === "cover" || sizing === "contain") next.fit = sizing;
+            if (sizing === "tile" && !layer.tile) next.tile = { scale: 1, axis: "both" };
+            if (sizing === "custom" && !layer.customSize) {
+              next.customSize = { w: layer.frame.w, h: layer.frame.h };
+            }
+            patch(next);
+          }}
         />
+        {/* Tâche 6 : le point focal ne compte QUE pour les modes qui laissent l'image déborder de son
+            cadre — cover (recadrage) et tile (origine de la mosaïque) ; contain/stretch/custom
+            remplissent le cadre exactement (ou le déforment), un point focal n'y change rien de
+            visible (imageCss.ts#focalToPosition reste appelé pour ces modes, mais son résultat est
+            sans effet observable — inutile d'exposer un contrôle qui ne ferait rien). */}
+        {(sizingMode === "cover" || sizingMode === "tile") && (
+          <FieldRow label="Point focal">
+            <FocalPointField
+              value={focalValue}
+              imageSrc={focalImageSrc}
+              onCommit={(v) => patch({ focal: v })}
+            />
+          </FieldRow>
+        )}
+        {(layer.sizing ?? layer.fit) === "tile" && (
+          <>
+            <SliderField
+              label="Échelle" dataField="tile-scale"
+              value={layer.tile?.scale ?? 1} min={0.1} max={4} step={0.1}
+              format={(v) => `×${v}`}
+              onCommit={(v) => patch({ tile: { scale: v, axis: layer.tile?.axis ?? "both" } })}
+            />
+            <SelectField
+              label="Répétition"
+              value={layer.tile?.axis ?? "both"}
+              options={[
+                { value: "both", label: "Les deux" },
+                { value: "x", label: "Horizontale" },
+                { value: "y", label: "Verticale" },
+              ]}
+              dataField="tile-axis"
+              onCommit={(v) => patch({ tile: { scale: layer.tile?.scale ?? 1, axis: v } })}
+            />
+          </>
+        )}
+        {(layer.sizing ?? layer.fit) === "custom" && (
+          <div className="grid grid-cols-2 gap-2">
+            <NumberField
+              label="Largeur" dataField="custom-w"
+              value={layer.customSize?.w ?? layer.frame.w} min={1}
+              onCommit={(v) => patch({ customSize: { w: v, h: layer.customSize?.h ?? layer.frame.h } })}
+            />
+            <NumberField
+              label="Hauteur" dataField="custom-h"
+              value={layer.customSize?.h ?? layer.frame.h} min={1}
+              onCommit={(v) => patch({ customSize: { w: layer.customSize?.w ?? layer.frame.w, h: v } })}
+            />
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-2">
           <NumberField label="Rayon" value={layer.radius ?? 0} min={0} onCommit={(v) => patch({ radius: v || undefined })} />
           <NumberField label="Flou" value={layer.blur ?? 0} min={0} max={200} onCommit={(v) => patch({ blur: v || undefined })} />

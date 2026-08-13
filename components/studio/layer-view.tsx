@@ -1,9 +1,10 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
 import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
+import { imageCss, tileBackgroundSize } from "@/lib/studio/image-css";
 import { resolveLayerColorsForDisplay } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { SELECTION, LOCKED_OUTLINE } from "@/lib/studio/overlay-theme";
@@ -82,20 +83,102 @@ function Placeholder({ label }: { label: string }) {
   );
 }
 
+// La taille INTRINSÈQUE d'un asset, lue au runtime (Properties Pro P1, Tâche 4) — SEUL endroit du
+// composant qui a besoin de connaître la vraie taille de l'image : `imageCss` (image-css.ts) est un
+// module PUR, zéro import, qui ne reçoit jamais l'image elle-même (voir son commentaire de tête) et
+// renvoie donc `backgroundSize: "auto"` pour `sizing:"tile"`, quel que soit `scale`.
+//
+// PARITÉ MOSAÏQUE (correctif revue de branche). `"auto"` fait tuiler le navigateur à la taille
+// ORIGINALE de la source, alors que l'export (Satori) tuile à la taille BORNÉE au plafond
+// `cap = 2×max(cadre)` — `prepared.w/h × scale` (element.ts#effectiveImage, images.ts#prepareImage).
+// Pour toute vraie photo dont le côté long dépasse ce plafond (le cas COURANT), ces deux tailles
+// DIFFÈRENT — donc des compteurs de répétition et une origine de tuile différents entre Montage et
+// Rendu réel (§0 WYSIWYG). L'aperçu doit donc tuiler au MÊME intrinsèque borné : on sonde la taille
+// naturelle pour TOUTE mosaïque (plus seulement `scale !== 1` — le bornage peut changer la taille même
+// à `scale === 1`) et on la borne via `tileBackgroundSize` (image-css.ts, la MÊME arithmétique que
+// sharp). Ce hook ne se déclenche donc QUE pour `sizing === "tile"` — pas de chargement d'image
+// superflu pour cover/contain/stretch/custom, qui n'ont pas besoin de la taille naturelle.
+function useNaturalSize(src: string | undefined, active: boolean): { w: number; h: number } | null {
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    if (!active || !src) {
+      setSize(null);
+      return;
+    }
+    let cancelled = false;
+    // `document.createElement("img")` plutôt que `new Image()` (équivalents dans un vrai navigateur) :
+    // le harnais DOM des tests (tests/dom-harness.ts) installe `document` explicitement mais PAS le
+    // constructeur global `Image` (absent de sa liste DOM_GLOBAL_KEYS) — cette forme reste donc
+    // exerçable sous jsdom sans étendre le harnais pour un seul appelant.
+    const probe = document.createElement("img");
+    probe.onload = () => {
+      if (!cancelled) setSize({ w: probe.naturalWidth, h: probe.naturalHeight });
+    };
+    probe.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [src, active]);
+  return size;
+}
+
 function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" }>; image?: string }) {
   // Un jeton ({{slot}}) n'a de valeur qu'au rendu réel (article/valeurs saisies) — l'éditeur n'en
   // a jamais, par construction (spec §2 : « l'éditeur n'a pas les valeurs de jeton »). Donc PAS de
   // tentative de résolution ici, un espace réservé nommé systématiquement.
-  if (layer.source.kind === "slot") return <Placeholder label={`{{${layer.source.slot}}}`} />;
+  //
+  // CHEMIN UNIQUE (aligné sur le verdict soupape de la Tâche 3, element.ts#imageNode) : un calque
+  // IMAGE est un `<div>` de FOND, PLUS un `<img objectFit>` — c'est ce qui rend l'aperçu et l'export
+  // d'accord PIXEL POUR PIXEL sur `sizing`/`focal`/`tile`/`customSize` (§0 : désaccord WYSIWYG interdit).
+  // `imageCss` (image-css.ts, Tâche 2) est LA MÊME fonction pure que le moteur consulte pour
+  // `backgroundSize`/`backgroundRepeat` ; seule la variante de POSITION diverge — voir le commentaire
+  // de tête d'image-css.ts : `%` (ici, correct dans le NAVIGATEUR) contre pixels calculés côté Satori
+  // (dont le `%` de `background-position` est bogué, spike Tâche 1). Les deux formules sont
+  // équivalentes en principe ; ce sont les DEUX SEULS points de divergence volontaires de tout ce
+  // fichier, documentés ici pour qu'un futur lecteur ne les prenne pas pour un oubli de parité.
+  // RÈGLE DES HOOKS (correctif revue) — `useNaturalSize` DOIT s'exécuter à CHAQUE rendu de ce
+  // composant, quelle que soit la branche qui retourne ensuite : `LayerView` est keyée par
+  // `layer.id` (même fibre React d'un rendu à l'autre), et un calque `source.kind === "asset"` peint
+  // souvent avec `image` encore `undefined` au premier rendu (résolution ASYNC via
+  // `images?.get(layer.id)`, canvas.tsx) avant qu'un rendu suivant ne lui passe l'URL résolue.
+  // Poser ce hook APRÈS les `return` de placeholder (comme la première version de cette tâche le
+  // faisait) le fait tantôt s'exécuter (rendu avec `src`), tantôt PAS (rendu sans `src`, ou calque
+  // `slot`) sur cette même fibre — exactement le nombre de hooks qui varie d'un rendu à l'autre que
+  // React interdit (« Rendered more hooks than during the previous render »). `src`/`needsNaturalSize`
+  // se calculent donc AVANT tout `return`, en code ordinaire (pas des hooks), et le hook les consomme
+  // inconditionnellement ; il gère déjà `!active || !src` en interne (repli `null`), donc l'appeler
+  // avec un `src` encore `undefined` ou `needsNaturalSize` à `false` est sans danger.
   const src = layer.source.kind === "url" ? layer.source.url : image;
+  const sizing = layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain");
+  const scale = layer.tile?.scale ?? 1;
+  // TOUTE mosaïque a besoin de la taille naturelle (voir `useNaturalSize` ci-dessus) : le bornage au
+  // plafond peut changer la taille de tuile même à `scale === 1`, dès que la source dépasse le plafond.
+  const needsNaturalSize = sizing === "tile";
+  const natural = useNaturalSize(src, needsNaturalSize);
+
+  if (layer.source.kind === "slot") return <Placeholder label={`{{${layer.source.slot}}}`} />;
   if (!src) return <Placeholder label={layer.name || "Image"} />;
+
+  const css = imageCss(layer);
+  // Voir useNaturalSize ci-dessus : LE SEUL cas où `imageCss` ne suffit pas — pour une mosaïque, il
+  // renvoie `"auto"`, qui tuile à la taille ORIGINALE de la source et diverge de l'export dès qu'elle
+  // dépasse le plafond. On la remplace par l'intrinsèque BORNÉE × scale (`tileBackgroundSize`, la même
+  // arithmétique que sharp côté export), MAIS seulement une fois la sonde résolue : tant que `natural`
+  // est `null` (premier rendu, chargement async), on garde `"auto"` le temps d'un rendu plutôt qu'un
+  // flash à 0×0 px — le rendu suivant, avec la taille naturelle connue, pose la valeur bornée exacte.
+  const backgroundSize = needsNaturalSize && natural
+    ? tileBackgroundSize(natural, layer.frame, scale)
+    : css.backgroundSize;
+
   return (
-    <img
-      src={src}
-      alt=""
+    <div
+      data-testid="image-content"
       style={{
         width: "100%", height: "100%",
-        objectFit: layer.fit,
+        backgroundImage: `url(${src})`,
+        backgroundSize,
+        backgroundRepeat: css.backgroundRepeat,
+        backgroundPosition: css.backgroundPosition,
         // `imageLayer.radius`, un NOMBRE (lib/studio/scene.ts:46) — et NON son homonyme
         // `shapeLayer.radius`, qui est `number | string` depuis l'arbitrage C (« 50% » pour l'ellipse).
         // Deux champs de même nom et de types différents ; ce qui les tient à l'écart ici est le
