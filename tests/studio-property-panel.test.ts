@@ -392,7 +392,11 @@ describe("PropertyPanel — calque texte", () => {
     expect(html).toContain("Bonjour {{article.title}}");
     expect(html).toContain('value="40"'); // taille de police
     expect(html).toContain('value="10"'); // frame.x
-    expect(html).toContain('value="0.9"'); // opacité
+    // Chantier C, Tâche 6 (correctif d'intégration) : cette assertion visait `value="0.9"`, la fraction
+    // brute qu'écrivait l'ancien `NumberField` d'opacité de la bande de géométrie — supprimé (voir
+    // geometry-strip.tsx). L'opacité (0.9) ne vit plus que dans `OpacityField` (Apparence), qui
+    // affiche un POURCENTAGE (`opacityToPercent(0.9) === 90`) dans son `<input>` numérique dédié.
+    expect(openingTag(html, "data-testid", "appearance-opacity-input")).toContain('value="90"');
     // Ombre et contour sont activés sur ce calque : leurs champs détaillés doivent apparaître.
     expect(html).toContain("Épaisseur");
     expect(html).toContain("Ajustement auto");
@@ -1165,9 +1169,20 @@ describe("PropertyPanel — bande de géométrie épinglée (Tâche 6)", () => {
   // Correctif revue finale (Minor) : ce titre affirmait « quel que soit le type de calque » mais ne
   // rendait QUE textLayer — les trois autres fixtures de ce fichier (imageLayer, shapeLayerSolid,
   // qrLayer) n'étaient jamais exercées ici, alors que GeometryStrip (geometry-strip.tsx) est monté
-  // pour LES QUATRE (elle ne lit que `layer.frame`/`layer.rotation`/`layer.opacity`, communs à
-  // l'union Layer entière — rien de spécifique au texte). La boucle rend le titre vrai.
-  it("la bande de géométrie porte les six champs de cadre, quel que soit le type de calque", () => {
+  // pour LES QUATRE (elle ne lit que `layer.frame`/`layer.rotation`, communs à l'union Layer entière —
+  // rien de spécifique au texte). La boucle rend le titre vrai.
+  //
+  // CORRECTIF D'INTÉGRATION (chantier C, Tâche 6, revue C5) : ce test affirmait « les six champs »,
+  // opacité comprise — plus vrai depuis que le `NumberField` d'opacité brut de la bande a été retiré
+  // (voir le commentaire posé sur « Rotation (°) », geometry-strip.tsx) : la propriété §0-INCORRECTE
+  // qu'il écrivait (toujours une valeur bornée, jamais `undefined`) vit désormais UNIQUEMENT dans le
+  // curseur `OpacityField` de la section « Apparence » (property-panel.tsx), en pourcentage. La bande
+  // n'a donc plus que CINQ champs de cadre — et ce test le prouve dans les deux sens : les cinq
+  // champs RESTANTS sont bien dans la bande (`stripHtml`, isolée par les mêmes bornes d'index que le
+  // test « FRÈRE placé AVANT » ci-dessus), `data-field="opacity"` en a disparu, et
+  // `appearance-opacity` (le SEUL porteur restant de l'opacité) est bien présent quelque part dans le
+  // panneau — une mutation qui ferait réapparaître le doublon rougirait ce test.
+  it("la bande de géométrie porte les cinq champs de cadre (opacité en a été retirée), quel que soit le type de calque", () => {
     const fixtures: [Layer, string, Parameters<typeof PropertyPanel>[0]["context"]][] = [
       [textLayer, "t", "social_post"],
       [imageLayer, "i", "article_image"],
@@ -1176,9 +1191,16 @@ describe("PropertyPanel — bande de géométrie épinglée (Tâche 6)", () => {
     ];
     for (const [layer, id, context] of fixtures) {
       const html = render([layer], id, context);
-      for (const f of ["frame.x", "frame.y", "frame.w", "frame.h", "rotation", "opacity"]) {
-        expect(html).toContain(`data-field="${f}"`);
+      const stripIdx = html.indexOf('data-testid="geometry-strip"');
+      const scrollIdx = html.indexOf('data-testid="property-sections"');
+      expect(stripIdx).toBeGreaterThan(-1);
+      expect(scrollIdx).toBeGreaterThan(-1);
+      const stripHtml = html.slice(stripIdx, scrollIdx);
+      for (const f of ["frame.x", "frame.y", "frame.w", "frame.h", "rotation"]) {
+        expect(stripHtml).toContain(`data-field="${f}"`);
       }
+      expect(stripHtml).not.toContain('data-field="opacity"');
+      expect(html).toContain('data-testid="appearance-opacity"');
     }
   });
 

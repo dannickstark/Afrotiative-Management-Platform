@@ -259,12 +259,17 @@ export function SliderField({
   format?: (v: number) => string;
   dataField?: string;
   /** Correctif revue (Important 2) — SURCHARGE le `data-testid` auto-dérivé de `dataField`
-   * (`slider-${dataField}`). Nécessaire quand DEUX `SliderField` du panneau partagent le MÊME
-   * `dataField` (ex. l'opacité : encore portée par la bande de géométrie épinglée,
-   * `dataField="opacity"`, ET par ce nouveau curseur dans « Apparence ») — un test qui viserait
-   * `[data-field="opacity"]` seul serait alors AMBIGU entre les deux. `property-panel.tsx#OpacityField`
-   * passe `"appearance-opacity"` ici précisément pour ça ; l'`<input>` numérique reçoit
-   * `${dataTestId}-input`, jamais le même testid que la racine du curseur. */
+   * (`slider-${dataField}`). Introduit quand DEUX `SliderField` du panneau partageaient le MÊME
+   * `dataField` (l'opacité : à l'époque portée à la fois par un `NumberField` brut de la bande de
+   * géométrie épinglée, `dataField="opacity"`, ET par ce nouveau curseur dans « Apparence ») — un test
+   * qui aurait visé `[data-field="opacity"]` seul aurait alors été AMBIGU entre les deux.
+   * `property-panel.tsx#OpacityField` passe `"appearance-opacity"` ici précisément pour ça.
+   * CORRECTIF D'INTÉGRATION (chantier C, Tâche 6) : le `NumberField` de la bande de géométrie a depuis
+   * été SUPPRIMÉ (voir geometry-strip.tsx) — `[data-field="opacity"]` n'a donc plus qu'UN porteur dans
+   * tout le panneau. La surcharge reste posée telle quelle : `tests/studio-slider-field.test.ts` et
+   * l'intégration §0 ciblent `"appearance-opacity"` par son nom, la retirer romprait ces tests sans
+   * aucun bénéfice. `${dataTestId}-input` sur l'`<input>` numérique, jamais le même testid que la
+   * racine du curseur, reste inchangé. */
   dataTestId?: string;
 }) {
   const strValue = Number.isFinite(value) ? String(value) : "0";

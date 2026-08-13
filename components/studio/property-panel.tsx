@@ -275,28 +275,35 @@ function SwitchField({
 }
 
 // Chantier C, Tâche 5 — LE CURSEUR D'OPACITÉ, dans chaque section « Apparence » (texte/image/forme/
-// QR). `layer.opacity` (`z.number().min(0).max(1).optional()`, lib/studio/scene.ts) portait déjà un
-// contrôle NUMÉRIQUE brut (0–1, `dataField="opacity"`) dans la bande de géométrie ÉPINGLÉE
-// (geometry-strip.tsx, à côté de X/Y/largeur/hauteur/rotation) depuis la Tâche 6 (U1) — la propriété
-// n'était donc pas *inatteignable*. Ce curseur-ci n'est PAS un doublon inutile pour autant : il
-// diffère sur les deux points que ce chantier corrige précisément —
+// QR). `layer.opacity` (`z.number().min(0).max(1).optional()`, lib/studio/scene.ts) portait déjà, à
+// l'époque où cette fonction a été écrite, un contrôle NUMÉRIQUE brut (0–1, `dataField="opacity"`)
+// dans la bande de géométrie ÉPINGLÉE (geometry-strip.tsx, à côté de X/Y/largeur/hauteur/rotation)
+// depuis la Tâche 6 (U1) — la propriété n'était donc pas *inatteignable*, et ce curseur-ci n'était PAS
+// un doublon inutile pour autant : il différait sur les deux points que ce chantier corrige
+// précisément —
 //   1. il affiche et édite un POURCENTAGE (0–100, `opacityToPercent`/`percentToOpacity`), l'unité que
-//      lit un designer, plutôt que la fraction brute (0–1) de la bande épinglée ;
+//      lit un designer, plutôt que la fraction brute (0–1) qu'écrivait l'ancien contrôle de la bande ;
 //   2. surtout, il respecte le §0 : à 100 %, `patch({ opacity: undefined })` efface la clé plutôt que
 //      d'écrire `1` — un calque jamais touché ou ramené à pleine opacité RESTE sans `opacity` dans la
-//      scène sérialisée, identique à avant que cette tâche n'existe (voir tests/studio-slider-field.test.ts,
-//      « round-trip 100 % »). La bande épinglée, elle, écrit TOUJOURS une valeur bornée (jamais
-//      `undefined`) — un comportement PRÉEXISTANT, hors périmètre de cette tâche (le brief ne demande
-//      de convertir QUE « Flou » et « Interligne », et la bande épinglée n'apparaît pas dans la liste
-//      des fichiers à modifier) : les deux contrôles coexistent donc, chacun avec sa sémantique
-//      d'écriture propre, plutôt que d'unifier les deux dans cette tâche.
+//      scène sérialisée (voir tests/studio-slider-field.test.ts, « round-trip 100 % »), CE QUE L'ANCIEN
+//      contrôle de la bande, lui, ne respectait PAS (il écrivait TOUJOURS une valeur bornée, jamais
+//      `undefined`).
 //
-// EXPORTÉE + `dataTestId="appearance-opacity"` (correctif revue, Important 2) : un test qui viserait
-// le SEUL `[data-field="opacity"]` du panneau serait AMBIGU — la bande de géométrie épinglée porte
-// EXACTEMENT le même `data-field` sur SON propre contrôle (voir le point 1 ci-dessus). Exporter cette
-// fonction permet à tests/studio-property-panel.test.ts de monter et committer à travers le VRAI
-// `OpacityField` plutôt qu'une copie manuscrite de son `onCommit` qu'une régression ici pourrait
-// laisser diverger sans qu'aucun test ne s'en aperçoive.
+// CORRECTIF D'INTÉGRATION (chantier C, Tâche 6 — revue C5) : l'ancien contrôle de la bande de
+// géométrie a depuis été SUPPRIMÉ (voir le commentaire posé sur le `NumberField` « Rotation (°) »,
+// geometry-strip.tsx) — le doublon que le point 2 ci-dessus documentait n'existe plus, et cette
+// fonction est désormais le SEUL endroit du panneau qui lit/écrit `layer.opacity`. Le paragraphe
+// ci-dessus reste néanmoins écrit à l'imparfait plutôt que réécrit au silence : il explique POURQUOI
+// ce curseur a été ajouté alors qu'un contrôle existait déjà, une raison d'être que la suppression
+// ultérieure du doublon ne rend pas caduque.
+//
+// EXPORTÉE + `dataTestId="appearance-opacity"` (correctif revue, Important 2, toujours vrai après la
+// suppression ci-dessus) : `[data-field="opacity"]` reste le SEUL champ de tout le panneau à porter ce
+// `data-field` désormais, mais `dataTestId` est conservé — retirer la surcharge romprait
+// tests/studio-slider-field.test.ts et l'intégration §0 (tests/studio-inspector-integration.test.ts)
+// sans aucun bénéfice. Exporter cette fonction permet à tests/studio-property-panel.test.ts de monter
+// et committer à travers le VRAI `OpacityField` plutôt qu'une copie manuscrite de son `onCommit` qu'une
+// régression ici pourrait laisser diverger sans qu'aucun test ne s'en aperçoive.
 export function OpacityField({ layer, patch }: { layer: Layer; patch: Patch }) {
   return (
     <SliderField
@@ -446,12 +453,14 @@ function TextFields({
             <SelectField label="Alignement vertical" value={layer.vAlign} options={VALIGN_OPTIONS} onCommit={(v) => patch({ vAlign: v })} />
           </div>
           {/* Interligne : `min` de la scène (0.1, lib/studio/scene.ts) INCHANGÉ — seul le contrôle
-              devient un combo curseur+numérique (Chantier C, Tâche 5). `max=3` est un plafond de
-              CURSEUR seulement (voir le commentaire de `SliderField` sur `boundedFrom` : la frappe
-              numérique passe par le MÊME chemin d'arrondi que le curseur, donc une valeur tapée
-              au-delà de 3 serait, elle aussi, RAMENÉE à 3 — accepté ici : un interligne de plus de 3×
-              la taille de police n'a pas de cas d'usage identifié, et §0 ne porte que sur
-              min/l'écriture d'`opacity`, jamais sur ce plafond d'affichage). */}
+              devient un combo curseur+numérique (Chantier C, Tâche 5). `max=3` n'est qu'un plafond de
+              CURSEUR (correctif revue de la Tâche 5, Important 1 — voir le commentaire d'en-tête de
+              `SliderField` sur `commitFromInput`) : le GLISSER seul y est borné des deux côtés
+              (`sliderValue`/`valueToFraction`, lib/studio/field-scrub.ts) ; la FRAPPE numérique ne
+              clampe qu'à `min` — taper « 5 » commit `lineHeight: 5`, pas `3`, exactement comme
+              l'ancien `NumberField` sans `max` le laissait déjà passer. Accepté ici : un interligne de
+              plus de 3× la taille de police n'a pas de cas d'usage identifié, et rien dans ce fichier
+              ne pose de VRAI plafond au-delà de `min` sur ce champ. */}
           <div className="grid grid-cols-2 gap-2">
             <SliderField
               label="Interligne" dataField="line-height" value={layer.lineHeight} step={0.1} min={0.1} max={3}
@@ -483,11 +492,13 @@ function TextFields({
                 <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
               </div>
               {/* Flou d'ombre : `min=0` INCHANGÉ (borne du schéma). `max=100` n'est qu'un plafond de
-                  CURSEUR — voir le commentaire de `SliderField`#`boundedFrom` : la frappe numérique
-                  passe par le MÊME chemin d'arrondi, donc une valeur tapée au-delà de 100 serait elle
-                  aussi ramenée à 100. Accepté ici (Chantier C, Tâche 5) : un flou de plus de 100px sur
-                  un texte n'a pas de cas d'usage identifié, et déplace le curseur hors de la plage
-                  utile du bloc-cousin (X/Y typiquement à un chiffre ou deux). */}
+                  CURSEUR (correctif revue de la Tâche 5, Important 1 — voir le commentaire d'en-tête de
+                  `SliderField` sur `commitFromInput`) : le GLISSER seul y est borné des deux côtés ; la
+                  FRAPPE numérique ne clampe qu'à `min` — taper « 500 » commit `blur: 500`, pas `100`,
+                  exactement comme l'ancien `NumberField` sans `max` le laissait déjà passer. Accepté ici
+                  (Chantier C, Tâche 5) : un flou de plus de 100px sur un texte n'a pas de cas d'usage
+                  identifié, et déplace le curseur hors de la plage utile du bloc-cousin (X/Y
+                  typiquement à un chiffre ou deux) — mais rien ne l'empêche RÉELLEMENT au-delà de 0. */}
               <SliderField
                 label="Flou" dataField="shadow-blur" value={layer.shadow.blur} min={0} max={100}
                 onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })}

@@ -38,6 +38,11 @@ import { ConstraintsField } from "./constraints-field";
 // et le cycle d'imports qui existait auparavant entre les deux (property-panel.tsx -> ce fichier ->
 // property-panel.tsx, inoffensif seulement parce que `NumberField` était une déclaration de fonction
 // hissée) a disparu structurellement, pas seulement par chance d'ordre d'évaluation.
+//
+// CORRECTIF (chantier C, Tâche 6) — « les SIX champs » ci-dessus n'en décrit plus que CINQ : opacité,
+// après ce paragraphe, a de nouveau quitté cette bande — voir le commentaire posé sur le `NumberField`
+// « Rotation (°) » plus bas pour la raison. Ce paragraphe reste tel quel comme trace de ce que U1 a
+// réellement extrait à l'époque ; il ne décrit plus l'état courant du fichier à lui seul.
 export interface GeometryStripProps {
   layer: Layer;
   patch: Patch;
@@ -117,22 +122,24 @@ export function GeometryStrip({
           onCommit={(v) => patch({ frame: { ...layer.frame, h: Math.max(1, v) } })}
         />
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        {/* U3 Tâche 3 (arbitrage A) : une forme DÉCOUPÉE ne tourne pas — satori tourne le remplissage
-            mais pas le masque (réserve 2 de la sonde, mesurée en pixels), et les deux chemins de rendu
-            suppriment donc la `transform` (lib/studio/shapes.ts#layerRotation). Le contrôle est grisé
-            plutôt que laissé actif-sans-effet, avec la note ci-dessous : « interdire en le disant vaut
-            mieux qu'autoriser sans effet », le verdict qu'a déjà rendu la revue de U2 deux fois. La
-            question est posée à la DESCRIPTION de la forme, jamais à une liste de noms en dur. */}
-        <NumberField
-          label="Rotation (°)" value={layer.rotation ?? 0} dataField="rotation" disabled={!tourne}
-          onCommit={(v) => patch({ rotation: v || undefined })}
-        />
-        <NumberField
-          label="Opacité (0–1)" value={layer.opacity ?? 1} step={0.05} min={0} max={1} dataField="opacity"
-          onCommit={(v) => patch({ opacity: Math.min(1, Math.max(0, v)) })}
-        />
-      </div>
+      {/* U3 Tâche 3 (arbitrage A) : une forme DÉCOUPÉE ne tourne pas — satori tourne le remplissage
+          mais pas le masque (réserve 2 de la sonde, mesurée en pixels), et les deux chemins de rendu
+          suppriment donc la `transform` (lib/studio/shapes.ts#layerRotation). Le contrôle est grisé
+          plutôt que laissé actif-sans-effet, avec la note ci-dessous : « interdire en le disant vaut
+          mieux qu'autoriser sans effet », le verdict qu'a déjà rendu la revue de U2 deux fois. La
+          question est posée à la DESCRIPTION de la forme, jamais à une liste de noms en dur.
+          Chantier C, Tâche 6 (revue finale de C, correctif d'intégration) : Rotation vit désormais
+          SEULE dans cette bande — l'ex-second champ de cette rangée, « Opacité (0–1) » (un `NumberField`
+          brut, écrivant TOUJOURS `opacity` même à 1.0, jamais `undefined`), a été retiré. Ce doublon
+          datait du chantier D (Tâche 6, ci-dessus) et n'était pas §0-correct ; la Tâche 5 de CE chantier
+          lui a substitué `OpacityField` (property-panel.tsx), un curseur en POURCENTAGE dans chaque
+          section « Apparence », qui efface la clé à 100 % — voir son commentaire d'en-tête pour le
+          détail. Une bande de géométrie qui parlait de position/taille/rotation gagnait, avec lui, une
+          propriété D'APPARENCE qui n'y avait pas sa place ; elle ne la porte plus. */}
+      <NumberField
+        label="Rotation (°)" value={layer.rotation ?? 0} dataField="rotation" disabled={!tourne}
+        onCommit={(v) => patch({ rotation: v || undefined })}
+      />
       {/* Tâche 5 (U2, spec §5) — la LIMITE D'ACCROCHAGE d'un calque pivoté, dite plutôt que laissée à
           découvrir (verdict de la revue de la Tâche 5 : « la fonctionnalité meurt en silence », et la
           Tâche 4 avait établi le précédent juste en dessous avec sa note de rotation). Mêmes règles de
