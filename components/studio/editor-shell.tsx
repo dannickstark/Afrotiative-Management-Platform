@@ -13,6 +13,11 @@ import {
 import { cn } from "@/lib/utils";
 import { Canvas } from "./canvas";
 import { CanvasChrome, safeAreaDefaultFor, RULER_SIZE } from "./canvas-chrome";
+// Chantier B, Tâche 7 (spec §5) — le VRAI composant base-ui du menu contextuel. Importé ICI,
+// jamais par canvas.tsx (voir son en-tête et celui de canvas-context-menu.tsx) : editor-shell.tsx
+// est déjà dans l'arbre base-ui-lourd (DropdownMenu du menu de zoom, quelques lignes plus haut), donc
+// cet import n'aggrave pas le risque que tests/studio-no-popover-in-canvas.test.ts surveille.
+import { CanvasContextMenu } from "./canvas-context-menu";
 import { SaveIndicator } from "./save-indicator";
 import { Rail } from "./rail";
 import { PanelHost } from "./panel-host";
@@ -266,6 +271,18 @@ function EditorShellInner({
     if (layout !== "full" && hasSelection && !hadSelectionRef.current) setInspectorOpen(true);
     hadSelectionRef.current = hasSelection;
   }, [state.selectedIds, layout]);
+
+  // ── Menu contextuel du clic droit (Chantier B, Tâche 7, spec §5) ─────────
+  // L'état vit ICI, jamais dans `Canvas` : voir le MANDAT DE CONCEPTION en tête de
+  // canvas-context-menu.tsx (l'incident `useIsoLayoutEffect`) — `Canvas` (canvas.tsx) reste PUR de
+  // tout composant base-ui, ne fait que calculer `{x,y,targetLayerId}` via `onContextMenu` et
+  // remonter ce littéral jusqu'ICI. `targetLayerId`/`x`/`y` restent délibérément la DERNIÈRE valeur
+  // connue même après `open: false` (fermeture) — inoffensif (rien ne les lit tant que `open` est
+  // faux) et évite une frame où le menu, encore en transition de fermeture côté base-ui, perdrait
+  // son ancrage.
+  const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number; targetLayerId: string | null }>(
+    { open: false, x: 0, y: 0, targetLayerId: null },
+  );
 
   // ── Modes Montage ⇄ Rendu réel (Tâche 5, U1 spec §5) ──────────────────────
   // `mode` ne pilote qu'un rendu CONDITIONNEL plus bas (jamais une `key` React) : basculer ne
@@ -986,9 +1003,24 @@ function EditorShellInner({
                 <Canvas
                   scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} scale={scale}
                   showBindings={prefs.showBindings}
+                  onContextMenu={(payload) => setContextMenu({ open: true, ...payload })}
                 />
               </CanvasChrome>
             </div>
+
+            {/* Menu contextuel du clic droit (Chantier B, Tâche 7, spec §5) — placement JSX
+                indifférent (base-ui le porte via un Portal dans `document.body`, comme le menu de
+                zoom plus haut) ; posé ici, juste après le conteneur du canevas, par proximité de
+                lecture avec ce qu'il complète. */}
+            <CanvasContextMenu
+              open={contextMenu.open}
+              anchor={contextMenu.open ? { x: contextMenu.x, y: contextMenu.y } : null}
+              targetLayerId={contextMenu.targetLayerId}
+              scene={state.scene}
+              selectedIds={state.selectedIds}
+              dispatch={dispatch}
+              onOpenChange={(open) => setContextMenu((c) => ({ ...c, open }))}
+            />
 
             {/* Tâche 6 (U1, spec §6) : `h-full` + `overflow-hidden` donnent à cette colonne une
                 hauteur RÉELLEMENT bornée — c'est ce qui rend la bande de géométrie de PropertyPanel

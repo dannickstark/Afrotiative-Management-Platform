@@ -264,6 +264,20 @@ export async function wheel(el: Element, init: WheelEventInit = {}): Promise<Whe
   return event;
 }
 
+/** Dispatche un VRAI MouseEvent "contextmenu" (clic droit) qui bubble depuis `el`, enveloppé dans
+ * `act` — Chantier B, Tâche 7 (menu contextuel). Même idiome que `click()`/`wheel()` ci-dessus :
+ * jsdom implémente une VRAIE classe `MouseEvent` pour ce type d'événement (contrairement à
+ * `pointer()`, qui doit détourner `MouseEvent` sous un nom "pointer*" — voir son commentaire), donc
+ * `new MouseEvent("contextmenu", …)` suffit sans artifice. `clientX`/`clientY` (portés par
+ * `MouseEventInit`) sont ce que canvas.tsx lit pour ancrer le menu (voir
+ * `CanvasContextMenuPayload`). */
+export async function contextMenu(el: Element, init: MouseEventInit = {}): Promise<void> {
+  await act(async () => {
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, view: window, ...init });
+    el.dispatchEvent(event);
+  });
+}
+
 /** Laisse les effets/mises à jour d'état en attente se stabiliser sans dispatcher d'événement —
  * utile après une mise à jour déclenchée par une promesse résolue dans un effet plutôt que par une
  * interaction utilisateur directe. */

@@ -39,6 +39,14 @@ const FORBIDDEN_SPECIFIER_SUFFIXES = [
   "/token-picker", // components/studio/token-picker.tsx — RÉ-EXPORTE TOKEN_LABELS mais tire Popover
   "/components/ui/popover", // le wrapper shadcn du Popover
   "@base-ui/react/popover", // la primitive base-ui elle-même
+  // Chantier B, Tâche 7 — le menu contextuel du clic droit. `canvas-context-menu.tsx` porte le VRAI
+  // composant base-ui (Menu/Portal/Positioner, voir son en-tête et celui de
+  // components/ui/context-menu.tsx) ; `canvas.tsx` ne doit JAMAIS le résoudre, même pour un TYPE
+  // seul (`CanvasContextMenuPayload` est définie LOCALEMENT dans canvas.tsx pour cette raison). Le
+  // même garde-fou structurel qui a détecté l'incident original attrape donc, par construction,
+  // toute régression future qui réintroduirait ce risque par ce chemin-ci.
+  "/canvas-context-menu", // components/studio/canvas-context-menu.tsx — le composant base-ui RÉEL
+  "/components/ui/context-menu", // le wrapper shadcn du menu contextuel (@base-ui/react/menu)
 ] as const;
 
 // N'inspecte QUE les lignes qui sont RÉELLEMENT des déclarations `import`/`export … from` — jamais
@@ -99,6 +107,14 @@ describe("garde structurelle — canvas.tsx (production ET tests) ne réimporte 
     expect(pullsPopoverTransitively('import { TOKEN_LABELS } from "./token-picker";')).toBe(true);
     expect(pullsPopoverTransitively('import { Popover } from "@/components/ui/popover";')).toBe(true);
     expect(pullsPopoverTransitively('import { Popover } from "@base-ui/react/popover";')).toBe(true);
+    // Chantier B, Tâche 7 — les deux nouveaux spécificateurs interdits (menu contextuel), sous les
+    // deux formes réelles présentes dans ce dépôt (relative depuis components/studio/, absolue via
+    // l'alias "@/…"), y COMPRIS un import de TYPE seul (`import type { … }`) — la forme précise que
+    // canvas.tsx doit éviter pour `CanvasContextMenuPayload` (voir son en-tête).
+    expect(pullsPopoverTransitively('import { CanvasContextMenu } from "./canvas-context-menu";')).toBe(true);
+    expect(pullsPopoverTransitively('import { CanvasContextMenu } from "@/components/studio/canvas-context-menu";')).toBe(true);
+    expect(pullsPopoverTransitively('import type { CanvasContextMenuProps } from "./canvas-context-menu";')).toBe(true);
+    expect(pullsPopoverTransitively('import { ContextMenu } from "@/components/ui/context-menu";')).toBe(true);
     // Témoin négatif : le remplacement RÉEL (module pur) ne déclenche rien.
     expect(pullsPopoverTransitively('import { TOKEN_LABELS } from "@/lib/studio/token-labels";')).toBe(false);
     // Témoin négatif : une simple MENTION en commentaire, entre guillemets mais sans "from" devant —

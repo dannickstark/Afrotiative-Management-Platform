@@ -34,6 +34,14 @@ export interface LayerViewProps {
    * fournir. */
   scale?: number;
   onPointerDown?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  /** Chantier B, Tâche 7 (spec §5) — le clic droit sur CE calque. Même discipline que
+   * `onPointerDown` juste au-dessus (voir `interactive` plus bas) : un calque VERROUILLÉ ne reçoit
+   * JAMAIS ce gestionnaire, quel que soit l'appelant — un clic droit dessus bouillonne donc jusqu'au
+   * gestionnaire `onContextMenu` de la RACINE (canvas.tsx), qui ouvre le menu CANEVAS plutôt que
+   * celui de ce calque (la règle de repli U3 nommée dans le brief T7, appliquée ici par la MÊME
+   * absence de gestionnaire qui fait déjà fonctionner le clic gauche traversant, pas par une garde
+   * `if (layer.locked)` séparée qui pourrait diverger de celle du pointeur). */
+  onContextMenu?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 function frameStyle(frame: Frame, rotation: number, layer: Layer): CSSProperties {
@@ -187,7 +195,9 @@ function LayerContent({ layer, image }: { layer: Layer; image?: string }) {
   }
 }
 
-export function LayerView({ layer, frame, rotation, selected, image, scale = 1, onPointerDown }: LayerViewProps) {
+export function LayerView({
+  layer, frame, rotation, selected, image, scale = 1, onPointerDown, onContextMenu,
+}: LayerViewProps) {
   const interactive = !layer.locked;
   // U4 Tâche 3 (§0 du plan) — le calque tel que ce composant le PEINT, jamais celui que `state.scene`
   // détient : `resolveLayerColorsForDisplay` (lib/studio/values.ts) ne touche QUE les champs-couleur
@@ -204,6 +214,7 @@ export function LayerView({ layer, frame, rotation, selected, image, scale = 1, 
       data-selected={selected || undefined}
       data-locked={layer.locked || undefined}
       onPointerDown={interactive ? onPointerDown : undefined}
+      onContextMenu={interactive ? onContextMenu : undefined}
       style={{
         ...frameStyle(frame, rotation, layer),
         // `2 / scale` (revue Lot 2, Important 3) : voir le commentaire en tête de fichier — sans
