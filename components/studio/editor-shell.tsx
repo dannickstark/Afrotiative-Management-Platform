@@ -979,7 +979,7 @@ function EditorShellInner({
                 layout !== "full" && "min-w-[240px]",
               )}
               // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur, posée IMPÉRATIVEMENT en effet —
-              // voir `useEffect([layout])` ci-dessus, PAS de prop `onWheel` ici : React la poserait
+              // voir `useEffect([canvasMounted])` ci-dessus, PAS de prop `onWheel` ici : React la poserait
               // PASSIVE, rendant `preventDefault()` sans effet) + Espace-glisser (pan). `style.cursor`
               // reflète l'état PAN (grab en attente, grabbing en cours) exactement comme n'importe
               // quelle autre affordance de curseur du canevas (poignées de redimensionnement,
