@@ -20,6 +20,10 @@ import { useLayerDrag, HANDLES, type HandleId } from "@/hooks/use-layer-drag";
 import { layerSupportsRotation } from "@/lib/studio/shapes";
 import { resolveDisplayColor } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
+// Chantier E Tâche 2 — SOURCE UNIQUE des couleurs de surcouches (chrome de canevas) : sélection,
+// guides d'accrochage, contour de liaison, poignées. Un seul module pur à modifier pour retoucher la
+// palette, jamais un hexe en dur répété dans chaque composant qui en a besoin.
+import { OVERLAY, SELECTION, HANDLE_FILL, SNAP_GUIDE, BINDING } from "@/lib/studio/overlay-theme";
 // U4 Tâche 6 (spec §5) : « voir les liaisons » — `usesInLayer` est la MÊME fonction que
 // lib/studio/tokens.ts#extractTokens appelle déjà pour valider la scène entière (jamais une copie
 // parallèle du repérage de jetons). `TOKEN_LABELS` vient de lib/studio/token-labels.ts — PAS de
@@ -113,18 +117,18 @@ const HANDLE_CURSOR: Record<HandleId, string> = {
 // `overflow: hidden` du conteneur pour tout calque proche du haut du canevas — donc impossible à
 // saisir. Corrigé en divisant chaque longueur par `scale` dans handleStyleFor()/le rendu ci-dessous,
 // pour qu'elles gardent une taille ÉCRAN constante quel que soit le format édité.
-// Couleur des guides d'accrochage (Tâche 5, U2). DÉLIBÉRÉMENT différente du bleu de sélection
-// (#2563eb, poignées et contours) : un guide n'est pas une partie du calque sélectionné mais une
-// relation TEMPORAIRE avec autre chose, et les outils de référence les distinguent tous par la
-// couleur. Le rose/rouge est le choix le plus répandu pour ce rôle.
-const GUIDE_COLOR = "#e11d48";
+// Couleur des guides d'accrochage (Tâche 5, U2). DÉLIBÉRÉMENT différente du rôle `selection`
+// (overlay-theme.ts, poignées et contours) : un guide n'est pas une partie du calque sélectionné mais
+// une relation TEMPORAIRE avec autre chose, et les outils de référence les distinguent tous par la
+// couleur. Chantier E Tâche 2 : la valeur vient désormais d'`overlay-theme.ts` (rôle `snapGuide`).
+const GUIDE_COLOR = SNAP_GUIDE;
 
-// Couleur du contour « liaisons » (Tâche 6, U4). DÉLIBÉRÉMENT différente des trois autres surcouches
-// déjà posées sur ce canevas : le bleu de sélection (#2563eb), le rose des guides d'accrochage
-// (#e11d48, Tâche 5), et l'ambre des zones sûres (canvas-chrome.tsx, rgba(245,158,11,…)) — un calque
-// LIÉ n'est ni une sélection, ni une relation temporaire de geste, ni une contrainte de format : le
-// violet reste le seul des quatre rôles à ne porter aucune de ces trois couleurs.
-const BINDING_COLOR = "#7c3aed";
+// Couleur du contour « liaisons » (Tâche 6, U4). DÉLIBÉRÉMENT différente des trois autres rôles de
+// surcouche déjà posés sur ce canevas : `selection`, `snapGuide` (Tâche 5) et `safeTint`
+// (canvas-chrome.tsx) — un calque LIÉ n'est ni une sélection, ni une relation temporaire de geste, ni
+// une contrainte de format : le rôle `binding` reste le seul des quatre à ne porter aucune de ces
+// trois couleurs. Chantier E Tâche 2 : la valeur vient désormais d'`overlay-theme.ts` (import
+// `BINDING` ci-dessus, consommé directement plus bas — pas de renommage local ici).
 
 const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
   n: { top: 0, left: "50%" }, s: { bottom: 0, left: "50%" },
@@ -450,7 +454,7 @@ export function Canvas({
                   // format édité.
                   position: "absolute", width: 8 / scale, height: 8 / scale,
                   marginLeft: -4 / scale, marginTop: -4 / scale,
-                  background: "#fff", border: "1px solid #2563eb", cursor: HANDLE_CURSOR[h],
+                  background: HANDLE_FILL, border: `1px solid ${SELECTION}`, cursor: HANDLE_CURSOR[h],
                   pointerEvents: "auto", ...HANDLE_STYLE[h],
                 }}
               />
@@ -471,7 +475,7 @@ export function Canvas({
                 // Important 3).
                 position: "absolute", top: -24 / scale, left: "50%", marginLeft: -4 / scale,
                 width: 8 / scale, height: 8 / scale,
-                borderRadius: "50%", background: "#fff", border: "1px solid #2563eb",
+                borderRadius: "50%", background: HANDLE_FILL, border: `1px solid ${SELECTION}`,
                 cursor: "grab", pointerEvents: "auto",
               }}
             />
@@ -558,7 +562,7 @@ export function Canvas({
                 position: "absolute",
                 left: frame.x, top: frame.y, width: frame.w, height: frame.h,
                 transform: rotation ? `rotate(${rotation}deg)` : undefined,
-                border: `${2 / scale}px solid ${BINDING_COLOR}`,
+                border: `${2 / scale}px solid ${BINDING}`,
                 boxSizing: "border-box",
                 pointerEvents: "none",
               }}
@@ -578,8 +582,8 @@ export function Canvas({
                   lineHeight: 1.4,
                   padding: `${2 / scale}px ${5 / scale}px`,
                   borderRadius: 3 / scale,
-                  background: BINDING_COLOR,
-                  color: "#fff",
+                  background: BINDING,
+                  color: OVERLAY.bindingLabelFg,
                   whiteSpace: "nowrap",
                 }}
               >

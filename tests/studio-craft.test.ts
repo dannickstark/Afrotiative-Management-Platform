@@ -19,3 +19,16 @@ describe("chantier E · --canvas-backdrop", () => {
     expect(shell).not.toContain("dark:bg-neutral-900");
   });
 });
+
+describe("chantier E · overlay-theme (source unique des couleurs de surcouches)", () => {
+  it("aucune couleur de surcouche EN DUR ne subsiste dans canvas/canvas-chrome (source unique)", () => {
+    const canvas = readFileSync(join(ROOT, "components/studio/canvas.tsx"), "utf8");
+    const chrome = readFileSync(join(ROOT, "components/studio/canvas-chrome.tsx"), "utf8");
+    // les hexes historiques ne doivent plus apparaître comme LITTÉRAUX de code (les commentaires citant
+    // l'historique sont tolérés : on vérifie l'absence dans un contexte de valeur CSS "…: '#…'" ou `${…}`).
+    for (const hex of ["#2563eb", "#e11d48", "#7c3aed"]) {
+      expect(canvas.includes(`"${hex}"`) || canvas.includes(`'${hex}'`)).toBe(false);
+    }
+    expect(chrome.includes("rgba(245,158,11")).toBe(false); // migré vers overlay-theme
+  });
+});
