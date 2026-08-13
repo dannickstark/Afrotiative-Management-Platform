@@ -1,12 +1,15 @@
 // lib/studio/field-scrub.ts — maths PURES de balayage/curseur. Aucune dépendance.
 //
-// Règle d'arrondi (unique, pour scrubValue) : le glisser avance TOUJOURS par
-// multiples du `step` nominal (pas du step effectif après modificateur) — Maj
-// et Alt changent la SENSIBILITÉ (combien de pixels il faut pour franchir un
-// pas), pas la granularité de la grille finale. La valeur brute est donc
-// systématiquement arrondie au multiple de `step`, quel que soit le
-// modificateur ; Alt (précision fine) n'assouplit pas cette grille, il rend
-// simplement chaque pas plus lent à atteindre (facteur ×0.1 sur `steps`).
+// Règle d'arrondi (unique, pour scrubValue) : la valeur brute est arrondie au
+// multiple de l'INCRÉMENT EFFECTIF, où l'incrément effectif dépend du
+// modificateur :
+//   - aucun modificateur → incrément = `step` (grille nominale) ;
+//   - Maj (rapide)       → incrément = `step` (même grille nominale, mais
+//     ×10 de sensibilité : moins de pixels par pas) ;
+//   - Alt (précision fine) → incrément = `step * 0.1` (grille DIX FOIS PLUS
+//     FINE) — Alt laisse donc atteindre des valeurs intermédiaires,
+//     inaccessibles au step nominal (ex. 0.1 sur un champ de step=1), en
+//     plus de ralentir l'avancement par pixel.
 export type ScrubModifier = "none" | "shift" | "alt";
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -22,7 +25,8 @@ export function scrubValue(
   const factor = opts.modifier === "shift" ? 10 : opts.modifier === "alt" ? 0.1 : 1;
   const steps = (dxPx / pxPerStep) * factor;
   const raw = start + steps * step;
-  const stepped = roundToStep(raw, step);
+  const effectiveIncrement = step * (opts.modifier === "alt" ? 0.1 : 1);
+  const stepped = roundToStep(raw, effectiveIncrement);
   return clamp(stepped, opts.min ?? -Infinity, opts.max ?? Infinity);
 }
 

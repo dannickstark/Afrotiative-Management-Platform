@@ -12,7 +12,13 @@ describe("scrubValue (fonction de choix — balayer)", () => {
   });
   it("Maj multiplie par 10, Alt par 0.1", () => {
     expect(scrubValue(0, 40, { step: 1, modifier: "shift" })).toBe(100); // 10 pas × 10
-    expect(scrubValue(0, 40, { step: 1, modifier: "alt" })).toBe(1);     // 10 pas × 0.1
+    expect(scrubValue(0, 40, { step: 1, modifier: "alt" })).toBeCloseTo(1, 5); // 10 pas × 0.1
+  });
+  it("Alt atteint des valeurs SOUS le step nominal (grille fine, ×0.1) — sans Alt c'est impossible", () => {
+    // dx=4 @ pxPerStep=4 → 1 pas × 0.1 → brut 0.1 → arrondi à la grille fine step*0.1=0.1 → 0.1
+    expect(scrubValue(0, 4, { step: 1, modifier: "alt" })).toBeCloseTo(0.1, 5);
+    // anti-vacuité : sans modificateur, on reste sur la grille nominale (entiers seulement ici)
+    expect(scrubValue(0, 4, { step: 1 })).toBe(1);
   });
   it("clampe à [min,max]", () => {
     expect(scrubValue(0, -400, { step: 1, min: 0 })).toBe(0);
