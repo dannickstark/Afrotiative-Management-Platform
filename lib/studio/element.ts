@@ -1,5 +1,7 @@
 import type { Scene, Layer, Gradient, TextLayer, ShapeLayer } from "./scene";
 import { layerBorder, layerBoxShadow, layerRotation, shapeCssFor } from "./shapes";
+import { imageCss, focalToPositionPx } from "./image-css";
+import type { PreparedImage } from "./images";
 
 // Satori accepte un arbre « à la React » sous forme d'objets simples : pas besoin de JSX dans du
 // code de bibliothèque.
@@ -130,7 +132,50 @@ function shapeNode(layer: ShapeLayer): SatoriNode {
   };
 }
 
-function imageNode(layer: Layer, uri: string): SatoriNode {
+// La taille EFFECTIVE de l'image peinte (en px du cadre) + le `background-size` correspondant, par
+// mode de cadrage. C'est le cœur du chemin unique (Tâche 3) : Satori sait peindre `cover`/`contain`/
+// une taille en px/une mosaïque, mais son `background-position` en `%` est bogué (spike, Tâche 1) —
+// on lui donne donc la position en PIXELS, calculée par focalToPositionPx à partir de `effImg`.
+// `effImg` reproduit EXACTEMENT la mise à l'échelle que Satori applique pour chaque `background-size`,
+// pour que la position calculée corresponde à ce qui est réellement peint.
+function effectiveImage(
+  sizing: "cover" | "contain" | "stretch" | "tile" | "custom",
+  frame: { w: number; h: number },
+  intrinsic: { w: number; h: number },
+  layer: Extract<Layer, { type: "image" }>,
+): { effImg: { w: number; h: number }; backgroundSize: string } {
+  const { w: fw, h: fh } = frame;
+  const { w: iw, h: ih } = intrinsic;
+  switch (sizing) {
+    case "contain": {
+      const s = Math.min(fw / iw, fh / ih);
+      return { effImg: { w: iw * s, h: ih * s }, backgroundSize: "contain" };
+    }
+    case "stretch":
+      return { effImg: { w: fw, h: fh }, backgroundSize: "100% 100%" };
+    case "custom": {
+      // customSize absent malgré sizing:"custom" — repli sûr sur le cadre (ne devrait pas arriver, le
+      // schéma le laisse optionnel). imageCss retombe pareillement sur "contain" ; ici on remplit.
+      const cw = layer.customSize?.w ?? fw;
+      const ch = layer.customSize?.h ?? fh;
+      return { effImg: { w: cw, h: ch }, backgroundSize: `${cw}px ${ch}px` };
+    }
+    case "tile": {
+      // `scale` est une fraction de la taille INTRINSÈQUE (image-css.ts). La taille de tuile est donc
+      // iw*scale × ih*scale — jamais "auto", puisque scale peut ≠ 1. `background-position` sert alors
+      // d'origine de la tuile : la même formule convient.
+      const scale = layer.tile?.scale ?? 1;
+      return { effImg: { w: iw * scale, h: ih * scale }, backgroundSize: `${iw * scale}px ${ih * scale}px` };
+    }
+    case "cover":
+    default: {
+      const s = Math.max(fw / iw, fh / ih);
+      return { effImg: { w: iw * s, h: ih * s }, backgroundSize: "cover" };
+    }
+  }
+}
+
+function imageNode(layer: Layer, prepared: PreparedImage): SatoriNode {
   // ATTENTION, DEUX CHAMPS `radius` DE TYPES DIFFÉRENTS (revue finale U3, Minor 3 — un piège que U3 a
   // créé lui-même) : celui-ci est `imageLayer.radius`, un `z.number()` (lib/studio/scene.ts:46) laissé
   // NUMÉRIQUE délibérément — le migrer achèterait des masques d'image elliptiques, une fonctionnalité,
@@ -141,7 +186,38 @@ function imageNode(layer: Layer, uri: string): SatoriNode {
   // vérifié, `layer.radius` sur l'union `Layer` est TS2339. Le versant observable de la séparation est
   // testé dans tests/studio-shapes.test.ts, « les DEUX champs `radius` du schéma restent SÉPARÉS ».
   const radius = layer.type === "image" && layer.radius ? { borderRadius: layer.radius } : {};
-  const fit = layer.type === "image" ? layer.fit : "contain";
+
+  // CHEMIN UNIQUE (Tâche 3, verdict du spike) — un calque IMAGE est un `<div>` de FOND, PAS un `<img>`.
+  // C'est ce qui rend le point focal hors-centre possible sur `cover` : l'image n'est plus pré-recadrée
+  // au cadre par sharp (prepareImage la remonte à sa taille naturelle bornée), et c'est le fond CSS de
+  // Satori qui l'échelonne et la positionne. `background-position` est donné en PIXELS calculés
+  // (focalToPositionPx) et NON en `%` : le `%` de Satori est bogué (spike, Tâche 1).
+  if (layer.type === "image") {
+    const sizing = layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain");
+    // Garde contre une intrinsèque nulle (calque QR partage la map mais n'entre jamais ici ; un 0
+    // ferait diviser par zéro dans `effectiveImage`) : retombe sur le cadre, inoffensif.
+    const intrinsic = { w: prepared.w || layer.frame.w, h: prepared.h || layer.frame.h };
+    const { effImg, backgroundSize } = effectiveImage(sizing, layer.frame, intrinsic, layer);
+    return {
+      type: "div",
+      props: {
+        "data-layer": layer.id,
+        style: {
+          ...frameStyle(layer),
+          overflow: "hidden",
+          ...radius,
+          backgroundImage: `url(${prepared.uri})`,
+          backgroundSize,
+          // `backgroundRepeat` d'imageCss (repeat/repeat-x/repeat-y pour tile, no-repeat sinon) est
+          // valable tel quel ; seul `backgroundPosition` est ÉCRASÉ par la version pixels ci-dessous.
+          backgroundRepeat: imageCss(layer).backgroundRepeat,
+          backgroundPosition: focalToPositionPx(layer, effImg),
+        },
+      },
+    };
+  }
+
+  // QR — CHEMIN `<img>` INCHANGÉ (un QR est un vecteur déjà à la bonne taille, pas de cadrage avancé).
   return {
     type: "div",
     props: {
@@ -150,28 +226,30 @@ function imageNode(layer: Layer, uri: string): SatoriNode {
       children: {
         type: "img",
         props: {
-          src: uri,
+          src: prepared.uri,
           width: layer.frame.w,
           height: layer.frame.h,
-          style: { objectFit: fit, width: layer.frame.w, height: layer.frame.h, ...radius },
+          style: { objectFit: "contain", width: layer.frame.w, height: layer.frame.h, ...radius },
         },
       },
     },
   };
 }
 
-// PURE — aucune I/O. `images` associe un ID DE CALQUE à une data URI déjà préparée (calques image
-// et qr). Un calque image sans URI préparée est omis : render.ts a déjà échoué franchement si la
-// préparation était obligatoire, donc arriver ici sans URI signifie « rien à peindre ».
-export function sceneToElement(scene: Scene, images: Map<string, string>): SatoriNode {
+// PURE — aucune I/O. `images` associe un ID DE CALQUE à une image déjà préparée (calques image et qr) :
+// `{ uri, w, h }` — la taille intrinsèque `w`/`h` est nécessaire au fond CSS d'une IMAGE (Tâche 3),
+// tandis qu'un QR n'utilise que `uri` (render.ts y stocke `w:0, h:0`). Un calque image sans image
+// préparée est omis : render.ts a déjà échoué franchement si la préparation était obligatoire, donc
+// arriver ici sans image signifie « rien à peindre ».
+export function sceneToElement(scene: Scene, images: Map<string, PreparedImage>): SatoriNode {
   const children: SatoriNode[] = [];
 
   for (const layer of scene.layers) {
     if (!layer.visible) continue;
     if (layer.type === "image" || layer.type === "qr") {
-      const uri = images.get(layer.id);
-      if (!uri) continue;
-      children.push(imageNode(layer, uri));
+      const prepared = images.get(layer.id);
+      if (!prepared) continue;
+      children.push(imageNode(layer, prepared));
     } else if (layer.type === "text") {
       children.push(textNode(layer));
     } else {

@@ -21,7 +21,9 @@ const scene: Scene = {
   ],
 };
 
-const images = new Map([["bg", "data:image/png;base64,AAAA"]]);
+// Properties Pro P1, Tâche 3 — la map associe désormais un ID à une `PreparedImage` (`{ uri, w, h }`),
+// pas à une simple URI : le chemin de rendu d'une IMAGE (fond CSS) a besoin de la taille intrinsèque.
+const images = new Map([["bg", { uri: "data:image/png;base64,AAAA", w: 1200, h: 675 }]]);
 
 describe("sceneToElement", () => {
   it("produit une racine aux dimensions du canevas", () => {
@@ -162,7 +164,7 @@ describe("sceneToElement", () => {
     expect("borderRight" in shapeStyle).toBe(false);
   });
 
-  it("applique le border-radius sur une couche image", () => {
+  it("applique le border-radius sur une couche image, rendue en FOND (Tâche 3 : plus de <img> interne)", () => {
     const radiusImageScene: Scene = {
       schemaVersion: 1,
       canvas: { width: 100, height: 100, background: "#FFF" },
@@ -175,13 +177,17 @@ describe("sceneToElement", () => {
         },
       ],
     };
-    const imgMap = new Map([["img", "data:image/png;base64,AAAA"]]);
+    const imgMap = new Map([["img", { uri: "data:image/png;base64,AAAA", w: 80, h: 80 }]]);
     const root = sceneToElement(radiusImageScene, imgMap);
-    const children = (root.props as { children: { props: { style: Record<string, unknown> } }[] }).children;
-    const containerStyle = children[0].props.style;
+    const children = (root.props as { children: { props: Record<string, unknown> }[] }).children;
+    const containerProps = children[0].props;
+    const containerStyle = containerProps.style as Record<string, unknown>;
     expect(containerStyle.borderRadius).toBe(16);
-    const imgChild = (children[0].props as Record<string, unknown>).children as { props: { style: Record<string, unknown> } };
-    expect(imgChild.props.style.borderRadius).toBe(16);
+    // CHEMIN UNIQUE : une IMAGE est un `<div>` de FOND — plus AUCUN `<img>` interne (le rayon vit sur
+    // le conteneur, l'image elle-même est peinte via `background-image`).
+    expect("children" in containerProps).toBe(false);
+    expect(containerStyle.backgroundImage).toBe("url(data:image/png;base64,AAAA)");
+    expect(containerStyle.backgroundSize).toBe("cover");
   });
 
   it("maintient l'ordre d'apparition des calques visibles seulement", () => {
@@ -245,7 +251,7 @@ describe("sceneToElement", () => {
         },
       ],
     };
-    const qrMap = new Map([["qr1", "data:image/png;base64,QRCODE"]]);
+    const qrMap = new Map([["qr1", { uri: "data:image/png;base64,QRCODE", w: 0, h: 0 }]]);
     const root = sceneToElement(qrScene, qrMap);
     const children = (root.props as { children: { props: { "data-layer": string; style: Record<string, unknown> } }[] }).children;
     expect(children).toHaveLength(1);

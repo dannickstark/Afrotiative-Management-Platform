@@ -447,7 +447,7 @@ describe("migration de `radius` — une chaîne traverse les deux chemins", () =
     function stylesOf(layer: Layer): Record<string, unknown> {
       const root = sceneToElement(
         { schemaVersion: 1, canvas: { width: 800, height: 400, background: "#000000" }, layers: [layer] },
-        new Map([[layer.id, "data:image/png;base64,AA"]]),
+        new Map([[layer.id, { uri: "data:image/png;base64,AA", w: 100, h: 100 }]]),
       );
       return (root.props as { children: { props: { style: Record<string, unknown> } }[] }).children[0].props.style;
     }

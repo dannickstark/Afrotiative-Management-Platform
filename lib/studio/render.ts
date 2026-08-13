@@ -4,7 +4,7 @@ import sharp from "sharp";
 import QRCode from "qrcode";
 import type { Scene, TextLayer } from "./scene";
 import { resolveTokens, type TokenValues } from "./values";
-import { prepareImage } from "./images";
+import { prepareImage, type PreparedImage } from "./images";
 import { loadFallbackFonts, NullAssetLoader, type AssetLoader, type LoadedFont } from "./fonts";
 import { sceneToElement, textStyleFor, type SatoriNode } from "./element";
 import type { TokenId } from "./tokens";
@@ -179,8 +179,10 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
     if (font) fonts.push(font); else degraded = true;
   }
 
-  // 3. Pré-passe images + QR, en parallèle.
-  const prepared = new Map<string, string>();
+  // 3. Pré-passe images + QR, en parallèle. La valeur est une `PreparedImage` (uri + taille
+  //    intrinsèque) : une IMAGE porte sa vraie taille (element.ts en a besoin pour `effImg`), un QR
+  //    n'a qu'une uri vectorielle et stocke `w:0, h:0` (imageNode ne lit que `uri` pour un QR).
+  const prepared = new Map<string, PreparedImage>();
   await Promise.all(resolved.layers.map(async (layer) => {
     if (!layer.visible) return;
     if (layer.type === "image") {
@@ -219,7 +221,7 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
         );
       }
       prepared.set(layer.id, await prepareImage({
-        url, width: layer.frame.w, height: layer.frame.h, fit: layer.fit,
+        url, width: layer.frame.w, height: layer.frame.h,
         blur: layer.blur, overlay: layer.overlay, fetchImpl: opts.fetchImpl,
       }));
     } else if (layer.type === "qr") {
@@ -231,7 +233,9 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
       // `degraded` pouvait couvrir un jeton QR manquant, alors que c'est un échec franc comme tout
       // autre jeton requis.
       const value = opts.values[layer.slot as TokenId]!;
-      prepared.set(layer.id, await qrDataUri(value, layer.fg, layer.bg, layer.margin));
+      // Un QR reste un vecteur déjà dimensionné (chemin `<img>` d'imageNode) : pas de taille
+      // intrinsèque à remonter, d'où `w:0, h:0` — imageNode ne lit que `uri` pour un calque QR.
+      prepared.set(layer.id, { uri: await qrDataUri(value, layer.fg, layer.bg, layer.margin), w: 0, h: 0 });
     }
   }));
 
