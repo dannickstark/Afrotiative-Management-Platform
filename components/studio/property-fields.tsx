@@ -227,13 +227,27 @@ export function NumberField({
 // `patch`/`setLayerProp`) n'est donc jamais câblé sur `onValueChange` — seulement sur
 // `onValueCommitted`, exactement comme `NumberField` ne committe jamais pendant `onLabelPointerMove`.
 //
-// La valeur COMMITTÉE ne fait jamais confiance à l'arrondi interne de Base UI tel quel : elle repasse
-// par `valueToFraction` puis `sliderValue` (lib/studio/field-scrub.ts, Tâche 2) — les MÊMES fonctions
-// pures que tout futur curseur de ce dépôt utilisera, pour que deux curseurs bornés au même min/max/
-// step committent TOUJOURS la même valeur pour le même geste, sans dépendre d'un détail d'arrondi
-// propre à la librairie tierce (demi-pair vs demi-supérieur, dérive flottante…).
+// La valeur COMMITTÉE par un GLISSER ne fait jamais confiance à l'arrondi interne de Base UI tel
+// quel : elle repasse par `valueToFraction` puis `sliderValue` (lib/studio/field-scrub.ts, Tâche 2) —
+// les MÊMES fonctions pures que tout futur curseur de ce dépôt utilisera, pour que deux curseurs
+// bornés au même min/max/step committent TOUJOURS la même valeur pour le même geste, sans dépendre
+// d'un détail d'arrondi propre à la librairie tierce (demi-pair vs demi-supérieur, dérive flottante…).
+//
+// CORRECTIF REVUE (Important 1) — LA FRAPPE NUMÉRIQUE NE PASSE **PAS** PAR CE MÊME BORNAGE. Une
+// première version faisait passer la frappe par LE MÊME `boundedFrom` que le glisser — donc par
+// `max` — et taper « 500 » dans le flou d'ombre (schéma `min:0`, SANS PLAFOND) donnait `onCommit(100)`
+// si le curseur affichait `max=100` : une RÉGRESSION réelle par rapport à l'ancien `NumberField`, qui
+// laissait passer 500 tel quel (voir son `commit()` plus haut — aucun clamp, ni min ni max, c'est
+// l'APPELANT/`patch` qui décide). `max` sur `SliderField` n'est qu'un plafond D'AFFICHAGE du curseur
+// (voir les commentaires « plafond de curseur » dans property-panel.tsx) — jamais une borne du champ
+// lui-même. La frappe ne clampe donc qu'à `min` (comme le ferait n'importe quel appelant qui écrit
+// `Math.max(min, v)` dans son `onCommit`, ex. le flou/l'interligne) et laisse le PLAFOND, s'il y en a
+// un de RÉEL (ex. l'opacité, où l'appelant applique `pct >= 100 ? undefined : …`), à la charge de
+// l'appelant. Le GLISSER, lui, reste borné aux DEUX côtés : Base UI ne laisse de toute façon jamais le
+// curseur sortir de `[min,max]`, donc `boundedFrom` n'y fait que RE-CONFIRMER une valeur déjà dans la
+// plage (défensif, jamais un vrai plafonnement inattendu).
 export function SliderField({
-  label, value, min, max, step, onCommit, format, dataField,
+  label, value, min, max, step, onCommit, format, dataField, dataTestId,
 }: {
   label: string; value: number; min: number; max: number;
   /** Défaut 1, même défaut que `Slider.Root` (Base UI) et que `NumberField`. */
@@ -244,40 +258,54 @@ export function SliderField({
    * faudrait reparser. */
   format?: (v: number) => string;
   dataField?: string;
+  /** Correctif revue (Important 2) — SURCHARGE le `data-testid` auto-dérivé de `dataField`
+   * (`slider-${dataField}`). Nécessaire quand DEUX `SliderField` du panneau partagent le MÊME
+   * `dataField` (ex. l'opacité : encore portée par la bande de géométrie épinglée,
+   * `dataField="opacity"`, ET par ce nouveau curseur dans « Apparence ») — un test qui viserait
+   * `[data-field="opacity"]` seul serait alors AMBIGU entre les deux. `property-panel.tsx#OpacityField`
+   * passe `"appearance-opacity"` ici précisément pour ça ; l'`<input>` numérique reçoit
+   * `${dataTestId}-input`, jamais le même testid que la racine du curseur. */
+  dataTestId?: string;
 }) {
   const strValue = Number.isFinite(value) ? String(value) : "0";
   const { local, setLocal, editing, setEditing } = useCommitBuffer(strValue);
   const displayValue = Number.isFinite(Number(local)) ? Number(local) : value;
 
-  // Même géométrie de bornage que `sliderValue` (lib/studio/field-scrub.ts) : une valeur BRUTE
-  // (curseur OU frappe numérique) est d'abord ramenée à une fraction [0,1] de la plage, puis
-  // re-projetée dans les unités du champ AU STEP DEMANDÉ — un seul chemin d'arrondi pour les deux
-  // sources de commit (glisser ET frappe), jamais deux implémentations qui pourraient diverger.
-  function boundedFrom(raw: number): number {
-    return sliderValue(valueToFraction(raw, min, max), { min, max, step });
-  }
-
-  function commit(raw: number) {
+  // GLISSER (`onValueCommitted`) — voir le commentaire d'en-tête : `raw` sort déjà de Base UI dans
+  // `[min,max]` (le composant ne laisse jamais le curseur en sortir), `sliderValue`/`valueToFraction`
+  // ne font donc que RE-CONFIRMER cette borne, jamais l'imposer de façon inattendue.
+  function commitFromDrag(raw: number) {
     setEditing(false);
-    const bounded = boundedFrom(raw);
+    const bounded = sliderValue(valueToFraction(raw, min, max), { min, max, step });
     if (bounded !== value) onCommit(bounded);
     else setLocal(strValue);
   }
 
+  // FRAPPE NUMÉRIQUE — voir le commentaire d'en-tête : `min` reste appliqué (même filet que le
+  // glisser à ce bord-là), mais `max` NE L'EST PAS — une saisie au-delà du plafond D'AFFICHAGE du
+  // curseur (`max`) passe telle quelle, exactement comme l'ancien `NumberField` (aucun clamp d'aucun
+  // bord, l'appelant/`patch` en décide). C'est le SEUL bornage que cette fonction applique — pas de
+  // repassage par `sliderValue` (qui, lui, imposerait `max`).
   function commitFromInput() {
     const n = Number(local);
     if (!Number.isFinite(n)) { setEditing(false); setLocal(strValue); return; }
-    commit(n);
+    setEditing(false);
+    const bounded = Math.max(min, n);
+    if (bounded !== value) onCommit(bounded);
+    else setLocal(strValue);
   }
 
-  const sliderTestId = dataField ? `slider-${dataField}` : undefined;
-  const inputTestId = dataField ? `slider-input-${dataField}` : undefined;
+  const sliderTestId = dataTestId ?? (dataField ? `slider-${dataField}` : undefined);
+  const inputTestId = dataTestId ? `${dataTestId}-input` : dataField ? `slider-input-${dataField}` : undefined;
 
   return (
     <FieldRow
       label={label}
       action={format ? (
-        <span className="text-xs tabular-nums text-muted-foreground" data-testid={dataField ? `slider-format-${dataField}` : undefined}>
+        <span
+          className="text-xs tabular-nums text-muted-foreground"
+          data-testid={dataTestId ? `${dataTestId}-format` : dataField ? `slider-format-${dataField}` : undefined}
+        >
           {format(displayValue)}
         </span>
       ) : undefined}
@@ -295,7 +323,7 @@ export function SliderField({
           onValueChange={(v) => { setEditing(true); setLocal(String(v as number)); }}
           // UNE fois, au relâchement — voir le commentaire d'en-tête de `SliderField` : c'est le SEUL
           // endroit où un glisser peut déclencher `onCommit`.
-          onValueCommitted={(v) => commit(v as number)}
+          onValueCommitted={(v) => commitFromDrag(v as number)}
         />
         <Input
           type="number"

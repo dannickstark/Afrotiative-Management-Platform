@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, mock } from "bun:
 import React from "react";
 import { act } from "react";
 import { installDom, mount, click } from "./dom-harness";
+import type { Layer } from "@/lib/studio/scene";
 
 // tests/studio-slider-field.test.ts — Chantier C, Tâche 5 (brief) : le VRAI câblage DOM de
 // `SliderField` (components/studio/property-fields.tsx), via le harnais U0 (tests/dom-harness.ts).
@@ -58,10 +59,17 @@ import { installDom, mount, click } from "./dom-harness";
 // choix, même raison), qui utilise déjà `onInput` plutôt que `onChange` pour la même raison.
 let teardownDom: () => void;
 let SliderFieldC: typeof import("@/components/studio/property-fields").SliderField;
+let OpacityFieldC: typeof import("@/components/studio/property-panel").OpacityField;
 
 beforeAll(async () => {
   teardownDom = installDom();
   ({ SliderField: SliderFieldC } = await import("@/components/studio/property-fields"));
+  // Correctif revue (Important 2) — importé ICI, AVANT le `mock.module()` posé plus bas (dans le
+  // `beforeAll` du bloc « glisser ») : la liaison ESM que `OpacityField` lit à travers
+  // `property-fields.tsx` -> `components/ui/slider.tsx` est LIVE (JS lit la valeur COURANTE de
+  // l'export au moment du RENDU, pas au moment de l'import — même mécanique déjà exploitée pour
+  // `SliderFieldC` ci-dessus, vérifiée en instrumentant ce fichier avant de l'écrire).
+  ({ OpacityField: OpacityFieldC } = await import("@/components/studio/property-panel"));
 });
 
 afterAll(() => {
@@ -167,14 +175,32 @@ describe("SliderField — le numérique synchronisé", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("une saisie hors bornes est RAMENÉE par le MÊME chemin que le curseur (sliderValue/valueToFraction), jamais laissée telle quelle", async () => {
+  // Correctif revue (Important 1) — RENVERSEMENT DÉLIBÉRÉ de l'assertion précédente. `max` sur
+  // `SliderField` n'est qu'un plafond D'AFFICHAGE du curseur (property-panel.tsx pose `max={100}` sur
+  // le flou d'ombre, dont le SCHÉMA n'a lui-même AUCUN plafond, `min:0` seulement) — la frappe
+  // numérique doit rester la SAISIE PRÉCISE que le brief demande, exactement comme l'ancien
+  // `NumberField` (aucun clamp d'aucun bord, l'appelant décide). Committer 200 ici serait une
+  // RÉGRESSION réelle : un designer qui veut un flou de 500px ne pourrait plus le taper.
+  it("une saisie AU-DELÀ du plafond d'affichage du curseur (max) passe TELLE QUELLE — jamais plafonnée côté SliderField", async () => {
     const onCommit = mock((_v: number) => {});
     const { container } = await mountReal({ label: "Flou", value: 4, min: 0, max: 200, step: 1, onCommit });
 
-    await typeAndBlur(container, 500); // au-delà de max=200
+    await typeAndBlur(container, 500); // au-delà de max=200 (plafond d'AFFICHAGE seulement)
 
     expect(onCommit).toHaveBeenCalledTimes(1);
-    expect(onCommit.mock.calls[0][0]).toBe(200); // borné, pas 500
+    expect(onCommit.mock.calls[0][0]).toBe(500); // PAS borné à 200 — la précision de la frappe survit
+  });
+
+  // `min`, lui, reste appliqué à la frappe — c'est une borne RÉELLE du champ (le schéma l'impose,
+  // ex. `shadow.blur` `min:0`), jamais un simple plafond visuel comme `max`.
+  it("une saisie SOUS min est ramenée à min — cette borne-là reste réelle, pas seulement visuelle", async () => {
+    const onCommit = mock((_v: number) => {});
+    const { container } = await mountReal({ label: "Flou", value: 4, min: 0, max: 200, step: 1, onCommit });
+
+    await typeAndBlur(container, -50);
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit.mock.calls[0][0]).toBe(0);
   });
 });
 
@@ -290,16 +316,29 @@ describe("SliderField — un glisser du curseur commit UNE fois la valeur borné
 
     expect(onCommit).not.toHaveBeenCalled();
   });
+
+  // Correctif revue (Important 1) — LE GLISSER, LUI, RESTE BORNÉ AUX DEUX BORDS (contrairement à la
+  // frappe numérique, corrigée juste au-dessus dans le bloc « le numérique synchronisé » : `max` n'y
+  // est PLUS appliqué). Base UI ne laisse jamais le curseur RÉEL sortir de `[min,max]` — ce test
+  // simule, via le double, un `onValueCommitted` qui rapporterait malgré tout une valeur hors plage
+  // (défense en profondeur : si le double ou une future version de Base UI se trompait, `SliderField`
+  // doit continuer à en garantir la borne).
+  it("le glisser reste borné à `max` (et `min`), CONTRAIREMENT à la frappe numérique", async () => {
+    const onCommit = mock((_v: number) => {});
+    const { container } = await mountReal({ label: "Opacité", value: 0, min: 0, max: 100, step: 1, onCommit });
+
+    await fireCommit(container, 150); // au-delà de max — ne devrait normalement jamais arriver via un VRAI glisser
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit.mock.calls[0][0]).toBe(100); // borné, PAS 150
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §0 (brief) — l'aller-retour opacité : 0,5 (fraction) ↔ 50 % (affiché/committé par SliderField, qui
 // ne connaît QUE des pourcents ici — c'est property-panel.tsx#OpacityField qui convertit 0–1 ↔ 0–100
-// via opacityToPercent/percentToOpacity, TESTÉ SÉPARÉMENT dans tests/studio-field-scrub.test.ts) —
-// PUIS le cas 100 % : la note « pas de clé opacity au-delà de 100 % » est le câblage EXACT de
-// `OpacityField` (property-panel.tsx, non exporté — reproduit ici À L'IDENTIQUE, littéralement copié
-// depuis le fichier source, pour que ce test rougisse si l'un des deux diverge).
-describe("SliderField — §0, l'aller-retour opacité (0,5 ↔ 50 %) et le cas 100 %", () => {
+// via opacityToPercent/percentToOpacity, TESTÉ SÉPARÉMENT dans tests/studio-field-scrub.test.ts).
+describe("SliderField — §0, l'aller-retour opacité (0,5 ↔ 50 %)", () => {
   it("monté à 50 (0,5 en fraction), le numérique ET le curseur affichent bien 50 — aucune double conversion", async () => {
     const { container } = await mountReal({
       label: "Opacité", value: 50, min: 0, max: 100, step: 1, onCommit: () => {}, format: (v) => `${v} %`,
@@ -309,38 +348,88 @@ describe("SliderField — §0, l'aller-retour opacité (0,5 ↔ 50 %) et le cas 
     expect(container.querySelector('[data-slot="slider"]')?.getAttribute("data-value")).toBe("50");
     expect(container.textContent).toContain("50 %");
   });
+});
 
-  it("§0 : un glisser qui ATTEINT 100 % — le câblage EXACT d'OpacityField écrit `opacity: undefined`, jamais `1`", async () => {
-    // Reproduction À L'IDENTIQUE de property-panel.tsx#OpacityField.onCommit — si ce fichier et
-    // property-panel.tsx divergent un jour, c'est LA-BAS qu'il faut lire le texte exact avant de
-    // changer cette copie.
-    let lastPatch: Record<string, unknown> | null = null;
-    const patch = (p: Record<string, unknown>) => { lastPatch = p; };
-    const opacity = 0.9; // layer.opacity ?? 1, comme OpacityField — un calque PAS encore pleinement opaque
-    const onCommit = (pct: number) => patch({ opacity: pct >= 100 ? undefined : pct / 100 });
+// ─────────────────────────────────────────────────────────────────────────────
+// §0, LE VRAI `OpacityField` (property-panel.tsx) — correctif revue (Important 2). La version
+// précédente de ce fichier re-tapait à la main le texte de `OpacityField.onCommit`
+// (`pct >= 100 ? undefined : pct / 100`) : un typo dans le VRAI fichier (`pct > 100`, ou l'oubli du
+// `?? 1` sur `layer.opacity`) aurait pu diverger de cette copie SANS qu'aucun test ne le remarque.
+// `OpacityField` est désormais EXPORTÉE précisément pour que ce fichier la monte et la pilote
+// directement — plus aucune copie de son `onCommit` nulle part dans ce fichier. Le double de
+// `components/ui/slider.tsx` posé par le bloc « glisser » ci-dessus reste actif ici (mock de module,
+// jamais retiré dans ce fichier) — `fireCommit`/`fireChange` fonctionnent donc identiquement.
+describe("SliderField — §0, le VRAI OpacityField (property-panel.tsx, exportée pour ce test)", () => {
+  const baseLayer: Layer = {
+    id: "t", name: "Titre", visible: true, locked: false,
+    frame: { x: 0, y: 0, w: 100, h: 100 },
+    type: "text", content: "x",
+    font: { family: "Noto Sans", size: 10, weight: 400 },
+    color: "#000000", align: "left", vAlign: "top", lineHeight: 1,
+  };
 
-    const { container } = await mountReal({
-      label: "Opacité", value: Math.round(opacity * 100), min: 0, max: 100, step: 1, onCommit,
-    });
+  async function mountOpacityField(layer: Layer) {
+    const patch = mock((_p: Record<string, unknown>) => {});
+    const { container, unmount: rawUnmount } = await mount(
+      React.createElement(OpacityFieldC, { layer, patch: patch as unknown as (p: Record<string, unknown>) => void }),
+    );
+    currentUnmount = rawUnmount;
+    return { container, patch };
+  }
+
+  it("un calque qui n'a JAMAIS porté `opacity` (clé absente) s'affiche à 100 % — opacityToPercent(?? 1)", async () => {
+    const { container } = await mountOpacityField(baseLayer); // pas de `opacity` du tout
+    const number = container.querySelector('input[type="number"]') as HTMLInputElement;
+    expect(number.value).toBe("100");
+  });
+
+  it("le SÉLECTEUR distinct : `data-testid=\"appearance-opacity\"` cible ce curseur SANS ambiguïté (voir la note de collision avec la bande de géométrie)", async () => {
+    const { container } = await mountOpacityField({ ...baseLayer, opacity: 0.5 });
+    const root = container.querySelector('[data-testid="appearance-opacity"]');
+    expect(root).not.toBeNull();
+    expect(root?.getAttribute("data-field")).toBe("opacity"); // même data-field que la bande — d'où le testid distinct
+  });
+
+  it("§0 : un glisser qui ATTEINT 100 % écrit `patch({ opacity: undefined })` — jamais `1`", async () => {
+    const { container, patch } = await mountOpacityField({ ...baseLayer, opacity: 0.9 }); // pas encore pleinement opaque
 
     await fireCommit(container, 100); // glisser jusqu'au bout à droite
 
-    expect(lastPatch).not.toBeNull();
-    // La clé EXISTE dans le correctif littéral (même wiring que le vrai code) mais sa VALEUR est
-    // `undefined` — c'est exactement ce que `{...layer, ...patch}` (editor-state.ts#setLayerProp)
-    // laisse ensuite tomber à la sérialisation JSON (JSON.stringify omet les clés `undefined`) : un
-    // calque qui n'avait jamais `opacity`, ramené à 100 %, ne RETROUVE pas cette clé.
-    expect(Object.prototype.hasOwnProperty.call(lastPatch, "opacity")).toBe(true);
-    expect((lastPatch as unknown as Record<string, unknown>).opacity).toBeUndefined();
-    // Contre-épreuve : EN DESSOUS de 100 %, la clé porte bien une fraction 0–1 (jamais `undefined`,
-    // jamais le pourcent brut non converti).
-    let lastPatch2: Record<string, unknown> | null = null;
-    const patch2 = (p: Record<string, unknown>) => { lastPatch2 = p; };
-    const onCommit2 = (pct: number) => patch2({ opacity: pct >= 100 ? undefined : pct / 100 });
-    const { container: container2 } = await mountReal({
-      label: "Opacité", value: 90, min: 0, max: 100, step: 1, onCommit: onCommit2,
+    expect(patch).toHaveBeenCalledTimes(1);
+    const written = patch.mock.calls[0][0] as Record<string, unknown>;
+    // La clé EXISTE dans le correctif (même objet que `{...layer, ...patch}` d'editor-state.ts#setLayerProp
+    // fusionnera) mais sa VALEUR est `undefined` — c'est ce que `JSON.stringify` laisse ensuite tomber à
+    // la sérialisation : un calque qui n'avait jamais `opacity`, ramené à 100 %, ne retrouve pas cette clé.
+    expect(Object.prototype.hasOwnProperty.call(written, "opacity")).toBe(true);
+    expect(written.opacity).toBeUndefined();
+  });
+
+  it("en dessous de 100 %, `patch({ opacity })` porte bien une fraction 0–1 (jamais `undefined`, jamais le pourcent brut)", async () => {
+    const { container, patch } = await mountOpacityField({ ...baseLayer, opacity: 0.9 });
+
+    await fireCommit(container, 70);
+
+    expect(patch).toHaveBeenCalledWith({ opacity: 0.7 });
+  });
+
+  // Correctif revue (Important 1), contre-épreuve CÔTÉ APPELANT : `SliderField` lui-même ne plafonne
+  // plus la frappe numérique à `max` (voir le bloc « le numérique synchronisé » plus haut) — mais
+  // `OpacityField` doit malgré tout rester à pleine opacité pour une saisie « 150 % », parce que SON
+  // PROPRE `onCommit` applique le VRAI plafond (`pct >= 100 ? undefined : …`), indépendamment de ce
+  // que `SliderField` laisse passer. Tapé, pas glissé : `typeAndBlur`-like, même recette qu'ailleurs
+  // dans ce fichier (setter du prototype + `input` natif + `focusout`).
+  it("taper « 150 » dans le numérique reste À PLEINE OPACITÉ — le plafond réel vit dans OpacityField.onCommit, pas dans SliderField", async () => {
+    const { container, patch } = await mountOpacityField({ ...baseLayer, opacity: 0.9 });
+    const number = container.querySelector('input[type="number"]') as HTMLInputElement;
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      valueSetter.call(number, "150");
+      number.dispatchEvent(new window.Event("input", { bubbles: true }));
     });
-    await fireCommit(container2, 70);
-    expect((lastPatch2 as unknown as Record<string, unknown>).opacity).toBe(0.7);
+    await act(async () => {
+      number.dispatchEvent(new window.FocusEvent("focusout", { bubbles: true }));
+    });
+
+    expect(patch).toHaveBeenCalledWith({ opacity: undefined });
   });
 });

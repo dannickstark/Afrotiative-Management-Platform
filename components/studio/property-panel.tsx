@@ -290,10 +290,17 @@ function SwitchField({
 //      de convertir QUE « Flou » et « Interligne », et la bande épinglée n'apparaît pas dans la liste
 //      des fichiers à modifier) : les deux contrôles coexistent donc, chacun avec sa sémantique
 //      d'écriture propre, plutôt que d'unifier les deux dans cette tâche.
-function OpacityField({ layer, patch }: { layer: Layer; patch: Patch }) {
+//
+// EXPORTÉE + `dataTestId="appearance-opacity"` (correctif revue, Important 2) : un test qui viserait
+// le SEUL `[data-field="opacity"]` du panneau serait AMBIGU — la bande de géométrie épinglée porte
+// EXACTEMENT le même `data-field` sur SON propre contrôle (voir le point 1 ci-dessus). Exporter cette
+// fonction permet à tests/studio-property-panel.test.ts de monter et committer à travers le VRAI
+// `OpacityField` plutôt qu'une copie manuscrite de son `onCommit` qu'une régression ici pourrait
+// laisser diverger sans qu'aucun test ne s'en aperçoive.
+export function OpacityField({ layer, patch }: { layer: Layer; patch: Patch }) {
   return (
     <SliderField
-      label="Opacité" dataField="opacity"
+      label="Opacité" dataField="opacity" dataTestId="appearance-opacity"
       value={opacityToPercent(layer.opacity ?? 1)} min={0} max={100} step={1}
       format={(v) => `${v} %`}
       onCommit={(pct) => patch({ opacity: pct >= 100 ? undefined : percentToOpacity(pct) })}
