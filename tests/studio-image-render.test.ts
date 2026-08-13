@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import sharp from "sharp";
 import { renderScene } from "@/lib/studio/render";
+import { parseScene } from "@/lib/studio/scene";
 import type { Scene } from "@/lib/studio/scene";
 
 // ============================================================================
@@ -140,4 +141,90 @@ describe("renderScene() — §0 pixel : un mode NOUVEAU (tile) répète le motif
     expect(px(120, 50)).toBe("rouge"); // pixel DANS la 2ᵉ tuile, bande rouge répétée
     expect(px(170, 50)).toBe("vert");  // et la bande verte de la 2ᵉ tuile aussi
   });
+});
+
+// ============================================================================
+// Properties Pro P1, Tâche 7 — §0 DE BOUT EN BOUT (intégration finale).
+//
+// Les deux describe ci-dessus prouvent déjà `sizing` EXPLICITE (cover/contain/tile) au pixel. Ce
+// qu'ils NE prouvent PAS : un gabarit ÉCRIT AVANT cette fonctionnalité — qui n'a QUE `fit`, jamais
+// `sizing` — retombe bien sur le MÊME `background-size` via `imageCss`#118
+// (`layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain")`). C'est un CHEMIN DE CODE distinct
+// (la branche `??` de repli, jamais exercée par les tests ci-dessus qui posent toujours `sizing`
+// explicitement) — la preuve au pixel doit donc être répétée ici avec un calque qui n'a QUE `fit`.
+// ============================================================================
+
+describe("renderScene() — §0 pixel : parité LEGACY (fit SEUL, sans `sizing`) — Tâche 7", () => {
+  // Calque STRICTEMENT historique : aucune des clés introduites par la Tâche 2 (`sizing`, `focal`,
+  // `tile`, `customSize`) n'apparaît. C'est le gabarit tel qu'un designer l'a écrit avant P1.
+  function legacyScene(fit: "cover" | "contain"): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 400, height: 400, background: "#0000FF" },
+      layers: [{
+        ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 400, h: 400 },
+        type: "image", source: { kind: "slot", slot: "article.image" }, fit,
+      }],
+    };
+  }
+
+  it("`fit: cover` SEUL (sans `sizing`) remplit le cadre jusqu'aux bords — même verdict que sizing:cover explicite", async () => {
+    const out = await renderScene({ scene: legacyScene("cover"), values: { "article.image": "https://cdn.test/cover.png" }, fetchImpl: coverFetch });
+    const px = await sampler(out.bytes);
+    expect(px(200, 200)).toBe("rouge"); // centre
+    expect(px(200, 20)).toBe("rouge");  // bord HAUT : cover recouvre
+    expect(px(20, 200)).toBe("rouge");  // bord GAUCHE
+  });
+
+  it("`fit: contain` SEUL (sans `sizing`) laisse une bande de FOND — même verdict que sizing:contain explicite", async () => {
+    const out = await renderScene({ scene: legacyScene("contain"), values: { "article.image": "https://cdn.test/cover.png" }, fetchImpl: coverFetch });
+    const px = await sampler(out.bytes);
+    expect(px(200, 20)).toBe("bleu");   // bande haute : FOND, contain ne recouvre pas jusqu'au bord
+    expect(px(200, 200)).toBe("rouge"); // centre : l'image est bien là
+  });
+});
+
+describe("parseScene() — aucune dérive de sérialisation sur un calque image legacy — Tâche 7", () => {
+  it("une scène image qui n'a que `fit` fait l'aller-retour à l'IDENTIQUE — aucune clé nouvelle injectée, aucun défaut matérialisé", () => {
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 400, height: 400, background: "#0000FF" },
+      layers: [{
+        ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 400, h: 400 },
+        type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover",
+      }],
+    };
+    expect(parseScene(scene)).toEqual(scene);
+  });
+});
+
+describe("renderScene() — chaque mode `sizing` NOUVEAU rend sans erreur (smoke, Tâche 7)", () => {
+  // Preuve de fumée : la parité pixel PAR MODE (cover/contain/étirer/mosaïque/perso, point focal) est
+  // le travail Playwright du contrôleur (WYSIWYG Montage vs Rendu réel) — hors de portée de jsdom.
+  // Ici, on prouve seulement que `renderScene` ABOUTIT et produit un buffer non vide pour chaque mode
+  // introduit par le schéma (Tâche 2) — aucun ne fait planter le moteur de rendu.
+  const modes: Array<{ name: string; layer: Partial<Scene["layers"][number]> }> = [
+    { name: "cover", layer: { sizing: "cover" } },
+    { name: "contain", layer: { sizing: "contain" } },
+    { name: "stretch", layer: { sizing: "stretch" } },
+    { name: "tile (avec tile:{scale,axis})", layer: { sizing: "tile", tile: { scale: 1, axis: "both" } } },
+    { name: "custom (avec customSize)", layer: { sizing: "custom", customSize: { w: 200, h: 100 } } },
+    { name: "focal (point focal seul, sizing par défaut)", layer: { focal: { x: 0.2, y: 0.8 } } },
+  ];
+
+  for (const { name, layer } of modes) {
+    it(`sizing/focal « ${name} » : renderScene aboutit et produit un buffer non vide`, async () => {
+      const scene: Scene = {
+        schemaVersion: 1,
+        canvas: { width: 400, height: 400, background: "#0000FF" },
+        layers: [{
+          ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 400, h: 400 },
+          type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover",
+          ...layer,
+        } as Scene["layers"][number]],
+      };
+      const out = await renderScene({ scene, values: { "article.image": "https://cdn.test/cover.png" }, fetchImpl: coverFetch });
+      expect(out.bytes.length).toBeGreaterThan(0);
+    });
+  }
 });
