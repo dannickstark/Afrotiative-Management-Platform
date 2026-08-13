@@ -45,12 +45,13 @@ beforeAll(async () => {
     { input: await sharp({ create: { width: 50, height: 100, channels: 3, background: { r: 0, g: 255, b: 0 } } }).png().toBuffer(), left: 50, top: 0 },
   ]).png().toBuffer();
 
-  // /crop.png : un TÉMOIN HORS-CENTRE pour LOCKER le recadrage centré accepté (revue de branche). Source
-  // 1200×400 (aspect 3:1, ≠ le cadre carré ; côté long 1200 > plafond 600), trois tiers verticaux :
-  // BLEU [0,400) | ROUGE [400,800) | VERT [800,1200). Rendue `cover` sur un cadre 300×300 (focal centre
-  // par défaut), l'image préparée 600×200 est mise à l'échelle ×1.5 → 900×300 et CENTRÉE : la fenêtre
-  // visible de 300 px tombe pile sur le tiers ROUGE (le centre), le bleu (gauche) et le vert (droite)
-  // sont recadrés HORS champ. C'est ce qui prouve, au pixel, que P1 recadre au CENTRE.
+  // /crop.png : un TÉMOIN HORS-CENTRE pour LOCKER le recadrage au POINT FOCAL (revue de branche). Source
+  // 1200×400 (aspect 3:1, ≠ le cadre carré), trois tiers verticaux : BLEU [0,400) | ROUGE [400,800) |
+  // VERT [800,1200). Rendue `cover` sur un cadre 300×300, prepareImage RECADRE la source DANS sharp au
+  // point focal (échelle cover s=0.75 → fenêtre 400×400 ; focal centre → origine x=400) puis la
+  // redimensionne à l'aspect du cadre : l'image préparée est donc DÉJÀ le tiers ROUGE (le CENTRE), et
+  // Satori la peint `cover` à 1:1 (aucun débordement, position 0). Le bleu (gauche) et le vert (droite)
+  // sont recadrés HORS champ. C'est ce qui prouve, au pixel, que l'export suit le point focal.
   const crop = await sharp({
     create: { width: 1200, height: 400, channels: 3, background: { r: 0, g: 0, b: 255 } },
   }).composite([
@@ -175,60 +176,76 @@ describe("renderScene() — §0 pixel : un mode NOUVEAU (tile) répète le motif
 });
 
 // ============================================================================
-// §0 (revue de branche) — LE RECADRAGE `cover` MESURÉ AU PIXEL (témoin hors-centre).
+// §0 (revue de branche) — LE RECADRAGE `cover` SUIT LE POINT FOCAL, MESURÉ AU PIXEL (témoin hors-centre).
 //
-// La réécriture de `prepareImage` (chemin unique) a ABANDONNÉ le recadrage content-aware de sharp
-// (`position:"attention"`) : le recadrage `cover` est désormais délégué au fond CSS de Satori
-// (`background-size:cover` + `background-position` en pixels via `focalToPositionPx`). Le témoin
-// cover.png précédent est ROUGE uni : il ne peut RIEN dire de QUELLE région est conservée. Ce test le
-// mesure avec un témoin HORS-CENTRE (BLEU | ROUGE | VERT, plus grand que le plafond) et LOCKE la région
-// réellement conservée par l'EXPORT — pour qu'une régression future (ou un changement de version de
-// Satori) rougisse.
+// prepareImage (images.ts) RECADRE désormais la source DANS sharp au point focal pour `cover`, plutôt
+// que de déléguer le recadrage au `background-position` de Satori. RAISON : Satori 0.29 PLAFONNE
+// `background-position` négatif à 0 — or un `cover` qui déborde le cadre (aspect source ≠ aspect cadre,
+// c.-à-d. quasi toute vraie photo) calcule une position NÉGATIVE, que Satori épinglait à 0, figeant
+// l'export sur le coin HAUT-GAUCHE quel que soit le point focal. La correction : sharp livre déjà la
+// fenêtre focale (aspect du cadre), Satori la peint `cover` à 1:1 (aucun débordement → position 0),
+// donc l'export est FIDÈLE au point focal ET rejoint l'aperçu navigateur (layer-view.tsx, qui émet un
+// `background-position` en `%` qu'un vrai navigateur applique correctement — même région conservée).
 //
-// ⚠ CE QUE LA MESURE RÉVÈLE (concern hors des 3 correctifs, remonté au coordinateur). Satori 0.29
-// PLAFONNE `background-position` négatif à 0 : quand l'image peinte DÉBORDE le cadre (le cas `cover`),
-// le point focal NE PEUT PAS tirer le recadrage hors de l'ORIGINE (haut-gauche) — vérifié en balayant
-// focal.x ∈ {0, 0.5, 1}, la sortie est identique. `cover` conserve donc le coin HAUT-GAUCHE de la
-// source (ici le BLEU), PAS le centre. Or l'APERÇU navigateur (layer-view.tsx) émet ce même
-// `background-position` en POURCENTAGE, que le CSS d'un vrai navigateur applique CORRECTEMENT (il
-// CENTRE le recadrage) — donc Montage (centré) et Rendu réel (haut-gauche) DIVERGENT pour tout `cover`
-// dont l'image déborde et dont le point focal n'est pas {0,0}. Le point focal est effectivement inopérant
-// sur l'export d'un `cover` débordant. Ce test épingle la RÉALITÉ de l'export (haut-gauche) plutôt qu'une
-// parité qui n'existe pas ; le correctif (recadrer en amont dans sharp au point focal, plutôt que via
-// `background-position`) est HORS PÉRIMÈTRE de cette revue (ne pas toucher cover/point focal).
+// Le témoin cover.png précédent est ROUGE uni : il ne peut RIEN dire de QUELLE région est conservée. Ce
+// test le mesure avec un témoin HORS-CENTRE (BLEU | ROUGE | VERT) et LOCKE la région réellement conservée
+// par l'EXPORT en balayant le point focal — pour qu'une régression future (ou un changement de version de
+// Satori qui replafonnerait la position) rougisse. WYSIWYG : la région exportée à focal 0.5 est le CENTRE,
+// exactement ce que le CSS `background-position:50%` de l'aperçu navigateur montre.
 // ============================================================================
 
-describe("renderScene() — §0 pixel : cover conserve l'ORIGINE (haut-gauche), pas le centre (Satori plafonne la position négative)", () => {
-  function coverCropScene(): Scene {
+describe("renderScene() — §0 pixel : cover recadre au POINT FOCAL — l'export suit le focal et rejoint l'aperçu", () => {
+  function coverCropScene(focal?: { x: number; y: number }): Scene {
     return {
       schemaVersion: 1,
       canvas: { width: 300, height: 300, background: "#0000FF" },
       layers: [{
         ...BASE, id: "img", name: "image", frame: { x: 0, y: 0, w: 300, h: 300 },
         type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover", sizing: "cover",
+        ...(focal ? { focal } : {}),
       }],
     };
   }
 
-  it("le tiers GAUCHE (bleu, l'origine) remplit le cadre ; le centre (rouge) et la droite (vert) sont recadrés HORS champ", async () => {
-    // Source 1200×400 → préparée 600×200 → `cover` ×1.5 = 900×300, débordant de 600 px en largeur. La
-    // position calculée est NÉGATIVE (−300 px pour un focal centré), que Satori plafonne à 0 : la
-    // fenêtre visible de 300 px reste à l'ORIGINE = le tiers BLEU [0,300) de l'image 900 px.
+  it("focal PAR DÉFAUT (0.5,0.5) → le CENTRE de la source (rouge) remplit le cadre — WYSIWYG avec l'aperçu (background-position:50%)", async () => {
+    // Source 1200×400 : `cover` s=max(300/1200,300/400)=0.75 → fenêtre visible 400×400. focal centre →
+    // origine x=(1200−400)·0.5=400 : sharp extrait [400,800) = le tiers ROUGE (le CENTRE), redimensionné
+    // à l'aspect du cadre. Satori le peint `cover` à 1:1 (position 0). Tout le cadre est ROUGE.
     const out = await renderScene({ scene: coverCropScene(), values: { "article.image": "https://cdn.test/crop.png" }, fetchImpl: cropFetch });
     const px = await sampler(out.bytes);
-    // Tout le cadre est le tiers d'ORIGINE de la source — le BLEU — jusqu'aux deux bords latéraux.
-    expect(px(150, 150)).toBe("bleu"); // centre du cadre : c'est le tiers GAUCHE de la source, PAS son centre
-    expect(px(30, 150)).toBe("bleu");  // bord gauche
-    expect(px(270, 150)).toBe("bleu"); // bord droit : toujours l'origine, le vert (droite source) est recadré
-    expect(px(150, 30)).toBe("bleu");  // haut : l'axe vertical remplit exactement (aucun recadrage vertical)
-    expect(px(150, 270)).toBe("bleu"); // bas
-    // ANTI-VACUITÉ / LOCK du concern : le ROUGE (centre de la source) et le VERT (droite) n'apparaissent
-    // NULLE PART. Si un correctif futur faisait enfin CENTRER l'export (parité avec l'aperçu), (150,150)
-    // deviendrait ROUGE et CE test rougirait — signalant qu'il faut réviser ce contrat.
+    // Tout le cadre est le tiers CENTRAL de la source — le ROUGE — jusqu'aux deux bords latéraux.
+    expect(px(150, 150)).toBe("rouge"); // centre du cadre : le tiers CENTRAL de la source (WYSIWYG avec l'aperçu)
+    expect(px(30, 150)).toBe("rouge");  // bord gauche
+    expect(px(270, 150)).toBe("rouge"); // bord droit
+    expect(px(150, 30)).toBe("rouge");  // haut : l'axe vertical remplit exactement (aucun recadrage vertical)
+    expect(px(150, 270)).toBe("rouge"); // bas
+    // ANTI-VACUITÉ : le BLEU (gauche) et le VERT (droite) sont recadrés HORS champ, nulle part visibles.
     for (const [x, y] of [[30, 150], [150, 150], [270, 150], [150, 30], [150, 270]] as const) {
-      expect(px(x, y)).not.toBe("rouge");
+      expect(px(x, y)).not.toBe("bleu");
       expect(px(x, y)).not.toBe("vert");
     }
+  });
+
+  it("focal {0,0} → le tiers GAUCHE (bleu) — le point focal tire le recadrage vers l'origine", async () => {
+    // origine x=(1200−400)·0=0 : sharp extrait [0,400) = le tiers BLEU (gauche). Le focal PILOTE l'export.
+    const out = await renderScene({ scene: coverCropScene({ x: 0, y: 0 }), values: { "article.image": "https://cdn.test/crop.png" }, fetchImpl: cropFetch });
+    const px = await sampler(out.bytes);
+    expect(px(150, 150)).toBe("bleu");
+    expect(px(30, 150)).toBe("bleu");
+    expect(px(270, 150)).toBe("bleu");
+    expect(px(150, 150)).not.toBe("rouge");
+    expect(px(150, 150)).not.toBe("vert");
+  });
+
+  it("focal {1,0} → le tiers DROIT (vert) — le point focal tire le recadrage vers la fin", async () => {
+    // origine x=(1200−400)·1=800 : sharp extrait [800,1200) = le tiers VERT (droite).
+    const out = await renderScene({ scene: coverCropScene({ x: 1, y: 0 }), values: { "article.image": "https://cdn.test/crop.png" }, fetchImpl: cropFetch });
+    const px = await sampler(out.bytes);
+    expect(px(150, 150)).toBe("vert");
+    expect(px(30, 150)).toBe("vert");
+    expect(px(270, 150)).toBe("vert");
+    expect(px(150, 150)).not.toBe("rouge");
+    expect(px(150, 150)).not.toBe("bleu");
   });
 });
 

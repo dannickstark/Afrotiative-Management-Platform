@@ -223,9 +223,12 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
       prepared.set(layer.id, await prepareImage({
         url, width: layer.frame.w, height: layer.frame.h,
         blur: layer.blur, overlay: layer.overlay, fetchImpl: opts.fetchImpl,
-        // Le mode de cadrage — nécessaire UNIQUEMENT pour corriger la force du flou (images.ts, sigma
-        // indépendant du plafond). Même repli `sizing ?? (fit === "cover" ? …)` que le reste du chemin.
+        // Le mode de cadrage — nécessaire pour le recadrage focal `cover` (images.ts) ET pour corriger
+        // la force du flou (sigma indépendant du plafond). Même repli `sizing ?? (fit === "cover" ? …)`
+        // que le reste du chemin.
         sizing: layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain"),
+        // Le point focal — pilote le recadrage `cover` côté sharp (images.ts). Absent = centre.
+        focal: layer.focal,
         tileScale: layer.tile?.scale,
         customSize: layer.customSize,
       }));

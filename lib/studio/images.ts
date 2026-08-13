@@ -13,14 +13,19 @@ export type PreparedImage = { uri: string; w: number; h: number };
 
 export type PrepareImageOptions = {
   url: string;
-  // Les dimensions du CADRE (px). Ne servent plus à RECADRER (le chemin unique a besoin de l'image à
-  // sa taille naturelle pour un point focal hors-centre sur `cover`) : elles bornent seulement la
-  // taille préparée à un plafond raisonnable (côté long ≤ 2×max(w,h)) — assez de marge pour la mise à
-  // l'échelle `cover`/retina, sans faire enfler la data URI.
+  // Les dimensions du CADRE (px). Pour `cover`, elles PILOTENT le recadrage focal (voir prepareImage) :
+  // la fenêtre source visible d'un `cover` est calculée à partir de l'aspect du cadre, et l'image
+  // préparée en ressort à l'aspect du CADRE. Pour les autres modes (contain/stretch/tile/custom),
+  // l'image garde son aspect NATUREL et le cadre ne fait que borner la taille préparée à un plafond
+  // raisonnable (côté long ≤ 2×max(w,h)) — assez de marge pour un rendu retina, sans enfler la data URI.
   width: number;
   height: number;
   blur?: number;
   overlay?: string;
+  // Le POINT FOCAL normalisé [0,1] (défaut {0.5,0.5} = centre), utilisé UNIQUEMENT par le recadrage
+  // `cover` ci-dessous pour choisir QUELLE fenêtre de la source est conservée. Sans effet sur les
+  // autres modes (l'aspect naturel y est préservé, le positionnement reste au fond CSS de Satori).
+  focal?: { x: number; y: number };
   // Properties Pro P1 (revue de branche) — le MODE de cadrage et ses paramètres, nécessaires UNIQUEMENT
   // pour corriger la force du flou (voir le bloc flou plus bas). Le flou est appliqué à la résolution
   // PRÉPARÉE (bornée au plafond, donc dépendante de la résolution SOURCE), puis Satori redimensionne
@@ -80,22 +85,32 @@ function parseHex(hex: string): { r: number; g: number; b: number; alpha: number
 }
 
 // C'est ICI que se fait le flou, en raster, avant composition — Satori n'a pas de backdrop-filter.
-// L'image N'EST PLUS recadrée au cadre (Tâche 3, chemin unique) : elle est préparée à sa taille
-// NATURELLE, seulement BORNÉE à un plafond (côté long ≤ 2×max(cadre.w, cadre.h)) en préservant le
-// rapport d'aspect. Le recadrage/positionnement `cover`/`contain`/`tile`… est fait par le fond CSS de
-// Satori (element.ts#imageNode) à partir de la taille intrinsèque remontée ci-dessous — c'est ce qui
-// rend un point focal hors-centre possible sur `cover` (impossible quand l'image était pré-recadrée).
 //
-// NOTE POST-REVUE (recadrage `cover` : ce qui est réellement conservé). L'ancien chemin
-// `<img objectFit:cover>` pré-recadrait via `sharp.resize(fit:"cover")`, dont le recadrage par défaut
-// est CONTENU (`position:"attention"`, content-aware). Le chemin unique l'a DÉLIBÉRÉMENT abandonné : le
-// recadrage est délégué au fond CSS de Satori. MAIS — mesuré à la revue de branche, épinglé par
-// tests/studio-image-render.test.ts (§0, témoin hors-centre) — Satori 0.29 PLAFONNE `background-position`
-// négatif à 0, donc un `cover` débordant conserve le coin HAUT-GAUCHE (l'origine), PAS le centre, et le
-// point focal reste sans effet sur cet axe. L'aperçu navigateur (layer-view.tsx), lui, CENTRE (le CSS
-// natif applique correctement la position en `%`) : Montage et Rendu réel DIVERGENT donc pour un `cover`
-// débordant à point focal ≠ {0,0}. Corriger cela (recadrer en amont dans sharp AU point focal) est un
-// chantier à part — hors périmètre de cette revue, qui ne touche ni cover ni le point focal.
+// RECADRAGE `cover` AU POINT FOCAL (revue de branche). Pour `cover`, prepareImage RECADRE la source dans
+// sharp au point focal, puis la redimensionne à l'ASPECT DU CADRE. Satori peint alors l'image préparée
+// `background-size:cover` à 1:1 (l'aspect correspond → aucun débordement → `background-position` 0), ce
+// qui rend l'export FIDÈLE au point focal ET identique à l'aperçu navigateur.
+//   POURQUOI (le bug corrigé). L'approche précédente livrait l'image à sa taille naturelle et déléguait
+// le recadrage `cover` au `background-position` de Satori (en pixels, via focalToPositionPx). Or Satori
+// 0.29 PLAFONNE une `background-position` négative à 0 — et un `cover` qui déborde le cadre (aspect
+// source ≠ aspect cadre, c.-à-d. quasi toute vraie photo) calcule justement une position NÉGATIVE.
+// Satori l'épinglait à 0 : l'export restait figé sur le coin HAUT-GAUCHE quel que soit le point focal,
+// alors que l'aperçu navigateur (layer-view.tsx, position en `%` correctement appliquée par le CSS natif)
+// conservait, lui, la région focale. Montage et Rendu réel DIVERGEAIENT. En recadrant en amont dans
+// sharp, l'image préparée EST déjà la fenêtre focale : plus de débordement, plus de position négative,
+// plus de divergence. Le point focal par défaut {0.5,0.5} → recadrage CENTRÉ.
+//   La formule est le recadrage focal standard, équivalent au CSS `background-position:<focal>%` sur une
+// image mise à l'échelle `cover` : fenêtre visible (fw/s, fh/s) avec s=max(fw/iw, fh/ih), origine
+// (iw−cw)·fx / (ih−ch)·fy bornée aux limites de la source.
+//
+// Les AUTRES modes (contain/stretch/tile/custom) NE débordent pas le cadre de la même manière (contain
+// tient dedans ; stretch = cadre ; les décalages de tuile sont POSITIFS) : ils gardent l'image à sa
+// taille NATURELLE, seulement BORNÉE à un plafond (côté long ≤ 2×max(cadre)) en préservant l'aspect,
+// et leur recadrage/positionnement reste au fond CSS de Satori (element.ts#imageNode).
+//   TODO (custom débordant) : un `sizing:"custom"` dont customSize dépasse le cadre sur un axe retombe
+// dans le MÊME plafonnement de position négative par Satori (coin haut-gauche). Non corrigé ici : le
+// recadrage focal `custom` a une sémantique distincte (taille de fond explicite) et sort du périmètre
+// de ce correctif `cover`. Voir le rapport de branche.
 export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedImage> {
   const { url, width, height, blur, overlay } = opts;
   const doFetch = opts.fetchImpl ?? fetch;
@@ -135,12 +150,42 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedI
   let ow: number;
   let oh: number;
   try {
-    // D'abord le redimensionnement SEUL — son encodage donne la taille RÉELLE de l'image préparée
-    // (info.width/height, produite par le cap + le rapport d'aspect), dont l'appelant a besoin pour
-    // `effImg` ET dont le bloc flou ci-dessous a besoin pour connaître l'échelle prepared->peint.
-    const bounded = await sharp(bytes)
-      .resize(cap, cap, { fit: "inside", withoutEnlargement: true })
-      .png().toBuffer({ resolveWithObject: true });
+    // D'abord la préparation SEULE — son encodage donne la taille RÉELLE de l'image préparée
+    // (info.width/height), dont l'appelant a besoin pour `effImg` ET dont le bloc flou ci-dessous a
+    // besoin pour connaître l'échelle prepared->peint.
+    const sizing = opts.sizing ?? "cover";
+    let bounded: { data: Buffer; info: { width: number; height: number } };
+    if (sizing === "cover") {
+      // RECADRAGE FOCAL `cover` (voir le bloc de tête). On lit l'intrinsèque de la source, on calcule la
+      // fenêtre visible d'un `cover` au point focal, on l'EXTRAIT, puis on la redimensionne à l'ASPECT DU
+      // CADRE — borné retina (≤ 2×) et jamais agrandi au-delà du recadrage natif (petite source : Satori
+      // l'agrandira au rendu, sans coût mémoire ici).
+      const meta = await sharp(bytes).metadata();
+      const iw = Math.max(1, meta.width ?? fw);
+      const ih = Math.max(1, meta.height ?? fh);
+      const fx = Math.min(1, Math.max(0, opts.focal?.x ?? 0.5));
+      const fy = Math.min(1, Math.max(0, opts.focal?.y ?? 0.5));
+      const s = Math.max(fw / iw, fh / ih);
+      const cw = Math.min(iw, Math.max(1, Math.round(fw / s)));
+      const ch = Math.min(ih, Math.max(1, Math.round(fh / s)));
+      const left = Math.round(Math.min(Math.max((iw - cw) * fx, 0), iw - cw));
+      const top = Math.round(Math.min(Math.max((ih - ch) * fy, 0), ih - ch));
+      // Sortie à l'aspect EXACT du cadre : `fit:"fill"` fige (tw, th) quelle que soit la dérive
+      // sous-pixel de l'aspect du recadrage entier — c'est ce qui garantit que element.ts#effectiveImage
+      // recalcule une position 0 (aucun débordement) pour ce `cover`.
+      const outScale = Math.min(2, cw / fw, ch / fh);
+      const tw = Math.max(1, Math.round(fw * outScale));
+      const th = Math.max(1, Math.round(fh * outScale));
+      bounded = await sharp(bytes)
+        .extract({ left, top, width: cw, height: ch })
+        .resize(tw, th, { fit: "fill" })
+        .png().toBuffer({ resolveWithObject: true });
+    } else {
+      // contain/stretch/tile/custom : aspect NATUREL préservé, seulement borné au plafond `cap`.
+      bounded = await sharp(bytes)
+        .resize(cap, cap, { fit: "inside", withoutEnlargement: true })
+        .png().toBuffer({ resolveWithObject: true });
+    }
     ow = bounded.info.width;
     oh = bounded.info.height;
 

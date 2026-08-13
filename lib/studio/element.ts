@@ -175,6 +175,11 @@ function effectiveImage(
     }
     case "cover":
     default: {
+      // Le recadrage focal `cover` vit désormais dans images.ts#prepareImage : l'image préparée arrive
+      // DÉJÀ à l'aspect du CADRE (fenêtre focale extraite dans sharp). L'intrinsèque `iw:ih` vaut donc
+      // `fw:fh`, `s` couvre EXACTEMENT le cadre, `effImg` == cadre, et focalToPositionPx recalcule une
+      // position 0 — aucun débordement, donc pas de plafonnement de position négative par Satori (le bug
+      // que le recadrage amont corrige), et AUCUN double emploi du point focal (déjà consommé par sharp).
       const s = Math.max(fw / iw, fh / ih);
       return { effImg: { w: iw * s, h: ih * s }, backgroundSize: "cover" };
     }

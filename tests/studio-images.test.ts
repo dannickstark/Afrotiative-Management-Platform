@@ -56,20 +56,29 @@ describe("prepareImage", () => {
   // contourner UNIQUEMENT ici le garde, sans jamais toucher lib/url-guard.ts. Le test de garde
   // plus bas, lui, n'injecte pas fetchImpl : il exerce le vrai garde.
   //
-  // Properties Pro P1, Tâche 3 — CONTRAT CHANGÉ : `prepareImage` ne recadre PLUS au cadre (le chemin
-  // de rendu unique a besoin de l'image à sa taille naturelle pour un point focal hors-centre) et
-  // renvoie `{ uri, w, h }` — l'image bornée à un plafond (côté long ≤ 2×max(cadre)), rapport d'aspect
-  // préservé, plus sa taille intrinsèque pour qu'element.ts calcule `effImg`.
-  it("prépare l'image à sa taille NATURELLE quand elle tient sous le plafond, et renvoie ses dimensions", async () => {
-    // Source 400×400, cadre 1200×675 → plafond 2400 : la source (400) est bien en dessous, donc elle
-    // n'est ni recadrée ni agrandie — elle reste 400×400 (ANCIEN comportement : recadrée à 1200×675).
-    const prep = await prepareImage({ url: `${base}/ok.png`, width: 1200, height: 675, fetchImpl: fetch });
-    expect(prep.uri.startsWith("data:image/png;base64,")).toBe(true);
-    expect(prep.w).toBe(400);
-    expect(prep.h).toBe(400);
-    const meta = await sharp(Buffer.from(prep.uri.split(",")[1], "base64")).metadata();
+  // Properties Pro P1, Tâche 3 + revue de branche — CONTRAT `{ uri, w, h }`, avec DEUX régimes selon le
+  // mode de cadrage :
+  //   - `cover` (le défaut) RECADRE la source au point focal DANS sharp, à l'ASPECT DU CADRE — c'est ce
+  //     qui rend l'export fidèle au point focal (Satori plafonne une `background-position` négative, donc
+  //     déléguer le recadrage `cover` à son fond CSS figeait l'export sur le coin haut-gauche).
+  //   - les autres modes (contain/stretch/tile/custom) gardent la taille NATURELLE de la source, bornée
+  //     à un plafond (côté long ≤ 2×max(cadre)), aspect préservé, pour qu'element.ts calcule `effImg`.
+  it("`cover` (défaut) recadre à l'ASPECT DU CADRE ; un mode non-cover garde la taille NATURELLE bornée", async () => {
+    // COVER : source 400×400, cadre 1200×675 (16:9) → fenêtre `cover` s=max(1200/400,675/400)=3 →
+    // 400×225, sortie à l'aspect du cadre (outScale=min(2,400/1200,225/675)=1/3) → 400×225.
+    const cover = await prepareImage({ url: `${base}/ok.png`, width: 1200, height: 675, fetchImpl: fetch });
+    expect(cover.uri.startsWith("data:image/png;base64,")).toBe(true);
+    expect(cover.w).toBe(400);
+    expect(cover.h).toBe(225);
+    const meta = await sharp(Buffer.from(cover.uri.split(",")[1], "base64")).metadata();
     expect(meta.width).toBe(400);
-    expect(meta.height).toBe(400);
+    expect(meta.height).toBe(225);
+
+    // NON-COVER : la MÊME source en `contain` n'est PAS recadrée — elle reste 400×400 (sous le plafond
+    // 2400), aspect naturel préservé. C'est le régime que les autres modes conservent.
+    const contain = await prepareImage({ url: `${base}/ok.png`, width: 1200, height: 675, sizing: "contain", fetchImpl: fetch });
+    expect(contain.w).toBe(400);
+    expect(contain.h).toBe(400);
   });
 
   it("borne le côté long au plafond (2×max(cadre)) en préservant le rapport d'aspect", async () => {
