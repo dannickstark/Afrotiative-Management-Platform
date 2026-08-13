@@ -4,6 +4,7 @@ import { join } from "node:path";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Scene, Layer } from "@/lib/studio/scene";
+import { Canvas } from "@/components/studio/canvas";
 import { PropertyPanel } from "@/components/studio/property-panel";
 import { Rail } from "@/components/studio/rail";
 import { EmptyState } from "@/components/shell/empty-state";
@@ -252,5 +253,61 @@ describe("chantier E · finition de marque — titre éditorial (Tâche 5)", () 
     // preuve locale que l'ajout est bien optionnel et additif.
     const html = renderToStaticMarkup(React.createElement(EmptyState, { title: "Sans classe de titre" }));
     expect(html).toContain('<p class="font-medium">Sans classe de titre</p>');
+  });
+});
+
+// ── Chantier E Tâche 6 (intégration + §0 non-régression) ───────────────────────────────────────────
+// Le chantier E est un pass CHROME UNIQUEMENT (fond, couleurs de surcouches, mouvement, icônes,
+// accent) : aucune de ses tâches n'a dû toucher la géométrie/structure des surcouches du canevas, ni
+// le moteur de rendu (`lib/studio/scene.ts`). Ce bloc épingle les deux à la fin de l'intégration.
+function boundLayerScene(): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 800, height: 600, background: "#000000" },
+    layers: [
+      {
+        id: "bound", name: "Titre lié", visible: true, locked: false,
+        frame: { x: 40, y: 40, w: 300, h: 80 }, rotation: 0, opacity: 1,
+        type: "text", content: "{{article.title}}",
+        font: { family: "Noto Sans", size: 32, weight: 700 },
+        color: "#FFFFFF", align: "left", vAlign: "top", lineHeight: 1.2,
+      },
+    ],
+  };
+}
+
+// Monte le VRAI `Canvas` (même recette que tests/studio-canvas.test.ts : `renderToStaticMarkup`, sans
+// DOM) avec un calque SÉLECTIONNÉ (surcouche de poignées) et `showBindings` sur ce même calque, dont
+// le contenu est un jeton (surcouche de liaison). `snap-guide` — la troisième surcouche citée par le
+// brief — n'a pas d'équivalent en rendu statique : elle n'apparaît qu'au fil d'un VRAI geste pointeur
+// pendant un glisser (tests/studio-interactions.test.ts, « Seam 9 »), que `renderToStaticMarkup` ne
+// peut pas produire. On épingle donc les DEUX surcouches qui RENDENT bien dans ce harnais — poignées
+// de sélection et contour de liaison — plutôt qu'une assertion sur un testid que ce harnais
+// n'atteindrait jamais.
+function renderCanvasWithSelectionAndGuides(): string {
+  const scene = boundLayerScene();
+  return renderToStaticMarkup(
+    React.createElement(Canvas, {
+      scene, selectedIds: ["bound"], dispatch: () => {}, scale: 1, showBindings: true,
+    }),
+  );
+}
+
+describe("chantier E · §0 non-régression (Tâche 6, intégration)", () => {
+  it("§0 : les surcouches gardent leurs data-testid après le re-thème du chantier E", () => {
+    const html = renderCanvasWithSelectionAndGuides();
+    // surcouche de sélection (poignées) — rendue dès qu'un calque non verrouillé est sélectionné.
+    expect(html).toContain('data-testid="handles-overlay"');
+    // surcouche de liaison — rendue avec showBindings + un calque dont le contenu porte un jeton.
+    expect(html).toContain('data-testid="binding-outline"');
+    expect(html).toContain('data-testid="binding-label"');
+  });
+
+  it("§0 : chantier E n'a pas touché le moteur de rendu / scene.ts", () => {
+    // les fichiers du moteur ne contiennent aucune référence aux jetons de chrome du chantier E
+    const scene = readFileSync(join(ROOT, "lib/studio/scene.ts"), "utf8");
+    expect(scene).not.toContain("canvas-backdrop");
+    expect(scene).not.toContain("overlay-theme");
+    expect(scene).not.toContain("studio-motion");
   });
 });
