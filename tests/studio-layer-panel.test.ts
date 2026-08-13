@@ -182,6 +182,77 @@ describe("Descendre le calque du HAUT du panneau réordonne bien le tableau sous
   });
 });
 
+// ── Chantier B, Tâche 5 — le NŒUD GROUPE : les calques co-`groupId` fusionnent en une ligne unique,
+// leurs contrôles (rename/visibilité/verrou/réordonner) restant accessibles NICHÉS dessous.
+describe("LayerPanel — nœud groupe (chantier B, Tâche 5)", () => {
+  function makeGroupedScene(): Scene {
+    const scene = makeScene();
+    scene.layers = [
+      scene.layers[0],
+      { ...scene.layers[1], groupId: "g1" },
+      { ...scene.layers[2], groupId: "g1" },
+    ];
+    return scene;
+  }
+
+  // Isole le HTML du nœud groupe (de son `data-group-row-id="…"` jusqu'à la fin, ce fichier ne
+  // testant jamais deux groupes à la fois) — même recette que `rowNode` ci-dessus.
+  function groupNode(html: string, groupId: string): string {
+    const start = html.indexOf(`data-group-row-id="${groupId}"`);
+    if (start === -1) throw new Error(`nœud du groupe « ${groupId} » absent du HTML rendu`);
+    const openStart = html.lastIndexOf("<li", start);
+    return html.slice(openStart);
+  }
+
+  it("deux calques co-groupId fusionnent en UNE ligne « Groupe (2) », pas deux lignes top-level", () => {
+    const html = render(makeGroupedScene());
+    expect(html).toContain('data-group-row-id="g1"');
+    expect(html).toContain("Groupe (2)");
+    // Le groupe n'apparaît qu'UNE fois — pas une ligne par membre au niveau racine.
+    expect((html.match(/data-group-row-id="g1"/g) ?? []).length).toBe(1);
+  });
+
+  it("le calque HORS groupe reste une ligne ordinaire, comportement d'avant intact", () => {
+    const html = render(makeGroupedScene());
+    expect(html).toContain('data-layer-row-id="a"');
+  });
+
+  it("les DEUX membres du groupe restent dans le HTML, nichés sous le nœud groupe", () => {
+    const html = render(makeGroupedScene());
+    const node = groupNode(html, "g1");
+    expect(node).toContain('data-layer-row-id="b"');
+    expect(node).toContain('data-layer-row-id="c"');
+  });
+
+  it("un membre de groupe garde SES contrôles — renommer, visibilité, verrou, supprimer", () => {
+    const html = render(makeGroupedScene());
+    const node = groupNode(html, "g1");
+    expect(node).toContain('value="Milieu B"');
+    expect(node).toContain('data-action="toggle-visible" data-layer-id="b"');
+    expect(node).toContain('data-action="toggle-locked" data-layer-id="c"');
+    expect(node).toContain('data-action="delete" data-layer-id="b"');
+  });
+
+  it("porte un bouton dégrouper adressant les DEUX membres du groupe", () => {
+    const html = render(makeGroupedScene());
+    const node = groupNode(html, "g1");
+    expect(node).toContain('data-action="ungroup" data-group-id="g1"');
+  });
+
+  it("une scène SANS aucun groupe ne rend AUCUN nœud groupe — comportement d'avant intact", () => {
+    const html = render(makeScene());
+    expect(html).not.toContain("data-group-row-id");
+    expect(html).not.toContain("Groupe (");
+  });
+
+  it("la sélection d'un membre du groupe met en évidence SA ligne, comme un calque ordinaire", () => {
+    const html = render(makeGroupedScene(), ["b"]);
+    const node = groupNode(html, "g1");
+    expect(rowNode(node, "b")).toContain('aria-selected="true"');
+    expect(rowNode(node, "c")).toContain('aria-selected="false"');
+  });
+});
+
 describe("LayerPanel — visibilité, verrou, suppression, ajout, renommage (structure rendue)", () => {
   it("reflète l'état visible/locked de chaque calque", () => {
     const html = render(makeScene());

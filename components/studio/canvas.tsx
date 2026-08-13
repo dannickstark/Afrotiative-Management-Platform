@@ -1,12 +1,19 @@
 "use client";
 
 import { useRef } from "react";
-import type { Dispatch, CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import type { Dispatch, CSSProperties, PointerEvent, MouseEvent } from "react";
 import type { Layer, Scene } from "@/lib/studio/scene";
 import {
-  type EditorAction, select, toggleSelection, clearSelection, singleSelectedId, deleteLayer, moveLayer,
+  type EditorAction, selectMany, toggleSelection, clearSelection, singleSelectedId,
 } from "@/lib/studio/editor-state";
-import { useLayerDrag, HANDLES, nudgeDelta, type HandleId } from "@/hooks/use-layer-drag";
+// Chantier B, Tâche 5 — un clic sur un MEMBRE de groupe sélectionne le GROUPE ENTIER (spec §6). Voir
+// son commentaire en tête de module pour le modèle FLAT — cette fonction dérive les membres à la
+// volée, aucune donnée « groupe » n'est stockée à part.
+// Chantier B, Tâche 6 — `groupBounds` (T5, même module) donne à la barre contextuelle flottante la
+// MÊME géométrie que le glisser de groupe utilise déjà pour son propre calcul : jamais une seconde
+// boîte englobante qui pourrait diverger de celle que l'utilisateur voit déjà bouger à l'écran.
+import { expandSelectionToGroups, groupBounds } from "@/lib/studio/groups";
+import { useLayerDrag, HANDLES, type HandleId } from "@/hooks/use-layer-drag";
 // U3 Tâche 3 (arbitrage A) : LA MÊME question que les deux chemins de rendu posent — cette forme
 // tourne-t-elle ? — pour que le chrome de sélection (contour, poignées) ne promette pas une rotation
 // que le rendu ne fera pas.
@@ -26,6 +33,11 @@ import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { usesInLayer, type TokenId } from "@/lib/studio/tokens";
 import { TOKEN_LABELS } from "@/lib/studio/token-labels";
 import { LayerView } from "./layer-view";
+// Chantier B, Tâche 6 — la barre contextuelle flottante. PAS de Popover/Select à l'intérieur (voir
+// son en-tête) : `FloatingToolbar` ne réutilise que `<Button>`, donc son import ici ne réintroduit
+// jamais l'incident que tests/studio-no-popover-in-canvas.test.ts garde (voir le commentaire de U4
+// Tâche 6 plus haut dans ce fichier).
+import { FloatingToolbar } from "./floating-toolbar";
 
 // Le canevas est du DOM, pas un `<canvas>` (spec §2) : chaque calque est une `div` positionnée en
 // absolu, à l'intérieur d'un conteneur mis à l'échelle. Le conteneur EXTÉRIEUR (celui que le parent
@@ -33,6 +45,28 @@ import { LayerView } from "./layer-view";
 // écran ; le conteneur INTÉRIEUR, lui, garde les dimensions RÉELLES du gabarit et porte
 // `transform: scale(k)` — exactement la stratégie du spec, pour que TOUTES les coordonnées
 // manipulées (frames, deltas de glisser) restent en pixels du gabarit, jamais en pixels écran.
+// Chantier B, Tâche 7 (spec §5) — le menu contextuel du clic droit. `CanvasContextMenuPayload` est
+// définie ICI, LOCALEMENT, jamais importée de components/studio/canvas-context-menu.tsx (le
+// composant base-ui RÉEL, rendu par editor-shell.tsx) — voir le MANDAT DE CONCEPTION en tête de
+// canvas-context-menu.tsx et de tests/studio-no-popover-in-canvas.test.ts : un import, même de TYPE
+// seul, d'un spécificateur portant "canvas-context-menu" ferait tomber le garde structurel de ce
+// dernier fichier (`FORBIDDEN_SPECIFIER_SUFFIXES`, correspondance sur le SPÉCIFICATEUR littéral de
+// la ligne `import`, pas sur ce que TypeScript efface ou non à la compilation) — et, plus
+// fondamentalement, romprait l'INVARIANT que ce garde protège : canvas.tsx ne doit JAMAIS avoir
+// besoin de résoudre le module qui porte @base-ui/react/menu, même pour un type. Ce composant-ci ne
+// RENDS donc AUCUN menu : il (a) sélectionne la cible du clic droit EN PREMIER (même règle que le
+// clic gauche de glisser-groupe, Tâche 5 — voir handleLayerContextMenu plus bas), (b) calcule le
+// point d'ancrage écran, et (c) appelle CETTE prop — sans jamais importer de composant base-ui.
+export interface CanvasContextMenuPayload {
+  x: number;
+  y: number;
+  /** L'id du calque ciblé, ou `null` pour le canevas VIDE — ET pour un clic droit qui est retombé
+   * sur le canevas via la règle de repli U3 (voir handleCanvasContextMenu plus bas : un calque
+   * VERROUILLÉ ne porte, comme pour onPointerDown, AUCUN gestionnaire onContextMenu propre — le clic
+   * droit dessus atteint donc TOUJOURS ce gestionnaire-racine, jamais handleLayerContextMenu). */
+  targetLayerId: string | null;
+}
+
 export interface CanvasProps {
   scene: Scene;
   /** Tâche 3 (U2, spec §3) — la sélection COMPLÈTE, dans l'ordre où l'utilisateur l'a construite.
@@ -51,6 +85,13 @@ export interface CanvasProps {
    * canevas neuf n'a rien à signaler avant qu'un jeton n'y soit posé, et cette surcouche resterait
    * un bruit permanent pour qui n'édite jamais de gabarit lié. */
   showBindings?: boolean;
+  /** Chantier B, Tâche 7 (spec §5) — appelée par un VRAI événement `contextmenu` (clic droit), APRÈS
+   * que la sélection a déjà été mise à jour (voir CanvasContextMenuPayload ci-dessus). Le parent
+   * (editor-shell.tsx) en tire l'état `{ open, anchor, targetLayerId }` du VRAI menu base-ui. Absente
+   * -> aucun changement de comportement (§0) : un `Canvas` sans ce prop reste octet pour octet celui
+   * d'avant cette tâche, `preventDefault()` mis à part (qui ne fait que supprimer le menu natif du
+   * navigateur, jamais observable par les tests d'avant cette tâche). */
+  onContextMenu?: (payload: CanvasContextMenuPayload) => void;
 }
 
 const HANDLE_CURSOR: Record<HandleId, string> = {
@@ -113,7 +154,9 @@ const HANDLE_STYLE: Record<HandleId, CSSProperties> = {
 // ⌘/Ctrl-clic a été écarté comme alternative : ⌘ porte déjà ⌘/ (replier le panneau accosté,
 // editor-shell.tsx) et macOS synthétise Ctrl-clic en clic DROIT, ce qui rendrait le geste
 // inatteignable pour la moitié du parc.
-export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindings = false }: CanvasProps) {
+export function Canvas({
+  scene, selectedIds, dispatch, scale, images, showBindings = false, onContextMenu,
+}: CanvasProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   // Tâche 5 (U2, spec §5) — le contexte d'accrochage : la scène ENTIÈRE plus les dimensions du plan de
   // travail. Le moteur en retire lui-même TOUS les calques que le geste déplace (le calque tiré, et les
@@ -125,18 +168,35 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
     canvas: scene.canvas,
   });
 
-  // Le calque à OUTILLER (poignées, rotation, clavier) : celui d'une sélection SIMPLE, jamais le
-  // premier d'une sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une
-  // sélection multiple laisserait croire qu'elles agissent sur l'ensemble. Les opérations par LOT sur
-  // une sélection multiple attendaient l'action « un lot = une entrée d'historique » : la Tâche 4 l'a
+  // Le calque à OUTILLER (poignées, rotation) : celui d'une sélection SIMPLE, jamais le premier d'une
+  // sélection multiple. Poignées et flèches manipulent UN cadre — les afficher sur une sélection
+  // multiple laisserait croire qu'elles agissent sur l'ensemble. Les opérations par LOT sur une
+  // sélection multiple attendaient l'action « un lot = une entrée d'historique » : la Tâche 4 l'a
   // livrée (`setFrames`, lib/studio/editor-state.ts) et s'en sert pour aligner/répartir
   // (components/studio/geometry-strip.tsx#AlignRow). Suppr et les flèches restent DÉLIBÉRÉMENT en
-  // sélection simple ici — les généraliser est un geste de produit à part entière (que faut-il faire
-  // d'un calque verrouillé dans le lot ? d'un calque masqué ?), hors du périmètre de la Tâche 4 ; ce
-  // qu'il ne faut surtout pas faire, c'est les dispatcher une action par calque, ce qui empilerait N
-  // entrées d'annulation pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
+  // sélection simple — les généraliser est un geste de produit à part entière (que faut-il faire d'un
+  // calque verrouillé dans le lot ? d'un calque masqué ?), hors périmètre ; ce qu'il ne faut surtout
+  // pas faire, c'est les dispatcher une action par calque, ce qui empilerait N entrées d'annulation
+  // pour un seul geste, à rebours de l'invariant « un geste = une entrée » de U1.
+  //
+  // Chantier B, Tâche 1 : Suppr et les flèches ne sont PLUS gérées ICI — `handleKeyDown` (posé sur ce
+  // composant, focus canevas requis) a migré vers le KEYMAP CENTRAL, un écouteur `window` unique monté
+  // dans editor-shell.tsx (hooks/use-editor-keymap.ts). Ce hook réutilise EXACTEMENT la même dérivation
+  // qu'ici — `singleSelectedId` puis un calque visible et non verrouillé — pour ne rien changer au
+  // comportement d'un canevas focalisé ; `selectedLayer` ci-dessous reste donc utile aux poignées/
+  // rotation seules, plus au clavier.
   const soleSelectedId = singleSelectedId(selectedIds);
   const selectedLayer = scene.layers.find((l) => l.id === soleSelectedId && l.visible) ?? null;
+
+  // Chantier B, Tâche 6 — la sélection RÉSOLUE contre la scène (jamais les ids bruts de la prop), sur
+  // le modèle de `selectedLayers()` (hooks/use-editor-keymap.ts, copier/dupliquer) : un id qui ne
+  // désigne plus aucun calque (§2 de l'en-tête d'editor-state.ts, « la sélection n'est pas validée
+  // contre la scène ») est silencieusement absent, jamais une entrée `undefined`. AUCUN filtre sur
+  // `visible`/`locked` ici — contrairement à `selectedLayer` ci-dessus (poignées de geste), la barre
+  // contextuelle affiche des ACTIONS (dupliquer, verrouiller…) qui ont un sens même sur un calque
+  // masqué ou déjà verrouillé (verrouiller reste, par construction, jamais bloqué par son propre
+  // verrou — voir editor-state.ts#toggleLocked).
+  const selectedLayers = scene.layers.filter((l) => selectedIds.includes(l.id));
 
   // U4 Tâche 3 — le fond du canevas, résolu pour l'AFFICHAGE (même discipline que LayerView) : un
   // fond lié à `{{jeton}}` montre l'échantillon plutôt qu'une chaîne CSS invalide silencieusement
@@ -165,20 +225,6 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
       : (layer.rotation ?? 0);
   }
 
-  function handleKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (!selectedLayer || selectedLayer.locked) return;
-    if (e.key === "Delete") {
-      e.preventDefault();
-      dispatch(deleteLayer(selectedLayer.id));
-      return;
-    }
-    const nudge = nudgeDelta(e.key, e.shiftKey);
-    if (nudge) {
-      e.preventDefault();
-      dispatch(moveLayer(selectedLayer.id, nudge.x, nudge.y));
-    }
-  }
-
   function handleRotateDown(layer: Layer) {
     return (e: PointerEvent<HTMLElement>) => {
       const canvasRect = rootRef.current?.getBoundingClientRect();
@@ -191,14 +237,59 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
     };
   }
 
+  // Chantier B, Tâche 7 (spec §5) — clic droit sur un CALQUE : sélectionne la cible EN PREMIER
+  // (« right-click selects the target first, like reference tools »), PUIS ouvre le menu via la
+  // prop-callback (jamais de composant base-ui ici, voir CanvasContextMenuPayload plus haut).
+  //
+  // LA MÊME expansion de groupe que le glisser (Tâche 5, voir le pointerdown des calques plus bas) —
+  // un membre de groupe cliqué DROIT sélectionne le GROUPE ENTIER, jamais lui seul — mais SANS armer
+  // aucun geste de déplacement (un clic droit n'ouvre jamais un glisser). `déjàSélectionné` reprend
+  // la MÊME garde que le clic gauche : cliquer droit un calque déjà membre de la sélection COURANTE
+  // (par ex. une sélection Maj-clic ad hoc à travers plusieurs groupes) GARDE cette sélection telle
+  // quelle plutôt que de la réduire au seul groupe de la cible — le menu agit alors sur CE lot-là
+  // pour copier/dupliquer/grouper (voir canvas-context-menu.tsx), exactement ce qu'un clic droit sur
+  // un membre d'une sélection multiple ferait dans un outil de référence.
+  //
+  // `stopPropagation()` : empêche l'événement de remonter jusqu'au gestionnaire `onContextMenu` de la
+  // RACINE plus bas, qui ouvrirait EN PLUS le menu « canevas vide » sur le même clic — un calque et
+  // le canevas ne doivent jamais répondre tous deux au même clic droit (même discipline que le
+  // Maj-clic du pointerdown, plus bas).
+  function handleLayerContextMenu(layer: Layer) {
+    return (e: MouseEvent<HTMLElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      rootRef.current?.focus();
+      const déjàSélectionné = selectedIds.includes(layer.id);
+      if (!déjàSélectionné) dispatch(selectMany(expandSelectionToGroups([layer.id], scene)));
+      onContextMenu?.({ x: e.clientX, y: e.clientY, targetLayerId: layer.id });
+    };
+  }
+
+  // Clic droit sur le CANEVAS — atteint par un clic droit réellement vide, ET par un clic droit sur
+  // un calque VERROUILLÉ (règle de repli U3, voir l'en-tête de CanvasContextMenuPayload) : un calque
+  // locked ne reçoit AUCUN `onContextMenu` propre (layer-view.tsx, même discipline que
+  // `onPointerDown`), donc l'événement bouillonne jusqu'ICI sans qu'aucun code de ce fichier n'ait à
+  // tester `layer.locked` explicitement — l'ABSENCE de gestionnaire, pas une garde, produit le repli.
+  // AUCUNE sélection n'est touchée ici (contrairement au clic GAUCHE dans le vide, plus bas) : la
+  // spec (§5) ne demande que « paste + select-all only » pour ce menu, jamais d'effacer quoi que ce
+  // soit — un clic droit dans le vide alors qu'une sélection existe garde cette sélection intacte.
+  function handleCanvasContextMenu(e: MouseEvent<HTMLDivElement>) {
+    e.preventDefault();
+    onContextMenu?.({ x: e.clientX, y: e.clientY, targetLayerId: null });
+  }
+
   const selectedFrame = selectedLayer ? frameFor(selectedLayer) : null;
   const selectedRotation = selectedLayer ? rotationFor(selectedLayer) : 0;
 
   return (
     <div
       ref={rootRef}
+      // `tabIndex={0}` reste nécessaire même sans `onKeyDown` propre à ce composant (Chantier B,
+      // Tâche 1 : Suppr/flèches ont migré vers le keymap central, window-level — voir plus haut) :
+      // `rootRef.current?.focus()`, plus bas, déplace le focus DOM ici au clic d'un calque, ce qui
+      // fait sortir `document.activeElement` d'un éventuel champ de saisie du panneau de propriétés —
+      // exactement ce que `isEditingText` (lib/studio/keymap.ts) regarde pour lever sa garde.
       tabIndex={0}
-      onKeyDown={handleKeyDown}
       // « Cliquer le canevas vide efface la sélection » (Tâche 3, spec §3). Posé ICI, sur la racine,
       // et atteint UNIQUEMENT par les pointerdown qui n'ont été absorbés par rien : le corps d'un
       // calque comme une poignée passent tous par `bind()` (use-layer-drag.ts), qui appelle
@@ -218,6 +309,7 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
         if (e.button !== 0 || e.shiftKey) return;
         if (selectedIds.length > 0) dispatch(clearSelection());
       }}
+      onContextMenu={handleCanvasContextMenu}
       data-testid="studio-canvas"
       style={{
         position: "relative",
@@ -261,12 +353,14 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
               onPointerDown={(e) => {
                 // Tâche 3, M4 (revue finale U0+U2) : LA GARDE DE BOUTON PASSE AVANT TOUT EFFET DE BORD.
                 // Avant ce correctif, `stopPropagation()`/`preventDefault()` tournaient AVANT le test
-                // `e.button === 0` du chemin Maj — un Maj-clic DROIT était donc avalé ici (mort : aucun
-                // gestionnaire `contextmenu` n'existe) tandis qu'un clic droit SANS Maj traversait
-                // jusqu'à `dispatch(select(...))` et RÉDUISAIT une sélection multiple à un seul calque.
-                // Les deux chemins disent maintenant la même chose : un bouton non primaire n'arme
-                // rien, ne consomme rien, ne touche pas la sélection — et l'événement remonte jusqu'à
-                // la racine, dont la garde `e.button !== 0` est identique.
+                // `e.button === 0` du chemin Maj — un Maj-clic DROIT était donc avalé ici (à l'époque,
+                // mort : aucun gestionnaire `contextmenu` n'existait encore — voir `onContextMenu`
+                // séparé plus bas, ajouté par la Tâche 7, qui gère désormais le clic droit à part) alors
+                // qu'un clic droit SANS Maj traversait jusqu'à `dispatch(select(...))` et RÉDUISAIT une
+                // sélection multiple à un seul calque. Les deux chemins disent maintenant la même
+                // chose : un bouton non primaire n'arme rien ICI, ne consomme rien, ne touche pas la
+                // sélection — et l'événement remonte jusqu'à la racine, dont la garde `e.button !== 0`
+                // est identique.
                 if (e.button !== 0) return;
                 rootRef.current?.focus();
                 if (e.shiftKey) {
@@ -305,12 +399,28 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
                 // (voir `beginMove`), et les calques MASQUÉS suivent le groupe — décision et motif dans
                 // hooks/use-layer-drag.ts.
                 const déjàSélectionné = selectedIds.includes(layer.id);
-                if (!déjàSélectionné) dispatch(select(layer.id));
-                const groupe = déjàSélectionné && selectedIds.length > 1
-                  ? scene.layers.filter((l) => selectedIds.includes(l.id))
+                // Chantier B, Tâche 5 (revue, Critique 1) — `selectedIds` (prop) est encore la valeur
+                // D'AVANT ce clic : `dispatch` ne réapplique pas React synchrones dans CE gestionnaire,
+                // donc lire `selectedIds` juste après avoir dispatché ne verrait JAMAIS le groupe qu'on
+                // vient de sélectionner. Sur le TOUT PREMIER clic d'un membre (pas encore sélectionné),
+                // `idsForDrag` doit donc venir de la MÊME expansion que celle qu'on dispatche — pas de
+                // `selectedIds`, qui est encore l'ancienne sélection (vide, ou autre chose) à cet
+                // instant précis. Sans ce correctif, ce premier clic armait un glisser À UN SEUL calque
+                // (`groupe` à `undefined`) : le membre cliqué bougeait seul, les autres restaient
+                // plantés — mesuré (actions `["select","moveLayer"]`, pas `"setFrames"`).
+                const idsForDrag = déjàSélectionné ? selectedIds : expandSelectionToGroups([layer.id], scene);
+                // Un clic qui SÉLECTIONNE (pas déjà dans la sélection) étend TOUJOURS à tout le
+                // groupe du calque cliqué : `expandSelectionToGroups` renvoie `[layer.id]` seul pour
+                // un calque SANS `groupId` (le comportement d'avant, intact), et TOUS les co-membres
+                // pour un calque groupé. `select(layer.id)` (remplacement par UN seul id) ne
+                // suffirait plus depuis cette tâche — `selectMany` porte l'ensemble.
+                if (!déjàSélectionné) dispatch(selectMany(idsForDrag));
+                const groupe = idsForDrag.length > 1
+                  ? scene.layers.filter((l) => idsForDrag.includes(l.id))
                   : undefined;
                 getMoveHandler(layer, groupe)(e);
               }}
+              onContextMenu={handleLayerContextMenu(layer)}
             />
           );
         })}
@@ -478,6 +588,29 @@ export function Canvas({ scene, selectedIds, dispatch, scale, images, showBindin
             </div>
           );
         })}
+
+        {/* Barre contextuelle flottante (Chantier B, Tâche 6, spec §4) — SIBLING des calques et des
+            surcouches ci-dessus, à l'intérieur du MÊME conteneur mis à l'échelle (même garde que la
+            grille de U1 : jamais un conteneur à côté de l'artboard). Rendue EN DERNIER pour rester
+            au-dessus de tout le reste à l'écran (ordre de peinture DOM, sans z-index, même idiome que
+            les guides/le contour de liaisons plus haut).
+              - `selectedLayers.length > 0` : §0 du plan — sans sélection, rien ne s'ancre, le canevas
+                reste inchangé (`FloatingToolbar` renvoie aussi `null` de son côté si
+                `toolbarActionsFor` renvoyait `[]`, mais la garde ici évite même de calculer
+                `groupBounds` sur un tableau vide).
+              - `!preview` : « masquée pendant un glisser/redimensionnement/rotation » (brief T6) —
+                `preview` (useLayerDrag, plus haut) est truthy pour LA DURÉE du geste entier, qu'il
+                déplace un seul calque ou tout un groupe ; la barre réapparaît au relâchement, quand
+                `preview` retombe à `null`. */}
+        {selectedLayers.length > 0 && !preview && (
+          <FloatingToolbar
+            selection={selectedLayers}
+            layers={scene.layers}
+            bounds={groupBounds(selectedLayers)}
+            scale={scale}
+            dispatch={dispatch}
+          />
+        )}
       </div>
     </div>
   );

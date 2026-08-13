@@ -1,15 +1,23 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft, Undo2, Redo2, PanelRight } from "lucide-react";
+import { ArrowLeft, Undo2, Redo2, PanelRight, Minus, Plus } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { Canvas } from "./canvas";
 import { CanvasChrome, safeAreaDefaultFor, RULER_SIZE } from "./canvas-chrome";
+// Chantier B, Tâche 7 (spec §5) — le VRAI composant base-ui du menu contextuel. Importé ICI,
+// jamais par canvas.tsx (voir son en-tête et celui de canvas-context-menu.tsx) : editor-shell.tsx
+// est déjà dans l'arbre base-ui-lourd (DropdownMenu du menu de zoom, quelques lignes plus haut), donc
+// cet import n'aggrave pas le risque que tests/studio-no-popover-in-canvas.test.ts surveille.
+import { CanvasContextMenu } from "./canvas-context-menu";
 import { SaveIndicator } from "./save-indicator";
 import { Rail } from "./rail";
 import { PanelHost } from "./panel-host";
@@ -33,11 +41,16 @@ import { saveTemplateScene, publishTemplate } from "@/lib/actions/studio-actions
 import { StorageBanner } from "./storage-banner";
 import { useEditorPrefs } from "@/hooks/use-editor-prefs";
 import { useEditorLayout } from "@/hooks/use-editor-layout";
+import { useEditorKeymap } from "@/hooks/use-editor-keymap";
 import {
   nextOpenPanel, setOpenPanel, toggleCollapse, type RailCategory,
   RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
 } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
+import {
+  clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS, wheelZoomScale, zoomAtCursor,
+} from "@/lib/studio/zoom";
+import { isEditingText, isPopupOpen } from "@/lib/studio/keymap";
 import { preserveView, type StudioMode, type PreservedView } from "@/lib/studio/studio-mode";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
@@ -55,6 +68,13 @@ const AUTOSAVE_DELAY_MS = 1500;
 // qui produit « ? », ouvre la recherche du menu Aide — un raccourci DIFFÉRENT) donc pas de collision
 // technique constatée ; conservé tel quel plutôt que le repli « ⌘. » envisagé par la spec.
 const COLLAPSE_PANEL_KEY = "/";
+
+// Chantier B, Tâche 3 — le slot de zoom (spec ci-dessous) : préréglages numériques additionnels du
+// menu déroulant, EN PLUS des trois entrées « spéciales » (Ajuster/100 %/Cadrer la sélection, qui
+// passent par lib/studio/zoom.ts#zoomPresetScale). `100` n'y figure PAS — déjà couvert par sa propre
+// entrée dédiée (« 100 % », qui reste exacte quel que soit `fitScale` via zoomPresetScale("100", …),
+// alors qu'un simple `100/100/fitScale` ici donnerait le MÊME résultat mais dupliquerait l'entrée).
+const ZOOM_PERCENT_PRESETS = [50, 75, 125, 150, 200] as const;
 
 const CONTEXT_LABEL: Record<TemplateContext, string> = {
   article_image: "Image à la une",
@@ -252,6 +272,18 @@ function EditorShellInner({
     hadSelectionRef.current = hasSelection;
   }, [state.selectedIds, layout]);
 
+  // ── Menu contextuel du clic droit (Chantier B, Tâche 7, spec §5) ─────────
+  // L'état vit ICI, jamais dans `Canvas` : voir le MANDAT DE CONCEPTION en tête de
+  // canvas-context-menu.tsx (l'incident `useIsoLayoutEffect`) — `Canvas` (canvas.tsx) reste PUR de
+  // tout composant base-ui, ne fait que calculer `{x,y,targetLayerId}` via `onContextMenu` et
+  // remonter ce littéral jusqu'ICI. `targetLayerId`/`x`/`y` restent délibérément la DERNIÈRE valeur
+  // connue même après `open: false` (fermeture) — inoffensif (rien ne les lit tant que `open` est
+  // faux) et évite une frame où le menu, encore en transition de fermeture côté base-ui, perdrait
+  // son ancrage.
+  const [contextMenu, setContextMenu] = useState<{ open: boolean; x: number; y: number; targetLayerId: string | null }>(
+    { open: false, x: 0, y: 0, targetLayerId: null },
+  );
+
   // ── Modes Montage ⇄ Rendu réel (Tâche 5, U1 spec §5) ──────────────────────
   // `mode` ne pilote qu'un rendu CONDITIONNEL plus bas (jamais une `key` React) : basculer ne
   // démonte ni ne réinitialise `state`/`dispatch` (le réducteur de l'éditeur, ci-dessus) — c'est ce
@@ -338,8 +370,12 @@ function EditorShellInner({
   }
 
   // ── Mise à l'échelle du canevas (spec §2, §7) ────────────────────────────
+  // `fitScale` (renommé depuis `scale` — Chantier B, Tâche 3) reste EXACTEMENT ce qu'il était : la
+  // mesure du conteneur par le ResizeObserver ci-dessous, RECALCULÉE, jamais touchée par le zoom
+  // utilisateur. `computeCanvasScale` lui-même n'a pas changé d'une ligne (§0 non-régression du
+  // brief T3) — voir sa propre documentation en tête de fichier.
   const canvasWrapRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  const [fitScale, setFitScale] = useState(1);
   useEffect(() => {
     const el = canvasWrapRef.current;
     if (!el) return;
@@ -351,7 +387,7 @@ function EditorShellInner({
         { width: template.width, height: template.height },
         prefs.rulers,
       );
-      if (next !== null) setScale(next);
+      if (next !== null) setFitScale(next);
     }
     computeScale();
     const ro = new ResizeObserver(computeScale);
@@ -366,6 +402,221 @@ function EditorShellInner({
     // là où vivent les règles, les rendant de facto invisibles en plus de faire apparaître des
     // barres de défilement inattendues.
   }, [template.width, template.height, prefs.rulers]);
+
+  // ── Zoom RÉEL (Chantier B, Tâche 3) : `scale = fitScale × factor` ────────
+  // `factor` vient de `EditorPrefs.zoom` (lib/studio/editor-prefs.ts, déjà persisté par utilisateur
+  // depuis U1/U7 — jamais consommé avant cette tâche, voir le commentaire d'origine de
+  // canvas-chrome.tsx). `"fit"` -> `1` (`scale = fitScale`, BIT À BIT le comportement d'avant cette
+  // tâche — §0 non-régression) ; un nombre passe par `clampZoom` (lib/studio/zoom.ts) à CHAQUE lecture
+  // — même discipline défensive que `clampPanelWidth` pour `railPanelWidth`/`inspectorWidth`
+  // (editor-prefs.ts) : une valeur persistée hors bornes (ex. un futur resserrement de ZOOM_STEPS) ne
+  // fait jamais déborder `scale`. `scale` — PAS `fitScale` — est ce que reçoivent `<Canvas>` et
+  // `<CanvasChrome>` plus bas : c'est LA seule échelle réellement appliquée à l'écran, la même que la
+  // pastille `zoom-chip` (canvas-chrome.tsx) affiche et que le slot `zoom-slot` ci-dessous affiche —
+  // UNE SEULE source de vérité, jamais deux nombres qui pourraient diverger.
+  const factor = prefs.zoom === "fit" ? 1 : clampZoom(prefs.zoom);
+  const scale = fitScale * factor;
+
+  function setZoom(next: number | "fit") {
+    setPrefs((p) => ({ ...p, zoom: next }));
+  }
+
+  function currentViewport(): { width: number; height: number } | null {
+    const el = canvasWrapRef.current;
+    return el ? { width: el.clientWidth, height: el.clientHeight } : null;
+  }
+
+  // Cadre la sélection courante dans le viewport — partagé par ⇧2 (via le keymap ci-dessous) ET
+  // l'entrée « Cadrer la sélection » du menu déroulant du slot (plus bas dans le rendu), pour que les
+  // deux chemins produisent EXACTEMENT le même facteur plutôt que deux calculs qui pourraient diverger.
+  function zoomToSelection() {
+    const layers = state.scene.layers.filter((l) => state.selectedIds.includes(l.id));
+    const bounds = unionBounds(layers.map((l) => l.frame));
+    const viewport = currentViewport();
+    if (!bounds || !viewport) return; // rien à cadrer, ou conteneur pas encore mesurable — no-op
+    setZoom(zoomPresetScale("selection", fitScale, bounds, viewport));
+  }
+
+  // ── Chantier B, Tâche 4 : pan (Espace-glisser) + zoom molette centré curseur ──────────────────
+  // Le PIÈGE (voir task-4-brief.md) : `setZoom` déclenche un rendu qui change `transform: scale()`
+  // (canvas.tsx). Poser `canvasWrapRef.current.scrollLeft/Top` DANS le gestionnaire `wheel`, AVANT ce
+  // rendu, appliquerait le nouveau défilement contre l'ANCIENNE taille de contenu — le point visé
+  // SAUTERAIT à l'écran. `pendingWheelScrollRef` porte donc la correction calculée par
+  // `zoomAtCursor` (lib/studio/zoom.ts, PURE) jusqu'au `useLayoutEffect` ci-dessous, qui ne
+  // s'exécute QU'APRÈS que React a peint la nouvelle `scale` — même échelle et défilement corrigé
+  // dans la MÊME frame, jamais deux peintures successives.
+  const pendingWheelScrollRef = useRef<{ x: number; y: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const pending = pendingWheelScrollRef.current;
+    if (!pending) return; // un changement de `scale` par un AUTRE chemin (slot, ⇧0/1/2…) n'a rien en attente — no-op
+    pendingWheelScrollRef.current = null;
+    const el = canvasWrapRef.current;
+    if (!el) return;
+    el.scrollLeft = pending.x;
+    el.scrollTop = pending.y;
+  }, [scale]);
+
+  // Molette ⌘/Ctrl (spec §2 du brief) : zoom centré sur le curseur. Molette SEULE : PAS de
+  // `preventDefault` — le défilement NATIF du conteneur `overflow-auto` fait déjà le pan, rien à
+  // câbler ici pour ce cas. Le pincement trackpad synthétise un `wheel` avec `ctrlKey` (spec
+  // navigateur) : le MÊME chemin ⌘/Ctrl le couvre déjà, pas de second gestionnaire.
+  //
+  // `WheelEvent` NATIF (pas `React.WheelEvent`) — revue chantier B T4, Important : voir l'effet
+  // `useEffect` plus bas qui pose ce gestionnaire, POURQUOI un `onWheel` React ne peut pas marcher ici.
+  function handleCanvasWheel(e: WheelEvent) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    const el = canvasWrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cursor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const prevScale = scale;
+    const rawNextScale = wheelZoomScale(prevScale, e.deltaY);
+    const nextFactor = clampZoom(rawNextScale / fitScale);
+    // GARDE (revue chantier B T4, Important) : un `deltaY` nul, ou qui pousse encore contre une
+    // borne DÉJÀ atteinte (8× ou 0,1×, molette qui continue de tourner), produit un `nextFactor`
+    // IDENTIQUE à `factor` — donc un `scale` NUMÉRIQUEMENT INCHANGÉ. Sans cette garde,
+    // `pendingWheelScrollRef` serait quand même écrit, mais le `useLayoutEffect` ci-dessus, keyed sur
+    // `[scale]`, ne se redéclenche JAMAIS pour une valeur inchangée (`Object.is` côté React) — la
+    // correction resterait donc en attente, ORPHELINE, jusqu'au PROCHAIN changement RÉEL de `scale`
+    // par un chemin complètement différent (slot, ⇧0/⇧1/⇧2, zoomToSelection), qui appliquerait alors
+    // un défilement calculé pour un curseur/geste qui n'a plus rien à voir — un saut de vue silencieux
+    // et différé. `return` AVANT d'écrire la ref ou d'appeler `setZoom` : un no-op véritable, rien en
+    // attente pour la prochaine fois.
+    if (nextFactor === factor) return;
+    const nextScale = fitScale * nextFactor;
+    const scroll = { x: el.scrollLeft, y: el.scrollTop };
+    const viewport = { width: el.clientWidth, height: el.clientHeight };
+    const corrected = zoomAtCursor(prevScale, nextScale, cursor, scroll, viewport);
+    pendingWheelScrollRef.current = corrected.scroll;
+    setZoom(nextFactor);
+  }
+
+  // Même motif que `stateRef`/`zoomRef` (hooks/use-editor-keymap.ts) : l'écouteur natif posé par
+  // l'effet ci-dessous ne doit PAS se figer sur les valeurs de `scale`/`fitScale`/`factor` du rendu où
+  // il a été attaché — cette ref porte toujours la fermeture la PLUS RÉCENTE de `handleCanvasWheel`.
+  const handleCanvasWheelRef = useRef(handleCanvasWheel);
+  useEffect(() => {
+    handleCanvasWheelRef.current = handleCanvasWheel;
+  });
+
+  // POSÉ IMPÉRATIVEMENT, NON PASSIF (revue chantier B T4, Important) — PAS un `onWheel` React sur le
+  // JSX plus bas. React délègue `wheel` par un unique écouteur RACINE, posé PASSIF par défaut : dans
+  // ce mode, `e.preventDefault()` (dans `handleCanvasWheel` ci-dessus) est un NO-OP SILENCIEUX — React
+  // avertit même « Unable to preventDefault inside passive event listener » en console. Constaté en
+  // conditions réelles (navigateur) : le canevas zoomait bien au bon endroit, mais le NAVIGATEUR
+  // zoomait AUSSI la page entière en même temps — la fonctionnalité cœur de cette tâche cassée malgré
+  // une suite `bun test` entièrement verte (jsdom ne simule pas la passivité des écouteurs, donc ce
+  // défaut-là est invisible en jsdom quel que soit le test écrit contre le COMPORTEMENT). `{ passive:
+  // false }` explicite est la SEULE façon d'obtenir un `wheel` sur lequel `preventDefault()` a un
+  // effet réel — d'où cet écouteur natif dédié plutôt qu'une prop JSX.
+  //
+  // `canvasWrapRef` ne pointe vers UN ÉLÉMENT RÉEL que sous DEUX conditions, PAS une seule (revue —
+  // régression trouvée en repassage navigateur) : `layout !== "too-small"` ET `mode === "montage"`
+  // (voir le rendu plus bas — `mode === "rendu"` monte `<RenderMode>` à la place, un arbre ENTIÈREMENT
+  // différent, sans `canvas-backdrop` du tout). `canvasMounted` réunit les DEUX en un seul booléen —
+  // PAS `[layout]` seul (le premier jet de ce correctif, et son bug) : un aller-retour Montage ->
+  // Rendu réel -> Montage (`ModeSwitch`/raccourci « R ») DÉMONTE l'ancien `canvas-backdrop` et en
+  // MONTE un NOUVEAU nœud DOM, sans que `layout` n'ait bougé d'un cran — un effet keyed sur `[layout]`
+  // seul ne se redéclenche alors JAMAIS, laisse le NOUVEAU nœud SANS écouteur `wheel`, et fait
+  // silencieusement REVENIR le bug d'origine (⌘/Ctrl-molette zoome à nouveau la PAGE) après un simple
+  // aller-retour de mode — pourtant un geste on ne peut plus ordinaire. Dépendre du booléen DÉRIVÉ
+  // (plutôt que d'énumérer `layout`/`mode` séparément dans le tableau de dépendances) est ce qui
+  // garantit que l'effet se redéclenche À CHAQUE fois que ce nœud est RÉELLEMENT (dé)monté, et
+  // seulement alors — pas à chaque changement de `layout` qui laisserait le nœud en place (ex.
+  // `full` <-> `inspector-drawer`, aucun des deux `too-small`).
+  const canvasMounted = layout !== "too-small" && mode === "montage";
+
+  useEffect(() => {
+    const el = canvasWrapRef.current;
+    if (!el) return; // `canvasMounted` faux -> la ref est `null`, rien à attacher (no-op correct)
+    function onWheel(e: WheelEvent) {
+      handleCanvasWheelRef.current(e);
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [canvasMounted]);
+
+  // `Espace`-glisser pan (spec §2 du brief). `spacePanning` : Espace physiquement maintenu (garde de
+  // focus ci-dessous respectée — un designer qui tape un espace dans un champ de saisie doit obtenir
+  // un espace, pas armer le pan). `dragging` : un GLISSER de pan est EN COURS (curseur « grabbing »
+  // plutôt que « grab » — la même distinction qu'un simple survol vs. un geste actif).
+  const [spacePanning, setSpacePanning] = useState(false);
+  const [panDragging, setPanDragging] = useState(false);
+  // Le NETTOYAGE d'un glisser EN COURS (retire les écouteurs pointermove/up/cancel, voir
+  // `handleCanvasPointerDownCapture` ci-dessous) — porté par une ref pour que `onKeyUp` puisse y
+  // accéder : « Release Space … exits pan mode » (brief §2) vaut aussi pour un glisser DÉJÀ armé, pas
+  // seulement pour le curseur au repos. `null` tant qu'aucun glisser n'est en cours.
+  const endPanDragRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      if (isEditingText(e.target) || isPopupOpen(document)) return; // même garde que le keymap central
+      e.preventDefault(); // Espace fait nativement défiler la PAGE quand rien n'a le focus — évite le conflit
+      setSpacePanning(true);
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      if (e.code !== "Space") return;
+      setSpacePanning(false);
+      endPanDragRef.current?.(); // un glisser EN COURS s'arrête AUSSI — pas seulement le curseur
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
+  // Posé en CAPTURE (pas en bouillonnement) sur `canvasWrapRef` : en mode pan, ce pointerdown doit
+  // atteindre CE gestionnaire AVANT le gestionnaire propre de `Canvas` (sélection/glisser un calque,
+  // canvas.tsx) — `stopPropagation()` ici empêche ensuite ce même événement de redescendre vers lui.
+  // Sans ce court-circuit, Espace-glisser sur un calque le déplacerait ou changerait la sélection en
+  // plus de faire défiler le conteneur — deux gestes différents armés par le même pointerdown.
+  function handleCanvasPointerDownCapture(e: React.PointerEvent<HTMLDivElement>) {
+    if (!spacePanning || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startScrollLeft = target.scrollLeft;
+    const startScrollTop = target.scrollTop;
+    target.setPointerCapture?.(e.pointerId);
+    setPanDragging(true);
+
+    // « glisser à droite -> le contenu se déplace à droite -> scrollLeft DIMINUE » (spec §2 du
+    // brief) : le contenu suit le curseur, donc le défilement va dans le sens OPPOSÉ au geste.
+    function handleMove(ev: PointerEvent) {
+      target.scrollLeft = startScrollLeft - (ev.clientX - startX);
+      target.scrollTop = startScrollTop - (ev.clientY - startY);
+    }
+    function endDrag() {
+      target.removeEventListener("pointermove", handleMove);
+      target.removeEventListener("pointerup", endDrag);
+      target.removeEventListener("pointercancel", endDrag);
+      endPanDragRef.current = null;
+      setPanDragging(false);
+    }
+    target.addEventListener("pointermove", handleMove);
+    target.addEventListener("pointerup", endDrag);
+    target.addEventListener("pointercancel", endDrag);
+    endPanDragRef.current = endDrag;
+  }
+
+  // Chantier B, Tâche 1 — le KEYMAP CENTRAL (⌘Z/⌘⇧Z/⌘A/Échap/Suppr/flèches, avec la garde de focus
+  // de lib/studio/keymap.ts). Monté ICI, sur `state`/`dispatch` déjà en place, plutôt que dans un
+  // composant enfant : c'est ce qui lui donne accès à la sélection ET à la scène ENTIÈRES pour
+  // ⌘A (sélectionner tous les calques) sans faire remonter ces deux valeurs par une prop dédiée.
+  //
+  // Chantier B, Tâche 3 (additif, déplacé ici — ce hook exigeait `fitScale`/`canvasWrapRef`/`setZoom`,
+  // tous les trois posés juste au-dessus) : le troisième argument câble ⇧0/⇧1/⇧2 (le VRAI zoom) — voir
+  // hooks/use-editor-keymap.ts#ZoomKeymapContext. `setZoom` écrit `EditorPrefs.zoom`, JAMAIS
+  // `dispatch` : un changement de zoom n'est pas une action du réducteur de scène (aucun
+  // `HistoryEntry`, aucun autosave — l'effet d'autosave plus haut ne compare QUE `state.scene`).
+  useEditorKeymap(state, dispatch, { fitScale, getViewport: currentViewport, setZoom });
 
   const showUnpublishedBadge = shouldShowUnpublishedBadge(template.publishedVersion, state.scene, publishedScene);
 
@@ -498,19 +749,6 @@ function EditorShellInner({
         </div>
 
         <div className="flex items-center justify-end gap-2">
-          {/* Slot chantier B (spec Studio Pro chantier A, Tâche 2) : affordance de zoom
-              DÉLIBÉRÉMENT inerte — `disabled`, aucun `onClick` — juste un emplacement réservé dans la
-              barre. Le vrai contrôle (lecture/écriture du zoom réel du canevas, `scale` ci-dessus)
-              est câblé par le chantier B, pas ici ; ce bouton n'affiche que "100%" en dur pour occuper
-              la place et fixer la forme attendue (`data-testid="zoom-slot"`, verrouillé par le test
-              U0 ci-dessous). */}
-          <Button
-            type="button" variant="outline" size="sm" disabled
-            data-testid="zoom-slot" aria-label="Zoom (à venir)"
-            className="tabular-nums"
-          >
-            100%
-          </Button>
           {/* Correctif revue (Chantier A Tâche 4) : « aperçu seulement » n'était PAS honnête —
               annuler/rétablir/restaurer une version restaient de VRAIES actions (dispatch(undo())/
               dispatch(redo()), un vrai `HistoryEntry` du réducteur ; `VersionHistory.onRestore`
@@ -520,9 +758,79 @@ function EditorShellInner({
               l'étiquette lecture seule. Repliées ici plutôt que simplement désactivées : un bouton
               `disabled` resterait un AFFORDANCE visible d'édition sur un écran qui prétend n'en avoir
               aucune — la même discipline que `TooSmallState` (Canvas en lecture seule, PAS un Canvas
-              éditable désactivé au pixel près). */}
+              éditable désactivé au pixel près).
+
+              Chantier B, Tâche 3 (additif) : le slot de zoom REJOINT ce même groupe conditionnel — le
+              brief le nomme explicitement (« follow how undo/redo are gated ») : c'est un contrôle
+              d'ÉDITION du canevas au même titre qu'annuler/rétablir, jamais un simple affichage, donc
+              il n'a pas plus sa place qu'eux dans l'en-tête lecture seule `too-small`. */}
           {layout !== "too-small" && (
             <>
+              {/* Le slot de zoom (spec Studio Pro chantier A Tâche 2, câblé ICI par le chantier B
+                  Tâche 3) : `−`/`+` (nextZoom, lib/studio/zoom.ts) encadrant le pourcentage COURANT
+                  (le déclencheur du menu, `scale × 100` arrondi — LA MÊME valeur que `zoom-chip`,
+                  canvas-chrome.tsx, puisque les deux lisent `scale = fitScale × factor` ci-dessus) et
+                  un menu déroulant Ajuster/100 %/Cadrer la sélection/préréglages 50–200 %.
+                  `data-testid="zoom-slot"` reste sur le CONTENEUR (verrouillé par le test U0) — plus
+                  un `<Button disabled>` isolé, mais le groupe entier du contrôle désormais vivant. */}
+              <div className="flex items-center gap-0.5" data-testid="zoom-slot">
+                <Button
+                  type="button" variant="ghost" size="icon-sm" title="Zoom arrière"
+                  aria-label="Zoom arrière" data-testid="zoom-out"
+                  disabled={factor <= ZOOM_STEPS[0]}
+                  onClick={() => setZoom(nextZoom(factor, -1))}
+                >
+                  <Minus />
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        type="button" variant="outline" size="sm" className="tabular-nums px-2"
+                        aria-label="Niveau de zoom" data-testid="zoom-current"
+                      />
+                    }
+                  >
+                    {Math.round(scale * 100)}%
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem data-testid="zoom-menu-fit" onClick={() => setZoom("fit")}>
+                      Ajuster
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      data-testid="zoom-menu-100"
+                      onClick={() => setZoom(zoomPresetScale("100", fitScale))}
+                    >
+                      100 %
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      data-testid="zoom-menu-selection"
+                      disabled={state.selectedIds.length === 0}
+                      onClick={zoomToSelection}
+                    >
+                      Cadrer la sélection
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    {ZOOM_PERCENT_PRESETS.map((pct) => (
+                      <DropdownMenuItem
+                        key={pct}
+                        data-testid={`zoom-menu-${pct}`}
+                        onClick={() => setZoom(clampZoom(pct / 100 / fitScale))}
+                      >
+                        {pct} %
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  type="button" variant="ghost" size="icon-sm" title="Zoom avant"
+                  aria-label="Zoom avant" data-testid="zoom-in"
+                  disabled={factor >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+                  onClick={() => setZoom(nextZoom(factor, 1))}
+                >
+                  <Plus />
+                </Button>
+              </div>
               <Button
                 type="button" variant="ghost" size="icon-sm" title="Annuler"
                 disabled={state.past.length === 0} onClick={() => dispatch(undo())}
@@ -670,6 +978,15 @@ function EditorShellInner({
                 "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900",
                 layout !== "full" && "min-w-[240px]",
               )}
+              // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur, posée IMPÉRATIVEMENT en effet —
+              // voir `useEffect([canvasMounted])` ci-dessus, PAS de prop `onWheel` ici : React la poserait
+              // PASSIVE, rendant `preventDefault()` sans effet) + Espace-glisser (pan). `style.cursor`
+              // reflète l'état PAN (grab en attente, grabbing en cours) exactement comme n'importe
+              // quelle autre affordance de curseur du canevas (poignées de redimensionnement,
+              // canvas.tsx#HANDLE_CURSOR) ; `undefined` en dehors du mode pan laisse le curseur PAR
+              // DÉFAUT du navigateur, §0 non-régression.
+              style={{ cursor: panDragging ? "grabbing" : spacePanning ? "grab" : undefined }}
+              onPointerDownCapture={handleCanvasPointerDownCapture}
             >
               <CanvasChrome
                 format={template.format}
@@ -686,9 +1003,24 @@ function EditorShellInner({
                 <Canvas
                   scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} scale={scale}
                   showBindings={prefs.showBindings}
+                  onContextMenu={(payload) => setContextMenu({ open: true, ...payload })}
                 />
               </CanvasChrome>
             </div>
+
+            {/* Menu contextuel du clic droit (Chantier B, Tâche 7, spec §5) — placement JSX
+                indifférent (base-ui le porte via un Portal dans `document.body`, comme le menu de
+                zoom plus haut) ; posé ici, juste après le conteneur du canevas, par proximité de
+                lecture avec ce qu'il complète. */}
+            <CanvasContextMenu
+              open={contextMenu.open}
+              anchor={contextMenu.open ? { x: contextMenu.x, y: contextMenu.y } : null}
+              targetLayerId={contextMenu.targetLayerId}
+              scene={state.scene}
+              selectedIds={state.selectedIds}
+              dispatch={dispatch}
+              onOpenChange={(open) => setContextMenu((c) => ({ ...c, open }))}
+            />
 
             {/* Tâche 6 (U1, spec §6) : `h-full` + `overflow-hidden` donnent à cette colonne une
                 hauteur RÉELLEMENT bornée — c'est ce qui rend la bande de géométrie de PropertyPanel

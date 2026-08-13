@@ -1,7 +1,7 @@
-import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeAll, afterAll, afterEach } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { installDom, mount } from "./dom-harness";
+import { installDom, mount, click, pressKey } from "./dom-harness";
 import type { Scene } from "@/lib/studio/scene";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
 import { RULER_SIZE } from "@/components/studio/canvas-chrome";
@@ -355,5 +355,125 @@ describe("EditorShell — réactif : editorLayoutMode pilote la composition rée
     expect(container.querySelector('[data-action="publish"]')).not.toBeNull();
 
     unmount();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Chantier B, Tâche 3 (spec task-3-brief.md, Étape 4) — le VRAI zoom : `scale = fitScale × factor`,
+// prouvé sur le VRAI EditorShell monté (installDom, comme le bloc ci-dessus) plutôt que sur
+// lib/studio/zoom.ts isolé (tests/studio-zoom.test.ts, déjà PUR) — LE point de cette tâche est que
+// editor-shell.tsx applique réellement ce facteur au `transform: scale()` de canvas.tsx et à la
+// pastille zoom-chip de canvas-chrome.tsx, pas seulement que zoom.ts calcule juste tout seul.
+//
+// Le conteneur mesuré (canvasWrapRef) a `clientWidth`/`clientHeight` à 0 sous jsdom (aucune vraie mise
+// en page) : `computeCanvasScale` (editor-shell.tsx) y renvoie donc `null` (conteneur « trop petit »
+// une fois son pad retranché) et `fitScale` reste bloqué à son défaut `useState(1)` — CE QUI EST
+// EXPLOITÉ ICI, pas contourné : `fitScale = 1` rend `scale = factor` directement lisible, sans
+// dépendre d'aucune mesure simulée de conteneur.
+describe("EditorShell — le VRAI zoom : scale = fitScale × factor, slot ET pastille D'ACCORD (Chantier B, Tâche 3)", () => {
+  let teardownDom: () => void;
+  let teardownGlobals: () => void;
+
+  beforeAll(() => {
+    teardownDom = installDom();
+    teardownGlobals = installLayoutTestGlobals();
+  });
+  afterAll(() => {
+    teardownGlobals();
+    teardownDom();
+  });
+  // Chaque test écrit `EditorPrefs.zoom` dans le MÊME `localStorage` jsdom (partagé par tout ce
+  // `describe`, un seul `installDom()` pour les trois tests) — sans ce nettoyage, un facteur zoomé
+  // laissé par un test contaminerait le montage initial du suivant (même précaution que la garde ⌘Z
+  // de tests/studio-interactions.test.ts, describe "keymap central").
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  async function mountAttached() {
+    const { container, unmount } = await mount(React.createElement(EditorShell, {
+      template, initialScene: scene(), publishedScene: null, versions: [], previewArticles: [],
+    }));
+    // Attaché à `document.body` (pas seulement monté détaché) : `pressKey` sans cible explicite
+    // dispatche sur `document` par défaut, et hooks/use-editor-keymap.ts écoute `window` — même
+    // précaution que `mountShellAttached` (tests/studio-interactions.test.ts) pour les tests clavier
+    // sur le VRAI EditorShell.
+    document.body.appendChild(container);
+    return { container, cleanup: () => { unmount(); container.remove(); } };
+  }
+
+  // Lit l'échelle RÉELLEMENT peinte — le `transform: scale(k)` du conteneur INTÉRIEUR de
+  // components/studio/canvas.tsx (le seul et unique enfant de `[data-testid="studio-canvas"]`),
+  // jamais un texte affiché : c'est CE nombre que la mutation du brief (« unbinding the factor from
+  // scale ») doit faire cesser de bouger.
+  function paintedScaleOf(container: HTMLElement): number {
+    const canvasEl = container.querySelector('[data-testid="studio-canvas"]') as HTMLElement;
+    const inner = canvasEl.firstElementChild as HTMLElement;
+    const match = /scale\(([-\d.]+)\)/.exec(inner.style.transform);
+    return match ? parseFloat(match[1]) : NaN;
+  }
+
+  it("cliquer + dans le slot fait CROÎTRE le scale RÉELLEMENT PEINT (transform: scale() de l'artboard) — LA mutation surveillée par le brief : découpler `factor` de `scale`", async () => {
+    const { container, cleanup } = await mountAttached();
+    try {
+      const before = paintedScaleOf(container);
+      expect(before).toBeCloseTo(1, 10); // fitScale=1 (non mesurable ici) × factor "fit"=1
+
+      const zoomIn = container.querySelector('[data-testid="zoom-in"]') as HTMLButtonElement;
+      expect(zoomIn).not.toBeNull();
+      await click(zoomIn);
+
+      expect(paintedScaleOf(container)).toBeGreaterThan(before);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("le pourcentage affiché par le slot (zoom-current) ET par la pastille (zoom-chip, canvas-chrome.tsx) restent TOUJOURS d'accord — UNE SEULE source de vérité", async () => {
+    const { container, cleanup } = await mountAttached();
+    try {
+      function percents() {
+        const slot = container.querySelector('[data-testid="zoom-current"]') as HTMLElement;
+        const chip = container.querySelector('[data-testid="zoom-chip"]') as HTMLElement;
+        expect(slot).not.toBeNull();
+        expect(chip).not.toBeNull();
+        return { slot: slot.textContent, chip: chip.textContent };
+      }
+
+      const before = percents();
+      expect(before.slot).toBe(before.chip);
+      expect(before.slot).toBe("100%"); // fitScale=1 × factor "fit"=1
+
+      const zoomIn = container.querySelector('[data-testid="zoom-in"]') as HTMLButtonElement;
+      await click(zoomIn);
+      await click(zoomIn);
+
+      const after = percents();
+      expect(after.slot).toBe(after.chip);
+      // Anti-vacuité — un mutant qui laisserait `scale` figé à `fitScale` (ignorant `factor`) ferait
+      // TOUJOURS passer l'égalité slot===chip (les deux liraient la même valeur figée) sans que cette
+      // seule assertion s'en aperçoive : le pourcentage doit avoir RÉELLEMENT bougé.
+      expect(after.slot).not.toBe(before.slot);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("⇧1 (Ajuster) RÉINITIALISE le scale RÉELLEMENT PEINT à sa valeur d'avant tout zoom manuel", async () => {
+    const { container, cleanup } = await mountAttached();
+    try {
+      const original = paintedScaleOf(container);
+
+      const zoomIn = container.querySelector('[data-testid="zoom-in"]') as HTMLButtonElement;
+      await click(zoomIn);
+      await click(zoomIn);
+      expect(paintedScaleOf(container)).not.toBe(original);
+
+      await pressKey({ key: "1", shiftKey: true }); // ⇧1 = zoomFit (lib/studio/keymap.ts)
+
+      expect(paintedScaleOf(container)).toBe(original);
+    } finally {
+      cleanup();
+    }
   });
 });

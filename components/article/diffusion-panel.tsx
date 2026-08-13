@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { sendToChannel, generateCaptionForArticle } from "@/lib/actions/diffusion-actions";
-import { SOCIAL_CHANNELS } from "@/lib/diffusion/channels";
+import { CHANNEL_AVAILABLE } from "@/lib/diffusion/channel-availability";
 import type { ChannelDiffusionState } from "@/lib/queries/diffusion";
 
 export type DiffusionDistributionView = {
@@ -155,7 +155,7 @@ function DiffusionChannelCard({
   const reason = computeSendDisabledReason({
     isPublished, channelEnabled: true, r2Configured, canSend, channelLabel: label,
     alreadySent: view.kind === "sent",
-    channelAvailable: SOCIAL_CHANNELS[channel].available,
+    channelAvailable: CHANNEL_AVAILABLE[channel],
   });
 
   function handleSend() {
