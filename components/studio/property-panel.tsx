@@ -37,7 +37,13 @@ import { ColorPicker } from "./color-picker";
 import { ImageAssetPicker, FontAssetPicker, pickImageAsset, pickFont } from "./asset-picker";
 import { AlignRow, GeometryStrip } from "./geometry-strip";
 import { alignParticipants } from "@/lib/studio/align";
-import { FieldRow, NumberField, SelectField, useCommitBuffer, type Patch } from "./property-fields";
+import { FieldRow, NumberField, SelectField, SliderField, useCommitBuffer, type Patch } from "./property-fields";
+// Chantier C, Tâche 5 — `opacityToPercent`/`percentToOpacity` (lib/studio/field-scrub.ts, Tâche 2) :
+// le curseur d'opacité de CHAQUE section « Apparence » ci-dessous travaille en POURCENTS affichés
+// (0–100), jamais en fraction brute (0–1) — plus lisible pour un designer qu'« opacité 0.42 ». Ces
+// deux fonctions sont le SEUL point de conversion ; aucune arithmétique de pourcentage n'est
+// recopiée à la main dans les quatre appels ci-dessous.
+import { opacityToPercent, percentToOpacity } from "@/lib/studio/field-scrub";
 
 // components/studio/property-panel.tsx — Tâche 8 : un formulaire PAR TYPE de calque, couvrant tous
 // les champs que l'union Layer autorise (spec Tâche 8). Deux principes traversent tout ce fichier :
@@ -268,6 +274,33 @@ function SwitchField({
   );
 }
 
+// Chantier C, Tâche 5 — LE CURSEUR D'OPACITÉ, dans chaque section « Apparence » (texte/image/forme/
+// QR). `layer.opacity` (`z.number().min(0).max(1).optional()`, lib/studio/scene.ts) portait déjà un
+// contrôle NUMÉRIQUE brut (0–1, `dataField="opacity"`) dans la bande de géométrie ÉPINGLÉE
+// (geometry-strip.tsx, à côté de X/Y/largeur/hauteur/rotation) depuis la Tâche 6 (U1) — la propriété
+// n'était donc pas *inatteignable*. Ce curseur-ci n'est PAS un doublon inutile pour autant : il
+// diffère sur les deux points que ce chantier corrige précisément —
+//   1. il affiche et édite un POURCENTAGE (0–100, `opacityToPercent`/`percentToOpacity`), l'unité que
+//      lit un designer, plutôt que la fraction brute (0–1) de la bande épinglée ;
+//   2. surtout, il respecte le §0 : à 100 %, `patch({ opacity: undefined })` efface la clé plutôt que
+//      d'écrire `1` — un calque jamais touché ou ramené à pleine opacité RESTE sans `opacity` dans la
+//      scène sérialisée, identique à avant que cette tâche n'existe (voir tests/studio-slider-field.test.ts,
+//      « round-trip 100 % »). La bande épinglée, elle, écrit TOUJOURS une valeur bornée (jamais
+//      `undefined`) — un comportement PRÉEXISTANT, hors périmètre de cette tâche (le brief ne demande
+//      de convertir QUE « Flou » et « Interligne », et la bande épinglée n'apparaît pas dans la liste
+//      des fichiers à modifier) : les deux contrôles coexistent donc, chacun avec sa sémantique
+//      d'écriture propre, plutôt que d'unifier les deux dans cette tâche.
+function OpacityField({ layer, patch }: { layer: Layer; patch: Patch }) {
+  return (
+    <SliderField
+      label="Opacité" dataField="opacity"
+      value={opacityToPercent(layer.opacity ?? 1)} min={0} max={100} step={1}
+      format={(v) => `${v} %`}
+      onCommit={(pct) => patch({ opacity: pct >= 100 ? undefined : percentToOpacity(pct) })}
+    />
+  );
+}
+
 // Tâche 6 (U1, spec §6) : chaque section de champs restante (Texte/Police/Apparence/Ombre/Contour
 // pour un texte ; Source/Apparence pour une image ; Remplissage/Forme/Bordure pour une forme ; QR
 // code) devient REPLIABLE — seule « Cadre » a quitté ce mécanisme : ses six champs vivent désormais
@@ -399,14 +432,22 @@ function TextFields({
 
       {section("apparence", "Apparence", (
         <>
+          <OpacityField layer={layer} patch={patch} />
           <ColorField label="Couleur" value={layer.color} context={context} onCommit={(v) => patch({ color: v })} />
           <div className="grid grid-cols-2 gap-2">
             <SelectField label="Alignement" value={layer.align} options={ALIGN_OPTIONS} onCommit={(v) => patch({ align: v })} />
             <SelectField label="Alignement vertical" value={layer.vAlign} options={VALIGN_OPTIONS} onCommit={(v) => patch({ vAlign: v })} />
           </div>
+          {/* Interligne : `min` de la scène (0.1, lib/studio/scene.ts) INCHANGÉ — seul le contrôle
+              devient un combo curseur+numérique (Chantier C, Tâche 5). `max=3` est un plafond de
+              CURSEUR seulement (voir le commentaire de `SliderField` sur `boundedFrom` : la frappe
+              numérique passe par le MÊME chemin d'arrondi que le curseur, donc une valeur tapée
+              au-delà de 3 serait, elle aussi, RAMENÉE à 3 — accepté ici : un interligne de plus de 3×
+              la taille de police n'a pas de cas d'usage identifié, et §0 ne porte que sur
+              min/l'écriture d'`opacity`, jamais sur ce plafond d'affichage). */}
           <div className="grid grid-cols-2 gap-2">
-            <NumberField
-              label="Interligne" value={layer.lineHeight} step={0.1} min={0.1}
+            <SliderField
+              label="Interligne" dataField="line-height" value={layer.lineHeight} step={0.1} min={0.1} max={3}
               onCommit={(v) => patch({ lineHeight: Math.max(0.1, v) })}
             />
             <NumberField label="Espacement lettres" value={layer.letterSpacing ?? 0} onCommit={(v) => patch({ letterSpacing: v || undefined })} />
@@ -430,11 +471,20 @@ function TextFields({
           />
           {layer.shadow && (
             <>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <NumberField label="X" value={layer.shadow.x} onCommit={(v) => patch({ shadow: { ...layer.shadow, x: v } })} />
                 <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
-                <NumberField label="Flou" value={layer.shadow.blur} min={0} onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })} />
               </div>
+              {/* Flou d'ombre : `min=0` INCHANGÉ (borne du schéma). `max=100` n'est qu'un plafond de
+                  CURSEUR — voir le commentaire de `SliderField`#`boundedFrom` : la frappe numérique
+                  passe par le MÊME chemin d'arrondi, donc une valeur tapée au-delà de 100 serait elle
+                  aussi ramenée à 100. Accepté ici (Chantier C, Tâche 5) : un flou de plus de 100px sur
+                  un texte n'a pas de cas d'usage identifié, et déplace le curseur hors de la plage
+                  utile du bloc-cousin (X/Y typiquement à un chiffre ou deux). */}
+              <SliderField
+                label="Flou" dataField="shadow-blur" value={layer.shadow.blur} min={0} max={100}
+                onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })}
+              />
               <ColorField
                 label="Couleur de l'ombre" value={layer.shadow.color} context={context}
                 onCommit={(v) => patch({ shadow: { ...layer.shadow, color: v } })}
@@ -573,6 +623,7 @@ function ImageFields({
       </TypeSection>
 
       <TypeSection title="Apparence" sectionId="apparence" layerType="image" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+        <OpacityField layer={layer} patch={patch} />
         <SelectField
           label="Ajustement"
           value={layer.fit}
@@ -658,6 +709,11 @@ function ShapeFields({
   return (
     <>
       <TypeSection title="Remplissage" sectionId="remplissage" layerType="shape" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+        {/* Une forme n'a pas de section « Apparence » à elle (Remplissage/Forme/Bordure/Ombre couvrent
+            déjà tout son aspect visuel) — le curseur d'opacité rejoint donc « Remplissage », la
+            section la plus proche de ce qu'« Apparence » nomme chez un texte ou une image (voir le
+            commentaire d'en-tête d'`OpacityField`). */}
+        <OpacityField layer={layer} patch={patch} />
         <Tabs
           value={isGradient ? "gradient" : "solid"}
           onValueChange={(v) => {
@@ -807,11 +863,16 @@ function ShapeFields({
         )}
         {supportsShadow(layer.shape) && layer.shadow && (
           <>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <NumberField label="X" value={layer.shadow.x} onCommit={(v) => patch({ shadow: { ...layer.shadow, x: v } })} />
               <NumberField label="Y" value={layer.shadow.y} onCommit={(v) => patch({ shadow: { ...layer.shadow, y: v } })} />
-              <NumberField label="Flou" value={layer.shadow.blur} min={0} onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })} />
             </div>
+            {/* Même plafond de curseur (100) et même raisonnement que le « Flou » d'ombre d'un texte
+                — voir son commentaire (section « Ombre » de `TextFields` ci-dessus). */}
+            <SliderField
+              label="Flou" dataField="shadow-blur" value={layer.shadow.blur} min={0} max={100}
+              onCommit={(v) => patch({ shadow: { ...layer.shadow, blur: Math.max(0, v) } })}
+            />
             <ColorField
               label="Couleur de l'ombre" value={layer.shadow.color} context={context}
               onCommit={(v) => patch({ shadow: { ...layer.shadow, color: v } })}
@@ -839,6 +900,10 @@ function QrFields({
   const urlRows = pickerRowsFor(context, "url");
   return (
     <TypeSection title="QR code" sectionId="qrcode" layerType="qr" sectionsOpen={sectionsOpen} onToggleSection={onToggleSection}>
+      {/* Un calque QR ne porte qu'UNE section — le curseur d'opacité y rejoint donc les autres
+          réglages visuels plutôt que d'ouvrir une section « Apparence » à lui seul (hors périmètre de
+          cette tâche : voir le commentaire d'en-tête d'`OpacityField`). */}
+      <OpacityField layer={layer} patch={patch} />
       <SelectField
         label="Emplacement (jeton URL)"
         value={layer.slot}

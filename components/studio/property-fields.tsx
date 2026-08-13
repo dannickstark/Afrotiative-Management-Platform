@@ -4,11 +4,16 @@ import { useEffect, useRef, useState, type HTMLAttributes, type KeyboardEvent, t
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { cn } from "@/lib/utils";
 // Chantier C, Tâche 3 : `scrubValue`/`ScrubModifier` (Tâche 2, lib/studio/field-scrub.ts) sont les
 // SEULES maths de balayage — ce fichier ne recalcule rien, il relaie `dxPx`/Maj/Alt bruts d'un VRAI
 // `PointerEvent` DOM à la fonction pure et affiche son résultat dans le tampon local existant.
-import { scrubValue, type ScrubModifier } from "@/lib/studio/field-scrub";
+// Tâche 5 : `sliderValue`/`valueToFraction` sont, de la même façon, les SEULES maths de curseur borné
+// — `SliderField` (plus bas) ne recalcule jamais lui-même un arrondi au step ni un clamp min/max, il
+// les demande à ces deux fonctions pures pour que le résultat COMMITTÉ soit indépendant de l'arrondi
+// interne (potentiellement différent) du composant Base UI sous-jacent.
+import { scrubValue, sliderValue, valueToFraction, type ScrubModifier } from "@/lib/studio/field-scrub";
 
 // components/studio/property-fields.tsx — Correctif revue finale (Minor) : `FieldRow`,
 // `useCommitBuffer` et `NumberField` vivaient dans property-panel.tsx, importées EN RETOUR par
@@ -203,6 +208,126 @@ export function NumberField({
           else if (e.key === "Escape") { setLocal(strValue); setEditing(false); e.currentTarget.blur(); }
         }}
       />
+    </FieldRow>
+  );
+}
+
+// Chantier C, Tâche 5 — `SliderField` : un curseur Base UI (components/ui/slider.tsx) COUPLÉ à un
+// `<input>` numérique synchronisé, sur le modèle de `NumberField` ci-dessus (même tampon local via
+// `useCommitBuffer`, même résolution au blur/Entrée, même Échap qui annule) — pour un champ dont les
+// bornes min/max ont un sens VISUEL (opacité, flou, interligne…), là où `NumberField` reste préférable
+// pour un champ non borné (X, Y…) ou dont le glisser-étiquette suffit.
+//
+// UNE SEULE entrée d'historique par glisser (§0, mêmes enjeux que le glisser-étiquette de
+// `NumberField`) : Base UI expose DEUX callbacks sur `Slider.Root` — `onValueChange` (tire à CHAQUE
+// `pointermove` pendant le glisser, purement local ici) et `onValueCommitted` (tire UNE fois, au
+// relâchement — vérifié dans node_modules/@base-ui/react/slider/control/SliderControl.js :
+// `handleTouchEnd` n'appelle `onValueCommitted` qu'UNE fois, avec la DERNIÈRE valeur retenue pendant
+// le glisser). `onCommit` (la prop de CE composant, qui pousse une entrée d'historique via
+// `patch`/`setLayerProp`) n'est donc jamais câblé sur `onValueChange` — seulement sur
+// `onValueCommitted`, exactement comme `NumberField` ne committe jamais pendant `onLabelPointerMove`.
+//
+// La valeur COMMITTÉE ne fait jamais confiance à l'arrondi interne de Base UI tel quel : elle repasse
+// par `valueToFraction` puis `sliderValue` (lib/studio/field-scrub.ts, Tâche 2) — les MÊMES fonctions
+// pures que tout futur curseur de ce dépôt utilisera, pour que deux curseurs bornés au même min/max/
+// step committent TOUJOURS la même valeur pour le même geste, sans dépendre d'un détail d'arrondi
+// propre à la librairie tierce (demi-pair vs demi-supérieur, dérive flottante…).
+export function SliderField({
+  label, value, min, max, step, onCommit, format, dataField,
+}: {
+  label: string; value: number; min: number; max: number;
+  /** Défaut 1, même défaut que `Slider.Root` (Base UI) et que `NumberField`. */
+  step?: number;
+  onCommit: (v: number) => void;
+  /** Formate la valeur affichée À CÔTÉ du curseur (ex. `v => \`${v} %\``) — l'`<input>` numérique,
+   * lui, reste TOUJOURS un nombre nu : c'est la SAISIE précise, jamais une chaîne mise en forme qu'il
+   * faudrait reparser. */
+  format?: (v: number) => string;
+  dataField?: string;
+}) {
+  const strValue = Number.isFinite(value) ? String(value) : "0";
+  const { local, setLocal, editing, setEditing } = useCommitBuffer(strValue);
+  const displayValue = Number.isFinite(Number(local)) ? Number(local) : value;
+
+  // Même géométrie de bornage que `sliderValue` (lib/studio/field-scrub.ts) : une valeur BRUTE
+  // (curseur OU frappe numérique) est d'abord ramenée à une fraction [0,1] de la plage, puis
+  // re-projetée dans les unités du champ AU STEP DEMANDÉ — un seul chemin d'arrondi pour les deux
+  // sources de commit (glisser ET frappe), jamais deux implémentations qui pourraient diverger.
+  function boundedFrom(raw: number): number {
+    return sliderValue(valueToFraction(raw, min, max), { min, max, step });
+  }
+
+  function commit(raw: number) {
+    setEditing(false);
+    const bounded = boundedFrom(raw);
+    if (bounded !== value) onCommit(bounded);
+    else setLocal(strValue);
+  }
+
+  function commitFromInput() {
+    const n = Number(local);
+    if (!Number.isFinite(n)) { setEditing(false); setLocal(strValue); return; }
+    commit(n);
+  }
+
+  const sliderTestId = dataField ? `slider-${dataField}` : undefined;
+  const inputTestId = dataField ? `slider-input-${dataField}` : undefined;
+
+  return (
+    <FieldRow
+      label={label}
+      action={format ? (
+        <span className="text-xs tabular-nums text-muted-foreground" data-testid={dataField ? `slider-format-${dataField}` : undefined}>
+          {format(displayValue)}
+        </span>
+      ) : undefined}
+    >
+      <div className="flex items-center gap-2">
+        <Slider
+          min={min}
+          max={max}
+          step={step}
+          value={displayValue}
+          data-field={dataField}
+          data-testid={sliderTestId}
+          // Live pendant le glisser : affichage local UNIQUEMENT (même rôle que
+          // `onLabelPointerMove`/`setLocal` de `NumberField`) — jamais `onCommit` ici.
+          onValueChange={(v) => { setEditing(true); setLocal(String(v as number)); }}
+          // UNE fois, au relâchement — voir le commentaire d'en-tête de `SliderField` : c'est le SEUL
+          // endroit où un glisser peut déclencher `onCommit`.
+          onValueCommitted={(v) => commit(v as number)}
+        />
+        <Input
+          type="number"
+          inputMode="decimal"
+          step={step}
+          min={min}
+          className="w-16 shrink-0"
+          value={local}
+          data-field={dataField}
+          data-testid={inputTestId}
+          onFocus={() => setEditing(true)}
+          // `onInput`, PAS `onChange` — même choix que color-picker.tsx#ColorField (le champ hex) et
+          // pour la MÊME raison, vérifiée dans ce fichier plutôt que supposée : le `ChangeEventPlugin`
+          // de React (node_modules/react-dom/cjs/react-dom-client.development.js) décide, à l'import
+          // de `react-dom/client`, s'il peut s'appuyer sur l'événement natif "input"/"change"
+          // (`isInputEventSupported`, calculé UNE FOIS via `canUseDOM`) — et tests/dom-harness.ts
+          // importe `react-dom/client` en TÊTE de fichier, donc AVANT que `installDom()` ne pose
+          // `window`/`document`. `isInputEventSupported` reste ainsi FAUX pour tout le process de
+          // test, et React retombe alors sur le chemin de repli IE9 (`handleEventsForInputEventPolyfill`,
+          // qui appelle `attachEvent` — une API IE, absente de jsdom) : AUCUN `onChange` React ne se
+          // déclenche plus jamais sur un `<input>` texte/nombre sous ce harnais, quel que soit
+          // l'événement DOM synthétisé. `onInput`, lui, est un simple relais du VRAI événement natif
+          // "input" — jamais passé par ce mécanisme de repli — et reste donc fiable ici (vérifié en
+          // instrumentant `react-dom-client.development.js`, voir tests/studio-slider-field.test.ts).
+          onInput={(e) => setLocal(e.currentTarget.value)}
+          onBlur={commitFromInput}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            else if (e.key === "Escape") { setLocal(strValue); setEditing(false); e.currentTarget.blur(); }
+          }}
+        />
+      </div>
     </FieldRow>
   );
 }
