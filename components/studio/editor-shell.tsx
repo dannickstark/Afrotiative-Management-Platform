@@ -958,13 +958,19 @@ function EditorShellInner({
                 consommateur avant cette tâche, voir le commentaire de canvas-chrome.tsx).
 
                 Chantier A Tâche 3 (spec §2/§3) puis revue de branche (fix wave) : `bg-muted/20` ->
-                `bg-muted/40` -> `bg-neutral-100 dark:bg-neutral-900` — `bg-muted/40` restait un TOKEN,
+                `bg-muted/40` -> un neutre EN DUR (clair/sombre) — `bg-muted/40` restait un TOKEN,
                 mais à ~1.4% d'écart du blanc pur il ne se distinguait pas franchement des panneaux
-                blancs qui l'entourent (spec : « kill the white void »). `bg-neutral-100
-                dark:bg-neutral-900` donne un fond d'atelier NETTEMENT visible — gris perceptible en
-                clair, presque noir en sombre — pour que l'artboard (son propre box-shadow, canvas.tsx,
-                inchangé) se lise comme une SURFACE posée sur un espace de travail plutôt que comme un
-                rectangle flottant sur un fond resté visuellement proche du blanc.
+                blancs qui l'entourent (spec : « kill the white void »). Ce neutre en dur donnait un
+                fond d'atelier NETTEMENT visible — gris perceptible en clair, presque noir en sombre —
+                pour que l'artboard (son propre box-shadow, canvas.tsx, inchangé) se lise comme une
+                SURFACE posée sur un espace de travail plutôt que comme un rectangle flottant sur un
+                fond resté visuellement proche du blanc.
+
+                Chantier E Tâche 1 : ce neutre EN DUR (clair/sombre) est remplacé par le jeton
+                `--canvas-backdrop` (globals.css, blocs `:root` et `.dark`) — même intention visuelle
+                (fond d'atelier nettement visible), mais un neutre éditorial CHAUD (teinte ~75) au lieu
+                du gris froid utilitaire, et pilotable comme n'importe quel autre jeton de thème plutôt
+                qu'une paire de classes Tailwind figées.
 
                 Chantier A Tâche 4 (spec §2/§9) : `min-w-[240px]` hors `full` — le brief nomme
                 explicitement « canvas full-bleed with a minimum width » pour `all-drawers` ; la même
@@ -975,7 +981,7 @@ function EditorShellInner({
               ref={canvasWrapRef}
               data-testid="canvas-backdrop"
               className={cn(
-                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-neutral-100 p-4 dark:bg-neutral-900",
+                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-[var(--canvas-backdrop)] p-4",
                 layout !== "full" && "min-w-[240px]",
               )}
               // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur, posée IMPÉRATIVEMENT en effet —

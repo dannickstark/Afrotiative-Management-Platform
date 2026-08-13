@@ -96,6 +96,9 @@
   --sidebar-ring: oklch(0.737 0.021 106.9);
   --background: oklch(1 0 0);
   --foreground: oklch(0.153 0.006 107.1);
+  /* Chantier E Tâche 1 : fond du canevas — un neutre éditorial CHAUD (teinte ~75, chroma légère),
+     distinct du gris froid utilitaire, pour lire comme une surface d'atelier plutôt qu'un utilitaire UI. */
+  --canvas-backdrop: oklch(0.965 0.008 75);
 }
 
 .dark {
@@ -130,6 +133,9 @@
   --sidebar-accent-foreground: oklch(0.988 0.003 106.5);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.58 0.031 107.3);
+  /* Chantier E Tâche 1 : pendant sombre — même teinte chaude ~75, luminosité et chroma abaissées
+     pour un fond d'atelier sombre (et non un noir/gris neutre froid). */
+  --canvas-backdrop: oklch(0.205 0.006 75);
 }
 
 @layer base {
