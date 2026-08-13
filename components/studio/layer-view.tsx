@@ -1,9 +1,10 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { Frame, Layer } from "@/lib/studio/scene";
 import { textStyleFor, gradientCss } from "@/lib/studio/element";
 import { layerBorder, layerBoxShadow, layerSupportsRotation, shapeCssFor } from "@/lib/studio/shapes";
+import { imageCss } from "@/lib/studio/image-css";
 import { resolveLayerColorsForDisplay } from "@/lib/studio/values";
 import { SAMPLE_VALUES } from "@/lib/studio/sample-values";
 import { SELECTION, LOCKED_OUTLINE } from "@/lib/studio/overlay-theme";
@@ -82,20 +83,80 @@ function Placeholder({ label }: { label: string }) {
   );
 }
 
+// La taille INTRINSÈQUE d'un asset, lue au runtime (Properties Pro P1, Tâche 4) — SEUL endroit du
+// composant qui a besoin de connaître la vraie taille de l'image : `imageCss` (image-css.ts) est un
+// module PUR, zéro import, qui ne reçoit jamais l'image elle-même (voir son commentaire de tête) et
+// renvoie donc `backgroundSize: "auto"` pour `sizing:"tile"`, quel que soit `scale`. `"auto"` est
+// EXACT pour `scale === 1` (le navigateur peint alors l'image à sa taille intrinsèque et la répète —
+// rien à corriger), mais FAUX pour `scale !== 1` : la mosaïque doit être peinte à `intrinsèque ×
+// scale`, exactement ce que fait le moteur d'export (element.ts#effectiveImage, cas "tile") pour la
+// parité WYSIWYG (§0). Ce hook ne se déclenche donc QUE dans ce cas précis (`needsNatural`) — pas de
+// chargement d'image superflu pour cover/contain/stretch/custom/tile-scale-1, qui n'en ont pas besoin.
+function useNaturalSize(src: string | undefined, active: boolean): { w: number; h: number } | null {
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    if (!active || !src) {
+      setSize(null);
+      return;
+    }
+    let cancelled = false;
+    // `document.createElement("img")` plutôt que `new Image()` (équivalents dans un vrai navigateur) :
+    // le harnais DOM des tests (tests/dom-harness.ts) installe `document` explicitement mais PAS le
+    // constructeur global `Image` (absent de sa liste DOM_GLOBAL_KEYS) — cette forme reste donc
+    // exerçable sous jsdom sans étendre le harnais pour un seul appelant.
+    const probe = document.createElement("img");
+    probe.onload = () => {
+      if (!cancelled) setSize({ w: probe.naturalWidth, h: probe.naturalHeight });
+    };
+    probe.src = src;
+    return () => {
+      cancelled = true;
+    };
+  }, [src, active]);
+  return size;
+}
+
 function ImageContent({ layer, image }: { layer: Extract<Layer, { type: "image" }>; image?: string }) {
   // Un jeton ({{slot}}) n'a de valeur qu'au rendu réel (article/valeurs saisies) — l'éditeur n'en
   // a jamais, par construction (spec §2 : « l'éditeur n'a pas les valeurs de jeton »). Donc PAS de
   // tentative de résolution ici, un espace réservé nommé systématiquement.
+  //
+  // CHEMIN UNIQUE (aligné sur le verdict soupape de la Tâche 3, element.ts#imageNode) : un calque
+  // IMAGE est un `<div>` de FOND, PLUS un `<img objectFit>` — c'est ce qui rend l'aperçu et l'export
+  // d'accord PIXEL POUR PIXEL sur `sizing`/`focal`/`tile`/`customSize` (§0 : désaccord WYSIWYG interdit).
+  // `imageCss` (image-css.ts, Tâche 2) est LA MÊME fonction pure que le moteur consulte pour
+  // `backgroundSize`/`backgroundRepeat` ; seule la variante de POSITION diverge — voir le commentaire
+  // de tête d'image-css.ts : `%` (ici, correct dans le NAVIGATEUR) contre pixels calculés côté Satori
+  // (dont le `%` de `background-position` est bogué, spike Tâche 1). Les deux formules sont
+  // équivalentes en principe ; ce sont les DEUX SEULS points de divergence volontaires de tout ce
+  // fichier, documentés ici pour qu'un futur lecteur ne les prenne pas pour un oubli de parité.
   if (layer.source.kind === "slot") return <Placeholder label={`{{${layer.source.slot}}}`} />;
   const src = layer.source.kind === "url" ? layer.source.url : image;
   if (!src) return <Placeholder label={layer.name || "Image"} />;
+
+  const sizing = layer.sizing ?? (layer.fit === "cover" ? "cover" : "contain");
+  const scale = layer.tile?.scale ?? 1;
+  const needsNaturalSize = sizing === "tile" && scale !== 1;
+  const natural = useNaturalSize(src, needsNaturalSize);
+
+  const css = imageCss(layer);
+  // Voir useNaturalSize ci-dessus : LE SEUL cas où `imageCss` ne suffit pas — `"auto"` (sa réponse
+  // pour toute mosaïque) reste correct pour `scale === 1`, donc `natural` n'est utilisé QUE quand
+  // `needsNaturalSize` est vrai ET que le chargement a déjà résolu (sinon on garde "auto" le temps
+  // d'un rendu, plutôt qu'un flash à 0×0 px).
+  const backgroundSize = needsNaturalSize && natural
+    ? `${natural.w * scale}px ${natural.h * scale}px`
+    : css.backgroundSize;
+
   return (
-    <img
-      src={src}
-      alt=""
+    <div
+      data-testid="image-content"
       style={{
         width: "100%", height: "100%",
-        objectFit: layer.fit,
+        backgroundImage: `url(${src})`,
+        backgroundSize,
+        backgroundRepeat: css.backgroundRepeat,
+        backgroundPosition: css.backgroundPosition,
         // `imageLayer.radius`, un NOMBRE (lib/studio/scene.ts:46) — et NON son homonyme
         // `shapeLayer.radius`, qui est `number | string` depuis l'arbitrage C (« 50% » pour l'ellipse).
         // Deux champs de même nom et de types différents ; ce qui les tient à l'écart ici est le
