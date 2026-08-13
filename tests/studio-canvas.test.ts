@@ -165,8 +165,8 @@ describe("Canvas — sélection et verrouillage", () => {
     // Corollaire du test précédent : « pas de poignées » ne doit PAS vouloir dire « sélection
     // invisible » — les deux calques gardent leur contour bleu.
     const html = render(makeScene(), ["bg", "title"]);
-    expect(layerNode(html, "bg")).toContain("outline:2px solid #2563eb");
-    expect(layerNode(html, "title")).toContain("outline:2px solid #2563eb");
+    expect(layerNode(html, "bg")).toContain("outline:2px solid #2f5fe0");
+    expect(layerNode(html, "title")).toContain("outline:2px solid #2f5fe0");
   });
 
   it("un calque verrouillé est marqué visuellement ET non-interactif (pointer-events: none)", () => {
@@ -250,7 +250,7 @@ describe("Canvas — poignées et contour de sélection gardent une taille ÉCRA
     expect(eHandle).toContain("margin-left:-4px");
     expect(eHandle).toContain("margin-top:-4px");
     expect(styleAttr(html, 'data-handle="rotate"')).toContain("top:-24px");
-    expect(styleAttr(html, 'data-layer-id="title"')).toContain("outline:2px solid #2563eb");
+    expect(styleAttr(html, 'data-layer-id="title"')).toContain("outline:2px solid #2f5fe0");
   });
 
   // La régression Lot 2 : ces longueurs sont en pixels GABARIT à l'intérieur du conteneur
@@ -276,7 +276,7 @@ describe("Canvas — poignées et contour de sélection gardent une taille ÉCRA
     expect(rotateHandle).toContain("margin-left:-8px");
 
     const titleLayer = styleAttr(html, 'data-layer-id="title"');
-    expect(titleLayer).toContain("outline:4px solid #2563eb"); // 2 / 0.5
+    expect(titleLayer).toContain("outline:4px solid #2f5fe0"); // 2 / 0.5
     expect(titleLayer).toContain("outline-offset:2px"); // 1 / 0.5
   });
 });

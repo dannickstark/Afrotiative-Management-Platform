@@ -44,6 +44,15 @@ describe("chantier E · overlay-theme (source unique des couleurs de surcouches)
     }
     expect(chrome.includes("rgba(245,158,11")).toBe(false); // migré vers overlay-theme
   });
+
+  it("aucune couleur de surcouche EN DUR ne subsiste dans layer-view (revue de branche : l'outline de sélection et la bordure verrouillée manquaient à l'appel)", () => {
+    const layerView = readFileSync(join(ROOT, "components/studio/layer-view.tsx"), "utf8");
+    // #2563eb (ancien bleu de l'outline de sélection) et #9ca3af (bordure verrouillée) : les deux
+    // sourcent désormais leur couleur depuis overlay-theme (SELECTION / LOCKED_OUTLINE) — voir §0.
+    for (const hex of ["#2563eb", "#9ca3af"]) {
+      expect(layerView.includes(`"${hex}"`) || layerView.includes(`'${hex}'`)).toBe(false);
+    }
+  });
 });
 
 // ── Chantier E Tâche 3 (spec « états vides du studio via EmptyState ») ────────────────────────────

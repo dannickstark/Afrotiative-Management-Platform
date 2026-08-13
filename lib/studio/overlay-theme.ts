@@ -10,6 +10,10 @@ export const OVERLAY = Object.freeze({
   safeTint: "rgba(245,158,11,0.14)", // ambre translucide (zone sûre)
   safeLine: "1px dashed rgba(245,158,11,0.85)",
   safeLabelFg: "rgba(245,158,11,0.95)", // même ambre, opacité pleine pour le texte des étiquettes de bande
+  lockedOutline: "#9ca3af",    // gris — bordure d'un calque VERROUILLÉ, distinct des 4 rôles actifs
+                                // ci-dessus (sélection/poignée/guide/liaison) : un calque verrouillé
+                                // n'est ni sélectionné ni en cours de manipulation, sa surcouche doit
+                                // rester visuellement neutre.
 });
 
 export const SELECTION = OVERLAY.selection;
@@ -19,3 +23,4 @@ export const BINDING = OVERLAY.binding;
 export const SAFE_TINT = OVERLAY.safeTint;
 export const SAFE_LINE = OVERLAY.safeLine;
 export const SAFE_LABEL_FG = OVERLAY.safeLabelFg;
+export const LOCKED_OUTLINE = OVERLAY.lockedOutline;
