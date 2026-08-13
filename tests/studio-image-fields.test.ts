@@ -11,17 +11,92 @@
 // Modelé sur tests/studio-layer-view.test.ts : `installDom()` + `mount()` (harnais U0), un calque
 // monté via `LayerView`, et une lecture du style RÉELLEMENT posé par React sur le DOM jsdom — jamais
 // une inspection de props React.
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
 import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { installDom, mount } from "./dom-harness";
-import type { Layer } from "@/lib/studio/scene";
+import { installDom, mount, click, flush, pointer } from "./dom-harness";
+import { parseScene, type Layer, type Scene } from "@/lib/studio/scene";
 import { LayerView } from "@/components/studio/layer-view";
+import { editorReducer, initEditorState, type EditorAction, type EditorState } from "@/lib/studio/editor-state";
+
+// Properties Pro P1, Tâche 5 — l'INSPECTEUR (ImageFields, property-panel.tsx). Même sonde
+// `popoverEffectsLive` que tests/studio-interactions.test.ts (voir son commentaire d'en-tête pour le
+// détail complet) : le sélecteur « Ajustement » est un VRAI `<Select>` Base UI (components/ui/select.tsx),
+// dont le popup se portale dans `document.body` UNIQUEMENT une fois ouvert, via un effet
+// (`@base-ui/utils/useIsoLayoutEffect`) qui se fige en no-op pour tout le processus `bun test` dès
+// qu'un AUTRE fichier de test a rendu un composant touchant `Button`/`Select` SANS jamais poser de DOM
+// avant celui-ci. Sonder ICI (plutôt que faire confiance à l'ordre d'exécution des fichiers, qui n'est
+// ni alphabétique ni celui de la ligne de commande) et sauter les tests d'interaction réelle si le
+// popup ne peut pas s'ouvrir dans CE process — jamais un faux vert qui ne prouverait plus rien.
+//
+// `PropertyPanel` (comme `layer-view.tsx#LayerView` juste au-dessus) importe transitivement
+// `components/ui/select.tsx`/`components/ui/button.tsx` (Base UI) : un import STATIQUE ici, avant la
+// sonde, évaluerait ces modules — donc figerait `useIsoLayoutEffect` — AVANT que `installDom()` n'ait
+// jamais tourné, empoisonnant la sonde par CE fichier lui-même plutôt que par un voisin. Import
+// DYNAMIQUE dans `beforeAll` (après `installDom()`), même recette que
+// tests/studio-interactions.test.ts#PropertyPanelC.
+let popoverEffectsLive = false;
+{
+  const probeTeardown = installDom();
+  try {
+    const { useIsoLayoutEffect } = await import("@base-ui/utils/useIsoLayoutEffect");
+    let ran = false;
+    function Probe() {
+      useIsoLayoutEffect(() => { ran = true; }, []);
+      return null;
+    }
+    const { unmount } = await mount(React.createElement(Probe));
+    unmount();
+    popoverEffectsLive = ran;
+  } finally {
+    probeTeardown();
+  }
+}
+if (!popoverEffectsLive) {
+  console.warn(
+    "\n[tests/studio-image-fields.test.ts] Inspecteur image (sélecteur Ajustement) : les tests " +
+    "d'interaction RÉELLE sont SAUTÉS — voir tests/studio-interactions.test.ts pour l'explication " +
+    "complète (useIsoLayoutEffect figé en no-op par un autre fichier). Relancez avec `bun test " +
+    "--isolate` pour les exécuter.\n",
+  );
+}
+
+// Globals que jsdom 30 (sans `pretendToBeVisual`) ne fournit pas et que `installDom()` n'installe
+// pas — mêmes globals, même raison, que tests/studio-inspector-integration.test.ts#installExtraGlobals :
+// `PropertyPanel` monte un `ColorField` (voile de l'image) qui embarque un `<ColorPicker>` (Popover
+// floating-ui-react), qui fait `value instanceof Element` (le global BARE) et planifie un calcul de
+// positionnement via `requestAnimationFrame`/`getComputedStyle` DÈS le montage, même popup fermé.
+function installExtraGlobals(): () => void {
+  const g = globalThis as unknown as Record<string, unknown> & { window: Record<string, unknown> };
+  const snapshot = new Map<string, { had: boolean; value: unknown }>();
+  const set = (key: string, value: unknown) => {
+    snapshot.set(key, { had: Object.prototype.hasOwnProperty.call(g, key), value: g[key] });
+    g[key] = value;
+  };
+
+  set("Element", g.window.Element);
+  set("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 0) as unknown as number);
+  set("cancelAnimationFrame", (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>));
+  set("getComputedStyle", (g.window.getComputedStyle as (...a: unknown[]) => unknown).bind(g.window));
+
+  return () => {
+    for (const [key, prior] of snapshot) {
+      if (prior.had) g[key] = prior.value;
+      else delete g[key];
+    }
+  };
+}
 
 let teardownDom: () => void;
-beforeAll(() => { teardownDom = installDom(); });
-afterAll(() => { teardownDom(); });
+let teardownExtraGlobals: () => void;
+let PropertyPanelC: typeof import("@/components/studio/property-panel").PropertyPanel;
+beforeAll(async () => {
+  teardownDom = installDom();
+  teardownExtraGlobals = installExtraGlobals();
+  ({ PropertyPanel: PropertyPanelC } = await import("@/components/studio/property-panel"));
+});
+afterAll(() => { teardownExtraGlobals(); teardownDom(); });
 
 const FRAME = { x: 0, y: 0, w: 200, h: 100 };
 const SRC = "https://x.test/photo.png";
@@ -225,4 +300,189 @@ describe("ImageContent — régression Règle des Hooks : un calque asset dont l
 
     act(() => { root.unmount(); });
   });
+});
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// Properties Pro P1, Tâche 5 — l'INSPECTEUR : le sélecteur « Ajustement » (property-panel.tsx#ImageFields)
+// écrit `sizing` (les CINQ modes du schéma, T2), et les contrôles mosaïque/perso n'apparaissent QUE
+// dans leur mode respectif. Task 6 (le sélecteur de point focal) est HORS PÉRIMÈTRE ici.
+//
+// Monte le VRAI `PropertyPanel` derrière un VRAI `editorReducer` — même recette que
+// tests/studio-interactions.test.ts#mountPropertyPanelWithReducer — pour committer à travers le VRAI
+// `setLayerProp` plutôt qu'un `onCommit` observé par introspection (spec §0 : « calling a handler
+// directly is what the five uncovered seams already fail to catch »).
+function sceneWithImage(layer: Extract<Layer, { type: "image" }>): Scene {
+  return {
+    schemaVersion: 1,
+    canvas: { width: 1080, height: 1080, background: "#111111" },
+    layers: [layer],
+  };
+}
+
+function baseImageLayer(overrides: Partial<Extract<Layer, { type: "image" }>> = {}): Layer {
+  return {
+    id: "img1", name: "Image", visible: true, locked: false,
+    frame: { x: 0, y: 0, w: 300, h: 200 },
+    type: "image", source: { kind: "url", url: "https://x.test/photo.png" }, fit: "cover",
+    ...overrides,
+  } as Layer;
+}
+
+async function mountImageFields(layer: Layer) {
+  const initial: EditorState = initEditorState(sceneWithImage(layer as Extract<Layer, { type: "image" }>));
+  initial.selectedIds = ["img1"];
+  const box: { state: EditorState; actions: EditorAction[] } = { state: initial, actions: [] };
+
+  function Host() {
+    const [state, rawDispatch] = React.useReducer(editorReducer, initial);
+    box.state = state;
+    return React.createElement(PropertyPanelC, {
+      scene: state.scene,
+      selectedIds: state.selectedIds,
+      context: "social_post",
+      dispatch: (a: EditorAction) => { box.actions.push(a); rawDispatch(a); },
+    });
+  }
+
+  const { container, unmount } = await mount(React.createElement(Host));
+  return {
+    box,
+    container,
+    unmount,
+    html: () => container.innerHTML,
+    layer: () => box.state.scene.layers.find((l) => l.id === "img1") as Extract<Layer, { type: "image" }>,
+  };
+}
+
+/** Ouvre le VRAI `<Select>` « Ajustement » (ou tout sélecteur ciblé par `field`) et clique l'option
+ * dont le libellé visible est `label` — jamais un appel direct à `onCommit`. Le popup se portale dans
+ * `document.body`, jamais dans le conteneur détaché de `mount()` (même piège que
+ * tests/studio-interactions.test.ts#SelectField, voir son commentaire). */
+async function chooseOption(container: HTMLElement, field: string, label: string): Promise<void> {
+  const trigger = container.querySelector(`[data-field="${field}"]`) as HTMLElement | null;
+  if (!trigger) throw new Error(`sélecteur « ${field} » absent du DOM monté`);
+  await click(trigger);
+  await flush();
+  const options = Array.from(document.body.querySelectorAll('[role="option"]')) as HTMLElement[];
+  const option = options.find((o) => o.textContent === label);
+  if (!option) throw new Error(`option « ${label} » introuvable dans le popup « ${field} »`);
+  // Base UI (SelectItem.mjs#commitSelection) n'honore un simple "click" QUE pour l'option déjà
+  // HIGHLIGHTED (celle sous le curseur au moment de l'ouverture, ou visée par le clavier) — un clic de
+  // SOURIS sur une AUTRE option exige d'abord un "pointerdown" (qui arme `allowMouseSelectionRef`),
+  // exactement le couple d'événements qu'un vrai clic de souris navigateur envoie toujours dans cet
+  // ordre. Trouvé en instrumentant le VRAI composant (`node_modules/@base-ui/react/select/item/
+  // SelectItem.mjs`) : un `click()` seul sur une option non survolée passait la garde
+  // `isInvalidMouseClick` et ne committait RIEN — silencieusement, sans lever la moindre erreur.
+  await pointer(option, "pointerdown");
+  await click(option);
+}
+
+describe("ImageFields — le menu « Ajustement » écrit sizing ; les contrôles mosaïque/perso n'apparaissent que dans leur mode (Properties Pro P1, T5)", () => {
+  it.skipIf(!popoverEffectsLive)(
+    "état initial cover : ni les contrôles mosaïque ni les champs perso ne sont peints",
+    async () => {
+      const { html, unmount } = await mountImageFields(baseImageLayer({ sizing: "cover" }));
+      expect(html()).not.toContain('data-field="tile-scale"');
+      expect(html()).not.toContain('data-field="tile-axis"');
+      expect(html()).not.toContain('data-field="custom-w"');
+      expect(html()).not.toContain('data-field="custom-h"');
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "choisir « Mosaïque » écrit sizing:\"tile\", pose un tile PAR DÉFAUT (scale 1, both) EN UNE entrée, et peint échelle+répétition",
+    async () => {
+      const { box, container, html, layer, unmount } = await mountImageFields(baseImageLayer({ sizing: "cover" }));
+
+      await chooseOption(container, "sizing", "Mosaïque");
+
+      expect(layer().sizing).toBe("tile");
+      // `fit` (legacy) reste TEL QUEL pour un mode que `fit` ne sait pas exprimer — jamais réécrit.
+      expect(layer().fit).toBe("cover");
+      expect(layer().tile).toEqual({ scale: 1, axis: "both" });
+      // UNE SEULE entrée d'historique pour ce geste unique (§0 d'en-tête property-panel.tsx).
+      expect(box.state.past).toHaveLength(1);
+
+      expect(html()).toContain('data-field="tile-scale"');
+      expect(html()).toContain('data-field="tile-axis"');
+      expect(html()).not.toContain('data-field="custom-w"');
+
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "choisir « Taille perso » patch un customSize PAR DÉFAUT (taille du cadre) — la scène résultante passe parseScene",
+    async () => {
+      const { box, container, html, layer, unmount } = await mountImageFields(
+        baseImageLayer({ sizing: "cover", frame: { x: 0, y: 0, w: 300, h: 200 } }),
+      );
+
+      await chooseOption(container, "sizing", "Taille perso");
+
+      expect(layer().sizing).toBe("custom");
+      expect(layer().customSize).toEqual({ w: 300, h: 200 });
+      expect(box.state.past).toHaveLength(1);
+
+      expect(html()).toContain('data-field="custom-w"');
+      expect(html()).toContain('data-field="custom-h"');
+      expect(html()).not.toContain('data-field="tile-scale"');
+
+      // T3 (schéma, garde-fou) : `sizing:"custom"` SANS `customSize` est REJETÉ par `parseScene` — la
+      // scène patchée ici DOIT donc le porter pour rester valide. Un aller-retour réussi EST la preuve.
+      expect(() => parseScene(box.state.scene)).not.toThrow();
+      expect(parseScene(box.state.scene)).toEqual(box.state.scene);
+
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "un calque déjà en mode mosaïque/perso ne réécrit PAS le tile/customSize existant en choisissant à nouveau le même mode",
+    async () => {
+      // §0 (revue) : le correctif « pose un défaut si absent » ne doit PAS écraser un réglage DÉJÀ fait
+      // par le designer (ex. échelle 2, largeur 500) — seulement combler une ABSENCE.
+      const { container, layer, unmount } = await mountImageFields(baseImageLayer({
+        sizing: "contain", tile: { scale: 2, axis: "x" }, customSize: { w: 500, h: 400 },
+      }));
+
+      await chooseOption(container, "sizing", "Mosaïque");
+      expect(layer().tile).toEqual({ scale: 2, axis: "x" });
+
+      await chooseOption(container, "sizing", "Taille perso");
+      expect(layer().customSize).toEqual({ w: 500, h: 400 });
+
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "choisir « Remplir »/« Ajuster » garde `fit` cohérent (rétrocompat) ; « Étirer » laisse `fit` INCHANGÉ",
+    async () => {
+      const { container, layer, unmount } = await mountImageFields(baseImageLayer({ sizing: "contain", fit: "contain" }));
+
+      await chooseOption(container, "sizing", "Remplir");
+      expect(layer().sizing).toBe("cover");
+      expect(layer().fit).toBe("cover");
+
+      await chooseOption(container, "sizing", "Étirer");
+      expect(layer().sizing).toBe("stretch");
+      // `fit` (legacy, ignoré dès que `sizing` est présent) reste au dernier cover/contain écrit —
+      // aucun mode « stretch » n'existe dans son propre z.enum.
+      expect(layer().fit).toBe("cover");
+
+      unmount();
+    },
+  );
+
+  it.skipIf(!popoverEffectsLive)(
+    "§0 : un calque LEGACY (fit seul, aucun `sizing`) affiche la bonne valeur d'Ajustement dérivée de `fit`",
+    async () => {
+      const { container, unmount } = await mountImageFields(baseImageLayer({ fit: "contain", sizing: undefined }));
+      const trigger = container.querySelector('[data-field="sizing"]') as HTMLElement;
+      expect(trigger.textContent).toContain("Ajuster");
+      unmount();
+    },
+  );
 });
