@@ -2,10 +2,11 @@
 import { useState, useTransition, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Loader2, RefreshCw } from "lucide-react";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DataTable } from "@/components/ui/data-table";
+import { DataTableToolbar } from "@/components/ui/data-table-toolbar";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/shell/empty-state";
 import { syncTaxonomyFromWordPress, setCategoryColor } from "@/lib/actions/taxonomy-actions";
@@ -14,6 +15,10 @@ import type { Taxonomy } from "@/lib/queries/settings";
 // dans un composant "use client", sans tirer le pool `pg` dans le bundle navigateur. Voir ce
 // fichier pour le détail.
 import { DEFAULT_CATEGORY_COLOR } from "@/lib/studio/default-category-color";
+// B7: ONE column factory reused for both the "Catégories" and "Tags" instances of TaxonomyCard
+// below — see components/settings/taxonomy-columns.tsx for why Row/CategoryRow live there now
+// (moved verbatim, unchanged shapes) instead of being redefined here.
+import { taxonomyColumns, type Row, type CategoryRow } from "@/components/settings/taxonomy-columns";
 
 // Page-level view for the taxonomy mirror admin (SP2 Task 4). Owns the "Synchroniser depuis
 // WordPress" entry point and both read-only tables — the server page.tsx wrapper stays a thin
@@ -56,18 +61,11 @@ export function TaxonomyTables({ data }: { data: Taxonomy }) {
   );
 }
 
-// Common shape shared with wpTags rows (only these fields are rendered). Narrowed rather than
-// aliased to Taxonomy["categories"][number] directly: the studio's `color` column (db/schema.ts)
-// lives only on wp_categories, not wp_tags, so the full categories row type is no longer
-// structurally assignable from tags data.
-type Row = Pick<Taxonomy["categories"][number], "id" | "wpId" | "name" | "articleCount">;
-
-// Widened for categories ONLY (Task 3) — adds back the one field categories need that tags don't
-// have. Deliberately NOT folded into the shared `Row` above: doing so would re-broaden it to a
-// shape tags data can no longer structurally satisfy, reintroducing the exact divergence `Row` was
-// narrowed to fix in V1. TaxonomyCard stays generic over `Row` so the tags call site is unaffected.
-type CategoryRow = Row & { color: string | null };
-
+// B7: converted from a hand-rolled <Table> to the shared client-mode DataTable (sortable Nom/ID
+// WordPress/Articles + a global search box on Nom) — same recipe as feeds-table.tsx/runs-view.tsx.
+// `extraColumn`'s shape (header + render) is unchanged from before; taxonomyColumns (imported
+// above) is the ONE column factory reused for both this card's categories AND tags instances, so
+// the two tables can never drift into two slightly different column sets.
 function TaxonomyCard<R extends Row>({
   title, emptyLabel, rows, extraColumn,
 }: {
@@ -76,46 +74,38 @@ function TaxonomyCard<R extends Row>({
   rows: R[];
   extraColumn?: { header: string; render: (row: R) => ReactNode };
 }) {
-  const columnCount = extraColumn ? 4 : 3;
+  const [globalFilter, setGlobalFilter] = useState("");
+  const columns = taxonomyColumns<R>(extraColumn ? { id: "extra", ...extraColumn } : undefined);
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent className="px-0">
-        <div className="mx-(--card-spacing) overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Nom</TableHead>
-                <TableHead>ID WordPress</TableHead>
-                {extraColumn && <TableHead>{extraColumn.header}</TableHead>}
-                <TableHead className="text-right">Articles</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={columnCount} className="border-0 p-0">
-                    <EmptyState
-                      title={emptyLabel}
-                      hint="Synchronisez depuis WordPress pour les récupérer."
-                    />
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium">{row.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{row.wpId ?? "—"}</TableCell>
-                    {extraColumn && <TableCell>{extraColumn.render(row)}</TableCell>}
-                    <TableCell className="text-right">{row.articleCount}</TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+      <CardContent className={rows.length === 0 ? undefined : "px-0"}>
+        {rows.length === 0 ? (
+          <EmptyState
+            title={emptyLabel}
+            hint="Synchronisez depuis WordPress pour les récupérer."
+          />
+        ) : (
+          <div className="mx-(--card-spacing)">
+            <DataTable
+              columns={columns}
+              data={rows}
+              globalFilter={globalFilter}
+              onGlobalFilterChange={setGlobalFilter}
+              emptyMessage="Aucun résultat pour cette recherche."
+              toolbar={
+                <DataTableToolbar
+                  globalValue={globalFilter}
+                  onGlobalChange={setGlobalFilter}
+                  searchPlaceholder="Rechercher par nom…"
+                />
+              }
+            />
+          </div>
+        )}
       </CardContent>
     </Card>
   );
