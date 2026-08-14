@@ -256,6 +256,31 @@ describe("ModelesPanel — héberge templates-table.tsx, ne le réimplémente pa
     expect(actionIdx).toBeGreaterThan(-1);
     expect(actionIdx).toBeLessThan(bodyIdx);
   });
+
+  // Fix round 1 (B8 review, DataTable conversion) : ModelesPanel possède DÉJÀ sa propre recherche
+  // (data-testid="modeles-search", ci-dessus) dans le slot `search` dédié de PanelHost. Avant ce
+  // correctif, TemplatesTable(showHeader=false) rendait EN PLUS son propre DataTableToolbar avec un
+  // second champ « Rechercher un gabarit… » (placeholder + aria-label identiques) — deux boîtes de
+  // recherche empilées dans un panneau de rail large de ~212–360px (panel-host.tsx). Reproduit par
+  // la revue : 3 occurrences du texte du placeholder (1 pour le champ du panneau, 2 pour le
+  // placeholder+aria-label du champ interne). Ce test verrouille le correctif — templates-table.tsx
+  // ne rend plus du tout le toolbar de recherche interne quand showHeader===false — sans casser les
+  // en-têtes de colonnes triables, qui restent rendues dans les deux cas (assertion séparée
+  // ci-dessous).
+  it("showHeader=false (panneau rail) : la recherche interne du DataTable est absente — une SEULE boîte de recherche pour toute la surface", async () => {
+    const html = renderModelesPanel({ templates: [fixtureTemplate()] });
+    const occurrences = html.split("Rechercher un gabarit").length - 1;
+    expect(occurrences).toBe(1);
+    // La seule occurrence restante est bien le champ PROPRE au panneau, pas une copie interne.
+    expect(html).toContain('data-testid="modeles-search"');
+  });
+
+  it("showHeader=false (panneau rail) : les en-têtes de colonnes triables restent rendus malgré l'absence de recherche interne", async () => {
+    const html = renderModelesPanel({ templates: [fixtureTemplate()] });
+    // DataTableColumnHeader rend un <button> pour chaque colonne triable — "Nom" reste triable même
+    // sans le toolbar (seule la recherche est supprimée, pas le tri).
+    expect(html).toContain(">Nom<");
+  });
 });
 
 // Correctif revue finale — Important 2, amendement de spec §3 : Modèles a désormais un champ de

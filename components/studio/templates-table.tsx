@@ -425,6 +425,15 @@ export function TemplatesTable({
         // header, so the whole list-view table shares ONE search box and ONE sort state, same
         // recipe as feeds-table.tsx/runs-view.tsx. The gallery view above still groups by context
         // (TemplatesGallery, unchanged) — that grouping isn't lost, just no longer duplicated here.
+        //
+        // Fix round 1 (B8 review): the internal search toolbar is gated on `showHeader`. When
+        // showHeader === false (the "Modèles" rail panel, components/studio/panels/modeles-panel.tsx),
+        // TemplatesTable is fed an ALREADY-FILTERED `templates` prop (filterTemplatesBySearch) and
+        // that panel owns its OWN search box in PanelHost's dedicated `search` slot
+        // (data-testid="modeles-search") — rendering this toolbar's search input there duplicated
+        // an identical "Rechercher un gabarit…" box in an already-narrow (~212–360px) panel. Sorting
+        // via the column headers stays available in both cases; only the redundant search input is
+        // suppressed.
         <DataTable
           columns={columns}
           data={templates}
@@ -432,11 +441,13 @@ export function TemplatesTable({
           onGlobalFilterChange={setGlobalFilter}
           emptyMessage="Aucun gabarit ne correspond à cette recherche."
           toolbar={
-            <DataTableToolbar
-              globalValue={globalFilter}
-              onGlobalChange={setGlobalFilter}
-              searchPlaceholder="Rechercher un gabarit…"
-            />
+            showHeader ? (
+              <DataTableToolbar
+                globalValue={globalFilter}
+                onGlobalChange={setGlobalFilter}
+                searchPlaceholder="Rechercher un gabarit…"
+              />
+            ) : undefined
           }
         />
       )}
