@@ -1,37 +1,20 @@
 "use client";
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
+import type { ColumnFiltersState } from "@tanstack/react-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DataTable } from "@/components/ui/data-table";
+import { DataTableToolbar } from "@/components/ui/data-table-toolbar";
 import { LiveRunPanel } from "@/components/pipeline/live-run-panel";
 import { RunDetailSheet } from "@/components/pipeline/run-detail-sheet";
 import { RunTrends } from "@/components/pipeline/run-trends";
 import { PageHeader } from "@/components/shell/page-header";
 import { EmptyState } from "@/components/shell/empty-state";
-import {
-  formatDate, formatRunDuration, pipelineStatusLabel, PIPELINE_STATUS_LABEL, type PipelineStatus,
-} from "@/lib/format";
+import { pipelineStatusLabel, PIPELINE_STATUS_LABEL, type PipelineStatus } from "@/lib/format";
 import { getRunDetailAction } from "@/lib/actions/pipeline-actions";
-import { filterRuns } from "@/lib/queries/runs-filter";
 import type { RunDetail, ActiveRun, RunTrendsSummary, TrendDay } from "@/lib/queries/runs";
-
-// SP7: "reprocess" (a single failed item relaunched from the run-detail drawer, see
-// lib/actions/pipeline-actions.ts's reprocessRawItem) previously fell through to the bare DB value
-// here — added so the trigger column/filter both read a proper French label for it too.
-const TRIGGER_LABEL: Record<string, string> = { manual: "Manuel", scheduled: "Programmé", reprocess: "Retraitement" };
-const TRIGGER_OPTIONS = ["manual", "scheduled", "reprocess"] as const;
-const STATUS_OPTIONS: PipelineStatus[] = ["success", "partial", "failed", "cancelled", "running", "paused"];
-
-const STATUS_STYLE: Record<PipelineStatus, string> = {
-  running: "text-[var(--status-in-review)]",
-  success: "text-[var(--status-approved)]",
-  partial: "text-[var(--status-pending)]",
-  failed: "text-[var(--status-error)]",
-  // SP5: cancelled (Stop) / paused (Pause) — button wiring lives in live-run-panel.tsx (Task 5).
-  cancelled: "text-[var(--status-rejected)]",
-  paused: "text-[var(--status-draft)]",
-};
+import { runsColumns, TRIGGER_LABEL, TRIGGER_OPTIONS, STATUS_OPTIONS } from "@/components/pipeline/runs-columns";
 
 export type RunRow = {
   id: string;
@@ -54,12 +37,20 @@ export function RunsView({
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [isPending, startTransition] = useTransition();
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [triggerFilter, setTriggerFilter] = useState("all");
-  const filteredRuns = useMemo(
-    () => filterRuns(runs, { status: statusFilter, trigger: triggerFilter }),
-    [runs, statusFilter, triggerFilter],
-  );
+  // B4: status/trigger facet filters are now TanStack column filters (matched by runs-columns.tsx's
+  // `equalsFilter`) instead of the old useState+filterRuns useMemo pair — DataTable (client mode,
+  // components/ui/data-table.tsx) runs getFilteredRowModel()/getSortedRowModel() over `runs`
+  // directly. A column only carries an entry here while its Select is off "Tous les …".
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [globalFilter, setGlobalFilter] = useState("");
+  const statusFilter = (columnFilters.find((f) => f.id === "status")?.value as string | undefined) ?? "all";
+  const triggerFilter = (columnFilters.find((f) => f.id === "trigger")?.value as string | undefined) ?? "all";
+  function setFacetFilter(id: "status" | "trigger", value: string) {
+    setColumnFilters((prev) => {
+      const rest = prev.filter((f) => f.id !== id);
+      return value === "all" ? rest : [...rest, { id, value }];
+    });
+  }
   // Tracks the run whose detail we currently want displayed, so a late/out-of-order
   // getRunDetailAction resolution (open A → close → open B, A resolves after B) can be dropped
   // rather than clobbering B's detail. Set to null on close so a resolution after close can't
@@ -102,36 +93,8 @@ export function RunsView({
       <RunTrends perDay={trends.perDay} summary={trends.summary} />
 
       <Card>
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <CardHeader>
           <CardTitle className="text-base">Dernières exécutions</CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? "all")}>
-              <SelectTrigger className="w-40" size="sm">
-                <SelectValue placeholder="Statut">
-                  {(v: string) => (v && v !== "all" ? pipelineStatusLabel(v as PipelineStatus) : "Tous les statuts")}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Tous les statuts</SelectItem>
-                {STATUS_OPTIONS.map((s) => (
-                  <SelectItem key={s} value={s}>{PIPELINE_STATUS_LABEL[s]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={triggerFilter} onValueChange={(v) => setTriggerFilter(v ?? "all")}>
-              <SelectTrigger className="w-44" size="sm">
-                <SelectValue placeholder="Déclencheur">
-                  {(v: string) => (v && v !== "all" ? (TRIGGER_LABEL[v] ?? v) : "Tous les déclencheurs")}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Tous les déclencheurs</SelectItem>
-                {TRIGGER_OPTIONS.map((t) => (
-                  <SelectItem key={t} value={t}>{TRIGGER_LABEL[t]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
         </CardHeader>
         <CardContent>
           {runs.length === 0 ? (
@@ -139,49 +102,51 @@ export function RunsView({
               title="Aucune exécution pour l'instant"
               hint="Les exécutions du pipeline apparaîtront ici une fois lancées."
             />
-          ) : filteredRuns.length === 0 ? (
-            <EmptyState
-              title="Aucune exécution ne correspond à ces filtres"
-              hint="Essayez d'élargir vos filtres de statut ou de déclencheur."
-            />
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Horodatage</TableHead>
-                    <TableHead>Déclencheur</TableHead>
-                    <TableHead className="text-right">Flux lus</TableHead>
-                    <TableHead className="text-right">Nouveaux</TableHead>
-                    <TableHead>Durée</TableHead>
-                    <TableHead>Statut</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredRuns.map((r) => (
-                    <TableRow
-                      key={r.id}
-                      onClick={() => handleRowClick(r.id)}
-                      className="cursor-pointer hover:bg-muted/50"
-                    >
-                      <TableCell>{formatDate(r.startedAt)}</TableCell>
-                      <TableCell>{TRIGGER_LABEL[r.triggeredBy] ?? r.triggeredBy}</TableCell>
-                      <TableCell className="text-right">{r.feedsRead}</TableCell>
-                      <TableCell className="text-right">{r.newItems}</TableCell>
-                      <TableCell>{formatRunDuration(r.startedAt, r.finishedAt, r.status)}</TableCell>
-                      <TableCell>
-                        <span className={STATUS_STYLE[r.status]}>{pipelineStatusLabel(r.status)}</span>
-                        {r.failedSteps > 0 && (
-                          <span className="ml-2 text-xs text-[var(--status-error)]">
-                            ({r.failedSteps} étape{r.failedSteps > 1 ? "s" : ""} en échec)
-                          </span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <DataTable
+              columns={runsColumns}
+              data={runs}
+              onRowClick={(r) => handleRowClick(r.id)}
+              globalFilter={globalFilter}
+              onGlobalFilterChange={setGlobalFilter}
+              columnFilters={columnFilters}
+              onColumnFiltersChange={setColumnFilters}
+              emptyMessage="Aucune exécution ne correspond à ces filtres. Essayez d'élargir vos filtres de statut ou de déclencheur."
+              toolbar={
+                <DataTableToolbar
+                  globalValue={globalFilter}
+                  onGlobalChange={setGlobalFilter}
+                  searchPlaceholder="Rechercher une exécution…"
+                >
+                  <Select value={statusFilter} onValueChange={(v) => setFacetFilter("status", v ?? "all")}>
+                    <SelectTrigger className="w-40" size="sm">
+                      <SelectValue placeholder="Statut">
+                        {(v: string) => (v && v !== "all" ? pipelineStatusLabel(v as PipelineStatus) : "Tous les statuts")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les statuts</SelectItem>
+                      {STATUS_OPTIONS.map((s) => (
+                        <SelectItem key={s} value={s}>{PIPELINE_STATUS_LABEL[s]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={triggerFilter} onValueChange={(v) => setFacetFilter("trigger", v ?? "all")}>
+                    <SelectTrigger className="w-44" size="sm">
+                      <SelectValue placeholder="Déclencheur">
+                        {(v: string) => (v && v !== "all" ? (TRIGGER_LABEL[v] ?? v) : "Tous les déclencheurs")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous les déclencheurs</SelectItem>
+                      {TRIGGER_OPTIONS.map((t) => (
+                        <SelectItem key={t} value={t}>{TRIGGER_LABEL[t]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </DataTableToolbar>
+              }
+            />
           )}
         </CardContent>
       </Card>
