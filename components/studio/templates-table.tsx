@@ -2,19 +2,21 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { toast } from "sonner";
 import {
   LayoutGrid, List, Loader2, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Card, CardContent } from "@/components/ui/card";
+import { DataTable } from "@/components/ui/data-table";
+import { DataTableToolbar } from "@/components/ui/data-table-toolbar";
 import { useTemplatesView } from "@/hooks/use-templates-view";
 import { TemplatesGallery } from "@/components/studio/templates-gallery";
-import {
-  CONTEXT_LABEL, StateBadge, TemplateRowMenu, dateFormatter, formatLabel, groupTemplatesByContext,
-} from "@/components/studio/templates-shared";
+import { CONTEXT_LABEL } from "@/components/studio/templates-shared";
+// B8: the list-view table is now the shared client-mode DataTable (sortable Nom/Contexte/Modifié +
+// a global search box on Nom) — same recipe as feeds-table.tsx/runs-view.tsx. The GALLERY view
+// (TemplatesGallery, imported above) and the grid/table toggle below are UNCHANGED.
+import { templatesColumns } from "@/components/studio/templates-columns";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -34,16 +36,8 @@ import { TEMPLATE_CONTEXTS, CHANNELS, CHANNEL_LABELS, type TemplateContext, type
 import type { TemplateRow, CategoryOption } from "@/lib/queries/studio";
 import { createTemplate, duplicateTemplate, archiveTemplate, renameTemplate } from "@/lib/actions/studio-actions";
 
-// Portée affichée : canal, catégorie, les deux, ou « Défaut » si ni l'un ni l'autre — c'est
-// littéralement le gabarit appliqué à tout le contexte, sans restriction. Un canal inconnu de
-// CHANNEL_LABELS (ex. une valeur "test-*" injectée par une suite de tests) s'affiche tel quel :
-// render_templates.channel est du texte libre en base (db/schema.ts), pas un enum — d'où le cast
-// (pas une garantie) sur l'indexation ci-dessous.
-function scopeLabel(row: TemplateRow): string {
-  const channel = row.channel ? (CHANNEL_LABELS[row.channel as Channel] ?? row.channel) : null;
-  const parts = [channel, row.categoryName].filter((v): v is string => Boolean(v));
-  return parts.length > 0 ? parts.join(" · ") : "Défaut";
-}
+// scopeLabel moved to components/studio/templates-columns.tsx (B8) — it's now the "Portée" column
+// cell in the list-view DataTable, unit-tested there (tests/templates-columns.test.ts).
 
 function formatPresetLabel(key: FormatKey): string {
   const preset = FORMAT_PRESETS[key];
@@ -338,8 +332,10 @@ export function TemplatesTable({
   // EditorPrefs) — le panneau n'a donc aucune raison d'en lire ni d'en écrire une valeur qu'il ne
   // sait pas afficher.
   const [view, setView] = useTemplatesView();
-
-  const groups = groupTemplatesByContext(templates);
+  // B8: global search state for the list-view DataTable below — same pattern as
+  // feeds-table.tsx/runs-view.tsx. Only ever read while `view === "table"`; the gallery view
+  // (TemplatesGallery) has no search box of its own, unchanged from before this conversion.
+  const [globalFilter, setGlobalFilter] = useState("");
 
   function handleDuplicate(row: TemplateRow) {
     startTransition(async () => {
@@ -368,6 +364,10 @@ export function TemplatesTable({
       router.refresh();
     });
   }
+
+  const columns = templatesColumns({
+    isPending, onDuplicate: handleDuplicate, onArchiveToggle: handleArchiveToggle, onRequestRename: setRenameTarget,
+  });
 
   return (
     // testid EXPORTÉ (Tâche 2) : tests/studio-templates-table.test.ts l'utilise pour prouver que
@@ -407,7 +407,7 @@ export function TemplatesTable({
         </div>
       )}
 
-      {groups.length === 0 ? (
+      {templates.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-muted-foreground">
             Aucun gabarit pour l&rsquo;instant.
@@ -420,53 +420,25 @@ export function TemplatesTable({
           onRequestRename={setRenameTarget}
         />
       ) : (
-        groups.map((group) => (
-          <Card key={group.context}>
-            <CardHeader>
-              <CardTitle>{CONTEXT_LABEL[group.context]}</CardTitle>
-            </CardHeader>
-            <CardContent className="px-0">
-              <div className="mx-(--card-spacing) rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Nom</TableHead>
-                      <TableHead>Portée</TableHead>
-                      <TableHead>Format</TableHead>
-                      <TableHead>État</TableHead>
-                      <TableHead className="text-right">Modifié</TableHead>
-                      <TableHead className="w-10"><span className="sr-only">Actions</span></TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {group.rows.map((row) => (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-medium">
-                          <Link href={`/studio/${row.id}`} className="hover:underline">{row.name}</Link>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{scopeLabel(row)}</TableCell>
-                        <TableCell className="text-muted-foreground">{formatLabel(row)}</TableCell>
-                        <TableCell>
-                          <StateBadge row={row} />
-                        </TableCell>
-                        <TableCell className="text-right text-muted-foreground">
-                          {dateFormatter.format(row.updatedAt)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <TemplateRowMenu
-                            row={row} isPending={isPending}
-                            onDuplicate={handleDuplicate} onArchiveToggle={handleArchiveToggle}
-                            onRequestRename={setRenameTarget}
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
-        ))
+        // B8: single flat DataTable across every context (previously one <Table> PER context,
+        // grouped in its own Card) — "Contexte" is now a sortable column instead of a section
+        // header, so the whole list-view table shares ONE search box and ONE sort state, same
+        // recipe as feeds-table.tsx/runs-view.tsx. The gallery view above still groups by context
+        // (TemplatesGallery, unchanged) — that grouping isn't lost, just no longer duplicated here.
+        <DataTable
+          columns={columns}
+          data={templates}
+          globalFilter={globalFilter}
+          onGlobalFilterChange={setGlobalFilter}
+          emptyMessage="Aucun gabarit ne correspond à cette recherche."
+          toolbar={
+            <DataTableToolbar
+              globalValue={globalFilter}
+              onGlobalChange={setGlobalFilter}
+              searchPlaceholder="Rechercher un gabarit…"
+            />
+          }
+        />
       )}
 
       <RenameTemplateDialog
