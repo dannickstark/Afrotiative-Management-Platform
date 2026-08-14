@@ -1,4 +1,5 @@
-import { AwsClient } from "aws4fetch";
+import { AwsV4Signer } from "aws4fetch";
+import { fetch as undiciFetch } from "undici";
 import type { StudioConfig } from "@/lib/studio/config";
 import { retryTransient } from "./retry";
 
@@ -49,18 +50,34 @@ export type R2Deps = { sendRequest?: R2SendRequest; sleep?: (ms: number) => Prom
 const R2_ATTEMPTS = 3;
 const R2_TIMEOUT_MS = 30_000; // par tentative : un socket qui pend est abandonné → AbortError → réessai
 
+// LE VRAI CORRECTIF DU 411 « Length Required ». Cause racine confirmée : dans une Server Action, le
+// PUT signé partait par le `fetch` GLOBAL PATCHÉ par Next.js (couche de cache App Router), qui
+// n'émettait PAS de `Content-Length` pour un corps binaire (transfer-encoding chunked) — or R2/S3
+// EXIGE Content-Length sur un PUT et répond 411 sinon. `aws4fetch`#AwsClient.fetch utilise ce global
+// patché ; on ne s'en sert donc plus pour TRANSMETTRE. On SIGNE avec `AwsV4Signer` (S3v4, hash du
+// corps), puis on ENVOIE avec le `fetch` d'`undici` importé DIRECTEMENT — jamais patché par Next.js —
+// qui pose bien Content-Length depuis l'octet-source (Uint8Array). Vérifié contre le VRAI compte R2
+// (PUT 200, DELETE 204), là où le global patché rendait 411. `retryTransient` reste l'unique autorité
+// de réessai (couvre AUSSI les erreurs réseau levées, ignorées par le réessai interne d'aws4fetch).
 function realSender(cfg: StudioConfig): R2SendRequest {
-  // `retries: 0` : aws4fetch NE réessaie plus lui-même — `retryTransient` est l'unique autorité de
-  // réessai (sinon 5xx serait réessayé 2× en cascade). aws4fetch ne sert plus qu'à SIGNER + envoyer.
-  const client = new AwsClient({
-    accessKeyId: cfg.accessKeyId,
-    secretAccessKey: cfg.secretAccessKey,
-    service: "s3",
-    region: "auto",
-    retries: 0,
-  });
   return async (url, init) => {
-    const res = await client.fetch(url, init);
+    const signer = new AwsV4Signer({
+      url,
+      method: init.method,
+      headers: init.headers,
+      body: init.body, // signé (x-amz-content-sha256) ET envoyé — les deux DOIVENT être identiques
+      accessKeyId: cfg.accessKeyId,
+      secretAccessKey: cfg.secretAccessKey,
+      service: "s3",
+      region: "auto",
+    });
+    const signed = await signer.sign();
+    const res = await undiciFetch(signed.url.toString(), {
+      method: signed.method,
+      headers: [...signed.headers],
+      body: init.body as Uint8Array | undefined,
+      signal: init.signal ?? undefined,
+    });
     return { ok: res.ok, status: res.status };
   };
 }
