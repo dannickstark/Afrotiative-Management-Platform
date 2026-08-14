@@ -3,7 +3,7 @@ import type { Role } from "@/lib/auth";
 type Matrix = Record<Role, Record<string, string[]>>;
 
 const MATRIX: Matrix = {
-  journalist: { article: ["create", "edit"], feed: ["read"], taxonomy: ["read"] },
+  journalist: { article: ["create", "edit"], feed: ["read"], taxonomy: ["read"], llmTokens: [] },
   editor: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
     feed: ["read", "manage"], taxonomy: ["read", "manage"], pipeline: ["read"],
@@ -11,6 +11,9 @@ const MATRIX: Matrix = {
     // D1 spec §6: the editor diffuses from the article page (read + send) but does not administer
     // channel settings (/settings/social/[channel] — manage stays admin-only).
     social: ["read", "send"],
+    // Task 6 (OpenRouter token pool) — editor+admin manage the token pool from
+    // /settings/integrations (add/delete/toggle/test); journalist gets nothing (no entry below).
+    llmTokens: ["manage"],
   },
   admin: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
@@ -18,6 +21,7 @@ const MATRIX: Matrix = {
     team: ["read", "manage"], pipeline: ["read", "configure"],
     template: ["read", "manage", "publish"],
     social: ["read", "manage", "send"],
+    llmTokens: ["manage"],
   },
 };
 
