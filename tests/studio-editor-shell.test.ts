@@ -3,6 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { installDom, mount, click, pressKey } from "./dom-harness";
 import type { Scene } from "@/lib/studio/scene";
+import type { AssetRow } from "@/lib/queries/assets";
 import type { EditorShellTemplate } from "@/components/studio/editor-shell";
 import { RULER_SIZE } from "@/components/studio/canvas-chrome";
 
@@ -482,5 +483,49 @@ describe("EditorShell — le VRAI zoom : scale = fitScale × factor, slot ET pas
     } finally {
       cleanup();
     }
+  });
+});
+
+// Bug « l'image de la bibliothèque ne s'affiche pas dans le canevas » — editor-shell rendait <Canvas>
+// SANS la map `images` que canvas.tsx consomme (`images?.get(layer.id)`), donc un calque image dont
+// la source est un ASSET restait sur le placeholder (une source `url` marchait — layer-view lit
+// `layer.source.url` en direct). Ce test verrouille le câblage : EditorShell résout l'URL de l'asset
+// (via la prop `assets`, déjà en scope) et la peint dans le canevas. Voir lib/studio/canvas-images.ts
+// (resolveCanvasImages) pour l'unité pure, et tests/studio-canvas-images.test.ts pour son balayage.
+describe("EditorShell — un calque image de la BIBLIOTHÈQUE s'affiche dans le canevas (bug asset)", () => {
+  function assetScene(): Scene {
+    return {
+      schemaVersion: 1,
+      canvas: { width: 1080, height: 1080, background: "#111111" },
+      layers: [{
+        id: "photo", name: "Photo", visible: true, locked: false,
+        frame: { x: 0, y: 0, w: 400, h: 400 },
+        type: "image", source: { kind: "asset", assetId: "a1" }, fit: "cover",
+      }],
+    };
+  }
+  const assets: AssetRow[] = [{
+    id: "a1", kind: "image", name: "pic", url: "https://cdn.example/pic.png",
+    mime: "image/png", bytes: 1, width: 400, height: 400,
+    fontFamily: null, fontWeight: null, fontStyle: null, uploadedByName: null, createdAt: new Date(0),
+  }];
+
+  it("résout l'URL de l'asset et la peint dans le canevas (plus de placeholder)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(EditorShell, {
+        template, initialScene: assetScene(), publishedScene: null, versions: [], previewArticles: [], assets,
+      }),
+    );
+    expect(html).toContain('data-testid="image-content"');
+    expect(html).toContain("https://cdn.example/pic.png");
+  });
+
+  it("un asset ABSENT de la bibliothèque reste un placeholder (aucune URL inventée)", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(EditorShell, {
+        template, initialScene: assetScene(), publishedScene: null, versions: [], previewArticles: [], assets: [],
+      }),
+    );
+    expect(html).not.toContain('data-testid="image-content"');
   });
 });

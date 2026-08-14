@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -48,6 +48,7 @@ import {
   RAIL_PANEL_WIDTH_MIN, RAIL_PANEL_WIDTH_MAX, INSPECTOR_WIDTH_MIN, INSPECTOR_WIDTH_MAX,
 } from "@/lib/studio/editor-prefs";
 import { withRecentShape } from "@/lib/studio/shape-gallery";
+import { resolveCanvasImages } from "@/lib/studio/canvas-images";
 import {
   clampZoom, nextZoom, unionBounds, zoomPresetScale, ZOOM_STEPS, wheelZoomScale, zoomAtCursor,
 } from "@/lib/studio/zoom";
@@ -201,6 +202,16 @@ function EditorShellInner({
 }: EditorShellInnerProps) {
   const router = useRouter();
   const [state, dispatch] = useReducer(editorReducer, initialScene, initEditorState);
+
+  // Sources d'affichage du canevas, par id de calque : l'URL de chaque calque image dont la source
+  // est un ASSET de la bibliothèque (resolveCanvasImages, PUR). Sans cette map, `Canvas` recevait
+  // `images` undefined et un calque image lié à un asset restait sur le placeholder — les sources
+  // `url` (peintes en direct par layer-view) marchaient, pas la bibliothèque. Mémoïsée sur les
+  // calques + la liste d'assets, les deux seules entrées.
+  const canvasImages = useMemo(
+    () => resolveCanvasImages(state.scene.layers, assets),
+    [state.scene.layers, assets],
+  );
 
   // ── Réactif (Chantier A Tâche 4, spec §2/§9) ──────────────────────────────
   // `layout` retombe sur `"full"` (hooks/use-editor-layout.ts) tant que le premier effet n'a pas
@@ -910,7 +921,7 @@ function EditorShellInner({
           voir `panelContent`/`inspectorOpen` ci-dessus. */}
       <div className="flex flex-1 gap-3 overflow-hidden">
         {layout === "too-small" ? (
-          <TooSmallState scene={state.scene} width={template.width} height={template.height} />
+          <TooSmallState scene={state.scene} images={canvasImages} width={template.width} height={template.height} />
         ) : mode === "montage" ? (
           <>
             <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
@@ -1031,6 +1042,7 @@ function EditorShellInner({
               >
                 <Canvas
                   scene={state.scene} selectedIds={state.selectedIds} dispatch={dispatch} scale={scale}
+                  images={canvasImages}
                   showBindings={prefs.showBindings}
                   onContextMenu={(payload) => setContextMenu({ open: true, ...payload })}
                 />
@@ -1154,7 +1166,7 @@ function EditorShellInner({
 // aperçu de l'artboard » est la lecture la plus honnête de « preview only » : LE même `<Canvas>` que
 // Montage, mais SANS dispatch réel (`() => {}`) ni sélection possible (`pointer-events-none` sur son
 // conteneur) — un aperçu, pas un éditeur miniature.
-function TooSmallState({ scene, width, height }: { scene: Scene; width: number; height: number }) {
+function TooSmallState({ scene, images, width, height }: { scene: Scene; images?: Map<string, string>; width: number; height: number }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState<number | null>(null);
 
@@ -1195,7 +1207,7 @@ function TooSmallState({ scene, width, height }: { scene: Scene; width: number; 
         className="pointer-events-none flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-4"
       >
         {scale !== null && (
-          <Canvas scene={scene} selectedIds={[]} dispatch={() => {}} scale={scale} />
+          <Canvas scene={scene} selectedIds={[]} dispatch={() => {}} scale={scale} images={images} />
         )}
       </div>
     </div>
