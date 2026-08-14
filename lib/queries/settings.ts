@@ -70,6 +70,7 @@ export async function getPipelineSettings(): Promise<PipelineSettings> {
   const cfg = getPipelineConfig();
   const [created] = await db.insert(pipelineSettings).values({
     id: 1, maxItemsPerRun: cfg.maxItemsPerRun, clusterThreshold: cfg.clusterThreshold,
+    openrouterMinContentChars: 400,
   }).onConflictDoNothing().returning();
   if (created) return created;
   const [again] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));

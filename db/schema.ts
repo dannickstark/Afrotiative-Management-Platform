@@ -320,8 +320,34 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   // ---- SP9a: optional email notification for alerts (default OFF, no-op without RESEND_API_KEY) ----
   alertEmailEnabled: boolean("alert_email_enabled").notNull().default(false),
   alertEmailRecipients: text("alert_email_recipients"), // comma-separated emails; null/empty = none
+  // Minimum scraped-content length (chars) before an item is considered usable for generation —
+  // below this, the pipeline falls back the same way it does for a failed/empty scrape. Tuning
+  // knob for the OpenRouter token pool work; not env-seeded (like scoreThreshold above), so the
+  // column default below is this setting's only source of truth on first seed.
+  openrouterMinContentChars: integer("openrouter_min_content_chars").notNull().default(400),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ---- OpenRouter token pool (DB-stored, encrypted — rotation/fallback across multiple keys) ----
+// Each `tokenCiphertext` is the output of lib/diffusion/crypto.ts's encryptSecret (a self-
+// describing "iv:authTag:ciphertext" string), same convention as socialChannelSettings.credentials
+// above — never store a raw OpenRouter key in plaintext. `active` + `sortOrder` let an admin
+// disable/reorder tokens without deleting history; `cooldownUntil`/`lastStatus`/`lastError` are
+// written by the rotation logic (later task) when a token gets rate-limited or errors out.
+export const openrouterTokens = pgTable("openrouter_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  label: text("label").notNull(),
+  tokenCiphertext: text("token_ciphertext").notNull(),
+  active: boolean("active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  cooldownUntil: timestamp("cooldown_until"),
+  lastStatus: text("last_status"),
+  lastUsedAt: timestamp("last_used_at"),
+  lastError: text("last_error"),
+  createdBy: text("created_by").references(() => user.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("openrouter_tokens_active_order_idx").on(t.active, t.sortOrder)]);
 
 // ---- alerts (SP9a — best-effort run_failed / feed_dark notifications) ----
 // Written ONLY by lib/alerts/notify.ts's createAlert(), called from two best-effort sites:
