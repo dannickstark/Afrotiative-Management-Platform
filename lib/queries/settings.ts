@@ -2,7 +2,10 @@ import { db, feeds, user, wpCategories, wpTags, distributions, pipelineRuns, pip
 import { and, desc, eq } from "drizzle-orm";
 import { getWpConfig } from "@/lib/wp/config";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { getStudioConfig } from "@/lib/studio/config";
 import { deriveFeedHealth } from "@/lib/pipeline/feed-health";
+import { INTEGRATION_META, computeIntegrationConfigured, type IntegrationName } from "@/lib/config/integration-config";
+import { getOpenRouterTokensMasked } from "@/lib/queries/openrouter-tokens";
 
 export type Feed = Awaited<ReturnType<typeof getFeeds>>[number];
 
@@ -37,8 +40,23 @@ export async function getTaxonomy() {
   return { categories, tags };
 }
 
+// Task 8 — extended from the original 5 (wordpress/omniroute/openrouter/jina/firecrawl) to the
+// full registry in lib/config/integration-config.ts. The `configured` booleans themselves come
+// from the PURE computeIntegrationConfigured() (unit-tested directly in
+// tests/integration-status.test.ts); this function's own job is resolving the live signals
+// (PipelineConfig, wordpress/r2 presence, search-provider env keys) and the two DB reads the
+// existing 5 cards already relied on (WordPress's last publication, the pipeline's last run),
+// plus — for the openrouter card only — a token-pool summary Task 9's card renders.
 export async function getIntegrationStatus() {
   const cfg = getPipelineConfig();
+  const configured = computeIntegrationConfigured(cfg, {
+    braveApiKey: process.env.BRAVE_SEARCH_API_KEY,
+    exaApiKey: process.env.EXA_API_KEY,
+    resendApiKey: process.env.RESEND_API_KEY,
+    wordpressConfigured: !!getWpConfig(),
+    r2Configured: !!getStudioConfig(),
+  });
+
   // Channel-scoped: once SP6 adds other distribution channels, a non-WordPress "sent" row must
   // never surface as the WordPress card's last successful publication.
   const [lastPub] = await db.select({ at: distributions.at }).from(distributions)
@@ -46,12 +64,22 @@ export async function getIntegrationStatus() {
     .orderBy(desc(distributions.at)).limit(1);
   const [lastRun] = await db.select({ at: pipelineRuns.startedAt, status: pipelineRuns.status })
     .from(pipelineRuns).orderBy(desc(pipelineRuns.startedAt)).limit(1);
+  const tokens = await getOpenRouterTokensMasked();
+  const now = new Date();
+  const tokenSummary = {
+    active: tokens.filter((t) => t.active && !(t.cooldownUntil && t.cooldownUntil > now)).length,
+    cooldown: tokens.filter((t) => t.active && t.cooldownUntil && t.cooldownUntil > now).length,
+  };
+
+  const base = {} as Record<IntegrationName, { configured: boolean; kind: (typeof INTEGRATION_META)[IntegrationName]["kind"]; management: (typeof INTEGRATION_META)[IntegrationName]["management"] }>;
+  for (const name of Object.keys(INTEGRATION_META) as IntegrationName[]) {
+    base[name] = { configured: configured[name], ...INTEGRATION_META[name] };
+  }
+
   return {
-    wordpress: { configured: !!getWpConfig(), lastSuccessAt: lastPub?.at ?? null },
-    omniroute: { configured: !!cfg.omniroute },
-    openrouter: { configured: !!cfg.openrouter },
-    jina: { configured: !!cfg.jina },
-    firecrawl: { configured: !!cfg.firecrawl },
+    ...base,
+    wordpress: { ...base.wordpress, lastSuccessAt: lastPub?.at ?? null },
+    openrouter: { ...base.openrouter, tokenSummary },
     lastRun: lastRun ?? null,
   };
 }
@@ -70,6 +98,7 @@ export async function getPipelineSettings(): Promise<PipelineSettings> {
   const cfg = getPipelineConfig();
   const [created] = await db.insert(pipelineSettings).values({
     id: 1, maxItemsPerRun: cfg.maxItemsPerRun, clusterThreshold: cfg.clusterThreshold,
+    openrouterMinContentChars: 400,
   }).onConflictDoNothing().returning();
   if (created) return created;
   const [again] = await db.select().from(pipelineSettings).where(eq(pipelineSettings.id, 1));

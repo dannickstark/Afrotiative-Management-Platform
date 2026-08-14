@@ -15,16 +15,48 @@ const TEST_CHANNEL = "whatsapp" as const;
 // restore that indirection in afterAll so files that run afterwards see real behavior again.
 const { buildModel: realBuildModel } = await import("@/lib/ai/providers");
 const { generateText: realGenerateText } = await import("ai");
+const { runWithOpenRouterPool: realRunWithOpenRouterPool } = await import("@/lib/ai/with-token-pool");
 
 let buildModelImpl: (name: string, cfg: unknown) => unknown = realBuildModel as unknown as typeof buildModelImpl;
-let generateTextImpl: (opts: { model: { name: string }; prompt: string }) => Promise<{ text: string }> =
+let generateTextImpl: (opts: { model: unknown; prompt: string }) => Promise<{ text: string }> =
   realGenerateText as unknown as typeof generateTextImpl;
+// runWithOpenRouterPool is the rotation runner (lib/ai/with-token-pool.ts) — mocked so these unit
+// tests can drive generateCaption's openrouter branch (`op`/`isFlaky`) directly without a real DB
+// token pool or a real OpenRouter API key. Default mirrors the real runner's single-token
+// behavior: call op, apply isFlaky, ok:false on either an empty/blank caption or a thrown error.
+// The optional 3rd `deps` param is NOT used by this file's own tests, but MUST still be accepted
+// and forwarded: this mock.module() call leaks into every file that imports "@/lib/ai/with-token-
+// pool" afterwards in the same `bun test` process (same reasoning as the buildModel/generateText
+// leak documented above) — including tests/with-token-pool.test.ts, which calls the REAL
+// runWithOpenRouterPool(op, isFlaky, deps) with an explicit `deps` override to fake the pool
+// without a DB. Dropping that 3rd arg here would silently swap it for the REAL default deps
+// (real DB pool) once this file's afterAll restores runWithOpenRouterPoolImpl to the real function.
+let runWithOpenRouterPoolImpl: (
+  op: (apiKey: string) => Promise<string>,
+  isFlaky: (v: string) => boolean,
+  deps?: unknown,
+) => Promise<{ ok: true; value: string } | { ok: false }> = async (op, isFlaky) => {
+  try {
+    const value = await op("test-openrouter-api-key");
+    return isFlaky(value) ? { ok: false } : { ok: true, value };
+  } catch {
+    return { ok: false };
+  }
+};
 
+// buildOpenRouterModel is left UNTOUCHED by this factory — because `realBuildModel` above was
+// captured via a top-level `await import(...)` before this call, Bun merges this factory's keys
+// onto the already-cached module object rather than replacing it wholesale, so
+// buildOpenRouterModel stays the REAL function for generateCaption's openrouter `op` to call.
 mock.module("@/lib/ai/providers", () => ({
   buildModel: (name: string, cfg: unknown) => buildModelImpl(name, cfg),
 }));
 mock.module("ai", () => ({
-  generateText: (opts: { model: { name: string }; prompt: string }) => generateTextImpl(opts),
+  generateText: (opts: { model: unknown; prompt: string }) => generateTextImpl(opts),
+}));
+mock.module("@/lib/ai/with-token-pool", () => ({
+  runWithOpenRouterPool: (op: (apiKey: string) => Promise<string>, isFlaky: (v: string) => boolean, deps?: unknown) =>
+    runWithOpenRouterPoolImpl(op, isFlaky, deps),
 }));
 
 // Imported AFTER the mocks are registered so its static imports resolve to the mocks.
@@ -136,6 +168,7 @@ describe("generateCaption (D1 §3, Task 4)", () => {
   // below setting process.env.LLM_ORDER = "openrouter" leaks into whichever OTHER test file runs
   // next in this single-process `bun test` run (D1 final review, "Also fix — cheap").
   const originalOrder = process.env.LLM_ORDER;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
 
   beforeAll(async () => {
     await db.delete(socialChannelSettings).where(eq(socialChannelSettings.channel, TEST_CHANNEL));
@@ -163,19 +196,30 @@ describe("generateCaption (D1 §3, Task 4)", () => {
 
   beforeEach(() => {
     spyOn(console, "warn").mockImplementation(() => {});
+    runWithOpenRouterPoolImpl = async (op, isFlaky) => {
+      try {
+        const value = await op("test-openrouter-api-key");
+        return isFlaky(value) ? { ok: false } : { ok: true, value };
+      } catch {
+        return { ok: false };
+      }
+    };
   });
 
   afterAll(() => {
     buildModelImpl = realBuildModel as unknown as typeof buildModelImpl;
     generateTextImpl = realGenerateText as unknown as typeof generateTextImpl;
+    runWithOpenRouterPoolImpl = realRunWithOpenRouterPool as unknown as typeof runWithOpenRouterPoolImpl;
     if (originalOrder === undefined) delete process.env.LLM_ORDER;
     else process.env.LLM_ORDER = originalOrder;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
     mock.restore();
   });
 
   it("truncates a deliberately over-long provider response — result never exceeds captionMaxChars", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     process.env.LLM_ORDER = "openrouter";
-    buildModelImpl = (name: string) => ({ name });
     const overLong = "Un marché en pleine effervescence ".repeat(20).trim(); // ~700 chars, way over any channel's default
     generateTextImpl = async () => ({ text: overLong });
 
@@ -195,7 +239,7 @@ describe("generateCaption (D1 §3, Task 4)", () => {
 
   it("falls back deterministically to a truncated title when no provider is usable — still ok:true, still within the limit", async () => {
     process.env.LLM_ORDER = "openrouter";
-    buildModelImpl = () => null; // every provider unconfigured
+    delete process.env.OPENROUTER_API_KEY; // openrouter itself unconfigured (cfg.openrouter unset) → skipped, no other provider in the order
 
     const settings = await getChannelSettings(TEST_CHANNEL);
     const r = await generateCaption({ articleId, channel: TEST_CHANNEL });
@@ -209,8 +253,8 @@ describe("generateCaption (D1 §3, Task 4)", () => {
   });
 
   it("also falls back when the provider returns empty text", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     process.env.LLM_ORDER = "openrouter";
-    buildModelImpl = (name: string) => ({ name });
     generateTextImpl = async () => ({ text: "   " });
 
     const r = await generateCaption({ articleId, channel: TEST_CHANNEL });
@@ -222,14 +266,50 @@ describe("generateCaption (D1 §3, Task 4)", () => {
   });
 
   it("returns a usable caption on a normal (short) provider response, unmodified apart from trimming", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     process.env.LLM_ORDER = "openrouter";
-    buildModelImpl = (name: string) => ({ name });
     generateTextImpl = async () => ({ text: "  L'UEMOA respire : l'inflation recule pour le 3e mois.  " });
 
     const r = await generateCaption({ articleId, channel: TEST_CHANNEL });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.caption).toBe("L'UEMOA respire : l'inflation recule pour le 3e mois.");
+  });
+
+  // The "Important" finding this test (and its assertions) directly answers: nothing previously
+  // proved that generateCaption's openrouter branch actually calls runWithOpenRouterPool with a
+  // correct `op` (builds a real model via buildOpenRouterModel and runs the SAME generateText call
+  // the file already makes) and a correct `isFlaky` (empty/blank text → flaky). This test captures
+  // the exact arguments the call site passes to the (mocked) pool runner and asserts them
+  // directly, then drives a successful pool result through to the caption.
+  it("routes the openrouter branch through runWithOpenRouterPool: builds a model and applies the empty-text isFlaky rule", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    process.env.LLM_ORDER = "openrouter";
+    let seenApiKey: string | undefined;
+    let seenModel: unknown;
+    let capturedIsFlaky: ((t: string) => boolean) | undefined;
+    runWithOpenRouterPoolImpl = async (op, isFlaky) => {
+      capturedIsFlaky = isFlaky;
+      seenApiKey = "fake-pool-key";
+      const value = await op("fake-pool-key");
+      return { ok: true, value };
+    };
+    generateTextImpl = async (opts) => { seenModel = opts.model; return { text: "Légende générée via le pool." }; };
+
+    const r = await generateCaption({ articleId, channel: TEST_CHANNEL });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.caption).toContain("Légende générée via le pool.");
+    expect(seenApiKey).toBe("fake-pool-key");
+    // op really called buildOpenRouterModel(cfg, apiKey) (the REAL function — only buildModel is
+    // mocked above) and passed the resulting model into generateText, not some placeholder.
+    expect(seenModel).toBeTruthy();
+
+    expect(capturedIsFlaky).toBeTruthy();
+    expect(capturedIsFlaky!("")).toBe(true);
+    expect(capturedIsFlaky!("   ")).toBe(true); // whitespace-only trims to empty
+    expect(capturedIsFlaky!("texte")).toBe(false);
   });
 
   it("returns ok:false for a non-existent article", async () => {

@@ -1,8 +1,11 @@
 import { generateObject } from "ai";
 import { buildArticleSchema, type ArticleDraft } from "./schema";
-import { buildModel } from "./providers";
+import { buildModel, buildOpenRouterModel } from "./providers";
 import { mockGenerateArticle } from "./mock";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { getPipelineSettings } from "@/lib/queries/settings";
+import { runWithOpenRouterPool } from "./with-token-pool";
+import { plainTextLen } from "./plain-text";
 
 export type GenerateInput = { sources: { mediaName: string; url: string; text: string }[]; candidateImages: string[]; categories: string[] };
 
@@ -44,10 +47,48 @@ function sanitizeDraft(draft: ArticleDraft, candidateImages: string[]): ArticleD
   };
 }
 
+// PURE — the article-draft "flaky" predicate used to decide whether an OpenRouter response is
+// usable or should trigger rotation to the next pooled token (lib/ai/with-token-pool.ts). Exported
+// so it's unit-testable without invoking the LLM or the pool (tests/openrouter-flaky-wiring.test.ts).
+export function articleIsFlaky(bodyHtml: string, minChars: number): boolean {
+  return plainTextLen(bodyHtml) < minChars;
+}
+
 export async function generateArticle(input: GenerateInput): Promise<{ draft: ArticleDraft; via: string }> {
   const cfg = getPipelineConfig();
   const schema = buildArticleSchema(input.categories);
+
   for (const name of cfg.llmOrder) {
+    if (name === "openrouter") {
+      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
+      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
+      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
+      if (!cfg.openrouter) continue;
+
+      const settings = await getPipelineSettings();
+      const isFlaky = (draft: ArticleDraft) => articleIsFlaky(draft.bodyHtml, settings.openrouterMinContentChars);
+      // Rotates across every pooled token (DB-managed + the env-configured key as a fallback member —
+      // see lib/ai/token-pool.ts), letting a quota error or a flaky/too-short draft on one token fall
+      // through to the next rather than failing this provider outright. The generateObject call is left
+      // to THROW on error (never caught here) so runWithOpenRouterPool can classify + rotate on it.
+      const r = await runWithOpenRouterPool(async (apiKey) => {
+        const model = buildOpenRouterModel(cfg, apiKey);
+        const { object } = await generateObject({
+          model,
+          schema,
+          prompt: buildArticlePrompt(input),
+          // Relaxes OpenAI-family strict json_schema validation (which rejects `format: "uri"`,
+          // used by our nullable URL fields). Ignored by providers that don't recognize this key.
+          providerOptions: { openaiCompatible: { strictJsonSchema: false } },
+        });
+        return object as ArticleDraft;
+      }, isFlaky);
+      if (r.ok) return { draft: sanitizeDraft(r.value, input.candidateImages), via: "openrouter" };
+      // Pool exhausted (every token failed/flaky) — do NOT retry openrouter again, move to the next
+      // configured provider in llmOrder, same as the non-openrouter branch falling through below.
+      continue;
+    }
+
     const model = buildModel(name, cfg);
     if (!model) continue;
     for (let attempt = 0; attempt < 2; attempt++) {

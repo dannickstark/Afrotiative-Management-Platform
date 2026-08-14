@@ -8,8 +8,9 @@
 // this module must too (Task 4 brief: "fall back deterministically... rather than erroring").
 import { generateText } from "ai";
 import { and, eq } from "drizzle-orm";
-import { buildModel } from "@/lib/ai/providers";
+import { buildModel, buildOpenRouterModel } from "@/lib/ai/providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { runWithOpenRouterPool } from "@/lib/ai/with-token-pool";
 import { db, articles, wpCategories, distributions } from "@/db";
 import { getChannelSettings } from "./settings-core";
 import { getWpConfig } from "@/lib/wp/config";
@@ -168,7 +169,26 @@ export async function generateCaption({ articleId, channel }: GenerateCaptionInp
     promptOverride: settings.captionPrompt,
   });
 
+  // Flaky here mirrors the OLD "empty output → next provider" check below: an empty/blank caption
+  // isn't usable, so it should trigger rotation to the next pooled OpenRouter token.
+  const isFlaky = (text: string): boolean => text.trim().length === 0;
+
   for (const name of cfg.llmOrder) {
+    if (name === "openrouter") {
+      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
+      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
+      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
+      if (!cfg.openrouter) continue;
+
+      const r = await runWithOpenRouterPool(async (apiKey) => {
+        const model = buildOpenRouterModel(cfg, apiKey);
+        const { text } = await generateText({ model, prompt });
+        return text.trim();
+      }, isFlaky);
+      if (r.ok) return { ok: true, caption: finalize(r.value) };
+      continue;
+    }
+
     const model = buildModel(name, cfg);
     if (!model) continue;
     for (let attempt = 0; attempt < 2; attempt++) {

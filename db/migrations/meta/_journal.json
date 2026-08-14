@@ -134,6 +134,13 @@
       "when": 1786366769882,
       "tag": "0018_bumpy_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786727607590,
+      "tag": "0019_burly_umar",
+      "breakpoints": true
     }
   ]
 }

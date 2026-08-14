@@ -1,6 +1,7 @@
 import { generateText } from "ai";
-import { buildModel } from "./providers";
+import { buildModel, buildOpenRouterModel } from "./providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { runWithOpenRouterPool } from "./with-token-pool";
 
 export type ImproveInput = { title: string; bodyHtml: string; instruction?: string };
 
@@ -19,9 +20,29 @@ export function buildImprovePrompt(input: ImproveInput): string {
 
 // Mirrors generateArticle's provider loop. Returns via:"mock" with the body UNCHANGED when no
 // provider is configured or all fail — the caller (improveWithAi) refuses to persist a mock result.
+// Flaky here mirrors the OLD "empty output → next provider" check (line below): an empty/blank
+// body is not usable, so it should trigger rotation to the next pooled OpenRouter token rather
+// than being accepted as-is.
+const isFlaky = (text: string): boolean => text.trim().length === 0;
+
 export async function improveArticleBody(input: ImproveInput): Promise<{ bodyHtml: string; via: string }> {
   const cfg = getPipelineConfig();
   for (const name of cfg.llmOrder) {
+    if (name === "openrouter") {
+      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
+      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
+      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
+      if (!cfg.openrouter) continue;
+
+      const r = await runWithOpenRouterPool(async (apiKey) => {
+        const model = buildOpenRouterModel(cfg, apiKey);
+        const { text } = await generateText({ model, prompt: buildImprovePrompt(input) });
+        return text.trim();
+      }, isFlaky);
+      if (r.ok) return { bodyHtml: r.value, via: "openrouter" };
+      continue;
+    }
+
     const model = buildModel(name, cfg);
     if (!model) continue;
     for (let attempt = 0; attempt < 2; attempt++) {

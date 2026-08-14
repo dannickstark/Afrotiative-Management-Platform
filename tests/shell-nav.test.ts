@@ -11,12 +11,15 @@ describe("visibleNavItems", () => {
     expect(hrefs).toContain("/queue");
   });
 
-  it("un éditeur voit Réglages avec exactement ses deux sous-pages autorisées", () => {
+  it("un éditeur voit Réglages avec exactement ses trois sous-pages autorisées", () => {
+    // Task 9 (OpenRouter token pool) : l'éditeur gagne l'accès à /settings/integrations —
+    // même droit llmTokens:manage que la page et les actions du bassin de jetons.
     const settings = visibleNavItems("editor").find((i) => i.href === "/settings");
     expect(settings).toBeDefined();
     expect(settings!.items!.map((c) => c.href)).toEqual([
       "/settings/feeds",
       "/settings/taxonomy",
+      "/settings/integrations",
     ]);
   });
 
