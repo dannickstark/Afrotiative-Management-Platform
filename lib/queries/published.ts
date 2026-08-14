@@ -27,7 +27,7 @@ export const PUBLISHED_PAGE_SIZE = 25;
 function escapeLike(s: string): string { return s.replace(/[\\%_]/g, (c) => `\\${c}`); }
 
 // Pure: map raw URL search params → typed filters (no DB/DOM). Invalid dates / unknown author /
-// blank strings are dropped; page clamps to >= 1; pageSize is fixed. Mirrors filterRuns/resolveRunParams.
+// blank strings are dropped; page clamps to >= 1; pageSize is fixed. Mirrors resolveRunParams.
 export function parsePublishedSearchParams(
   sp: Record<string, string | string[] | undefined>,
 ): PublishedFilters {
@@ -70,7 +70,7 @@ export function parsePublishedSearchParams(
 // version, so a raw `sql` fragment is the portable equivalent.
 const SORT_EXPR: Record<PublishedSortCol, (dir: "asc" | "desc") => SQL> = {
   title: (dir) => (dir === "asc" ? asc(articles.title) : desc(articles.title)),
-  category: (dir) => (dir === "asc" ? asc(wpCategories.name) : desc(wpCategories.name)),
+  category: (dir) => (dir === "asc" ? sql`${wpCategories.name} asc nulls last` : sql`${wpCategories.name} desc nulls last`),
   publishedAt: (dir) => (dir === "asc" ? sql`${articles.publishedAt} asc nulls last` : sql`${articles.publishedAt} desc nulls last`),
   author: (dir) => (dir === "asc" ? asc(articles.aiAuthor) : desc(articles.aiAuthor)),
 };

@@ -82,12 +82,6 @@ export async function getActiveRun() {
 export type ActiveRun = NonNullable<Awaited<ReturnType<typeof getActiveRun>>>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SP7 — runs list client-side filter bar. The pure helper itself lives in ./runs-filter (a DB-free
-// module) so the "use client" runs-view.tsx can import it without dragging `@/db`/`pg` into the
-// browser bundle; re-exported here so server code and tests keep importing it from this module.
-export { filterRuns } from "./runs-filter";
-
-// ─────────────────────────────────────────────────────────────────────────────
 // SP7 — history trends strip (components/pipeline/run-trends.tsx), derived entirely from existing
 // data (pipeline_runs + articles) — no migration, no new table.
 

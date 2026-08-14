@@ -103,7 +103,7 @@ const SOURCE_COUNT = sql<number>`(select count(*) from ${articleSources} s where
 // l'unique point d'entrée), donc cette table est exhaustive et jamais indexée par une chaîne brute.
 const SORT_EXPR: Record<QueueSortCol, (dir: "asc" | "desc") => SQL> = {
   title: (dir) => (dir === "asc" ? asc(articles.title) : desc(articles.title)),
-  category: (dir) => (dir === "asc" ? asc(wpCategories.name) : desc(wpCategories.name)),
+  category: (dir) => (dir === "asc" ? sql`${wpCategories.name} asc nulls last` : sql`${wpCategories.name} desc nulls last`),
   score: (dir) => (dir === "asc" ? sql`${articles.score} asc nulls last` : sql`${articles.score} desc nulls last`),
   date: (dir) => (dir === "asc" ? sql`${articles.generatedAt} asc nulls last` : sql`${articles.generatedAt} desc nulls last`),
   source: (dir) => (dir === "asc" ? asc(SOURCE_COUNT) : desc(SOURCE_COUNT)),

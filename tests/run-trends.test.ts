@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { db, articles, pipelineRuns } from "@/db";
 import { gte, inArray, sql } from "drizzle-orm";
-import { getRunTrends, mergeDailyTrends, summarizeRunsWindow, filterRuns } from "@/lib/queries/runs";
+import { getRunTrends, mergeDailyTrends, summarizeRunsWindow } from "@/lib/queries/runs";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SP7 — pure helpers (no DB): the day-merge/zero-fill for the trends strip's per-day bars, the
@@ -86,34 +86,6 @@ describe("summarizeRunsWindow", () => {
   it("returns avgDurationSec=null when nothing in the window is finalized", () => {
     const rows = [{ status: "paused", startedAt: new Date(0), finishedAt: null }];
     expect(summarizeRunsWindow(rows).avgDurationSec).toBeNull();
-  });
-});
-
-describe("filterRuns", () => {
-  const rows = [
-    { id: "1", status: "success", triggeredBy: "manual" },
-    { id: "2", status: "failed", triggeredBy: "scheduled" },
-    { id: "3", status: "failed", triggeredBy: "reprocess" },
-  ];
-
-  it("passes everything through with status=all, trigger=all", () => {
-    expect(filterRuns(rows, { status: "all", trigger: "all" }).map((r) => r.id)).toEqual(["1", "2", "3"]);
-  });
-
-  it("filters by status only", () => {
-    expect(filterRuns(rows, { status: "failed", trigger: "all" }).map((r) => r.id)).toEqual(["2", "3"]);
-  });
-
-  it("filters by trigger only", () => {
-    expect(filterRuns(rows, { status: "all", trigger: "reprocess" }).map((r) => r.id)).toEqual(["3"]);
-  });
-
-  it("combines both filters (AND)", () => {
-    expect(filterRuns(rows, { status: "failed", trigger: "scheduled" }).map((r) => r.id)).toEqual(["2"]);
-  });
-
-  it("returns an empty array when nothing matches", () => {
-    expect(filterRuns(rows, { status: "success", trigger: "reprocess" })).toEqual([]);
   });
 });
 
