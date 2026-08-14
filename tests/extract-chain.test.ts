@@ -276,6 +276,39 @@ describe("extract chain — crawl4ai provider + image backfill (Task 3)", () => 
     }
   });
 
+  it("when crawl4ai wins the chain but returns 0 images, extract() does NOT re-crawl for image backfill (Finding 3)", async () => {
+    process.env.EXTRACT_ORDER = "jina,firecrawl,crawl4ai,readability";
+    delete process.env.JINA_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
+    process.env.CRAWL4AI_API_URL = CRAWL4AI_URL;
+    process.env.CRAWL4AI_API_TOKEN = CRAWL4AI_TOKEN;
+
+    const { extract } = await import("@/lib/extract/index");
+    let crawl4aiCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const u = urlOf(input);
+      if (u === `${CRAWL4AI_URL}/crawl`) {
+        crawl4aiCalls++;
+        // Crawl4AI wins the chain (text ok) but comes back with 0 images.
+        return new Response(JSON.stringify(crawl4aiFixture([])), { status: 200 });
+      }
+      throw new Error(`fetch inattendu vers ${u}`);
+    }) as typeof fetch;
+
+    try {
+      const r = await extract("https://example.com/article");
+      expect(r.via).toBe("crawl4ai");
+      expect(r.images).toEqual([]);
+      // Exactly one /crawl call: the winning extract() attempt. backfillCandidateImages must skip
+      // the second crawl4aiImages() call it would otherwise make, since crawl4ai already ran and
+      // already came back with 0 images for this same URL.
+      expect(crawl4aiCalls).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("hasExternalExtractor() is true when only crawl4ai is configured and in extractOrder", async () => {
     const { hasExternalExtractor } = await import("@/lib/extract/index");
     delete process.env.JINA_API_KEY;

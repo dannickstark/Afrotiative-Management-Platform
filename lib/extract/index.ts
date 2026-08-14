@@ -1,4 +1,4 @@
-import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { getPipelineConfig, type PipelineConfig } from "@/lib/config/pipeline-config";
 import { jinaExtract } from "./jina";
 import { firecrawlExtract } from "./firecrawl";
 import { crawl4aiExtract, crawl4aiImages } from "./crawl4ai";
@@ -60,7 +60,7 @@ export async function extract(url: string, opts: ExtractOptions = {}): Promise<E
       // Jina always returns no images; Firecrawl/Crawl4AI usually do but may come back empty too —
       // in either case, backfill candidate images (see backfillCandidateImages below, which tries
       // a raw fetch for trusted feed URLs and Crawl4AI for both feed and untrusted web URLs).
-      if (r.images.length === 0 && name !== "readability") r.images = await backfillCandidateImages(url, !!opts.externalOnly);
+      if (r.images.length === 0 && name !== "readability") r.images = await backfillCandidateImages(url, !!opts.externalOnly, cfg, name);
       return { ...r, attempts };
     } catch (e) {
       attempts.push({ provider: name, ok: false, reason: (e as Error).message });
@@ -104,14 +104,24 @@ export function hasExternalExtractor(): boolean {
 //  2. Crawl4AI — safe for BOTH feed and untrusted web URLs, because Crawl4AI fetches from its own
 //     separate infra (a hosted Railway box), never from our server directly. This is what lets
 //     web-search sources get images at all (they skip strategy 1 entirely), and gives feed sources
-//     a second chance when the raw fetch above is blocked or renders nothing useful.
-async function backfillCandidateImages(url: string, externalOnly: boolean): Promise<string[]> {
-  const cfg = getPipelineConfig();
+//     a second chance when the raw fetch above is blocked or renders nothing useful. EXCEPT when
+//     Crawl4AI was itself the winning extract() provider (`winningProvider === "crawl4ai"`): that
+//     provider call already crawled `url` via Crawl4AI and came back with 0 images, so calling
+//     crawl4aiImages() again would just re-crawl the same URL for the same (already-empty) result —
+//     skipped as a wasted network round-trip, not a correctness issue.
+//  `cfg` is the already-parsed PipelineConfig from the caller's extract() — reused here rather
+//  than re-parsing process.env a second time per call.
+async function backfillCandidateImages(
+  url: string,
+  externalOnly: boolean,
+  cfg: PipelineConfig,
+  winningProvider: string,
+): Promise<string[]> {
   if (!externalOnly) {
     const raw = await backfillImages(url);
     if (raw.length) return raw;
   }
-  if (cfg.crawl4ai) return await crawl4aiImages(url, cfg.crawl4ai);
+  if (cfg.crawl4ai && winningProvider !== "crawl4ai") return await crawl4aiImages(url, cfg.crawl4ai);
   return [];
 }
 
