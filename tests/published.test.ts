@@ -21,8 +21,16 @@ describe("parsePublishedSearchParams", () => {
   it("defaults empty params to page 1, default page size, no filters", () => {
     expect(parsePublishedSearchParams({})).toEqual({
       search: undefined, categoryId: undefined, from: undefined, to: undefined,
-      author: undefined, page: 1, pageSize: PUBLISHED_PAGE_SIZE,
+      author: undefined, sortColumn: "publishedAt", sortDirection: "desc",
+      page: 1, pageSize: PUBLISHED_PAGE_SIZE,
     });
+  });
+  it("only accepts allowlisted sort columns (task B3 — clickable headers)", () => {
+    expect(parsePublishedSearchParams({ sort: "title", dir: "asc" }).sortColumn).toBe("title");
+    expect(parsePublishedSearchParams({ sort: "title", dir: "asc" }).sortDirection).toBe("asc");
+    const f = parsePublishedSearchParams({ sort: "n'importe quoi" });
+    expect(f.sortColumn).toBe("publishedAt");
+    expect(f.sortDirection).toBe("desc");
   });
   it("reads and trims q/cat, parses valid dates, and accepts the author enum", () => {
     const f = parsePublishedSearchParams({ q: "  brvm ", cat: "cat-1", from: "2026-08-01", to: "2026-08-06", author: "ai", page: "3" });
