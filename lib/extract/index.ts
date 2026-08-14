@@ -1,6 +1,7 @@
-import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { getPipelineConfig, type PipelineConfig } from "@/lib/config/pipeline-config";
 import { jinaExtract } from "./jina";
 import { firecrawlExtract } from "./firecrawl";
+import { crawl4aiExtract, crawl4aiImages } from "./crawl4ai";
 import { readabilityExtract } from "./readability";
 import { extractImages } from "./images";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
@@ -12,19 +13,60 @@ export type ExtractOptions = {
   // SP4 Task 6b (web-search augmentation) — web-search result URLs are UNTRUSTED (arbitrary
   // internet, picked by a third-party search API, never a feed we deliberately chose to follow).
   // externalOnly restricts the chain to providers that fetch from THEIR OWN infrastructure (jina
-  // reader, firecrawl) — there is no SSRF surface from OUR server regardless of the URL. The
-  // direct-`fetch(url)` readability provider is skipped entirely, and so is the raw-fetch image
-  // backfill below (it's also a direct fetch of the untrusted URL). If neither jina nor firecrawl
-  // is configured, this returns `via:"none"` rather than ever falling back to a direct fetch.
+  // reader, firecrawl, crawl4ai — the last runs on our own separate Crawl4AI infra, not our Next
+  // server) — there is no SSRF surface from OUR server regardless of the URL. The direct-`fetch(url)`
+  // readability provider is skipped entirely, and so is the raw-fetch image backfill (it's also a
+  // direct fetch of the untrusted URL; see backfillCandidateImages below, which still allows
+  // Crawl4AI for images even in externalOnly mode for the same reason). If none of jina, firecrawl,
+  // or crawl4ai is configured, this returns `via:"none"` rather than ever falling back to a direct
+  // fetch.
   externalOnly?: boolean;
 };
+
+// A provider result is "strong" when it has real substance: at least `minChars` of trimmed text,
+// AND the text doesn't look like a JS-wall/anti-bot stub. The problem this guards against: Jina
+// Reader almost always returns SOMETHING ≥100 chars (its own, much lower, internal floor) — even
+// for pages that are just a "please enable JavaScript" interstitial — so under the old ">=100
+// chars or throw" rule Jina "won" the chain on the very first try and the stronger fallbacks
+// (Firecrawl, our self-hosted Crawl4AI, which actually renders JS) never got a real shot at TEXT
+// extraction. The regex is deliberately conservative (a handful of well-known bot-wall/consent
+// phrases) so real short-but-legitimate articles are never misclassified as weak by the pattern
+// half of this check — only the length floor can flag those, and it's generous (500 chars) by
+// design.
+const WEAK_CONTENT_MARKERS =
+  /enable javascript|requires javascript|verify you are (a )?human|are you a robot|checking your browser|cf-browser-verification|please enable cookies/i;
+
+function isStrongContent(text: string, minChars: number): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < minChars) return false;
+  if (WEAK_CONTENT_MARKERS.test(trimmed)) return false;
+  return true;
+}
 
 export async function extract(url: string, opts: ExtractOptions = {}): Promise<ExtractResult> {
   const cfg = getPipelineConfig();
   const attempts: ExtractResult["attempts"] = [];
   const order = opts.externalOnly
-    ? cfg.extractOrder.filter((name) => name === "jina" || name === "firecrawl")
+    ? cfg.extractOrder.filter((name) => name === "jina" || name === "firecrawl" || name === "crawl4ai")
     : cfg.extractOrder;
+
+  // Image backfill (see backfillCandidateImages below) is identical whichever result ends up
+  // winning — a strong hit that returns immediately, or the best-weak fallback picked after the
+  // loop — so it's factored into this closure to avoid drifting the two return points apart.
+  async function withImageBackfill(r: Extracted, name: string): Promise<ExtractResult> {
+    // Jina always returns no images; Firecrawl/Crawl4AI usually do but may come back empty too —
+    // in either case, backfill candidate images (see backfillCandidateImages below, which tries
+    // a raw fetch for trusted feed URLs and Crawl4AI for both feed and untrusted web URLs).
+    if (r.images.length === 0 && name !== "readability") r.images = await backfillCandidateImages(url, !!opts.externalOnly, cfg, name);
+    return { ...r, attempts };
+  }
+
+  // Best weak candidate seen so far (kept only when no strong hit is found at all) — the longest
+  // trimmed text among providers that returned WITHOUT throwing but under the strength bar. This
+  // is the last resort: if every provider is weak, we still return the fullest thing we saw rather
+  // than regress to `via:"none"` (which would be worse than what the old "first success wins"
+  // behavior gave us).
+  let bestWeak: { r: Extracted; provider: string } | undefined;
 
   for (const name of order) {
     try {
@@ -41,22 +83,42 @@ export async function extract(url: string, opts: ExtractOptions = {}): Promise<E
           continue;
         }
         r = await firecrawlExtract(url, cfg.firecrawl.apiKey);
+      } else if (name === "crawl4ai") {
+        if (!cfg.crawl4ai) {
+          attempts.push({ provider: name, ok: false, reason: "pas de config Crawl4AI" });
+          continue;
+        }
+        r = await crawl4aiExtract(url, cfg.crawl4ai);
       } else if (name === "readability") {
         r = await readabilityExtract(url);
       } else {
         continue;
       }
-      attempts.push({ provider: name, ok: true });
-      // Jina always returns no images; Firecrawl usually does but may come back empty too —
-      // in either case, backfill candidate images from a best-effort raw fetch of the page.
-      // SKIPPED in externalOnly mode: that raw fetch targets `url` directly, which is exactly the
-      // SSRF surface externalOnly exists to avoid for untrusted web-search URLs.
-      if (r.images.length === 0 && name !== "readability" && !opts.externalOnly) r.images = await backfillImages(url);
-      return { ...r, attempts };
+
+      if (isStrongContent(r.text, cfg.minContentChars)) {
+        // Genuine win: substantial content, not a bot-wall stub. Return immediately — unchanged
+        // fast path for the common case where the first configured provider just works.
+        attempts.push({ provider: name, ok: true });
+        return await withImageBackfill(r, name);
+      }
+
+      // Weak result: the provider itself didn't throw (so it's not a hard failure — some content
+      // came back), but it's too thin or looks like a JS-wall/anti-bot stub to trust as the final
+      // answer. Don't return yet — record WHY we're moving on, remember it if it's the fullest
+      // weak result so far, and let the chain fall through to the next (stronger) provider, e.g.
+      // Crawl4AI, which renders JS and can often get past exactly this kind of stub.
+      attempts.push({ provider: name, ok: true, reason: `contenu faible (${r.text.trim().length} car.) — repli` });
+      if (!bestWeak || r.text.trim().length > bestWeak.r.text.trim().length) bestWeak = { r, provider: name };
     } catch (e) {
       attempts.push({ provider: name, ok: false, reason: (e as Error).message });
     }
   }
+
+  // No provider ever returned strong content. Fall back to the best (longest) weak result rather
+  // than regress to an empty via:"none" — some content beats none, and this is still strictly
+  // better than the pre-fallthrough behavior (which would have returned this exact result anyway,
+  // just without ever giving Firecrawl/Crawl4AI a chance to do better first).
+  if (bestWeak) return await withImageBackfill(bestWeak.r, bestWeak.provider);
 
   return { title: "", text: "", images: [], via: "none", attempts };
 }
@@ -69,20 +131,51 @@ export function extractExternal(url: string): Promise<ExtractResult> {
   return extract(url, { externalOnly: true });
 }
 
-// Whether at least one external-fetching provider (jina reader or firecrawl — providers that
-// fetch from THEIR OWN infrastructure, never ours) is BOTH configured (has a key) AND enabled in
-// the extraction order. The runner checks this BEFORE even calling searchRelated(): if no external
-// provider will actually run, extractExternal() would just return `via:"none"` for every single
-// hit (a wasted Brave call + per-hit no-op), so this lets the caller skip web augmentation
-// entirely and log ONE clear reason instead. Requiring extractOrder membership — not just the key
-// — matters because keys can be set while EXTRACT_ORDER deliberately excludes those providers
-// (e.g. an operator pinning EXTRACT_ORDER="readability"): extractExternal() filters the order to
-// jina/firecrawl, so a provider absent from the order never runs even with a key present.
+// Whether at least one external-fetching provider (jina reader, firecrawl, or crawl4ai — providers
+// that fetch from THEIR OWN infrastructure, never ours) is BOTH configured (has a key/creds) AND
+// enabled in the extraction order. The runner checks this BEFORE even calling searchRelated(): if
+// no external provider will actually run, extractExternal() would just return `via:"none"` for
+// every single hit (a wasted Brave call + per-hit no-op), so this lets the caller skip web
+// augmentation entirely and log ONE clear reason instead. Requiring extractOrder membership — not
+// just the key — matters because keys can be set while EXTRACT_ORDER deliberately excludes those
+// providers (e.g. an operator pinning EXTRACT_ORDER="readability"): extractExternal() filters the
+// order to jina/firecrawl/crawl4ai, so a provider absent from the order never runs even with a key
+// present.
 export function hasExternalExtractor(): boolean {
   const cfg = getPipelineConfig();
   const jinaReady = !!cfg.jina && cfg.extractOrder.includes("jina");
   const firecrawlReady = !!cfg.firecrawl && cfg.extractOrder.includes("firecrawl");
-  return jinaReady || firecrawlReady;
+  const crawl4aiReady = !!cfg.crawl4ai && cfg.extractOrder.includes("crawl4ai");
+  return jinaReady || firecrawlReady || crawl4aiReady;
+}
+
+// Two image-backfill strategies, tried in order:
+//  1. Raw fetch of `url` — feed-URLs ONLY (`externalOnly === false`). This is a direct fetch of
+//     `url` from OUR server, so it's exactly the SSRF surface externalOnly exists to avoid; never
+//     called for untrusted web-search URLs. It's also prone to failing outright on JS-rendered or
+//     bot-blocked pages, since it's a plain unauthenticated GET with no rendering.
+//  2. Crawl4AI — safe for BOTH feed and untrusted web URLs, because Crawl4AI fetches from its own
+//     separate infra (a hosted Railway box), never from our server directly. This is what lets
+//     web-search sources get images at all (they skip strategy 1 entirely), and gives feed sources
+//     a second chance when the raw fetch above is blocked or renders nothing useful. EXCEPT when
+//     Crawl4AI was itself the winning extract() provider (`winningProvider === "crawl4ai"`): that
+//     provider call already crawled `url` via Crawl4AI and came back with 0 images, so calling
+//     crawl4aiImages() again would just re-crawl the same URL for the same (already-empty) result —
+//     skipped as a wasted network round-trip, not a correctness issue.
+//  `cfg` is the already-parsed PipelineConfig from the caller's extract() — reused here rather
+//  than re-parsing process.env a second time per call.
+async function backfillCandidateImages(
+  url: string,
+  externalOnly: boolean,
+  cfg: PipelineConfig,
+  winningProvider: string,
+): Promise<string[]> {
+  if (!externalOnly) {
+    const raw = await backfillImages(url);
+    if (raw.length) return raw;
+  }
+  if (cfg.crawl4ai && winningProvider !== "crawl4ai") return await crawl4aiImages(url, cfg.crawl4ai);
+  return [];
 }
 
 async function backfillImages(url: string): Promise<string[]> {
