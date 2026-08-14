@@ -138,7 +138,7 @@ export async function stageSources(
   // TASK A2 — trailing + optional so stageItem (below) and every existing caller/test that omits
   // it keeps its prior behavior (scope=null → every category in scope, i.e. no filtering at all).
   categoryScope: Set<string> | null = null,
-): Promise<{ articleId: string | null; steps: StepRec[] }> {
+): Promise<{ articleId: string | null; steps: StepRec[]; skipped?: boolean }> {
   const steps: StepRec[] = [];
 
   // Dedupe by URL BEFORE anything downstream: two grouped members can share a URL (e.g. the same
@@ -246,6 +246,13 @@ export async function stageSources(
     // transactional insert. Mirrors the "Publication automatique" best-effort hook pattern just
     // below: never-throw, wrapped in its own try/catch, so an observability hiccup here can never
     // turn a legitimate skip into a story-failing exception.
+    //
+    // TASK A-STATS — `skipped: true` is the ONLY return path (of every branch in this function)
+    // that sets it; every other return (including the early empty-sources return above, and the
+    // catch-all below) leaves it undefined/falsy. This is the sole signal executeRun (lib/pipeline/
+    // run.ts) uses to keep a category filter-out from being counted/alerted as a story failure — a
+    // narrow (or all-excluding) category scope must never inflate itemFailures or trip the
+    // "all items failed" → status "failed" + run_failed alert path.
     if (!isInCategoryScope(draft.category, categoryScope)) {
       const step: StepRec = { name: "Hors catégorie sélectionnée (ignoré)", status: "success", durationMs: 0 };
       try {
@@ -255,7 +262,7 @@ export async function stageSources(
       } catch {
         // Best-effort observability only — never fail the story over this.
       }
-      return { articleId: null, steps };
+      return { articleId: null, steps, skipped: true };
     }
 
     const depot = await timedStep(steps, hooks, "Dépôt en revue", ms, () => persistArticle({
@@ -433,7 +440,7 @@ export async function stageItem(
   categoryNames: string[],
   hooks: StageHooks = {},
   timeoutMs?: number,
-): Promise<{ articleId: string | null; steps: StepRec[] }> {
+): Promise<{ articleId: string | null; steps: StepRec[]; skipped?: boolean }> {
   const steps: StepRec[] = [];
   try {
     const ms = timeoutMs ?? (await getPipelineSettings()).perOperationTimeoutMs;
@@ -458,7 +465,7 @@ export async function stageItem(
       hooks,
       ms,
     );
-    return { articleId: result.articleId, steps: [...steps, ...result.steps] };
+    return { articleId: result.articleId, steps: [...steps, ...result.steps], skipped: result.skipped };
   } catch {
     return { articleId: null, steps };
   }

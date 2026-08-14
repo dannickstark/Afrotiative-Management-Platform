@@ -46,7 +46,7 @@ const PURE_FILES = new Set<string>([
   "interval-picker.test.ts", "live-panel.test.ts",
   "mock-llm.test.ts", "nav-sections.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
   "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "resend.test.ts", "rss-parse.test.ts",
-  "run-config-dialog.test.ts", "run-detail.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
+  "run-config-dialog.test.ts", "run-detail.test.ts", "run-outcome.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
   "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts",
   "session-guard.test.ts", "settings-rbac.test.ts",
   "shell-nav.test.ts", "smoke.test.ts", "stat-card.test.ts",

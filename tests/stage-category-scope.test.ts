@@ -78,9 +78,12 @@ describe("stageSources (network-free, mock fallback) — category scope enforcem
     const categoryNames = ["Sport", "Économie"]; // mock deterministically picks categoryNames[0] = "Sport"
     const categoryScope = new Set(["Économie"]); // scope excludes "Sport"
 
-    const { articleId, steps } = await stageSources(SOURCES, categoryNames, {}, undefined, undefined, categoryScope);
+    const { articleId, steps, skipped } = await stageSources(SOURCES, categoryNames, {}, undefined, undefined, categoryScope);
 
     expect(articleId).toBeNull();
+    // TASK A-STATS — this is the field executeRun (lib/pipeline/run.ts) reads to keep a category
+    // filter-out from being tallied/alerted as a story failure (see classifyRunOutcome there).
+    expect(skipped).toBe(true);
     expect(steps.some((s) => s.name === "Hors catégorie sélectionnée (ignoré)" && s.status === "success")).toBe(true);
     expect(steps.some((s) => s.name === "Dépôt en revue")).toBe(false);
 
@@ -94,10 +97,11 @@ describe("stageSources (network-free, mock fallback) — category scope enforcem
     const categoryNames = ["Sport", "Économie"]; // mock picks "Sport"
     const categoryScope = new Set(["Sport"]); // scope includes "Sport"
 
-    const { articleId, steps } = await stageSources(SOURCES, categoryNames, {}, undefined, undefined, categoryScope);
+    const { articleId, steps, skipped } = await stageSources(SOURCES, categoryNames, {}, undefined, undefined, categoryScope);
     expect(articleId).not.toBeNull();
     createdArticleIds.push(articleId!);
 
+    expect(skipped).toBeUndefined(); // TASK A-STATS — falsy on every non-skip return path
     expect(steps.some((s) => s.name === "Hors catégorie sélectionnée (ignoré)")).toBe(false);
     expect(steps.some((s) => s.name === "Dépôt en revue" && s.status === "success")).toBe(true);
 
