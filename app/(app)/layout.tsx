@@ -38,7 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </div>
           )}
         </header>
-        <main className="flex-1 overflow-hidden p-6 w-full max-w-full">{children}</main>
+        <main className="flex-1 overflow-auto p-6 w-full max-w-full">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );
