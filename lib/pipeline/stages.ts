@@ -36,6 +36,17 @@ export type StageHooks = {
   onStageEnd?: (step: StepRec) => void | Promise<void>;
 };
 
+// TASK A2 — "filter output" enforcement. `scope` is a Set of WordPress category NAMES the run was
+// restricted to (via RunParams.categoryIds → resolved to names by the caller; see run.ts), or
+// `null` when the run wasn't category-scoped at all (the default — every category is in scope).
+// Pure and total: never throws, no I/O. `category` is `draft.category` (or absent) — a story whose
+// AI-classified category doesn't fall in a non-null scope is out of scope, INCLUDING when the
+// category itself is missing/null (an unclassified story can't be proven to match the selection).
+export function isInCategoryScope(category: string | null | undefined, scope: Set<string> | null): boolean {
+  if (scope === null) return true;
+  return typeof category === "string" && scope.has(category);
+}
+
 // One already-extracted piece of source content to synthesize into (part of) ONE article — SP4
 // Task 6a's corpus cross-check unit. `images` are that source's OWN candidate images (e.g.
 // ExtractResult.images from lib/extract); stageSources aggregates them across every source of a
@@ -124,6 +135,9 @@ export async function stageSources(
   hooks: StageHooks = {},
   timeoutMs?: number,
   autoPublishCfg?: AutoPublishCfg,
+  // TASK A2 — trailing + optional so stageItem (below) and every existing caller/test that omits
+  // it keeps its prior behavior (scope=null → every category in scope, i.e. no filtering at all).
+  categoryScope: Set<string> | null = null,
 ): Promise<{ articleId: string | null; steps: StepRec[] }> {
   const steps: StepRec[] = [];
 
@@ -224,6 +238,25 @@ export async function stageSources(
       hasImage: !!draft.featuredImageUrl,
       confidence,
     });
+
+    // TASK A2 — "filter output": a run scoped to selected categories keeps only stories the AI
+    // classifies into one of them; everything else is skipped BEFORE any DB write. draft.category
+    // is final by this point (repairDraft, above, never touches it — see its own comment: "La
+    // catégorie n'est JAMAIS devinée"), so this is the last possible point before persistArticle's
+    // transactional insert. Mirrors the "Publication automatique" best-effort hook pattern just
+    // below: never-throw, wrapped in its own try/catch, so an observability hiccup here can never
+    // turn a legitimate skip into a story-failing exception.
+    if (!isInCategoryScope(draft.category, categoryScope)) {
+      const step: StepRec = { name: "Hors catégorie sélectionnée (ignoré)", status: "success", durationMs: 0 };
+      try {
+        await hooks.onStageStart?.(step.name);
+        steps.push(step);
+        await hooks.onStageEnd?.(step);
+      } catch {
+        // Best-effort observability only — never fail the story over this.
+      }
+      return { articleId: null, steps };
+    }
 
     const depot = await timedStep(steps, hooks, "Dépôt en revue", ms, () => persistArticle({
       draft, sanitizedBody: sanitized, vector, clusterId: cluster.clusterId, score, confidence,

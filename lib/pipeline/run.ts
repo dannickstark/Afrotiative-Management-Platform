@@ -195,7 +195,8 @@ export async function executeRun(
     // DB-backed (SP1): maxItemsPerRun is admin-editable at /settings/pipeline, not just env —
     // getPipelineConfig() stays for provider/secret/order config elsewhere in the pipeline.
     const settings = await getPipelineSettings();
-    const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
+    const cats = await db.select({ id: wpCategories.id, name: wpCategories.name }).from(wpCategories);
+    const categoryNames = cats.map((c) => c.name);
 
     // Params live on the run row (resolved at trigger). Read once; drives feed targeting, the item
     // cap, and the recency cutoff. Null for legacy rows / direct executeRun callers → no cutoff,
@@ -204,6 +205,18 @@ export async function executeRun(
     const params = runRow?.params ?? null;
     const cutoff = params ? cutoffDate(params) : null;
     const maxItems = params?.maxItems ?? settings.maxItemsPerRun;
+
+    // TASK A2 — "filter output": a run scoped to selected categories (params.categoryIds) keeps
+    // only stories the AI classifies into one of THOSE categories; everything else is skipped
+    // before any DB write (see stageSources's isInCategoryScope check below). Built as a Set of
+    // NAMES (not ids) because that's what draft.category carries — the AI outputs a category NAME
+    // during synthesis, never an id. A selected id with no matching row in `cats` (stale/deleted
+    // category) simply contributes no name to the set — intentional: it can never accidentally
+    // match a story, it just narrows the scope further. Null (not present, or empty array) means
+    // "no category restriction" — stageSources treats that as "every category in scope".
+    const categoryScope = params?.categoryIds && params.categoryIds.length > 0
+      ? new Set(cats.filter((c) => params.categoryIds!.includes(c.id)).map((c) => c.name))
+      : null;
 
     type Candidate = { item: RawItem; feedId: string; feedName: string };
     type Group = { members: Candidate[] };
@@ -496,7 +509,7 @@ export async function executeRun(
             enabled: settings.autoPublishEnabled,
             scoreThreshold: settings.scoreThreshold,
             minSources: settings.autoPublishMinSources,
-          });
+          }, categoryScope);
           if (articleId) produced++; else itemFailures++;
         }
       } catch (e) {
