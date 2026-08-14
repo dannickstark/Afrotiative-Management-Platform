@@ -60,37 +60,10 @@ export async function generateArticle(input: GenerateInput): Promise<{ draft: Ar
 
   for (const name of cfg.llmOrder) {
     if (name === "openrouter") {
-      // buildModel("openrouter", cfg) is the SAME availability gate the pre-pool code used —
-      // in real (unmocked) code it is non-null iff cfg.openrouter is configured, so this check
-      // is equivalent to `if (!cfg.openrouter) continue`. Kept as buildModel() rather than the
-      // cfg check directly so unit tests that mock buildModel to simulate an available provider
-      // (tests/ai-fallback.test.ts, predating the token pool) keep working unmodified.
-      const gateModel = buildModel(name, cfg);
-      if (!gateModel) continue;
-
-      if (!cfg.openrouter) {
-        // UNREACHABLE with the real buildModel: it only returns non-null when cfg.openrouter is
-        // set, in which case this branch can't be taken. This exists solely for callers that
-        // module-mock buildModel directly (bypassing cfg.openrouter entirely) — the token pool
-        // has no env key to fall back to in that case, so mirror the OLD single-model, two-attempt
-        // flow with the model buildModel already handed back, instead of routing through a pool
-        // that would otherwise always be empty.
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const { object } = await generateObject({
-              model: gateModel,
-              schema,
-              prompt: buildArticlePrompt(input),
-              providerOptions: { openaiCompatible: { strictJsonSchema: false } },
-            });
-            return { draft: sanitizeDraft(object as ArticleDraft, input.candidateImages), via: "openrouter" };
-          } catch (e) {
-            console.warn(`[pipeline] LLM provider openrouter a échoué: ${(e as Error).message}`);
-            if (attempt === 1) break;
-          }
-        }
-        continue;
-      }
+      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
+      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
+      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
+      if (!cfg.openrouter) continue;
 
       const settings = await getPipelineSettings();
       const isFlaky = (draft: ArticleDraft) => articleIsFlaky(draft.bodyHtml, settings.openrouterMinContentChars);

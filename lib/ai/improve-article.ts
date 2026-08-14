@@ -29,30 +29,10 @@ export async function improveArticleBody(input: ImproveInput): Promise<{ bodyHtm
   const cfg = getPipelineConfig();
   for (const name of cfg.llmOrder) {
     if (name === "openrouter") {
-      // See lib/ai/generate-article.ts's identical gate + fallback for the full rationale: this
-      // buildModel() call is the SAME availability check the pre-pool code used (non-null iff
-      // cfg.openrouter is configured in real, unmocked code), kept so tests that mock buildModel
-      // directly (tests/ai-improve.test.ts, predating the token pool) keep working unmodified.
-      const gateModel = buildModel(name, cfg);
-      if (!gateModel) continue;
-
-      if (!cfg.openrouter) {
-        // UNREACHABLE with the real buildModel — see generate-article.ts's twin comment. Exists
-        // only for callers that module-mock buildModel directly, bypassing cfg.openrouter (the
-        // token pool would otherwise always be empty for them).
-        for (let attempt = 0; attempt < 2; attempt++) {
-          try {
-            const { text } = await generateText({ model: gateModel, prompt: buildImprovePrompt(input) });
-            const body = text.trim();
-            if (body.length > 0) return { bodyHtml: body, via: "openrouter" };
-            break;
-          } catch (e) {
-            console.warn(`[improve] fournisseur openrouter a échoué: ${(e as Error).message}`);
-            if (attempt === 1) break;
-          }
-        }
-        continue;
-      }
+      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
+      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
+      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
+      if (!cfg.openrouter) continue;
 
       const r = await runWithOpenRouterPool(async (apiKey) => {
         const model = buildOpenRouterModel(cfg, apiKey);

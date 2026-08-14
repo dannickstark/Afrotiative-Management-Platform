@@ -18,33 +18,82 @@ import type { ArticleDraft } from "@/lib/ai/schema";
 // that mock.module() can no longer touch.
 const { buildModel: realBuildModel } = await import("@/lib/ai/providers");
 const { generateObject: realGenerateObject } = await import("ai");
+const { getPipelineSettings: realGetPipelineSettings } = await import("@/lib/queries/settings");
+const { runWithOpenRouterPool: realRunWithOpenRouterPool } = await import("@/lib/ai/with-token-pool");
 
 // --- Mutable controls, reset per test; the module mocks below delegate to these. ---
 let buildModelImpl: (name: string, cfg: unknown) => unknown = () => null;
-let generateObjectImpl: (opts: { model: { name: string } }) => Promise<{ object: ArticleDraft }> =
+let generateObjectImpl: (opts: { model: unknown }) => Promise<{ object: ArticleDraft }> =
   async () => { throw new Error("generateObjectImpl not set"); };
+// getPipelineSettings is only reached by generate-article.ts's REAL openrouter branch once
+// cfg.openrouter is configured (below). Mocked so this DB-free ("pure" lane, per
+// scripts/test-fast.ts's PURE_FILES) test file never opens a real DB connection just because a
+// test sets OPENROUTER_API_KEY. openrouterMinContentChars: 400 matches the real default seeded
+// by lib/queries/settings.ts's getPipelineSettings().
+let getPipelineSettingsImpl: () => Promise<{ openrouterMinContentChars: number }> =
+  async () => ({ openrouterMinContentChars: 400 });
+// runWithOpenRouterPool is the rotation runner (lib/ai/with-token-pool.ts) — mocked so these
+// unit tests can drive the openrouter branch's `op`/`isFlaky` wiring directly without a real DB
+// token pool or a real OpenRouter API key. The DEFAULT below faithfully mirrors the real runner's
+// single-token behavior (call op, ok:false on throw) WITHOUT applying isFlaky automatically —
+// several tests below construct drafts with a short bodyHtml ("<p>corps</p>", well under any
+// realistic openrouterMinContentChars) that would spuriously read as "flaky" if isFlaky were
+// auto-applied here; isFlaky's real behavior is instead asserted directly (see "routes the
+// openrouter branch through runWithOpenRouterPool" below) against the closure the call site wires
+// in, exactly as it's actually invoked in production.
+// The optional 3rd `deps` param is NOT used by this file's own tests, but MUST still be accepted
+// and forwarded: this mock.module() call leaks into every file that imports "@/lib/ai/with-token-
+// pool" afterwards in the same `bun test` process (same reasoning as the buildModel/generateObject
+// leak documented above) — including tests/with-token-pool.test.ts, which calls the REAL
+// runWithOpenRouterPool(op, isFlaky, deps) with an explicit `deps` override to fake the pool
+// without a DB. Dropping that 3rd arg here would silently swap it for the REAL default deps
+// (real DB pool) once this file's afterAll restores runWithOpenRouterPoolImpl to the real function.
+let runWithOpenRouterPoolImpl: (
+  op: (apiKey: string) => Promise<ArticleDraft>,
+  isFlaky: (v: ArticleDraft) => boolean,
+  deps?: unknown,
+) => Promise<{ ok: true; value: ArticleDraft } | { ok: false }> = async (op) => {
+  try {
+    return { ok: true, value: await op("test-openrouter-api-key") };
+  } catch {
+    return { ok: false };
+  }
+};
 
 // Network-free: replace only the provider factory and the AI SDK (nothing else in the
 // suite imports these, so replacing them wholesale cannot leak into other test files).
 // The config is NOT module-mocked — Bun shares one module registry across the whole
 // `bun test` run, so a partial mock of pipeline-config would break other files that need
 // parsePipelineConfig. Instead we drive cfg.llmOrder via the REAL getPipelineConfig through
-// process.env.LLM_ORDER; buildModel is mocked, so provider-credential gating is irrelevant.
+// process.env.LLM_ORDER; buildModel is mocked, so provider-credential gating is irrelevant for
+// the NON-openrouter branch (openrouter itself is now gated on the REAL cfg.openrouter, i.e. the
+// REAL process.env.OPENROUTER_API_KEY — see the individual tests below).
 // mockGenerateArticle + schema also remain REAL so the terminal-mock path is exercised for real.
 //
-// Both factories are a stable indirection (they always call through buildModelImpl /
-// generateObjectImpl, never inline the test-of-the-moment logic), so repointing those two
-// variables at the real functions in afterAll (below) genuinely restores real behavior for every
-// current AND future importer — without needing Bun to support "un-mocking" a module.
+// All four factories are a stable indirection (they always call through the *Impl variables,
+// never inline the test-of-the-moment logic), so repointing them at the real functions in
+// afterAll (below) genuinely restores real behavior for every current AND future importer —
+// without needing Bun to support "un-mocking" a module.
+// buildOpenRouterModel is left UNTOUCHED by this factory — because `realBuildModel` above was
+// captured via a top-level `await import(...)` before this call, Bun merges this factory's keys
+// onto the already-cached module object rather than replacing it wholesale, so
+// buildOpenRouterModel stays the REAL function for the openrouter branch's `op` to call.
 mock.module("@/lib/ai/providers", () => ({
   buildModel: (name: string, cfg: unknown) => buildModelImpl(name, cfg),
 }));
 mock.module("ai", () => ({
-  generateObject: (opts: { model: { name: string } }) => generateObjectImpl(opts),
+  generateObject: (opts: { model: unknown }) => generateObjectImpl(opts),
+}));
+mock.module("@/lib/queries/settings", () => ({
+  getPipelineSettings: () => getPipelineSettingsImpl(),
+}));
+mock.module("@/lib/ai/with-token-pool", () => ({
+  runWithOpenRouterPool: (op: (apiKey: string) => Promise<ArticleDraft>, isFlaky: (v: ArticleDraft) => boolean, deps?: unknown) =>
+    runWithOpenRouterPoolImpl(op, isFlaky, deps),
 }));
 
 // Imported AFTER the mocks are registered so its static imports resolve to the mocks.
-const { generateArticle } = await import("@/lib/ai/generate-article");
+const { generateArticle, articleIsFlaky } = await import("@/lib/ai/generate-article");
 
 function setOrder(order: string[]): void {
   process.env.LLM_ORDER = order.join(",");
@@ -71,50 +120,72 @@ const baseInput = {
 
 describe("generateArticle fallback chain", () => {
   const originalOrder = process.env.LLM_ORDER;
+  const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
   beforeEach(() => {
     // Silence the observability console.warn emitted on provider failure.
     spyOn(console, "warn").mockImplementation(() => {});
     buildModelImpl = () => null;
     generateObjectImpl = async () => { throw new Error("generateObjectImpl not set"); };
+    getPipelineSettingsImpl = async () => ({ openrouterMinContentChars: 400 });
+    runWithOpenRouterPoolImpl = async (op) => {
+      try {
+        return { ok: true, value: await op("test-openrouter-api-key") };
+      } catch {
+        return { ok: false };
+      }
+    };
     if (originalOrder === undefined) delete process.env.LLM_ORDER;
     else process.env.LLM_ORDER = originalOrder;
+    // Every test below opts IN to a configured openrouter (cfg.openrouter defined) by explicitly
+    // setting this itself; default it to ABSENT here so "unconfigured" is the neutral baseline
+    // (matches test-setup.ts's real-world stripping of OPENROUTER_API_KEY for the whole suite).
+    delete process.env.OPENROUTER_API_KEY;
   });
 
-  // Bun shares ONE module registry across the whole `bun test` run, so the mock.module("ai", …)
-  // and mock.module("@/lib/ai/providers", …) stubs registered above the describe block would
-  // otherwise leak into every other test file that imports those modules afterwards — notably
-  // tests/pipeline-run.test.ts's "network-free E2E" stageItem test, whose generateArticle() call
-  // would then resolve these leaked stubs instead of exercising the real generate→mock fallback
-  // path. mock.restore() only undoes the spyOn(console, "warn") mock (module mocks are not
-  // restorable in this Bun version) — so real restoration comes from repointing the
-  // buildModelImpl/generateObjectImpl indirection at the real functions captured above.
+  // Bun shares ONE module registry across the whole `bun test` run, so the mock.module(…) stubs
+  // registered above the describe block would otherwise leak into every other test file that
+  // imports those modules afterwards — notably tests/pipeline-run.test.ts's "network-free E2E"
+  // stageItem test, whose generateArticle() call would then resolve these leaked stubs instead of
+  // exercising the real generate→mock fallback path. mock.restore() only undoes the
+  // spyOn(console, "warn") mock (module mocks are not restorable in this Bun version) — so real
+  // restoration comes from repointing the *Impl indirection at the real functions captured above.
   afterAll(() => {
     mock.restore();
     buildModelImpl = realBuildModel as unknown as typeof buildModelImpl;
     generateObjectImpl = realGenerateObject as unknown as typeof generateObjectImpl;
+    getPipelineSettingsImpl = realGetPipelineSettings as unknown as typeof getPipelineSettingsImpl;
+    runWithOpenRouterPoolImpl = realRunWithOpenRouterPool as unknown as typeof runWithOpenRouterPoolImpl;
     if (originalOrder === undefined) delete process.env.LLM_ORDER;
     else process.env.LLM_ORDER = originalOrder;
+    if (originalOpenRouterKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
   });
 
-  it("skips an unconfigured provider (buildModel→null) and uses the next configured one", async () => {
+  it("skips openrouter when unconfigured (cfg.openrouter unset) and uses the next configured provider", async () => {
+    delete process.env.OPENROUTER_API_KEY; // cfg.openrouter undefined → the openrouter branch's own gate skips it
     setOrder(["openrouter", "omniroute"]);
-    buildModelImpl = (name) => (name === "openrouter" ? null : { name });
+    buildModelImpl = (name) => ({ name }); // only reached for omniroute now — openrouter no longer calls buildModel
+    let poolCalled = false;
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false }; };
     const seen: string[] = [];
-    generateObjectImpl = async (opts) => { seen.push(opts.model.name); return { object: goodDraft({ category: "Marchés" }) }; };
+    generateObjectImpl = async (opts) => { seen.push((opts.model as { name: string }).name); return { object: goodDraft({ category: "Marchés" }) }; };
 
     const r = await generateArticle(baseInput);
+    expect(poolCalled).toBe(false); // the pool runner is never invoked when openrouter is unconfigured
     expect(r.via).toBe("omniroute");
-    expect(seen).toEqual(["omniroute"]); // generateObject never invoked for the null provider
+    expect(seen).toEqual(["omniroute"]); // generateObject never invoked for the skipped provider
     expect(r.draft.category).toBe("Marchés");
   });
 
-  it("falls through to the next provider when generateObject throws", async () => {
+  it("falls through to the next provider when the OpenRouter pool is exhausted ({ok:false})", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = (name) => ({ name });
-    generateObjectImpl = async (opts) => {
-      if (opts.model.name === "openrouter") throw new Error("quota exceeded");
-      return { object: goodDraft({ category: "Marchés" }) };
-    };
+    // Real runWithOpenRouterPool would return {ok:false} once every pooled token's op() throws
+    // (quota exceeded, etc.) — expressed here directly via the mocked pool runner, matching the
+    // NEW architecture rather than a per-name check inside generateObjectImpl.
+    runWithOpenRouterPoolImpl = async () => ({ ok: false });
+    generateObjectImpl = async () => { return { object: goodDraft({ category: "Marchés" }) }; }; // only omniroute reaches this now
 
     const r = await generateArticle(baseInput);
     expect(r.via).toBe("omniroute");
@@ -122,9 +193,11 @@ describe("generateArticle fallback chain", () => {
   });
 
   it("returns the deterministic mock with via='mock' when every provider fails", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = (name) => ({ name });
-    generateObjectImpl = async () => { throw new Error("provider down"); };
+    runWithOpenRouterPoolImpl = async () => ({ ok: false }); // openrouter pool exhausted
+    generateObjectImpl = async () => { throw new Error("provider down"); }; // omniroute also fails
 
     const r = await generateArticle(baseInput);
     expect(r.via).toBe("mock");
@@ -133,19 +206,53 @@ describe("generateArticle fallback chain", () => {
     expect(r.draft.confidence.categoryUncertain).toBe(true); // mock is always low-confidence
   });
 
-  it("returns via=<provider name> and that provider's object on success", async () => {
-    setOrder(["openrouter", "omniroute"]);
-    buildModelImpl = (name) => ({ name });
-    generateObjectImpl = async () => ({ object: goodDraft({ title: "Article réel produit par le modèle" }) });
+  // The "Important" finding this test (and its assertions) directly answers: with the LEGACY
+  // buildModel-mock tests removed, nothing previously proved that generateArticle's openrouter
+  // branch actually calls runWithOpenRouterPool with a correct `op` (builds a real model via
+  // buildOpenRouterModel and runs the SAME generateObject call the file already makes) and a
+  // correct `isFlaky` (articleIsFlaky bound to settings.openrouterMinContentChars). This test
+  // captures the exact arguments the call site passes to the (mocked) pool runner and asserts
+  // them directly, then drives a successful pool result through to via:"openrouter".
+  it("routes the openrouter branch through runWithOpenRouterPool: builds a model via buildOpenRouterModel and applies articleIsFlaky", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    setOrder(["openrouter"]);
+    getPipelineSettingsImpl = async () => ({ openrouterMinContentChars: 400 });
+
+    let seenApiKey: string | undefined;
+    let seenModel: unknown;
+    let capturedIsFlaky: ((d: ArticleDraft) => boolean) | undefined;
+    runWithOpenRouterPoolImpl = async (op, isFlaky) => {
+      capturedIsFlaky = isFlaky;
+      seenApiKey = "fake-pool-key";
+      const value = await op("fake-pool-key");
+      return { ok: true, value };
+    };
+    generateObjectImpl = async (opts) => {
+      seenModel = opts.model;
+      return { object: goodDraft({ title: "Article réel produit par le modèle" }) };
+    };
 
     const r = await generateArticle(baseInput);
+
     expect(r.via).toBe("openrouter");
     expect(r.draft.title).toBe("Article réel produit par le modèle");
+    expect(seenApiKey).toBe("fake-pool-key");
+    // op really called buildOpenRouterModel(cfg, apiKey) (the REAL function — only buildModel is
+    // mocked above) and passed the resulting model into generateObject, not some placeholder.
+    expect(seenModel).toBeTruthy();
+
+    // The SAME isFlaky closure the call site wired in — proves settings.openrouterMinContentChars
+    // (mocked to 400 above, matching the real default) actually drives the rule, matching
+    // articleIsFlaky's own unit-tested boundary (tests/openrouter-flaky-wiring.test.ts).
+    expect(capturedIsFlaky).toBeTruthy();
+    expect(capturedIsFlaky!(goodDraft({ bodyHtml: "<p>short</p>" }))).toBe(true);
+    expect(capturedIsFlaky!(goodDraft({ bodyHtml: "<p>" + "a".repeat(500) + "</p>" }))).toBe(false);
+    expect(capturedIsFlaky!(goodDraft({ bodyHtml: "<p>short</p>" }))).toBe(articleIsFlaky("<p>short</p>", 400));
   });
 
   it("sanitizeDraft nulls a featuredImageUrl that is not a supplied candidate (and its image fields)", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter"]);
-    buildModelImpl = (name) => ({ name });
     generateObjectImpl = async () => ({
       object: goodDraft({
         featuredImageUrl: "https://not-a-candidate.example/x.jpg",
@@ -156,6 +263,7 @@ describe("generateArticle fallback chain", () => {
     });
 
     const r = await generateArticle({ ...baseInput, candidateImages: [] });
+    expect(r.via).toBe("openrouter");
     expect(r.draft.featuredImageUrl).toBeNull();
     expect(r.draft.imageCredit).toBeNull();
     expect(r.draft.imageSourceUrl).toBeNull();
@@ -167,8 +275,8 @@ describe("generateArticle fallback chain", () => {
     // featuredImageUrl/imageCredit/imageSourceUrl rather than sending null — the schema's
     // `.nullish()` fields let this validate, and sanitizeDraft must still normalize the
     // persisted draft to `null`, never leave `undefined` on it (clean DB insert in stages.ts).
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter"]);
-    buildModelImpl = (name) => ({ name });
     const omittedImageDraft = {
       title: "Titre suffisamment long",
       bodyHtml: "<p>corps</p>",
@@ -197,8 +305,8 @@ describe("generateArticle fallback chain", () => {
     // The exact real-world shape reported: model picks a candidate image and sets imageCredit,
     // but omits imageSourceUrl outright instead of sending null.
     const cand = "https://cdn.example/img.jpg";
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter"]);
-    buildModelImpl = (name) => ({ name });
     const partialImageDraft = {
       title: "Titre suffisamment long",
       bodyHtml: "<p>corps</p>",
@@ -222,8 +330,8 @@ describe("generateArticle fallback chain", () => {
 
   it("sanitizeDraft keeps a featuredImageUrl that IS a supplied candidate", async () => {
     const cand = "https://cdn.example/img.jpg";
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter"]);
-    buildModelImpl = (name) => ({ name });
     generateObjectImpl = async () => ({
       object: goodDraft({
         featuredImageUrl: cand,
@@ -234,6 +342,7 @@ describe("generateArticle fallback chain", () => {
     });
 
     const r = await generateArticle({ ...baseInput, candidateImages: [cand] });
+    expect(r.via).toBe("openrouter");
     expect(r.draft.featuredImageUrl).toBe(cand);
     expect(r.draft.imageCredit).toBe("Ecofin");
     expect(r.draft.imageSourceUrl).toBe("https://src.example");
