@@ -4,6 +4,10 @@ import { eq } from "drizzle-orm";
 import { can } from "@/lib/rbac";
 import { getIntegrationStatus } from "@/lib/queries/settings";
 import { db, articles, distributions } from "@/db";
+import { computeIntegrationConfigured, INTEGRATION_META, type IntegrationName } from "@/lib/config/integration-config";
+import type { PipelineConfig } from "@/lib/config/pipeline-config";
+
+const ALL_INTEGRATIONS = Object.keys(INTEGRATION_META) as IntegrationName[];
 
 describe("integration test guard", () => {
   it("only admin can test integrations", () => {
@@ -12,15 +16,89 @@ describe("integration test guard", () => {
   });
 });
 
+// Task 8 — PURE unit coverage for computeIntegrationConfigured() (lib/config/integration-config.ts),
+// deliberately kept separate from the DB-backed describe block below: no env mutation, no DB
+// access, no network — a fake PipelineConfig + fake extras in, a plain boolean map out. This is
+// what keeps the mapping testable even though getIntegrationStatus() itself (DB reads for
+// lastRun/lastSuccessAt + the openrouter token-pool summary) cannot be pure. Not added to
+// scripts/test-fast.ts's PURE_FILES allowlist because this FILE also contains DB-touching tests
+// below — the allowlist is per-file, not per-`it`.
+describe("computeIntegrationConfigured (pure)", () => {
+  const emptyCfg = {
+    openrouter: undefined, omniroute: undefined, anthropic: undefined, openai: undefined, google: undefined,
+    jina: undefined, firecrawl: undefined, embed: { apiKey: "", baseUrl: "", model: "", dimensions: 1024 },
+  } as unknown as PipelineConfig;
+  const emptyExtra = { braveApiKey: undefined, exaApiKey: undefined, resendApiKey: undefined, wordpressConfigured: false, r2Configured: false };
+
+  it("is false across the board for an empty config", () => {
+    const result = computeIntegrationConfigured(emptyCfg, emptyExtra);
+    for (const name of ALL_INTEGRATIONS) expect(result[name]).toBe(false);
+  });
+
+  it("flags only the providers present in cfg as configured, leaves the rest false", () => {
+    const cfg = {
+      ...emptyCfg,
+      openrouter: { apiKey: "k", model: "m", baseUrl: "https://openrouter.ai/api/v1" },
+      anthropic: { apiKey: "k", model: "m" },
+      embed: { apiKey: "embed-key", baseUrl: "https://api.jina.ai/v1", model: "m", dimensions: 1024 },
+    } as unknown as PipelineConfig;
+    const result = computeIntegrationConfigured(cfg, emptyExtra);
+    expect(result.openrouter).toBe(true);
+    expect(result.anthropic).toBe(true);
+    expect(result.embeddings).toBe(true);
+    expect(result.omniroute).toBe(false);
+    expect(result.openai).toBe(false);
+    expect(result.google).toBe(false);
+    expect(result.jina).toBe(false);
+    expect(result.firecrawl).toBe(false);
+    expect(result.brave).toBe(false);
+    expect(result.exa).toBe(false);
+    expect(result.r2).toBe(false);
+    expect(result.resend).toBe(false);
+    expect(result.wordpress).toBe(false);
+  });
+
+  it("resolves the extra (non-PipelineConfig) signals: brave/exa/resend keys, wordpress/r2 presence", () => {
+    const result = computeIntegrationConfigured(emptyCfg, {
+      braveApiKey: "b", exaApiKey: "e", resendApiKey: "r",
+      wordpressConfigured: true, r2Configured: true,
+    });
+    expect(result.brave).toBe(true);
+    expect(result.exa).toBe(true);
+    expect(result.resend).toBe(true);
+    expect(result.wordpress).toBe(true);
+    expect(result.r2).toBe(true);
+    // Untouched by the extras — still false.
+    expect(result.openrouter).toBe(false);
+    expect(result.embeddings).toBe(false);
+  });
+
+  it("has kind+management metadata for exactly the 13-integration registry, no crawl4ai", () => {
+    const expected: IntegrationName[] = [
+      "anthropic", "brave", "embeddings", "exa", "firecrawl", "google", "jina", "omniroute",
+      "openai", "openrouter", "r2", "resend", "wordpress",
+    ];
+    expect([...ALL_INTEGRATIONS].sort()).toEqual(expected.sort());
+    expect(INTEGRATION_META.openrouter.management).toBe("tokens");
+    for (const name of ALL_INTEGRATIONS) {
+      if (name === "openrouter") continue;
+      expect(INTEGRATION_META[name].management).toBe("env");
+    }
+  });
+});
+
 describe("getIntegrationStatus", () => {
-  it("returns the expected shape: 5 integrations with configured booleans + lastRun", async () => {
+  it("returns the expected shape: every registry integration with configured/kind/management + lastRun", async () => {
     const status = await getIntegrationStatus();
-    expect(typeof status.wordpress.configured).toBe("boolean");
-    expect(typeof status.omniroute.configured).toBe("boolean");
-    expect(typeof status.openrouter.configured).toBe("boolean");
-    expect(typeof status.jina.configured).toBe("boolean");
-    expect(typeof status.firecrawl.configured).toBe("boolean");
+    for (const name of ALL_INTEGRATIONS) {
+      expect(typeof status[name].configured).toBe("boolean");
+      expect(status[name].kind).toBe(INTEGRATION_META[name].kind);
+      expect(status[name].management).toBe(INTEGRATION_META[name].management);
+    }
     expect("lastSuccessAt" in status.wordpress).toBe(true);
+    expect("tokenSummary" in status.openrouter).toBe(true);
+    expect(typeof status.openrouter.tokenSummary.active).toBe("number");
+    expect(typeof status.openrouter.tokenSummary.cooldown).toBe("number");
     expect("lastRun" in status).toBe(true);
   });
 
