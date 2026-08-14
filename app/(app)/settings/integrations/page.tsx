@@ -1,5 +1,5 @@
 import { requireUser } from "@/lib/session";
-import { requirePermission } from "@/lib/rbac";
+import { can, requirePermission } from "@/lib/rbac";
 import { getIntegrationStatus } from "@/lib/queries/settings";
 import { getOpenRouterTokensMasked } from "@/lib/queries/openrouter-tokens";
 import { getCryptoConfig } from "@/lib/diffusion/crypto";
@@ -15,7 +15,8 @@ import { IntegrationCards } from "@/components/settings/integration-cards";
 export default async function Page() {
   const user = await requireUser();
   requirePermission(user.role, "llmTokens", "manage");
+  const canTest = can(user.role, "pipeline", "configure");
   const [status, tokens] = await Promise.all([getIntegrationStatus(), getOpenRouterTokensMasked()]);
   const cryptoConfigured = getCryptoConfig() !== null;
-  return <IntegrationCards status={status} tokens={tokens} cryptoConfigured={cryptoConfigured} />;
+  return <IntegrationCards status={status} tokens={tokens} cryptoConfigured={cryptoConfigured} canTest={canTest} />;
 }

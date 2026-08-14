@@ -56,11 +56,12 @@ const INTEGRATIONS: { name: IntegrationName; label: string; description: string 
 // getCryptoConfig) and threaded through here untouched, same "server computes, client only
 // renders" split as social-channel-form.tsx's `isConfigured` prop.
 export function IntegrationCards({
-  status, tokens, cryptoConfigured,
+  status, tokens, cryptoConfigured, canTest,
 }: {
   status: IntegrationStatus;
   tokens: MaskedToken[];
   cryptoConfigured: boolean;
+  canTest: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -72,6 +73,7 @@ export function IntegrationCards({
             management={status[i.name].management}
             lastSuccessAt={i.name === "wordpress" ? status.wordpress.lastSuccessAt : null}
             lastRun={status.lastRun}
+            canTest={canTest}
           />
         ))}
       </div>
@@ -81,7 +83,7 @@ export function IntegrationCards({
 }
 
 function IntegrationCard({
-  name, label, description, configured, management, lastSuccessAt, lastRun,
+  name, label, description, configured, management, lastSuccessAt, lastRun, canTest,
 }: {
   name: IntegrationName;
   label: string;
@@ -90,6 +92,7 @@ function IntegrationCard({
   management: IntegrationManagement;
   lastSuccessAt: Date | string | null;
   lastRun: IntegrationStatus["lastRun"];
+  canTest: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
 
@@ -122,12 +125,14 @@ function IntegrationCard({
           ? lastSuccessAt && <p>Dernière publication réussie : {formatDate(lastSuccessAt)}</p>
           : lastRun && <p>Dernière exécution du pipeline : {formatDate(lastRun.at)} ({pipelineStatusLabel(lastRun.status)})</p>}
       </CardContent>
-      <CardFooter>
-        <Button variant="outline" size="sm" onClick={handleTest} disabled={isPending}>
-          {isPending && <Loader2 className="animate-spin" aria-hidden />}
-          Tester
-        </Button>
-      </CardFooter>
+      {canTest && (
+        <CardFooter>
+          <Button variant="outline" size="sm" onClick={handleTest} disabled={isPending}>
+            {isPending && <Loader2 className="animate-spin" aria-hidden />}
+            Tester
+          </Button>
+        </CardFooter>
+      )}
     </Card>
   );
 }
