@@ -23,12 +23,50 @@ export type ExtractOptions = {
   externalOnly?: boolean;
 };
 
+// A provider result is "strong" when it has real substance: at least `minChars` of trimmed text,
+// AND the text doesn't look like a JS-wall/anti-bot stub. The problem this guards against: Jina
+// Reader almost always returns SOMETHING ≥100 chars (its own, much lower, internal floor) — even
+// for pages that are just a "please enable JavaScript" interstitial — so under the old ">=100
+// chars or throw" rule Jina "won" the chain on the very first try and the stronger fallbacks
+// (Firecrawl, our self-hosted Crawl4AI, which actually renders JS) never got a real shot at TEXT
+// extraction. The regex is deliberately conservative (a handful of well-known bot-wall/consent
+// phrases) so real short-but-legitimate articles are never misclassified as weak by the pattern
+// half of this check — only the length floor can flag those, and it's generous (500 chars) by
+// design.
+const WEAK_CONTENT_MARKERS =
+  /enable javascript|requires javascript|verify you are (a )?human|are you a robot|checking your browser|cf-browser-verification|please enable cookies/i;
+
+function isStrongContent(text: string, minChars: number): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < minChars) return false;
+  if (WEAK_CONTENT_MARKERS.test(trimmed)) return false;
+  return true;
+}
+
 export async function extract(url: string, opts: ExtractOptions = {}): Promise<ExtractResult> {
   const cfg = getPipelineConfig();
   const attempts: ExtractResult["attempts"] = [];
   const order = opts.externalOnly
     ? cfg.extractOrder.filter((name) => name === "jina" || name === "firecrawl" || name === "crawl4ai")
     : cfg.extractOrder;
+
+  // Image backfill (see backfillCandidateImages below) is identical whichever result ends up
+  // winning — a strong hit that returns immediately, or the best-weak fallback picked after the
+  // loop — so it's factored into this closure to avoid drifting the two return points apart.
+  async function withImageBackfill(r: Extracted, name: string): Promise<ExtractResult> {
+    // Jina always returns no images; Firecrawl/Crawl4AI usually do but may come back empty too —
+    // in either case, backfill candidate images (see backfillCandidateImages below, which tries
+    // a raw fetch for trusted feed URLs and Crawl4AI for both feed and untrusted web URLs).
+    if (r.images.length === 0 && name !== "readability") r.images = await backfillCandidateImages(url, !!opts.externalOnly, cfg, name);
+    return { ...r, attempts };
+  }
+
+  // Best weak candidate seen so far (kept only when no strong hit is found at all) — the longest
+  // trimmed text among providers that returned WITHOUT throwing but under the strength bar. This
+  // is the last resort: if every provider is weak, we still return the fullest thing we saw rather
+  // than regress to `via:"none"` (which would be worse than what the old "first success wins"
+  // behavior gave us).
+  let bestWeak: { r: Extracted; provider: string } | undefined;
 
   for (const name of order) {
     try {
@@ -56,16 +94,31 @@ export async function extract(url: string, opts: ExtractOptions = {}): Promise<E
       } else {
         continue;
       }
-      attempts.push({ provider: name, ok: true });
-      // Jina always returns no images; Firecrawl/Crawl4AI usually do but may come back empty too —
-      // in either case, backfill candidate images (see backfillCandidateImages below, which tries
-      // a raw fetch for trusted feed URLs and Crawl4AI for both feed and untrusted web URLs).
-      if (r.images.length === 0 && name !== "readability") r.images = await backfillCandidateImages(url, !!opts.externalOnly, cfg, name);
-      return { ...r, attempts };
+
+      if (isStrongContent(r.text, cfg.minContentChars)) {
+        // Genuine win: substantial content, not a bot-wall stub. Return immediately — unchanged
+        // fast path for the common case where the first configured provider just works.
+        attempts.push({ provider: name, ok: true });
+        return await withImageBackfill(r, name);
+      }
+
+      // Weak result: the provider itself didn't throw (so it's not a hard failure — some content
+      // came back), but it's too thin or looks like a JS-wall/anti-bot stub to trust as the final
+      // answer. Don't return yet — record WHY we're moving on, remember it if it's the fullest
+      // weak result so far, and let the chain fall through to the next (stronger) provider, e.g.
+      // Crawl4AI, which renders JS and can often get past exactly this kind of stub.
+      attempts.push({ provider: name, ok: true, reason: `contenu faible (${r.text.trim().length} car.) — repli` });
+      if (!bestWeak || r.text.trim().length > bestWeak.r.text.trim().length) bestWeak = { r, provider: name };
     } catch (e) {
       attempts.push({ provider: name, ok: false, reason: (e as Error).message });
     }
   }
+
+  // No provider ever returned strong content. Fall back to the best (longest) weak result rather
+  // than regress to an empty via:"none" — some content beats none, and this is still strictly
+  // better than the pre-fallthrough behavior (which would have returned this exact result anyway,
+  // just without ever giving Firecrawl/Crawl4AI a chance to do better first).
+  if (bestWeak) return await withImageBackfill(bestWeak.r, bestWeak.provider);
 
   return { title: "", text: "", images: [], via: "none", attempts };
 }

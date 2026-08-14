@@ -25,6 +25,12 @@ export function parsePipelineConfig(env: Record<string, string | undefined>) {
       model: env.EMBED_MODEL || "jina-embeddings-v3",
       dimensions: num(env.EMBED_DIMENSIONS, 1024),
     },
+    // Minimum trimmed-text length (chars) a provider's result must clear to count as "strong"
+    // content in the extract() chain (lib/extract/index.ts's isStrongContent). Below this, the
+    // chain falls through to the next provider instead of returning immediately — real news
+    // articles run into the thousands of characters, while JS-walled/bot-blocked stubs (e.g. a
+    // "please enable JavaScript" page) are typically well under it.
+    minContentChars: num(env.EXTRACT_MIN_CONTENT_CHARS, 500),
     clusterThreshold: num(env.CLUSTER_THRESHOLD, 0.83),
     maxItemsPerRun: num(env.MAX_ITEMS_PER_RUN, 20),
     windowHours: num(env.CLUSTER_WINDOW_HOURS, 72),
