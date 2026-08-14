@@ -131,6 +131,7 @@ export const runParamsSchema = z.object({
     z.object({ kind: z.literal("none") }),
   ]).optional(),
   feedIds: z.array(z.string().uuid("Identifiant de flux invalide")).nullable().optional(),
+  categoryIds: z.array(z.string().uuid("Identifiant de catégorie invalide")).nullable().optional(),
   maxItems: z.number().int().positive(POSITIVE_INT_MSG).max(500, "Maximum 500 éléments").optional(),
 }).refine(
   (v) => v.recency?.kind !== "since" || Date.parse(v.recency.at) <= Date.now(),

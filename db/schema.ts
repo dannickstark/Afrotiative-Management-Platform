@@ -24,6 +24,7 @@ export type RunParams = {
     | { kind: "since"; cutoffAt: string }               // absolute ISO datetime
     | { kind: "none" };                                  // no cutoff
   feedIds: string[] | null;
+  categoryIds: string[] | null;
   maxItems: number;
 };
 

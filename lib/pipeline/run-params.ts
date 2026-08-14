@@ -15,6 +15,8 @@ export function resolveRunParams(
   return {
     recency: resolveRecency(input?.recency, defaults.defaultMaxItemAgeHours, now),
     feedIds: input?.feedIds ?? null,
+    // Empty selection means "no scope" (same as omitted), not "match nothing" — normalize both to null.
+    categoryIds: input?.categoryIds && input.categoryIds.length > 0 ? input.categoryIds : null,
     maxItems: input?.maxItems ?? defaults.maxItemsPerRun,
   };
 }
