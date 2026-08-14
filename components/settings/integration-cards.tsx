@@ -10,6 +10,8 @@ import { testIntegration } from "@/lib/actions/integration-actions";
 import { formatDate, pipelineStatusLabel } from "@/lib/format";
 import type { getIntegrationStatus } from "@/lib/queries/settings";
 import type { IntegrationName, IntegrationManagement } from "@/lib/config/integration-config";
+import { OpenRouterTokensPanel } from "@/components/settings/openrouter-tokens-panel";
+import type { MaskedToken } from "@/lib/queries/openrouter-tokens";
 
 type IntegrationStatus = Awaited<ReturnType<typeof getIntegrationStatus>>;
 export type { IntegrationName };
@@ -49,8 +51,17 @@ const INTEGRATIONS: { name: IntegrationName; label: string; description: string 
 // only ever runs FREE checks (see lib/actions/integration-actions.ts): WordPress /users/me,
 // OmniRoute/OpenRouter /models, every other provider key/config-presence. No token-spending LLM
 // completion is ever triggered from here. The openrouter card's token-pool panel (management:
-// "tokens") is mounted by Task 9 — this component only renders its own status/Tester header for it.
-export function IntegrationCards({ status }: { status: IntegrationStatus }) {
+// "tokens") is mounted below (Task 9) directly under that card's own status/Tester header —
+// `tokens`/`cryptoConfigured` are computed server-side by the page (getOpenRouterTokensMasked,
+// getCryptoConfig) and threaded through here untouched, same "server computes, client only
+// renders" split as social-channel-form.tsx's `isConfigured` prop.
+export function IntegrationCards({
+  status, tokens, cryptoConfigured,
+}: {
+  status: IntegrationStatus;
+  tokens: MaskedToken[];
+  cryptoConfigured: boolean;
+}) {
   return (
     <div className="space-y-6">
       <PageHeader title="Intégrations" />
@@ -64,6 +75,7 @@ export function IntegrationCards({ status }: { status: IntegrationStatus }) {
           />
         ))}
       </div>
+      <OpenRouterTokensPanel tokens={tokens} cryptoConfigured={cryptoConfigured} />
     </div>
   );
 }

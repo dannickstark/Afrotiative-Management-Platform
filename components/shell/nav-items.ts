@@ -19,7 +19,10 @@ export const SETTINGS_CHILDREN: NavChild[] = [
   { href: "/settings/feeds", label: "Sources RSS", roles: ["admin", "editor"] },
   { href: "/settings/taxonomy", label: "Catégories & Tags", roles: ["admin", "editor"] },
   { href: "/settings/team", label: "Équipe", roles: ["admin"] },
-  { href: "/settings/integrations", label: "Intégrations", roles: ["admin"] },
+  // Task 9 (OpenRouter token pool): editor gets VIEW access too — same llmTokens:manage right
+  // gating the page itself (app/(app)/settings/integrations/page.tsx) and the token-pool actions
+  // (lib/actions/openrouter-token-actions.ts). Still excludes journalist.
+  { href: "/settings/integrations", label: "Intégrations", roles: ["admin", "editor"] },
   { href: "/settings/pipeline", label: "Pipeline", roles: ["admin"] },
   // D1 §6: admin-only (social:manage) — the editor gets read/send from the article page's
   // Diffusion panel, not this administration surface (same split as team/integrations/pipeline
