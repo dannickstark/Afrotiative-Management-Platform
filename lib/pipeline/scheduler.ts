@@ -25,6 +25,24 @@ let job: Cron | null = null;
 let diffusionJob: Cron | null = null;
 const DIFFUSION_TICK_CRON = "*/15 * * * *"; // every 15 minutes
 
+// The in-app publish-due tick — same "extend this file, don't stand up a second scheduling
+// mechanism" reasoning as the diffusion tick above, and for an even sharper reason: without it,
+// scheduled/auto-approved articles NEVER publish on a deployment that has no external cron hitting
+// the bearer-gated /api/publish/due route (publishDueArticles, lib/wp/publish-due.ts) — the article
+// just sits at status='approved' with a past scheduledAt forever.
+//
+// Deliberately UNCONDITIONAL, exactly like the diffusion tick — it must NOT be piggy-backed on `job`
+// above (gated by pipeline_settings.scheduleCron) or on any autoPublishEnabled setting. Those two
+// settings govern very different things: scheduleCron controls whether INGESTION runs on a timer at
+// all, and autoPublishEnabled (lib/pipeline/auto-publish.ts) only widens which NEWLY-ingested
+// articles auto-advance to 'approved'. Neither has anything to do with actually PUBLISHING an
+// article a human already approved-with-a-schedule (SP4) or an admin-approved auto-approval (SP6)
+// once its scheduledAt arrives — that's this tick's only job. publishDueArticles() itself is
+// UNCHANGED by this task: it still only ever selects status='approved', so this tick can never
+// publish anything neither path already signed off on.
+let publishDueJob: Cron | null = null;
+const PUBLISH_DUE_TICK_CRON = "*/5 * * * *"; // every 5 minutes — scheduledAt=now wants prompt pickup
+
 // Exported (not just used internally by the Cron callback) so tests can call it directly without
 // waiting on a real cron fire — see the plan's "no timing-dependent tests" constraint.
 //
@@ -83,6 +101,42 @@ function startDiffusionScheduler(): void {
   }
 }
 
+// Exported for the same reason as triggerScheduledDiffusionTick above: tests call it directly
+// instead of waiting on a real cron fire. Never throws — publishDueArticles already isolates each
+// article's own failure (its own per-article try/catch, tallied as `failed`), so this try/catch is
+// defense in depth against anything else escaping (a DB outage on the SELECT itself, etc.), matching
+// triggerScheduledDiffusionTick's own belt-and-suspenders shape (croner's catch: true below is a
+// third layer).
+export async function triggerScheduledPublishDue(): Promise<void> {
+  try {
+    const { publishDueArticles } = await import("@/lib/wp/publish-due");
+    const res = await publishDueArticles();
+    console.log(`[scheduler] publication planifiée: ${res.published} publié(s), ${res.failed} échec(s)`);
+  } catch (e) {
+    console.error("[scheduler] échec de la publication planifiée : " + (e as Error).message);
+  }
+}
+
+// Starts the publish-due tick job once, unconditionally — same reasoning and same shape as
+// startDiffusionScheduler above (see PUBLISH_DUE_TICK_CRON's comment for why this must not depend on
+// any DB setting). Idempotent for the same reason: initScheduler() is the only caller today, but a
+// second call must not double-schedule.
+function startPublishDueScheduler(): void {
+  if (publishDueJob) return;
+  try {
+    // protect: true / catch: true — same reasoning as the diffusion job above: skip a re-fire while
+    // the previous tick is still running, and swallow+log anything that could still escape
+    // triggerScheduledPublishDue's own try/catch.
+    publishDueJob = new Cron(PUBLISH_DUE_TICK_CRON, { protect: true, catch: true }, triggerScheduledPublishDue);
+    console.log(`[scheduler] tic de publication planifiée actif : ${PUBLISH_DUE_TICK_CRON} (prochain : ${publishDueJob.nextRun()?.toISOString()})`);
+  } catch (e) {
+    // Reaching here would mean PUBLISH_DUE_TICK_CRON itself is invalid — a bug in this file, not
+    // anything an operator configured. Degrade the same way startDiffusionScheduler does: log, leave
+    // the job cleared, let the app boot regardless.
+    console.error(`[scheduler] échec de démarrage du tic de publication planifiée : ${(e as Error).message}`);
+  }
+}
+
 // (Re)configures the schedule from the current DB settings (pipeline_settings.scheduleCron).
 // Called at boot (initScheduler) AND after a settings change (updatePipelineSettings) — same
 // process, single instance — so a new cron takes effect live without a restart.
@@ -124,6 +178,7 @@ export async function reloadSchedule(): Promise<void> {
 export async function initScheduler(): Promise<void> {
   await reloadSchedule();
   startDiffusionScheduler();
+  startPublishDueScheduler();
 }
 
 // Test-only accessor: reloadSchedule() itself returns void (matches the plan's signature, and
@@ -136,4 +191,9 @@ export function getScheduledJob(): Cron | null {
 // Test-only accessor, same reasoning as getScheduledJob above.
 export function getDiffusionSchedulerJob(): Cron | null {
   return diffusionJob;
+}
+
+// Test-only accessor, same reasoning as getScheduledJob above.
+export function getPublishDueSchedulerJob(): Cron | null {
+  return publishDueJob;
 }
