@@ -28,13 +28,23 @@ function ageOptionsFor(hours: string) {
 }
 
 type Feed = { id: string; name: string };
+type Category = { id: string; name: string };
 type RecencyMode = "none" | "age" | "since";
+
+// Pure — extracted so the run/all-categories logic is unit-testable without mounting the dialog
+// (this repo has no React component testing). Mirrors how buildInput derives feedIds: an empty
+// checked set means "no explicit scope" → null → executeRun/stageSources include every category.
+export function toCategoryIds(checkedIds: string[]): string[] | null {
+  return checkedIds.length > 0 ? checkedIds : null;
+}
 
 export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => void }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<RecencyMode>("none");
   const [ageHours, setAgeHours] = useState("48");
   const [sinceDate, setSinceDate] = useState("");
@@ -50,6 +60,8 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
         const opts = await getRunConfigOptions();
         setFeeds(opts.feeds);
         setSelected(new Set(opts.feeds.map((f) => f.id)));           // all feeds by default
+        setCategories(opts.categories);
+        setSelectedCategories(new Set());                            // none checked = all categories by default
         setMaxItems(String(opts.defaults.maxItemsPerRun));
         if (opts.defaults.defaultMaxItemAgeHours != null) {
           setMode("age");
@@ -64,6 +76,10 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
 
   function toggleFeed(id: string) {
     setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }
+
+  function toggleCategory(id: string) {
+    setSelectedCategories((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   }
 
   function buildInput(): RunParamsInput | null {
@@ -81,6 +97,7 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
     return {
       recency,
       feedIds: allSelected ? null : [...selected],
+      categoryIds: toCategoryIds([...selectedCategories]),
       maxItems: maxItems.trim() ? Number(maxItems) : undefined,
     };
   }
@@ -151,6 +168,28 @@ export function RunConfigDialog({ onStarted }: { onStarted: (runId: string) => v
                   <label key={f.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm hover:bg-muted/50">
                     <input type="checkbox" checked={selected.has(f.id)} onChange={() => toggleFeed(f.id)} />
                     <span className="truncate">{f.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Catégories */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Catégories ({selectedCategories.size}/{categories.length})</Label>
+                {selectedCategories.size > 0 && (
+                  <button type="button" className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setSelectedCategories(new Set())}>
+                    Tout désélectionner
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">Aucune sélection = toutes les catégories.</p>
+              <div className="max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border p-2">
+                {categories.map((c) => (
+                  <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm hover:bg-muted/50">
+                    <input type="checkbox" checked={selectedCategories.has(c.id)} onChange={() => toggleCategory(c.id)} />
+                    <span className="truncate">{c.name}</span>
                   </label>
                 ))}
               </div>
