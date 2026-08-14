@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { publishArticle } from "@/lib/wp/publish";
 import { blockingGapsForArticle, MISSING_LABEL } from "@/lib/pipeline/completeness";
-import { bulkIdsSchema, bulkRejectSchema } from "@/lib/validation";
+import { bulkIdsSchema, bulkRejectSchema, regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/validation";
 import { z } from "zod";
 
 export async function quickApprove(id: string) {
@@ -87,6 +87,49 @@ export async function bulkApprove(ids: string[]): Promise<BulkResult> {
     const res = await publishArticle(row.id, user.id);
     if (res.ok) result.ok.push(row.id);
     else result.failed.push({ id: row.id, title: row.title, message: res.message });
+  }
+
+  revalidatePath("/queue"); revalidatePath("/dashboard");
+  return result;
+}
+
+// Plafond spécifique au renvoi en lot : BIEN plus bas que bulkIdsSchema (max 100), car chaque
+// article ici, c'est une extraction réseau de toutes ses sources PUIS un appel IA — bien plus
+// coûteux qu'une publication WordPress. 10 tient la Server Action dans une durée raisonnable.
+// On n'ABAISSE PAS le schéma partagé bulkIdsSchema : on ajoute le plafond ici, localement.
+const bulkRegenerateIdsSchema = bulkIdsSchema.max(10, "Maximum 10 articles par lot.");
+
+/**
+ * Renvoie à l'IA une sélection d'articles — même logique unitaire que regenerate (le cœur partagé
+ * regenerateArticle), appliquée EN SÉRIE. Séquentiel à dessein, comme bulkApprove : chaque itération
+ * est une extraction réseau + un appel IA ; en parallèle on s'exposerait au throttling et le rapport
+ * d'échec deviendrait illisible.
+ *
+ * Ne lève JAMAIS sur un échec unitaire : le retour partiel EST le résultat attendu. Ne lève que sur
+ * la garde RBAC, la validation des champs, ou le dépassement du plafond — tout AVANT la boucle.
+ */
+export async function bulkRegenerate(ids: string[], fields: RegenerateFieldsInput): Promise<BulkResult> {
+  const user = await requireUser();
+  requirePermission(user.role, "article", "regenerate");
+  const parsedFields = regenerateFieldsSchema.parse(fields);
+  const parsedIds = bulkRegenerateIdsSchema.parse(ids);
+
+  // Import dynamique : garde le graphe d'extraction/génération lourd (jsdom) hors de l'analyse
+  // statique de ce module "use server" — même discipline que regenerate côté unitaire.
+  const { regenerateArticle } = await import("@/lib/pipeline/regenerate-core");
+  const result: BulkResult = { ok: [], failed: [] };
+
+  for (const id of parsedIds) {
+    try {
+      const r = await regenerateArticle(id, parsedFields, user.id);
+      if (r.ok) result.ok.push(id);
+      else result.failed.push({ id, title: r.title, message: r.message });
+    } catch (e) {
+      // Une erreur imprévue sur un article ne doit pas interrompre le lot : on la consigne et on
+      // continue. Le titre n'est pas récupérable ici sans requête supplémentaire — on retombe sur
+      // l'identifiant.
+      result.failed.push({ id, title: id, message: e instanceof Error ? e.message : "Échec du renvoi à l'IA." });
+    }
   }
 
   revalidatePath("/queue"); revalidatePath("/dashboard");
