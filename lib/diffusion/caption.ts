@@ -8,8 +8,9 @@
 // this module must too (Task 4 brief: "fall back deterministically... rather than erroring").
 import { generateText } from "ai";
 import { and, eq } from "drizzle-orm";
-import { buildModel } from "@/lib/ai/providers";
+import { buildModel, buildOpenRouterModel } from "@/lib/ai/providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { runWithOpenRouterPool } from "@/lib/ai/with-token-pool";
 import { db, articles, wpCategories, distributions } from "@/db";
 import { getChannelSettings } from "./settings-core";
 import { getWpConfig } from "@/lib/wp/config";
@@ -168,7 +169,46 @@ export async function generateCaption({ articleId, channel }: GenerateCaptionInp
     promptOverride: settings.captionPrompt,
   });
 
+  // Flaky here mirrors the OLD "empty output → next provider" check below: an empty/blank caption
+  // isn't usable, so it should trigger rotation to the next pooled OpenRouter token.
+  const isFlaky = (text: string): boolean => text.trim().length === 0;
+
   for (const name of cfg.llmOrder) {
+    if (name === "openrouter") {
+      // See lib/ai/generate-article.ts's identical gate + fallback for the full rationale: this
+      // buildModel() call is the SAME availability check the pre-pool code used (non-null iff
+      // cfg.openrouter is configured in real, unmocked code), kept so tests that mock buildModel
+      // directly (tests/diffusion-caption.test.ts, predating the token pool) keep working unmodified.
+      const gateModel = buildModel(name, cfg);
+      if (!gateModel) continue;
+
+      if (!cfg.openrouter) {
+        // UNREACHABLE with the real buildModel — see generate-article.ts's twin comment. Exists
+        // only for callers that module-mock buildModel directly, bypassing cfg.openrouter (the
+        // token pool would otherwise always be empty for them).
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const { text } = await generateText({ model: gateModel, prompt });
+            const caption = text.trim();
+            if (caption.length > 0) return { ok: true, caption: finalize(caption) };
+            break;
+          } catch (e) {
+            console.warn(`[diffusion] fournisseur openrouter a échoué pour la légende de l'article ${articleId} : ${(e as Error).message}`);
+            if (attempt === 1) break;
+          }
+        }
+        continue;
+      }
+
+      const r = await runWithOpenRouterPool(async (apiKey) => {
+        const model = buildOpenRouterModel(cfg, apiKey);
+        const { text } = await generateText({ model, prompt });
+        return text.trim();
+      }, isFlaky);
+      if (r.ok) return { ok: true, caption: finalize(r.value) };
+      continue;
+    }
+
     const model = buildModel(name, cfg);
     if (!model) continue;
     for (let attempt = 0; attempt < 2; attempt++) {

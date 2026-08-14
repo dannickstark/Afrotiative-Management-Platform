@@ -1,6 +1,7 @@
 import { generateText } from "ai";
-import { buildModel } from "./providers";
+import { buildModel, buildOpenRouterModel } from "./providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
+import { runWithOpenRouterPool } from "./with-token-pool";
 
 export type ImproveInput = { title: string; bodyHtml: string; instruction?: string };
 
@@ -19,9 +20,49 @@ export function buildImprovePrompt(input: ImproveInput): string {
 
 // Mirrors generateArticle's provider loop. Returns via:"mock" with the body UNCHANGED when no
 // provider is configured or all fail — the caller (improveWithAi) refuses to persist a mock result.
+// Flaky here mirrors the OLD "empty output → next provider" check (line below): an empty/blank
+// body is not usable, so it should trigger rotation to the next pooled OpenRouter token rather
+// than being accepted as-is.
+const isFlaky = (text: string): boolean => text.trim().length === 0;
+
 export async function improveArticleBody(input: ImproveInput): Promise<{ bodyHtml: string; via: string }> {
   const cfg = getPipelineConfig();
   for (const name of cfg.llmOrder) {
+    if (name === "openrouter") {
+      // See lib/ai/generate-article.ts's identical gate + fallback for the full rationale: this
+      // buildModel() call is the SAME availability check the pre-pool code used (non-null iff
+      // cfg.openrouter is configured in real, unmocked code), kept so tests that mock buildModel
+      // directly (tests/ai-improve.test.ts, predating the token pool) keep working unmodified.
+      const gateModel = buildModel(name, cfg);
+      if (!gateModel) continue;
+
+      if (!cfg.openrouter) {
+        // UNREACHABLE with the real buildModel — see generate-article.ts's twin comment. Exists
+        // only for callers that module-mock buildModel directly, bypassing cfg.openrouter (the
+        // token pool would otherwise always be empty for them).
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const { text } = await generateText({ model: gateModel, prompt: buildImprovePrompt(input) });
+            const body = text.trim();
+            if (body.length > 0) return { bodyHtml: body, via: "openrouter" };
+            break;
+          } catch (e) {
+            console.warn(`[improve] fournisseur openrouter a échoué: ${(e as Error).message}`);
+            if (attempt === 1) break;
+          }
+        }
+        continue;
+      }
+
+      const r = await runWithOpenRouterPool(async (apiKey) => {
+        const model = buildOpenRouterModel(cfg, apiKey);
+        const { text } = await generateText({ model, prompt: buildImprovePrompt(input) });
+        return text.trim();
+      }, isFlaky);
+      if (r.ok) return { bodyHtml: r.value, via: "openrouter" };
+      continue;
+    }
+
     const model = buildModel(name, cfg);
     if (!model) continue;
     for (let attempt = 0; attempt < 2; attempt++) {
