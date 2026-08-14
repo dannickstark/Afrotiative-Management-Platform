@@ -1,7 +1,8 @@
 import { db, articles, articleSources, wpCategories } from "@/db";
-import { and, asc, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, sql, type SQL } from "drizzle-orm";
 import { sortMissingFields, type MissingField } from "@/lib/pipeline/completeness";
 import type { ArticleStatus } from "@/lib/format";
+import { resolveQueueSort, type QueueSortCol } from "./queue-sort";
 
 export const QUEUE_PAGE_SIZE = 25;
 
@@ -10,15 +11,20 @@ const STATUSES: ArticleStatus[] = [
 ];
 
 export type QueueStatusFilter = ArticleStatus | "all";
-export type QueueSort = "oldest" | "newest" | "score";
 export type SourceBucket = "single" | "multiple";
+
+// Ré-exportés depuis le module pur sibling (queue-sort.ts) : la resolution de tri elle-même n'a
+// aucune I/O et doit rester importable depuis bun test sans tirer le client DB — voir
+// tests/queue-sort.test.ts, qui importe le module pur directement plutôt que via ce fichier.
+export { resolveQueueSort, type QueueSortCol };
 
 export type QueueFilters = {
   status: QueueStatusFilter;
   search?: string;
   categoryId?: string;
   source?: SourceBucket;
-  sort: QueueSort;
+  sortColumn: QueueSortCol;
+  sortDirection: "asc" | "desc";
   page: number;
   pageSize: number;
 };
@@ -62,15 +68,23 @@ export function parseQueueSearchParams(
   const srcRaw = str(sp.src);
   const source = srcRaw === "single" || srcRaw === "multiple" ? srcRaw : undefined;
 
+  // En-têtes de colonnes cliquables (task B2) : `?sort=<colonne>&dir=asc|desc`, résolus via la
+  // liste blanche de queue-sort.ts. Remplace l'ancien menu déroulant oldest/newest/score.
+  // Une arrivée NUE sur /queue (aucun `?sort`) doit reproduire EXACTEMENT l'ancien tri par
+  // défaut — le plus ancien d'abord — donc ce cas est traité à part plutôt que via le repli
+  // générique de resolveQueueSort (qui vaut « date desc », le plus récent d'abord, et ne sert
+  // qu'aux clics explicites / entrées invalides).
   const sortRaw = str(sp.sort);
-  const sort: QueueSort =
-    sortRaw === "newest" || sortRaw === "score" ? sortRaw : "oldest";
+  const { column: sortColumn, direction: sortDirection } =
+    sortRaw === undefined
+      ? { column: "date" as const, direction: "asc" as const }
+      : resolveQueueSort(sortRaw, str(sp.dir));
 
   const pageRaw = Number(str(sp.page));
   const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1;
 
   return {
-    status, search: str(sp.q), categoryId: str(sp.cat), source, sort,
+    status, search: str(sp.q), categoryId: str(sp.cat), source, sortColumn, sortDirection,
     page, pageSize: QUEUE_PAGE_SIZE,
   };
 }
@@ -78,6 +92,23 @@ export function parseQueueSearchParams(
 // Sous-requête corrélée réutilisée par le SELECT et par le filtre « sources » — une seule
 // définition pour que les deux ne puissent pas compter différemment.
 const SOURCE_COUNT = sql<number>`(select count(*) from ${articleSources} s where s.article_id = ${articles.id})`;
+
+// `desc(articles.score)` seul trierait NULLS FIRST (comportement Postgres par défaut pour DESC) :
+// les articles JAMAIS notés passeraient devant les mieux notés — l'inverse de ce que « Score »
+// doit produire en tri décroissant. Même logique pour `date`. `desc()`/`asc()` renvoient un SQL
+// sans méthode `.nulls()` dans cette version de Drizzle (0.45.2 — vérifié : absente de
+// sql/sql.d.ts et sql/expressions/select.d.ts) ; un fragment `sql` brut est l'équivalent portable.
+// Liste blanche colonne → expression ORDER BY : c'est elle qui empêche un `?sort=` arbitraire
+// d'atteindre le SQL — `f.sortColumn` est déjà typé QueueSortCol (resolveQueueSort en garde
+// l'unique point d'entrée), donc cette table est exhaustive et jamais indexée par une chaîne brute.
+const SORT_EXPR: Record<QueueSortCol, (dir: "asc" | "desc") => SQL> = {
+  title: (dir) => (dir === "asc" ? asc(articles.title) : desc(articles.title)),
+  category: (dir) => (dir === "asc" ? asc(wpCategories.name) : desc(wpCategories.name)),
+  score: (dir) => (dir === "asc" ? sql`${articles.score} asc nulls last` : sql`${articles.score} desc nulls last`),
+  date: (dir) => (dir === "asc" ? sql`${articles.generatedAt} asc nulls last` : sql`${articles.generatedAt} desc nulls last`),
+  source: (dir) => (dir === "asc" ? asc(SOURCE_COUNT) : desc(SOURCE_COUNT)),
+  status: (dir) => (dir === "asc" ? asc(articles.status) : desc(articles.status)),
+};
 
 export async function getQueue(f: QueueFilters): Promise<QueuePage> {
   const conds = [];
@@ -94,15 +125,7 @@ export async function getQueue(f: QueueFilters): Promise<QueuePage> {
   // plutôt qu'un tableau vide.
   const page = Math.min(Math.max(1, f.page), pageCount);
 
-  // `desc(articles.score)` seul trierait NULLS FIRST (comportement Postgres par défaut pour
-  // DESC) : les articles JAMAIS notés passeraient devant les mieux notés — l'inverse de ce que
-  // « Meilleur score » doit produire. `desc()`/`asc()` renvoient un SQL sans méthode `.nulls()`
-  // dans cette version de Drizzle (0.45.2 — vérifié : absente de sql/sql.d.ts et
-  // sql/expressions/select.d.ts) ; un fragment `sql` brut est l'équivalent portable.
-  const orderBy =
-    f.sort === "newest" ? desc(articles.generatedAt)
-      : f.sort === "score" ? sql`${articles.score} desc nulls last`
-        : asc(articles.generatedAt);
+  const orderBy = SORT_EXPR[f.sortColumn](f.sortDirection);
 
   const rows = await db.select({
     id: articles.id, title: articles.title, excerpt: articles.excerpt,

@@ -14,9 +14,6 @@ const STATUS_OPTIONS: ArticleStatus[] = [
 const SOURCE_LABEL: Record<string, string> = {
   all: "Toutes les sources", single: "Source unique", multiple: "Sources multiples",
 };
-const SORT_LABEL: Record<string, string> = {
-  oldest: "Plus anciens d'abord", newest: "Plus récents d'abord", score: "Meilleur score",
-};
 
 export function QueueFilters({
   filters, categories,
@@ -106,17 +103,6 @@ export function QueueFilters({
           <SelectItem value="all">Toutes les sources</SelectItem>
           <SelectItem value="single">Source unique</SelectItem>
           <SelectItem value="multiple">Sources multiples</SelectItem>
-        </SelectContent>
-      </Select>
-
-      <Select value={filters.sort} onValueChange={(v) => v && setParams({ sort: v })}>
-        <SelectTrigger className="w-52">
-          <SelectValue placeholder="Tri">{(v: string) => SORT_LABEL[v] ?? SORT_LABEL.oldest}</SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="oldest">Plus anciens d&apos;abord</SelectItem>
-          <SelectItem value="newest">Plus récents d&apos;abord</SelectItem>
-          <SelectItem value="score">Meilleur score</SelectItem>
         </SelectContent>
       </Select>
     </div>
