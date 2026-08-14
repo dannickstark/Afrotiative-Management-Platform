@@ -21,6 +21,7 @@
 - `bun run test:pure` stays green; `bunx tsc --noEmit` clean. Keep new tests in the `test:pure` lane (register DB-free/network-free files in `scripts/test-fast.ts` PURE allowlist where applicable).
 - Customized Next.js: read `node_modules/next/dist/docs/` before touching any Next API (searchParams, RSC, route handlers).
 - Commit after each task (or each green step). Branch: `feat/category-runs-and-tanstack-tables`.
+- **TESTING APPROACH — no React component testing exists in this repo** (no `@testing-library`, zero `.test.tsx`; all tests are `.test.ts` over pure functions/queries/actions). Do NOT add a component-test framework. For UI tasks, make behavior testable by **extracting pure helpers** and unit-testing THOSE with `bun test` (sort resolvers, the sort-toggle state machine, column accessor/`sortingFn`/`filterFn` functions, param-builders). Interaction (clicking a header re-sorts, a filter narrows rows) is verified in the **browser preview** (dev server + Browser tools), not in a DOM unit test. Name new pure-logic test files `.test.ts` and register them in `scripts/test-fast.ts` PURE allowlist. Every table task MUST end with a browser-verification step against the running app.
 
 ---
 
@@ -146,7 +147,7 @@ describe("runParamsSchema categoryIds", () => {
 - Create: `components/ui/data-table.tsx`
 - Create: `components/ui/data-table-column-header.tsx`
 - Create: `components/ui/data-table-toolbar.tsx`
-- Test: `tests/data-table.test.tsx`
+- Test: `tests/data-table-sort.test.ts` (pure `nextSortDir` helper; no DOM)
 
 **Interfaces:**
 - Produces:
@@ -157,17 +158,19 @@ describe("runParamsSchema categoryIds", () => {
 
 - [ ] **Step 1: Read** `components/queue/queue-table.tsx` (existing `useReactTable` usage) and `components/ui/table.tsx`, `components/ui/input.tsx`, `components/ui/button.tsx` to match import style and props.
 
-- [ ] **Step 2: Write failing tests** `tests/data-table.test.tsx` (client mode, render + interact — use the project's component-test tooling; check an existing `*.test.tsx` for the render helper, e.g. `@testing-library/react` or a custom one):
+- [ ] **Step 2: Write failing tests** `tests/data-table-sort.test.ts` over a PURE sort-toggle helper (no DOM — see Global Constraints testing approach). Extract the header's click behavior into a pure function and test it:
 
-```tsx
-// Pseudocode shape — adapt to the repo's actual render/query helpers.
-// 1. Client sort: render DataTable with columns [{accessorKey:"n", header: DataTableColumnHeader title "N", enableSorting:true}]
-//    and data [{n:3},{n:1},{n:2}]. Click the "N" header once → rows render 1,2,3 (asc). Click again → 3,2,1 (desc).
-// 2. Global filter: type "ab" in the toolbar search → only rows whose cells include "ab" remain.
-// 3. Manual mode: pass manualSorting + a spy onSortingChange; clicking the header calls the spy and does NOT reorder DOM rows.
+```ts
+import { describe, it, expect } from "bun:test";
+import { nextSortDir } from "@/components/ui/data-table-column-header";
+describe("nextSortDir (asc → desc → none cycle)", () => {
+  it("false → asc", () => expect(nextSortDir(false)).toBe("asc"));
+  it("asc → desc", () => expect(nextSortDir("asc")).toBe("desc"));
+  it("desc → false (clear)", () => expect(nextSortDir("desc")).toBe(false));
+});
 ```
 
-Write these as real tests using the repo's helpers (discover them first; if no RTL is present, test the pure bits — e.g. a `nextSortDir(prev)` helper — and keep DOM assertions minimal).
+Client-mode sorting/filtering themselves are TanStack's own well-tested row models — do not re-test the library. Our testable surface is the toggle state machine (above) and, in later tasks, each table's pure column accessor/`sortingFn`/`filterFn`. DOM interaction is browser-verified in Step 6.
 
 - [ ] **Step 3: Run** — expect FAIL.
 
@@ -209,11 +212,11 @@ export function DataTable<T>(p: Props<T>) {
 }
 ```
 
-Fill in the JSX (headers via `header.column.columnDef.header` through `flexRender`, cells via `flexRender(cell.column.columnDef.cell, cell.getContext())`). `DataTableColumnHeader` uses `column.getIsSorted()` for the icon and `column.toggleSorting(column.getIsSorted() === "asc")` on click, with a third click clearing (use `column.clearSorting()` when already `"desc"`). Keep it accessible (button, `aria-sort` on the `TableHead`).
+Fill in the JSX (headers via `header.column.columnDef.header` through `flexRender`, cells via `flexRender(cell.column.columnDef.cell, cell.getContext())`). In `data-table-column-header.tsx`, export the pure `export function nextSortDir(cur: false | "asc" | "desc"): false | "asc" | "desc" { return cur === false ? "asc" : cur === "asc" ? "desc" : false; }` and have the header's onClick apply it via TanStack (`const d = nextSortDir(column.getIsSorted()); d === false ? column.clearSorting() : column.toggleSorting(d === "desc");`). Icon from `column.getIsSorted()`. Accessible (button, `aria-sort` on the `TableHead`).
 
-- [ ] **Step 5: Run** `bun test tests/data-table.test.tsx` + `bunx tsc --noEmit`.
+- [ ] **Step 5: Run** `bun test tests/data-table-sort.test.ts` + `bunx tsc --noEmit`.
 
-- [ ] **Step 6: Commit** `feat(ui): shared TanStack DataTable primitive`.
+- [ ] **Step 6: Commit** `feat(ui): shared TanStack DataTable primitive`. (Browser verification happens in Task B2, the first table to render it.)
 
 ---
 
