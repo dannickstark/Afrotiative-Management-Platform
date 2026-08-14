@@ -24,6 +24,7 @@ describe("pipeline_runs.params jsonb round-trip", () => {
     const params: RunParams = {
       recency: { kind: "age", hours: 48, cutoffAt: "2026-08-04T00:00:00.000Z" },
       feedIds: null,
+      categoryIds: null,
       maxItems: 20,
     };
     expect(await roundTrip(params)).toEqual(params);
@@ -33,13 +34,14 @@ describe("pipeline_runs.params jsonb round-trip", () => {
     const params: RunParams = {
       recency: { kind: "since", cutoffAt: "2026-08-05T09:00:00.000Z" },
       feedIds: null,
+      categoryIds: null,
       maxItems: 10,
     };
     expect(await roundTrip(params)).toEqual(params);
   });
 
   it("round-trips recency.kind === 'none' unchanged", async () => {
-    const params: RunParams = { recency: { kind: "none" }, feedIds: null, maxItems: 10 };
+    const params: RunParams = { recency: { kind: "none" }, feedIds: null, categoryIds: null, maxItems: 10 };
     expect(await roundTrip(params)).toEqual(params);
   });
 
@@ -47,6 +49,7 @@ describe("pipeline_runs.params jsonb round-trip", () => {
     const params: RunParams = {
       recency: { kind: "none" },
       feedIds: ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"],
+      categoryIds: null,
       maxItems: 10,
     };
     expect(await roundTrip(params)).toEqual(params);

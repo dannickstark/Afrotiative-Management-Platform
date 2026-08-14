@@ -7,7 +7,10 @@ describe("parseQueueSearchParams", () => {
     expect(f.status).toBe("pending");
     expect(f.page).toBe(1);
     expect(f.pageSize).toBe(QUEUE_PAGE_SIZE);
-    expect(f.sort).toBe("oldest");
+    // Arrivée nue : reproduit l'ancien tri par défaut (le plus ancien d'abord) — cf. le
+    // traitement spécial du `?sort` absent dans parseQueueSearchParams (lib/queries/queue.ts).
+    expect(f.sortColumn).toBe("date");
+    expect(f.sortDirection).toBe("asc");
     expect(f.search).toBeUndefined();
     expect(f.categoryId).toBeUndefined();
     expect(f.source).toBeUndefined();
@@ -40,10 +43,15 @@ describe("parseQueueSearchParams", () => {
     expect(parseQueueSearchParams({ src: "beaucoup" }).source).toBeUndefined();
   });
 
-  it("ne retient que les tris connus", () => {
-    expect(parseQueueSearchParams({ sort: "newest" }).sort).toBe("newest");
-    expect(parseQueueSearchParams({ sort: "score" }).sort).toBe("score");
-    expect(parseQueueSearchParams({ sort: "n'importe quoi" }).sort).toBe("oldest");
+  it("ne retient que les colonnes de tri connues (task B2 — en-têtes cliquables)", () => {
+    expect(parseQueueSearchParams({ sort: "score", dir: "asc" }).sortColumn).toBe("score");
+    expect(parseQueueSearchParams({ sort: "score", dir: "asc" }).sortDirection).toBe("asc");
+    // `?sort=` présent mais hors liste blanche retombe sur "date" — et, `?sort` étant présent,
+    // sur la direction par défaut de resolveQueueSort ("desc"), pas sur le repli spécial de
+    // l'arrivée nue (voir le test précédent).
+    const f = parseQueueSearchParams({ sort: "n'importe quoi" });
+    expect(f.sortColumn).toBe("date");
+    expect(f.sortDirection).toBe("desc");
   });
 
   it("borne la page à 1 minimum", () => {

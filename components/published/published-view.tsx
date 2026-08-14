@@ -21,7 +21,11 @@ export function PublishedView({
         }
       />
       <PublishedFilterBar filters={filters} categories={categories} />
-      <PublishedTable rows={page.rows} filtered={filtered} />
+      <PublishedTable
+        rows={page.rows}
+        filtered={filtered}
+        sort={{ column: filters.sortColumn, direction: filters.sortDirection }}
+      />
       {page.pageCount > 1 && <PublishedPagination page={page.page} pageCount={page.pageCount} />}
     </div>
   );

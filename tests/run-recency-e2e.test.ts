@@ -72,7 +72,7 @@ describe("executeRun — phase-1 recency filter", () => {
   it("skips items older than the cutoff, records only the recent one, and logs a 'too old' step", async () => {
     const params: RunParams = {
       recency: { kind: "age", hours: 48, cutoffAt: new Date(Date.now() - 48 * 3600_000).toISOString() },
-      feedIds: null, maxItems: 10,
+      feedIds: null, categoryIds: null, maxItems: 10,
     };
     runId = await openRun({ triggeredBy: "manual", feedsTotal: 1, params });
     expect(runId).not.toBeNull();

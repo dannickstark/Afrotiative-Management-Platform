@@ -22,7 +22,11 @@ export function QueueView({
         }
       />
       <QueueFilters filters={filters} categories={categories} />
-      <QueueTable rows={page.rows} categories={categories} />
+      <QueueTable
+        rows={page.rows}
+        categories={categories}
+        sort={{ column: filters.sortColumn, direction: filters.sortDirection }}
+      />
       {page.pageCount > 1 && <QueuePagination page={page.page} pageCount={page.pageCount} />}
     </div>
   );

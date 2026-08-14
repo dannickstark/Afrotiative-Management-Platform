@@ -45,7 +45,12 @@ describe("getPublishedArticles", () => {
     for (const k of Object.keys(WP_ENV)) { if (envSnap[k] === undefined) delete process.env[k]; else process.env[k] = envSnap[k]; }
   });
 
-  const base = { search: undefined, categoryId: undefined, from: undefined, to: undefined, author: undefined, page: 1, pageSize: 50 } as const;
+  // sortColumn/sortDirection default to "publishedAt"/"desc" — reproduces the previous fixed
+  // `desc(articles.publishedAt)` orderBy (task B3, click-to-sort headers).
+  const base = {
+    search: undefined, categoryId: undefined, from: undefined, to: undefined, author: undefined,
+    sortColumn: "publishedAt", sortDirection: "desc", page: 1, pageSize: 50,
+  } as const;
   const mine = (p: Awaited<ReturnType<typeof getPublishedArticles>>) => p.rows.filter((r) => r.title.startsWith("PubTest"));
 
   it("returns only status='published', newest first, with wpUrl from the WP distribution", async () => {

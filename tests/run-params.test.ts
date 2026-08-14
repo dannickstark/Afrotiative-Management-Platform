@@ -57,6 +57,7 @@ describe("narrowByRecency", () => {
 });
 
 import { resolveRunParams, cutoffDate } from "@/lib/pipeline/run-params";
+import { runParamsSchema } from "@/lib/validation";
 
 describe("resolveRunParams", () => {
   const now = new Date("2026-08-06T00:00:00.000Z");
@@ -90,10 +91,38 @@ describe("resolveRunParams", () => {
   });
 });
 
+describe("resolveRunParams categoryIds", () => {
+  const now = new Date("2026-08-06T00:00:00.000Z");
+  const defaults = { defaultMaxItemAgeHours: 72, maxItemsPerRun: 20 };
+
+  it("passes through a category id array", () => {
+    const r = resolveRunParams({ categoryIds: ["11111111-1111-1111-1111-111111111111"] }, defaults, now);
+    expect(r.categoryIds).toEqual(["11111111-1111-1111-1111-111111111111"]);
+  });
+  it("normalizes empty array to null (no scope)", () => {
+    expect(resolveRunParams({ categoryIds: [] }, defaults, now).categoryIds).toBeNull();
+  });
+  it("defaults missing categoryIds to null", () => {
+    expect(resolveRunParams(undefined, defaults, now).categoryIds).toBeNull();
+  });
+});
+
+describe("runParamsSchema categoryIds", () => {
+  it("accepts null", () => {
+    expect(runParamsSchema.parse({ categoryIds: null }).categoryIds).toBeNull();
+  });
+  it("accepts a uuid array", () => {
+    expect(runParamsSchema.parse({ categoryIds: ["11111111-1111-1111-8111-111111111111"] }).categoryIds).toHaveLength(1);
+  });
+  it("rejects a non-uuid entry", () => {
+    expect(() => runParamsSchema.parse({ categoryIds: ["not-a-uuid"] })).toThrow();
+  });
+});
+
 describe("cutoffDate", () => {
   it("returns a Date for age/since and null for none", () => {
-    expect(cutoffDate({ recency: { kind: "age", hours: 1, cutoffAt: "2026-08-06T00:00:00.000Z" }, feedIds: null, maxItems: 1 }))
+    expect(cutoffDate({ recency: { kind: "age", hours: 1, cutoffAt: "2026-08-06T00:00:00.000Z" }, feedIds: null, categoryIds: null, maxItems: 1 }))
       .toEqual(new Date("2026-08-06T00:00:00.000Z"));
-    expect(cutoffDate({ recency: { kind: "none" }, feedIds: null, maxItems: 1 })).toBeNull();
+    expect(cutoffDate({ recency: { kind: "none" }, feedIds: null, categoryIds: null, maxItems: 1 })).toBeNull();
   });
 });

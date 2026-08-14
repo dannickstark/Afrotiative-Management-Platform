@@ -49,6 +49,47 @@ function isUniqueViolation(e: unknown): boolean {
   return pgErrorCode(e) === "23505";
 }
 
+// TASK A-STATS — the run-status tally, extracted to a pure function so it can be unit-tested
+// directly (no DB, no pipeline run) rather than only through a full executeRun() call.
+//
+// `skippedByCategory` (stories whose stageSources() call returned `skipped: true` — see stages.ts's
+// category-scope branch) is DELIBERATELY NOT folded into `itemsAttempted`/`allItemsFailed` below: a
+// category filter-out is a filter OUTCOME, not a failure, exactly like a duplicate item that never
+// reached stageSources at all. A run scoped to a narrow (or, in the limit, all-excluding) category
+// selection that produces 0 articles SOLELY because every candidate story was out of scope must read
+// "success" (mirroring the existing "itemsAttempted === 0 → success" quiet-duplicate-run case just
+// below), never "failed" — and therefore must never fire the run_failed alert (executeRun's `finally`
+// gates that alert on `status === "failed"` alone, so fixing status here is sufficient; no separate
+// alert-condition change is needed). `skippedByCategory` is accepted as an explicit parameter (rather
+// than silently absorbed into the caller's existing counters) precisely so a test can assert this
+// exclusion directly: passing a large `skippedByCategory` alongside `produced: 0, itemFailures: 0`
+// must NOT change the result. Every other threshold below is copied VERBATIM from the tally this
+// replaces — only the treatment of skips is new.
+export function classifyRunOutcome(input: {
+  produced: number;
+  itemFailures: number;
+  skippedByCategory: number;
+  feedsFailed: number;
+  targetFeedsLength: number;
+  capHit: boolean;
+// Return type deliberately narrower than the full RunStatus union (which also has "skipped" —
+// runPipeline()'s own early-return for a slot conflict, never assigned inside executeRun —
+// "cancelled" and "paused", both decided elsewhere in executeRun's own control flow, never by this
+// function): this function only ever computes one of these three. Kept narrow (rather than
+// `RunStatus`) so `status = classifyRunOutcome(...)` preserves TypeScript's control-flow narrowing
+// of the `status` local for the plain `db.update(...).set({ status })` call further down (that
+// column's type doesn't accept "skipped") — widening this return type to `RunStatus` would silently
+// break that narrowing.
+}): "success" | "partial" | "failed" {
+  const { produced, itemFailures, feedsFailed, targetFeedsLength, capHit } = input;
+  const itemsAttempted = produced + itemFailures;
+  const allFeedsFailed = targetFeedsLength > 0 && feedsFailed === targetFeedsLength;
+  const allItemsFailed = itemsAttempted > 0 && produced === 0;
+  return allFeedsFailed || allItemsFailed ? "failed"
+    : feedsFailed > 0 || itemFailures > 0 || capHit ? "partial"
+    : "success";
+}
+
 // Best-effort human-readable label for a web-search source when no feed name applies — the
 // hostname (without a leading "www.") reads better in the references list than a raw URL. Falls
 // back to the search hit's own title if the URL doesn't parse (defensive; searchRelated's hits
@@ -176,6 +217,11 @@ export async function executeRun(
   opts: { feedIds?: string[]; resumeStories?: RunCheckpoint["stories"] } = {},
 ): Promise<RunResult> {
   let feedsRead = 0, feedsFailed = 0, newItems = 0, produced = 0, itemFailures = 0, overCap = 0, tooOld = 0;
+  // TASK A-STATS — stories skipped because their AI-classified category fell outside the run's
+  // category scope (stageSources returned `skipped: true`). Tracked SEPARATELY from itemFailures —
+  // see classifyRunOutcome's doc comment above for why this must never count toward, or alert on,
+  // "all items failed".
+  let skippedByCategory = 0;
   let capHit = false, targetFeedsLength = 0;
   let status: RunStatus = "failed";
   // SP5 Task 3: set the moment a cooperative cancel check observes cancel_requested=true. Declared
@@ -195,7 +241,8 @@ export async function executeRun(
     // DB-backed (SP1): maxItemsPerRun is admin-editable at /settings/pipeline, not just env —
     // getPipelineConfig() stays for provider/secret/order config elsewhere in the pipeline.
     const settings = await getPipelineSettings();
-    const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
+    const cats = await db.select({ id: wpCategories.id, name: wpCategories.name }).from(wpCategories);
+    const categoryNames = cats.map((c) => c.name);
 
     // Params live on the run row (resolved at trigger). Read once; drives feed targeting, the item
     // cap, and the recency cutoff. Null for legacy rows / direct executeRun callers → no cutoff,
@@ -204,6 +251,18 @@ export async function executeRun(
     const params = runRow?.params ?? null;
     const cutoff = params ? cutoffDate(params) : null;
     const maxItems = params?.maxItems ?? settings.maxItemsPerRun;
+
+    // TASK A2 — "filter output": a run scoped to selected categories (params.categoryIds) keeps
+    // only stories the AI classifies into one of THOSE categories; everything else is skipped
+    // before any DB write (see stageSources's isInCategoryScope check below). Built as a Set of
+    // NAMES (not ids) because that's what draft.category carries — the AI outputs a category NAME
+    // during synthesis, never an id. A selected id with no matching row in `cats` (stale/deleted
+    // category) simply contributes no name to the set — intentional: it can never accidentally
+    // match a story, it just narrows the scope further. Null (not present, or empty array) means
+    // "no category restriction" — stageSources treats that as "every category in scope".
+    const categoryScope = params?.categoryIds && params.categoryIds.length > 0
+      ? new Set(cats.filter((c) => params.categoryIds!.includes(c.id)).map((c) => c.name))
+      : null;
 
     type Candidate = { item: RawItem; feedId: string; feedName: string };
     type Group = { members: Candidate[] };
@@ -483,7 +542,7 @@ export async function executeRun(
             }
           }
 
-          const { articleId } = await stageSources(sources, categoryNames, {
+          const { articleId, skipped } = await stageSources(sources, categoryNames, {
             onStageStart: (name) => setProgress(runId, { currentStage: name }),
             onStageEnd: (step) => insertStep({
               runId, name: step.name, status: step.status, durationMs: step.durationMs,
@@ -496,8 +555,13 @@ export async function executeRun(
             enabled: settings.autoPublishEnabled,
             scoreThreshold: settings.scoreThreshold,
             minSources: settings.autoPublishMinSources,
-          });
-          if (articleId) produced++; else itemFailures++;
+          }, categoryScope);
+          // TASK A-STATS — a category skip (skipped: true, articleId: null) is a filter outcome,
+          // not a failure: it must land in skippedByCategory, never itemFailures. See
+          // classifyRunOutcome's doc comment above for why that separation matters for status/alert.
+          if (articleId) produced++;
+          else if (skipped) skippedByCategory++;
+          else itemFailures++;
         }
       } catch (e) {
         itemFailures++;
@@ -527,6 +591,20 @@ export async function executeRun(
         errorMessage: `${tooOld} élément(s) antérieur(s) à la date de récence configurée ont été ignorés (non traités).`,
       });
     }
+    // TASK A-STATS — same "no silent truncation" observability convention as capHit/tooOld above,
+    // for stories filtered out by the run's category scope. Status "partial" here is purely the
+    // pipeline_steps row's own display status (this table has no "skipped"/"success-with-note"
+    // status); it does NOT feed classifyRunOutcome, which never reads pipeline_steps — the run's
+    // overall status/alert are computed from the in-memory counters below, where skippedByCategory
+    // is kept out of itemFailures entirely (see the tally above and classifyRunOutcome's doc comment).
+    if (skippedByCategory > 0) {
+      await insertStep({
+        runId, name: "Histoires hors catégorie ignorées", status: "partial", durationMs: null,
+        errorMessage:
+          `${skippedByCategory} histoire(s) ignorée(s) car hors de la portée de catégorie sélectionnée `
+          + `pour cette exécution (filtrage, pas un échec).`,
+      });
+    }
 
     if (cancelled) {
       // SP5 Task 3: a neutral, best-effort observability step — recorded here (still inside the
@@ -554,18 +632,13 @@ export async function executeRun(
           + `seront reprises à la reprise de l'exécution.`,
       });
     } else {
-      // Status tally:
+      // Status tally (see classifyRunOutcome above for the exact rules):
       //  - failed  = every feed failed to parse, OR items were attempted and NONE succeeded.
       //  - partial = some feeds/items failed (or the cap was hit) but at least one item was produced.
-      //  - success = no failures at all — including a quiet run where every item was a duplicate
-      //              (itemsAttempted === 0), which must read as success, not failed.
-      const itemsAttempted = produced + itemFailures;
-      const allFeedsFailed = targetFeedsLength > 0 && feedsFailed === targetFeedsLength;
-      const allItemsFailed = itemsAttempted > 0 && produced === 0;
-      status =
-        allFeedsFailed || allItemsFailed ? "failed"
-        : feedsFailed > 0 || itemFailures > 0 || capHit ? "partial"
-        : "success";
+      //  - success = no failures at all — including a quiet run where every item was a duplicate, OR
+      //              where every candidate story was skipped for being outside the run's category
+      //              scope (itemsAttempted === 0 either way) — neither case reads as failed.
+      status = classifyRunOutcome({ produced, itemFailures, skippedByCategory, feedsFailed, targetFeedsLength, capHit });
     }
   } catch (e) {
     // Catastrophic error outside the per-feed/per-item guards (e.g. the feeds/category query).
