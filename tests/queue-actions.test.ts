@@ -60,7 +60,7 @@ mock.module("next/cache", () => ({
   revalidateTag: realRevalidateTag,
 }));
 
-const { bulkApprove, bulkReject, bulkRegenerate } = await import("@/lib/actions/queue-actions");
+const { bulkApprove, bulkReject, regenerateInQueue } = await import("@/lib/actions/queue-actions");
 
 const ALL_FIELDS = { title: true, body: true, excerpt: true, category: true, tags: true, image: true };
 
@@ -145,35 +145,27 @@ describe("bulkReject", () => {
   });
 });
 
-describe("bulkRegenerate", () => {
+// regenerateInQueue est l'action UNITAIRE (un seul article) appelée en boucle côté client par la
+// barre d'actions, qui possède désormais la progression X/N et le plafond de 10. Elle lève sur la
+// garde RBAC et la validation des champs (AVANT le cœur), mais renvoie { ok:false } — sans lever —
+// sur un échec métier unitaire (article introuvable, aucune source…). Pas de revalidatePath ici :
+// le client rafraîchit une seule fois en fin de boucle.
+describe("regenerateInQueue", () => {
   it("refuse une sélection de champs entièrement décochée (aucun champ à régénérer)", async () => {
-    // La validation des champs (regenerateFieldsSchema.parse) lève AVANT toute itération.
-    await expect(bulkRegenerate(
-      [faker.string.uuid()],
+    // La validation des champs (regenerateFieldsSchema.parse) lève AVANT tout appel au cœur.
+    await expect(regenerateInQueue(
+      faker.string.uuid(),
       { title: false, body: false, excerpt: false, category: false, tags: false, image: false },
     )).rejects.toThrow();
   });
 
-  it("refuse un lot de plus de 10 articles (plafond spécifique au renvoi en lot)", async () => {
-    // Le plafond est vérifié AVANT toute itération : 11 identifiants valides suffisent, pas de DB.
-    const elevenIds = Array.from({ length: 11 }, () => faker.string.uuid());
-    await expect(bulkRegenerate(elevenIds, ALL_FIELDS)).rejects.toThrow();
-  });
-
-  it("refuse une liste vide", async () => {
-    await expect(bulkRegenerate([], ALL_FIELDS)).rejects.toThrow();
-  });
-
-  it("rapporte en échec (sans lever) un article sans source, avec son titre", async () => {
+  it("rapporte { ok:false } (sans lever) un article sans source", async () => {
     // Article seedé sans aucune ligne article_sources → regenerateArticle s'arrête sur « Aucune
-    // source à régénérer. » AVANT tout appel réseau/IA. Le lot ne lève pas : succès partiel.
+    // source à régénérer. » AVANT tout appel réseau/IA. L'action ne lève pas : échec métier unitaire.
     const id = await seedArticle({ status: "pending", title: "Sans source pour renvoi IA" });
-    const res = await bulkRegenerate([id], ALL_FIELDS);
-    expect(res.ok).toEqual([]);
-    expect(res.failed).toHaveLength(1);
-    expect(res.failed[0].id).toBe(id);
-    expect(res.failed[0].title).toBe("Sans source pour renvoi IA");
-    expect(res.failed[0].message).toBe("Aucune source à régénérer.");
+    const res = await regenerateInQueue(id, ALL_FIELDS);
+    expect(res.ok).toBe(false);
+    expect(res.message).toBe("Aucune source à régénérer.");
   });
 });
 
@@ -210,8 +202,8 @@ describe("RBAC : bulkApprove/bulkReject refusent un rôle sans permission", () =
     expect(revs.some((r) => r.action === "rejeté")).toBe(false);
   });
 
-  it("bulkRegenerate : un journaliste est refusé (article:regenerate)", async () => {
+  it("regenerateInQueue : un journaliste est refusé (article:regenerate)", async () => {
     const id = await seedArticle({ status: "pending" });
-    await expect(bulkRegenerate([id], ALL_FIELDS)).rejects.toThrow();
+    await expect(regenerateInQueue(id, ALL_FIELDS)).rejects.toThrow();
   });
 });
