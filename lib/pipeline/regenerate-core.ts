@@ -5,9 +5,10 @@ import { regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/valida
 // Cœur de la régénération, par article — extrait de regenerate() (lib/actions/article-actions.ts).
 // Volontairement PLAIN (pas de "use server") : ni requireUser/requirePermission ni revalidatePath
 // ici — l'appelant possède la garde RBAC et la revalidation (l'action unitaire regenerate et
-// l'action en lot bulkRegenerate). Les imports RESTENT DYNAMIQUES (await import) pour que le graphe
-// d'extraction/génération lourd (jsdom) n'entre jamais dans l'analyse statique des modules
-// "use server" appelants — même raison que le commentaire d'origine au-dessus de regenerate().
+// regenerateInQueue, appelé en boucle par la barre d'actions du /queue). Les imports RESTENT
+// DYNAMIQUES (await import) pour que le graphe d'extraction/génération lourd (jsdom) n'entre jamais
+// dans l'analyse statique des modules "use server" appelants — même raison que le commentaire
+// d'origine au-dessus de regenerate().
 //
 // Retourne toujours `title` (le titre courant de l'article) pour un rapport d'échec lisible en lot.
 export async function regenerateArticle(

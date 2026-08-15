@@ -4,8 +4,9 @@ import { eq, inArray } from "drizzle-orm";
 import { regenerateArticle } from "@/lib/pipeline/regenerate-core";
 import { faker } from "@faker-js/faker";
 
-// regenerateArticle est le cœur unitaire partagé par regenerate (action unitaire) et bulkRegenerate
-// (action en lot). Il est PLAIN (pas de "use server") : ni RBAC ni revalidatePath ici, donc on peut
+// regenerateArticle est le cœur unitaire partagé par regenerate (action unitaire) et
+// regenerateInQueue (appelé en boucle par la barre d'actions du /queue, un article par appel).
+// Il est PLAIN (pas de "use server") : ni RBAC ni revalidatePath ici, donc on peut
 // l'exercer directement sous `bun test`, sans mocker session/next-cache. Le chemin complet
 // (extraction réseau + IA) n'est pas testable ici — on couvre les deux retours précoces qui ne
 // touchent QUE la base : « article introuvable » et « aucune source ». Fixtures auto-nettoyées.

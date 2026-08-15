@@ -93,47 +93,32 @@ export async function bulkApprove(ids: string[]): Promise<BulkResult> {
   return result;
 }
 
-// Plafond spécifique au renvoi en lot : BIEN plus bas que bulkIdsSchema (max 100), car chaque
-// article ici, c'est une extraction réseau de toutes ses sources PUIS un appel IA — bien plus
-// coûteux qu'une publication WordPress. 10 tient la Server Action dans une durée raisonnable.
-// On n'ABAISSE PAS le schéma partagé bulkIdsSchema : on ajoute le plafond ici, localement.
-const bulkRegenerateIdsSchema = bulkIdsSchema.max(10, "Maximum 10 articles par lot.");
-
 /**
- * Renvoie à l'IA une sélection d'articles — même logique unitaire que regenerate (le cœur partagé
- * regenerateArticle), appliquée EN SÉRIE. Séquentiel à dessein, comme bulkApprove : chaque itération
- * est une extraction réseau + un appel IA ; en parallèle on s'exposerait au throttling et le rapport
- * d'échec deviendrait illisible.
+ * Renvoie à l'IA UN SEUL article — même cœur partagé que regenerate (regenerateArticle). C'est la
+ * brique appelée EN BOUCLE côté client par la barre d'actions du /queue, qui affiche la progression
+ * « Renvoi à l'IA… 3/10 » entre chaque itération. La boucle vit désormais dans le client, pas ici.
  *
- * Ne lève JAMAIS sur un échec unitaire : le retour partiel EST le résultat attendu. Ne lève que sur
- * la garde RBAC, la validation des champs, ou le dépassement du plafond — tout AVANT la boucle.
+ * PAS de revalidatePath ici, à dessein : le client possède l'unique rafraîchissement de fin de
+ * boucle (router.refresh, une seule fois). Une revalidation à chaque itération démonterait la barre
+ * en effaçant la sélection en plein milieu du lot — exactement ce qu'on veut éviter.
+ *
+ * Le plafond de 10 (bien plus coûteux qu'approuver/rejeter : extraction réseau + appel IA par
+ * article) est désormais une garde d'UI : chaque appel ne porte qu'un article. On lève sur la garde
+ * RBAC et la validation des champs — tout AVANT le cœur — mais on renvoie { ok:false } sans lever
+ * sur un échec métier unitaire (article introuvable, aucune source…), pour que la boucle continue.
  */
-export async function bulkRegenerate(ids: string[], fields: RegenerateFieldsInput): Promise<BulkResult> {
+export async function regenerateInQueue(
+  articleId: string,
+  fields: RegenerateFieldsInput,
+): Promise<{ ok: boolean; message: string }> {
   const user = await requireUser();
   requirePermission(user.role, "article", "regenerate");
   const parsedFields = regenerateFieldsSchema.parse(fields);
-  const parsedIds = bulkRegenerateIdsSchema.parse(ids);
-
   // Import dynamique : garde le graphe d'extraction/génération lourd (jsdom) hors de l'analyse
   // statique de ce module "use server" — même discipline que regenerate côté unitaire.
   const { regenerateArticle } = await import("@/lib/pipeline/regenerate-core");
-  const result: BulkResult = { ok: [], failed: [] };
-
-  for (const id of parsedIds) {
-    try {
-      const r = await regenerateArticle(id, parsedFields, user.id);
-      if (r.ok) result.ok.push(id);
-      else result.failed.push({ id, title: r.title, message: r.message });
-    } catch (e) {
-      // Une erreur imprévue sur un article ne doit pas interrompre le lot : on la consigne et on
-      // continue. Le titre n'est pas récupérable ici sans requête supplémentaire — on retombe sur
-      // l'identifiant.
-      result.failed.push({ id, title: id, message: e instanceof Error ? e.message : "Échec du renvoi à l'IA." });
-    }
-  }
-
-  revalidatePath("/queue"); revalidatePath("/dashboard");
-  return result;
+  const { ok, message } = await regenerateArticle(articleId, parsedFields, user.id);
+  return { ok, message };
 }
 
 export async function bulkReject(input: { ids: string[]; reason: string }): Promise<BulkResult> {

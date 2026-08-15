@@ -63,7 +63,8 @@ export async function rejectArticle(input: { id: string; reason: string }) {
 // regenerateArticle (lib/pipeline/regenerate-core.ts), a plain module whose dynamic imports keep
 // the jsdom-heavy extraction/generation graph out of this "use server" module's static analysis
 // (mirrors reprocessRawItem in lib/actions/pipeline-actions.ts). The core is shared verbatim with
-// the bulk action (bulkRegenerate in lib/actions/queue-actions.ts).
+// the /queue client loop (regenerateInQueue in lib/actions/queue-actions.ts), called once per
+// article so the bar can show live X/N progress.
 export async function regenerate(articleId: string, fields: RegenerateFieldsInput): Promise<{ ok: boolean; message: string }> {
   const user = await requireUser();
   requirePermission(user.role, "article", "regenerate");
