@@ -60,7 +60,9 @@ mock.module("next/cache", () => ({
   revalidateTag: realRevalidateTag,
 }));
 
-const { bulkApprove, bulkReject } = await import("@/lib/actions/queue-actions");
+const { bulkApprove, bulkReject, bulkRegenerate } = await import("@/lib/actions/queue-actions");
+
+const ALL_FIELDS = { title: true, body: true, excerpt: true, category: true, tags: true, image: true };
 
 // Unit-level guard: the action must refuse a journalist.
 describe("queue action guards", () => {
@@ -143,6 +145,38 @@ describe("bulkReject", () => {
   });
 });
 
+describe("bulkRegenerate", () => {
+  it("refuse une sélection de champs entièrement décochée (aucun champ à régénérer)", async () => {
+    // La validation des champs (regenerateFieldsSchema.parse) lève AVANT toute itération.
+    await expect(bulkRegenerate(
+      [faker.string.uuid()],
+      { title: false, body: false, excerpt: false, category: false, tags: false, image: false },
+    )).rejects.toThrow();
+  });
+
+  it("refuse un lot de plus de 10 articles (plafond spécifique au renvoi en lot)", async () => {
+    // Le plafond est vérifié AVANT toute itération : 11 identifiants valides suffisent, pas de DB.
+    const elevenIds = Array.from({ length: 11 }, () => faker.string.uuid());
+    await expect(bulkRegenerate(elevenIds, ALL_FIELDS)).rejects.toThrow();
+  });
+
+  it("refuse une liste vide", async () => {
+    await expect(bulkRegenerate([], ALL_FIELDS)).rejects.toThrow();
+  });
+
+  it("rapporte en échec (sans lever) un article sans source, avec son titre", async () => {
+    // Article seedé sans aucune ligne article_sources → regenerateArticle s'arrête sur « Aucune
+    // source à régénérer. » AVANT tout appel réseau/IA. Le lot ne lève pas : succès partiel.
+    const id = await seedArticle({ status: "pending", title: "Sans source pour renvoi IA" });
+    const res = await bulkRegenerate([id], ALL_FIELDS);
+    expect(res.ok).toEqual([]);
+    expect(res.failed).toHaveLength(1);
+    expect(res.failed[0].id).toBe(id);
+    expect(res.failed[0].title).toBe("Sans source pour renvoi IA");
+    expect(res.failed[0].message).toBe("Aucune source à régénérer.");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // RBAC : la garde `requirePermission` — pas seulement la matrice `can()` testée plus haut, mais
 // bien le chemin réel des actions — doit refuser un rôle sans permission AVANT toute écriture.
@@ -174,5 +208,10 @@ describe("RBAC : bulkApprove/bulkReject refusent un rôle sans permission", () =
     expect(row.status).toBe("pending");
     const revs = await db.select().from(articleRevisions).where(eq(articleRevisions.articleId, id));
     expect(revs.some((r) => r.action === "rejeté")).toBe(false);
+  });
+
+  it("bulkRegenerate : un journaliste est refusé (article:regenerate)", async () => {
+    const id = await seedArticle({ status: "pending" });
+    await expect(bulkRegenerate([id], ALL_FIELDS)).rejects.toThrow();
   });
 });

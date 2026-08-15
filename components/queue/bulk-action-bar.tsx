@@ -4,7 +4,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/role-gate";
 import { ConfirmDialog } from "@/components/confirm-dialog";
-import { bulkApprove, bulkReject, type BulkResult } from "@/lib/actions/queue-actions";
+import { BulkRegenerateDialog } from "@/components/queue/bulk-regenerate-dialog";
+import { bulkApprove, bulkReject, bulkRegenerate, type BulkResult } from "@/lib/actions/queue-actions";
 import type { QueueRow } from "@/lib/queries/queue";
 
 export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () => void }) {
@@ -14,6 +15,9 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
   if (rows.length === 0) return null;
   const ids = rows.map((r) => r.id);
   const n = rows.length;
+  // Le renvoi en lot est bien plus coûteux qu'approuver/rejeter (extraction réseau + appel IA par
+  // article) : plafonné à 10 (voir bulkRegenerate). Approuver/Rejeter NE sont PAS concernés.
+  const tooMany = n > 10;
 
   function report(res: BulkResult, verb: string) {
     setFailures(res.failed);
@@ -68,6 +72,13 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
             withReason
             onConfirm={(reason) => run(() => bulkReject({ ids, reason: reason ?? "" }), "rejeté(s)")}
           />
+
+          <BulkRegenerateDialog
+            count={n}
+            disabled={isPending || tooMany}
+            onConfirm={(fields) => run(() => bulkRegenerate(ids, fields), "renvoyé(s) à l'IA")}
+          />
+          {tooMany && <span className="text-xs text-muted-foreground">Maximum 10 par lot</span>}
         </RoleGate>
 
         <Button size="sm" variant="ghost" onClick={() => { setFailures([]); onDone(); }}>

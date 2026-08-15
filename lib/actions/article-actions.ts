@@ -59,47 +59,22 @@ export async function rejectArticle(input: { id: string; reason: string }) {
 }
 
 // Real regeneration: re-extract every existing source, regenerate a full draft, and apply only
-// the checked fields. RBAC runs FIRST (cheap, statically-imported) — every subsequent import is
-// dynamic so the jsdom-heavy extraction/generation graph never enters this "use server" module's
-// static analysis (mirrors reprocessRawItem in lib/actions/pipeline-actions.ts).
+// the checked fields. RBAC runs FIRST (cheap, statically-imported); the per-article work lives in
+// regenerateArticle (lib/pipeline/regenerate-core.ts), a plain module whose dynamic imports keep
+// the jsdom-heavy extraction/generation graph out of this "use server" module's static analysis
+// (mirrors reprocessRawItem in lib/actions/pipeline-actions.ts). The core is shared verbatim with
+// the bulk action (bulkRegenerate in lib/actions/queue-actions.ts).
 export async function regenerate(articleId: string, fields: RegenerateFieldsInput): Promise<{ ok: boolean; message: string }> {
   const user = await requireUser();
   requirePermission(user.role, "article", "regenerate");
   const parsed = regenerateFieldsSchema.safeParse(fields);
   if (!parsed.success) return { ok: false, message: "Sélectionnez au moins un champ à régénérer." };
 
-  const { articleSources, wpCategories } = await import("@/db");
-  const [article] = await db.select().from(articles).where(eq(articles.id, articleId));
-  if (!article) return { ok: false, message: "Article introuvable." };
-  const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
-  if (sources.length === 0) return { ok: false, message: "Aucune source à régénérer." };
-
-  const { extractExternal } = await import("@/lib/extract");
-  const extracted: { mediaName: string; url: string; text: string; images?: string[] }[] = [];
-  const candidateImages: string[] = [];
-  for (const s of sources) {
-    try {
-      const r = await extractExternal(s.url);
-      if (r.text.trim().length > 0) { extracted.push({ mediaName: s.mediaName, url: s.url, text: r.text }); candidateImages.push(...r.images); }
-    } catch (e) {
-      console.warn(`[regenerate] extraction échouée pour ${s.url}: ${(e as Error).message}`);
-    }
-  }
-  if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré)." };
-
-  const { generateArticle } = await import("@/lib/ai/generate-article");
-  const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
-  const { draft, via } = await generateArticle({ sources: extracted, candidateImages, categories: categoryNames });
-  if (via === "mock") return { ok: false, message: "Aucun fournisseur IA configuré — régénération impossible." };
-
-  const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
-  await applyRegeneration({
-    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
-    draft, fields: parsed.data, sourceCount: extracted.length, categoryNames, actorId: user.id,
-  });
+  const { regenerateArticle } = await import("@/lib/pipeline/regenerate-core");
+  const { ok, message } = await regenerateArticle(articleId, parsed.data, user.id);
 
   revalidatePath(`/article/${articleId}`); revalidatePath("/queue");
-  return { ok: true, message: "Article régénéré — déposé en revue." };
+  return { ok, message };
 }
 
 // AI-assisted body rewrite driven by an optional editor instruction. Reuses applyRegeneration
