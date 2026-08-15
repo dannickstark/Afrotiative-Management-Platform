@@ -700,8 +700,17 @@ function EditorShellInner({
 
   const panelContent = panelBody(layout === "all-drawers" ? undefined : prefs.railPanelWidth);
 
+  // Impeccable `layout` — thèse spatiale : le PLAN DE TRAVAIL est le sujet, les panneaux sont des
+  // instruments posés sur ses bords. Avant cette passe, la coque était `gap-3` partout et CHACUNE des
+  // quatre régions (rail, panneau accosté, canevas, inspecteur) portait le MÊME `rounded-lg border` —
+  // quatre cartes de poids égal flottant sans marge extérieure contre les bords de la fenêtre. Au
+  // test du plissement, rien ne désignait le canevas. Désormais : plus aucun `gap` ici (l'en-tête
+  // porte sa propre `border-b`, la rangée du corps ses propres coutures), et la différenciation passe
+  // par le CONFINEMENT — les instruments restent des surfaces `bg-card` bordées d'un filet, le canevas
+  // est le seul à n'avoir NI cadre NI arrondi : un fond d'atelier à fond perdu. C'est la règle « filet
+  // plutôt qu'ombre » de DESIGN.md appliquée à la hiérarchie, plutôt qu'à la seule séparation.
   return (
-    <div className="flex h-full flex-col gap-3" data-testid="editor-shell">
+    <div className="flex h-full flex-col" data-testid="editor-shell">
       {/* Chantier A Tâche 2 : cet en-tête EST désormais la seule barre supérieure de l'éditeur —
           la coque admin (SidebarProvider/AppSidebar/Breadcrumbs/SidebarTrigger, app/(app)/layout.tsx)
           a quitté cet arbre dès la Tâche 1 (app/(studio-editor)/layout.tsx, plein écran, requireUser()
@@ -717,7 +726,22 @@ function EditorShellInner({
           supérieure, tient la même promesse (« les DEUX états », « à côté du sélecteur de mode »)
           sans plus jamais dépendre d'un positionnement absolu ni d'un pad (`pt-11`) réservé pour lui
           — voir le conteneur juste en dessous, qui ne porte plus ni l'un ni l'autre. */}
-      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b pb-3">
+      {/* Impeccable `layout` : trois correctifs sur cette barre.
+          1. `minmax(0,1fr)` au lieu de `1fr` sur les deux pistes latérales. `1fr` vaut
+             `minmax(auto,1fr)` : la piste DROITE, dont le contenu minimal est la somme incompressible
+             du groupe zoom + annuler/rétablir + « Historique (n) » + « Publier » (tous
+             `whitespace-nowrap` via buttonVariants), débordait sa part et poussait la piste gauche —
+             décentrant le ModeSwitch, c'est-à-dire exactement ce que cette grille existe pour tenir.
+             Avec `minmax(0,…)` les deux pistes peuvent se rétrécir sous leur contenu minimal, donc
+             c'est le `truncate` du titre qui absorbe le trop-plein, en premier recours et non en
+             dernier.
+          2. `h-14 shrink-0` : une hauteur FIXE. Le groupe de badges ci-dessous peut compter jusqu'à
+             trois entrées ; en `flex-wrap` sur une barre à hauteur libre, il repoussait le corps de
+             l'éditeur vers le bas. Le canevas ne perd plus de hauteur au gré du statut du gabarit.
+          3. `px-3` : la coque est désormais à fond perdu (voir le commentaire de `editor-shell`), donc
+             ce padding est ce qui empêche le lien « Gabarits » et le bouton « Publier » de coller aux
+             bords de la fenêtre. */}
+      <header className="grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4 border-b px-3">
         <div className="flex min-w-0 items-center gap-2">
           {/* Correctif chantier A T2 : AVANT cette tâche, ce lien portait déjà `href="/studio"` (donc
               naviguait réellement) mais SANS texte visible — une simple flèche icône, `aria-label`
@@ -733,16 +757,29 @@ function EditorShellInner({
             <ArrowLeft />
             Gabarits
           </Link>
+          {/* Impeccable `layout` : un filet vertical sépare l'affordance de NAVIGATION (quitter vers
+              la liste) de l'IDENTITÉ du document. Avant, quatre préoccupations sans rapport — retour,
+              titre, badges, indicateur de sauvegarde — se suivaient à un `gap-2` uniforme : la
+              proximité ne disait plus rien, faute de varier. Le regroupement se fait maintenant par
+              distance (`gap-2` serré à l'intérieur d'un groupe, `gap-4` entre les pistes de la
+              grille) plutôt que par décoration. */}
+          <span aria-hidden className="h-5 w-px shrink-0 bg-border" />
           <div className="min-w-0">
             {/* Chantier E Tâche 5 (finition de marque) : `font-heading` — le titre de gabarit tient
                 le même rôle que le h1 de PageHeader (globals.css, « Type scale »), qui porte déjà
                 cette police ailleurs dans le produit ; il ne l'avait pas encore ici. */}
-            <h1 className="truncate font-heading text-base font-semibold">{template.name}</h1>
+            <h1 className="truncate font-heading text-base leading-tight font-semibold">{template.name}</h1>
             <p className="truncate text-xs text-muted-foreground">
               {CONTEXT_LABEL[template.context]} · {template.width}×{template.height}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          {/* Impeccable `layout` : `flex-wrap` retiré — il pouvait ajouter une deuxième ligne de
+              badges et faire grandir la barre (voir la hauteur fixe ci-dessus).
+              `shrink-0` et NON `min-w-0` : mesuré à 700px, un `min-w-0` laissait ce groupe se réduire
+              à zéro pendant que les badges, eux, gardaient leur taille — ils débordaient donc PAR
+              DESSUS l'indicateur de sauvegarde voisin. Les badges sont petits et de largeur bornée :
+              c'est au titre (`truncate`, juste au-dessus) d'absorber le manque de place, pas à eux. */}
+          <div className="flex shrink-0 items-center gap-1.5">
             {template.archived && <Badge variant="outline">Archivé</Badge>}
             {template.publishedVersion === null
               ? <Badge variant="secondary">Brouillon</Badge>
@@ -759,11 +796,21 @@ function EditorShellInner({
           />
         </div>
 
+        {/* Impeccable `layout` : le ModeSwitch rejoint la condition `layout !== "too-small"` qui
+            gouverne déjà toute la piste droite. Sous 768px le corps rend `TooSmallState` QUEL QUE SOIT
+            `mode` (voir plus bas) : le sélecteur restait donc focusable et changeait d'état sans le
+            moindre effet visible — la même malhonnêteté que le correctif du chantier A Tâche 4 avait
+            retirée à annuler/rétablir, laissée en place ici par oubli. */}
         <div className="flex items-center justify-center">
-          <ModeSwitch mode={mode} onChange={changeMode} />
+          {layout !== "too-small" && <ModeSwitch mode={mode} onChange={changeMode} />}
         </div>
 
-        <div className="flex items-center justify-end gap-2">
+        {/* Impeccable `layout` : `gap-2` uniforme -> une cadence à deux temps. Cette piste porte TROIS
+            familles distinctes — régler la vue (zoom), défaire (annuler/rétablir/historique), publier —
+            qui se suivaient toutes à la même distance, si bien qu'aucune ne se lisait comme un groupe.
+            Désormais `gap-1` À L'INTÉRIEUR d'une famille, un filet vertical ENTRE deux familles : la
+            proximité fait le regroupement, comme dans la piste gauche. */}
+        <div className="flex min-w-0 items-center justify-end gap-1">
           {/* Correctif revue (Chantier A Tâche 4) : « aperçu seulement » n'était PAS honnête —
               annuler/rétablir/restaurer une version restaient de VRAIES actions (dispatch(undo())/
               dispatch(redo()), un vrai `HistoryEntry` du réducteur ; `VersionHistory.onRestore`
@@ -846,6 +893,7 @@ function EditorShellInner({
                   <Plus />
                 </Button>
               </div>
+              <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
               <Button
                 type="button" variant="ghost" size="icon-sm" title="Annuler"
                 disabled={state.past.length === 0} onClick={() => dispatch(undo())}
@@ -873,6 +921,7 @@ function EditorShellInner({
                   foreground` en className, sans toucher `hover:bg-primary/80` (hérité de
                   buttonVariants, jamais en conflit de PROPRIÉTÉ avec `bg-accent-brand` — seul l'état
                   :hover diverge légèrement de la couleur de repos, comme login-form.tsx déjà). */}
+              <span aria-hidden className="mx-1 h-5 w-px shrink-0 bg-border" />
               <Button
                 type="button" data-action="publish" disabled={!storageConfigured || publishing}
                 title={!storageConfigured ? "Indisponible : stockage R2 non configuré." : undefined}
@@ -886,17 +935,28 @@ function EditorShellInner({
         </div>
       </header>
 
-      {!storageConfigured && <StorageBanner />}
+      {/* Impeccable `layout` : ces deux bandeaux sont les seuls enfants de la colonne à pouvoir
+          grandir SANS borne, et ils volent leur hauteur au canevas — qui, lui, ne peut pas la
+          reprendre en défilant. `shrink-0` + le padding qui remplace l'ancien `gap-3` de la colonne
+          les tient hors du chemin ; la liste d'erreurs, elle, est désormais plafonnée et défile pour
+          son propre compte (dix erreurs de validation coûtaient ~240px de canevas, définitivement). */}
+      {!storageConfigured && (
+        <div className="shrink-0 px-3 pt-3">
+          <StorageBanner />
+        </div>
+      )}
 
       {publishErrors && (
-        <div
-          className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
-          data-testid="publish-errors"
-        >
-          <p className="font-medium">La publication a été refusée :</p>
-          <ul className="list-disc pl-5">
-            {publishErrors.map((e, i) => <li key={i}>{e}</li>)}
-          </ul>
+        <div className="shrink-0 px-3 pt-3">
+          <div
+            className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+            data-testid="publish-errors"
+          >
+            <p className="font-medium">La publication a été refusée :</p>
+            <ul className="max-h-32 list-disc overflow-auto pl-5">
+              {publishErrors.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          </div>
         </div>
       )}
 
@@ -919,7 +979,15 @@ function EditorShellInner({
           panneau accosté (`all-drawers` UNIQUEMENT) et l'inspecteur (`inspector-drawer` ET
           `all-drawers`) migrent d'une colonne fixe vers un `Sheet` (components/ui/sheet.tsx),
           voir `panelContent`/`inspectorOpen` ci-dessus. */}
-      <div className="flex flex-1 gap-3 overflow-hidden">
+      {/* Impeccable `layout` : `gap-3` retiré. Il portait QUATRE distances sémantiquement
+          différentes avec une seule valeur — rail↔panneau (deux moitiés d'UN SEUL instrument : on
+          choisit une catégorie à gauche, son contenu s'ouvre à droite) recevait les mêmes 12px que
+          canevas↔inspecteur (deux régions sans rapport). Résultat : chaque frontière devait être
+          DESSINÉE, d'où les quatre cadres identiques. Ici la rangée est cousue bord à bord et chaque
+          région porte le filet de son propre bord (`border-r` / `border-l`) : le rail et son panneau
+          se lisent comme un bloc continu, et la seule vraie respiration de l'écran est le pourtour du
+          plan de travail lui-même. */}
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {layout === "too-small" ? (
           <TooSmallState scene={state.scene} images={canvasImages} width={template.width} height={template.height} />
         ) : mode === "montage" ? (
@@ -952,11 +1020,17 @@ function EditorShellInner({
                     components/ui/sheet.tsx) — même mécanisme d'apparition, mais avec le ressort du
                     studio plutôt que le `ease-in-out` générique du composant partagé. Coupé sous
                     `prefers-reduced-motion: reduce`. */}
+                {/* Impeccable `layout` : `data-[side=left]:left-18` décale le tiroir de la largeur du
+                    rail (72px, `w-18`). Le rail reste DOCKÉ dans ce palier — le tiroir se dépliait
+                    donc par-dessus l'objet même qui le commande, et la catégorie sélectionnée
+                    disparaissait à l'instant où son contenu s'ouvrait. Décalé, le panneau se déplie À
+                    CÔTÉ de son rail, exactement comme en mode accosté : une seule et même relation
+                    spatiale à toutes les largeurs. */}
                 <SheetContent
                   side="left"
                   data-testid="panel-drawer"
                   showCloseButton={false}
-                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:w-auto studio-motion-slide"
+                  className="w-auto gap-0 border-r p-0 sm:max-w-none data-[side=left]:left-18 data-[side=left]:w-auto studio-motion-slide"
                 >
                   {panelContent}
                 </SheetContent>
@@ -1015,8 +1089,28 @@ function EditorShellInner({
               ref={canvasWrapRef}
               data-testid="canvas-backdrop"
               className={cn(
-                "flex min-w-0 flex-1 items-center justify-center overflow-auto rounded-lg border bg-[var(--canvas-backdrop)] p-4",
-                layout !== "full" && "min-w-[240px]",
+                // Impeccable `layout` — LE geste principal. `rounded-lg border` retirés : le canevas
+                // était la quatrième carte d'une rangée de quatre cartes identiques, donc rien ne le
+                // désignait comme sujet. Sans cadre ni arrondi, il devient le FOND sur lequel les
+                // instruments (rail, panneau, inspecteur — eux gardent leur filet et leur `bg-card`)
+                // sont posés : la seule région à fond perdu de l'écran est celle qui compte.
+                //
+                // `p-6` (24px, l'échelon `lg` de DESIGN.md) contre les `p-3`/`px-2` du chrome : c'est
+                // la cadence délibérée que cette passe installe — instruments serrés, plan de travail
+                // généreux — là où toute la coque répétait auparavant la même valeur.
+                //
+                // `m-auto` sur l'enfant PLUTÔT QUE `items-center justify-center` ici : sur un
+                // conteneur `overflow-auto`, le centrage flex rend le début du contenu INATTEIGNABLE
+                // dès que l'artboard dépasse la boîte (le débordement part en négatif, et aucun
+                // défilement ne va chercher un `scrollLeft` négatif) — le haut et la gauche du plan de
+                // travail étaient perdus à tout zoom supérieur à l'ajustement. Les marges automatiques
+                // centrent tant qu'il reste de la place et cèdent proprement au défilement sinon.
+                "flex min-w-0 flex-1 overflow-auto bg-[var(--canvas-backdrop)] p-6",
+                // Le plancher de largeur s'applique désormais AUSSI en `full` : c'est le SEUL mode qui
+                // monte les deux poignées de redimensionnement, donc le seul où l'utilisateur peut
+                // lui-même écraser le canevas (panneau 360 + inspecteur 480 à 1280px ne lui laissent
+                // que ~300px). Le garde protégeait tous les modes sauf celui qui en avait besoin.
+                "min-w-[240px]",
               )}
               // Chantier B, Tâche 4 : molette ⌘/Ctrl (zoom-au-curseur, posée IMPÉRATIVEMENT en effet —
               // voir `useEffect([canvasMounted])` ci-dessus, PAS de prop `onWheel` ici : React la poserait
@@ -1100,7 +1194,11 @@ function EditorShellInner({
 
                 <div
                   data-testid="inspector-column"
-                  className="h-full shrink-0 overflow-hidden rounded-lg border"
+                  // Impeccable `layout` : symétrique du rail et du panneau accosté — le cadre complet
+                  // devient le filet du bord droit, et la colonne prend explicitement `bg-card`. Elle
+                  // était jusqu'ici transparente (donc peinte de la couleur de la PAGE), ce qui la
+                  // rendait indistincte du fond en thème sombre.
+                  className="h-full shrink-0 overflow-hidden border-l bg-card"
                   style={{ width: prefs.inspectorWidth }}
                 >
                   <PropertyPanel
@@ -1120,7 +1218,12 @@ function EditorShellInner({
                   data-testid="inspector-drawer-trigger"
                   title="Propriétés"
                   aria-label="Propriétés"
-                  className="h-full shrink-0 self-stretch"
+                  // Impeccable `layout` : `h-full self-stretch` faisait de ce déclencheur un bouton de
+                  // 28px de large sur TOUTE la hauteur du viewport — ~800px de surface cliquable pour
+                  // une seule action, qui se lisait comme une colonne vide plutôt que comme un
+                  // contrôle. Ramené à sa taille propre et ancré en haut du bord droit, là où
+                  // l'inspecteur qu'il ouvre viendra se poser.
+                  className="mt-3 mr-3 shrink-0 self-start"
                   onClick={() => setInspectorOpen(true)}
                 >
                   <PanelRight />
@@ -1186,7 +1289,7 @@ function TooSmallState({ scene, images, width, height }: { scene: Scene; images?
   }, [width, height]);
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-hidden" data-testid="editor-too-small">
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 overflow-hidden p-3" data-testid="editor-too-small">
       {/* Chantier E Tâche 3 : la carte ad-hoc (border plein + shadow-sm) est remplacée par la
           primitive PARTAGÉE `EmptyState` — même bordure pointillée que les autres états vides du
           produit. Le libellé EXACT « Écran trop petit pour l'édition — aperçu seulement » (verrouillé
@@ -1204,7 +1307,10 @@ function TooSmallState({ scene, images, width, height }: { scene: Scene; images?
       <div
         ref={wrapRef}
         data-testid="editor-too-small-preview"
-        className="pointer-events-none flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-lg border bg-muted/40 p-4"
+        // Impeccable `layout` : `bg-muted/40` -> le jeton `--canvas-backdrop`, celui-là même que le
+        // fond d'atelier de l'éditeur. Cet aperçu montre LE MÊME artboard : il n'y a aucune raison
+        // qu'il repose sur un sol différent selon la largeur de la fenêtre.
+        className="pointer-events-none flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden rounded-lg border bg-[var(--canvas-backdrop)] p-4"
       >
         {scale !== null && (
           <Canvas scene={scene} selectedIds={[]} dispatch={() => {}} scale={scale} images={images} />

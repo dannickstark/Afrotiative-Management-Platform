@@ -109,8 +109,14 @@ export function GeometryStrip({
   // (arbitrage A) — un texte, une image, un QR, un rectangle, une ellipse ou une ligne tournent tous.
   const tourne = layerSupportsRotation(layer);
   return (
-    <div className="space-y-2 border-b p-3" data-testid="geometry-strip">
-      <div className="grid grid-cols-4 gap-2">
+    <div className="@container space-y-2 border-b p-3" data-testid="geometry-strip">
+      {/* Impeccable `layout` : quatre colonnes FIXES pour X / Y / Largeur / Hauteur donnaient ~63px
+          par cellule dans un inspecteur de 300px — assez pour le libellé, pas pour la valeur, qui se
+          faisait rogner (mesuré : une largeur à quatre chiffres est coupée). La grille est désormais
+          gouvernée par la largeur RÉELLE de la bande (`@container`) et non par celle de la fenêtre :
+          deux colonnes tant que l'inspecteur est étroit, quatre dès qu'il est élargi — l'inspecteur
+          étant redimensionnable de 240 à 480px, c'est sa propre largeur qui doit décider. */}
+      <div className="grid grid-cols-2 gap-2 @[21rem]:grid-cols-4">
         <NumberField label="X" value={layer.frame.x} dataField="frame.x" onCommit={(v) => patch({ frame: { ...layer.frame, x: v } })} />
         <NumberField label="Y" value={layer.frame.y} dataField="frame.y" onCommit={(v) => patch({ frame: { ...layer.frame, y: v } })} />
         <NumberField
@@ -270,7 +276,12 @@ export function AlignRow({ scene, selectedIds, dispatch, className }: AlignRowPr
 
   return (
     <div className={cn("space-y-1", className)} data-testid="align-row">
-      <div className="flex items-center gap-0.5" role="group" aria-label="Aligner et répartir">
+      {/* Impeccable `layout` : `flex-wrap` ajouté. Ce groupe monte six boutons d'alignement, un
+          séparateur et deux boutons de répartition, tous `icon-sm` (28px) — ~249px incompressibles.
+          L'inspecteur descend à 240px (INSPECTOR_WIDTH_MIN) moins le `p-3` de la bande, soit 216px
+          utiles : le débordement était DÉTERMINISTE à la largeur minimale, sans repli ni défilement,
+          et les deux boutons de répartition étaient purement et simplement coupés. */}
+      <div className="flex flex-wrap items-center gap-0.5" role="group" aria-label="Aligner et répartir">
         {ALIGN_MODES.map((mode) => {
           const { label, Icon } = ALIGN_BUTTONS[mode];
           return (

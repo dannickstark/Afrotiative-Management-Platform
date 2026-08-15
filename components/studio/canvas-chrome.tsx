@@ -163,7 +163,15 @@ export function CanvasChrome({
       : "Zones sûres — bornes publicitaires Meta : le bas (35 %) réserve le bouton d’appel à l’action, absent d’une story organique ; c’est donc une marge volontairement conservatrice";
 
   return (
-    <div className="relative flex h-full w-full items-center justify-center" data-testid="canvas-chrome">
+    // Impeccable `layout` : `items-center justify-center` -> `m-auto` sur le cadre de l'artboard
+    // (juste plus bas). Le conteneur de défilement est le fond d'atelier (editor-shell.tsx) ; avec un
+    // centrage flex, tout ce qui dépasse part en négatif des DEUX côtés et le haut/la gauche du plan
+    // de travail deviennent inatteignables — aucun défilement ne va chercher un `scrollLeft` négatif.
+    // `margin: auto` centre tant qu'il reste de la place, puis se résout à 0 et laisse le débordement
+    // partir vers la droite/le bas, là où le défilement peut le rattraper. `h-full w-full` reste : les
+    // pastilles flottantes ci-dessous se positionnent sur les coins du PLAN DE TRAVAIL, pas sur ceux
+    // de l'artboard.
+    <div className="relative flex h-full w-full" data-testid="canvas-chrome">
       {/* Pastille flottante (spec §2 : « Floating chips top-left (format name and pixel size, zoom
           percentage) » — TOP-LEFT, à ne pas confondre avec ModeSwitch, seul élément top-CENTRE). */}
       <div className="pointer-events-none absolute left-2 top-2 z-20 flex">
@@ -242,7 +250,7 @@ export function CanvasChrome({
           en haut et à gauche — l'artboard lui-même (ci-dessous) ne bouge donc jamais de taille,
           seule sa POSITION dans ce cadre se décale de RULER_SIZE. */}
       <div
-        className="relative"
+        className="relative m-auto"
         style={{ padding: prefs.rulers ? RULER_SIZE : 0 }}
       >
         {prefs.rulers && (
