@@ -31,12 +31,22 @@ export function ModeSwitch({ mode, onChange, className, montageDisabled }: ModeS
         target: target ? { tagName: target.tagName, isContentEditable: target.isContentEditable } : null,
       };
       if (!isModeToggleShortcut(shortcutEvent)) return;
+      const next = toggleMode(mode);
+      // Correctif revue Tâche 8 (Important 1) : le bouton Montage refuse le clic via `disabled`, mais
+      // « R » passait par `onChange` SANS jamais consulter `montageDisabled` — un clavier externe/
+      // Bluetooth, une fenêtre desktop rétrécie ou un iPad en Split View pouvaient encore basculer VERS
+      // Montage sous 768px et retomber dans `TooSmallState`, exactement le cul-de-sac que cette tâche
+      // existe à rendre évitable. La condition ne bloque que CE sens : `next === "montage"` — jamais
+      // l'inverse, sous peine de PIÉGER un utilisateur déjà en Montage (donc déjà face à
+      // `TooSmallState`) qui presserait « R » pour en sortir vers Rendu réel, le seul chemin qui lui
+      // reste sur cet écran.
+      if (montageDisabled && next === "montage") return;
       e.preventDefault();
-      onChange(toggleMode(mode));
+      onChange(next);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [mode, onChange]);
+  }, [mode, onChange, montageDisabled]);
 
   // Correctif revue finale (Minor) : `role="tablist"`/`role="tab"` promettait une sémantique de tabs
   // (tabpanel associé via `aria-controls`, flèches gauche/droite pour naviguer, `aria-selected`) que
@@ -91,6 +101,13 @@ export function ModeSwitch({ mode, onChange, className, montageDisabled }: ModeS
           // deux pastilles actives restent visuellement identiques, comme une revue antérieure les
           // avait délibérément alignées (voir le commentaire de rail.tsx).
           mode === "montage" ? "bg-accent-brand text-accent-brand-foreground" : "text-muted-foreground hover:text-foreground",
+          // Correctif revue Tâche 8 (Important 2) : `disabled` seul (posé plus haut) est invisible —
+          // aucun style de ce bouton ne change avec l'attribut. Convention déjà en place ailleurs dans
+          // le produit (components/ui/button.tsx, components/studio/panels/elements-panel.tsx:122) :
+          // `disabled:opacity-50` + curseur adapté. Le `title` reste pour la souris/le clavier, mais
+          // sur tactile (précisément le public sous 768px) aucun `title` ne se déclenche au toucher —
+          // l'affordance visuelle est donc la SEULE explication que ces utilisateurs reçoivent.
+          "disabled:cursor-not-allowed disabled:opacity-50",
         )}
       >
         Montage
