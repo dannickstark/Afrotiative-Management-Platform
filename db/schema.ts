@@ -365,6 +365,10 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   // knob for the OpenRouter token pool work; not env-seeded (like scoreThreshold above), so the
   // column default below is this setting's only source of truth on first seed.
   openrouterMinContentChars: integer("openrouter_min_content_chars").notNull().default(400),
+  // Mode de choix de l'image à la une lors d'un renvoi à l'IA : `auto` = un appel LLM dédié choisit
+  // parmi les images scrapées ; `manual` = les candidats sont garés sur l'article et l'éditeur
+  // tranche depuis le bac du /queue. `text` et non pgEnum — voir la contrainte globale du plan.
+  regenerateImageMode: text("regenerate_image_mode").notNull().default("auto"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

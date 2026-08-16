@@ -92,11 +92,30 @@ describe("persistPipelineSettings — default recency (defaultMaxItemAgeHours)",
       maxItemsPerRun: 20, perOperationTimeoutMs: 300000, clusterThreshold: 0.83, scoreThreshold: 70,
       autoPublishEnabled: false, autoPublishMinSources: 2, webSearchEnabled: false,
       scheduleCron: null, alertEmailEnabled: false, alertEmailRecipients: null,
+      regenerateImageMode: "auto" as const,
     };
     await persistPipelineSettings({ ...base, defaultMaxItemAgeHours: 96 });
     expect((await getPipelineSettings()).defaultMaxItemAgeHours).toBe(96);
     await persistPipelineSettings({ ...base, defaultMaxItemAgeHours: null });
     expect((await getPipelineSettings()).defaultMaxItemAgeHours).toBeNull();
+  });
+});
+
+// Maps a PipelineSettings row (DB read) to a PipelineSettingsInput (validated payload shape),
+// dropping id/updatedAt — keeps every other field so a test can round-trip a real settings row
+// through persistPipelineSettings without repeating its fields by hand.
+function toInput(settings: PipelineSettings) {
+  const { id, updatedAt, ...rest } = settings;
+  return rest;
+}
+
+describe("persistPipelineSettings — regenerateImageMode", () => {
+  it("persiste regenerateImageMode", async () => {
+    const base = await getPipelineSettings();
+    await persistPipelineSettings({ ...toInput(base), regenerateImageMode: "manual" });
+    expect((await getPipelineSettings()).regenerateImageMode).toBe("manual");
+    await persistPipelineSettings({ ...toInput(base), regenerateImageMode: "auto" });
+    expect((await getPipelineSettings()).regenerateImageMode).toBe("auto");
   });
 });
 

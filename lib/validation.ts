@@ -118,6 +118,10 @@ export const pipelineSettingsSchema = z.object({
   // Default recency cutoff (hours). Nullable = "no limit". `.default(null)` keeps existing callers
   // that don't send the field valid (mirrors alertEmailEnabled's default-for-compat pattern).
   defaultMaxItemAgeHours: z.number().int().positive("Doit être un entier positif").max(720, "Maximum 720 heures (30 jours)").nullable().default(null),
+  // `.default("auto")` (et non un enum nu) pour la même raison qu'alertEmailEnabled ci-dessus : le
+  // payload existant de PipelineSettingsForm n'envoie pas encore ce champ, et un champ requis
+  // casserait le safeParse côté client au moment même où ce schéma change.
+  regenerateImageMode: z.enum(["auto", "manual"]).default("auto"),
 });
 export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;
 

@@ -32,6 +32,7 @@ export async function persistPipelineSettings(data: PipelineSettingsInput): Prom
     alertEmailEnabled: data.alertEmailEnabled,
     alertEmailRecipients,
     defaultMaxItemAgeHours: data.defaultMaxItemAgeHours ?? null,
+    regenerateImageMode: data.regenerateImageMode,
     updatedAt: new Date(),
   };
   await db.insert(pipelineSettings).values({ id: 1, ...values })

@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_settings" ADD COLUMN "regenerate_image_mode" text DEFAULT 'auto' NOT NULL;

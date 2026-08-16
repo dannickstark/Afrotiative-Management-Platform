@@ -162,6 +162,13 @@
       "when": 1786910178036,
       "tag": "0022_big_tomas",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786911091138,
+      "tag": "0023_lonely_scorpion",
+      "breakpoints": true
     }
   ]
 }
