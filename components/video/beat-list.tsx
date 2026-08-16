@@ -152,11 +152,15 @@ export function BeatList({
                 key={beat.id}
                 data-beat-id={beat.id}
                 className="cursor-pointer"
-                // Round de correction 1 (Task 12, Minor) : la ligne n'était ouvrable qu'à la
-                // souris (`onClick` seul, sans rôle ni piste de tabulation) — l'inspecteur était
-                // inatteignable au clavier. `role="button"` + `tabIndex` + Entrée/Espace en font
-                // un contrôle standard, sans changer le marquage `<tr>` sémantique du tableau.
-                role="button"
+                // Round de correction 1 (Task 12, Minor), corrigé au round 2 (N1) : la ligne
+                // n'était ouvrable qu'à la souris (`onClick` seul, sans piste de tabulation) —
+                // l'inspecteur était inatteignable au clavier. `tabIndex` + Entrée/Espace en font
+                // une ligne focalisable et actionnable SANS `role="button"` : ce rôle écrasait le
+                // rôle implicite `row` de la `<tr>`, ce qui détachait ses `<td>` de toute ligne et
+                // faisait perdre à la table entière sa structure ligne/colonne pour un lecteur
+                // d'écran (plus d'annonce « ligne 3 sur 12 », plus de navigation par cellule) — un
+                // correctif d'accessibilité en cassait une autre, plus large. Un `button` ARIA ne
+                // peut de toute façon pas contenir de contenu tabulaire.
                 tabIndex={0}
                 aria-label={`Ouvrir le beat ${beat.externalId}`}
                 draggable

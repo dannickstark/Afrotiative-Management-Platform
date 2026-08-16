@@ -44,6 +44,22 @@ describe("BeatList", () => {
     const html = renderToStaticMarkup(React.createElement(BeatList, { beats: [], targetDurationSec: 720 }));
     expect(html).toContain("Aucun beat");
   });
+
+  // Round de correction 2 (Task 12, T) : la fixture par défaut ci-dessus (`estimatedDurationSec: 4`)
+  // coïncide EXACTEMENT avec ce qu'un recalcul client à 155 mots/min produirait pour son
+  // `spokenText` (8 mots → ceil(8/155*60) = 4) — un recalcul contre la valeur stockée est donc
+  // indétectable dessus. Cette fixture diverge délibérément : même texte, mais
+  // `estimatedDurationSec: 9`, différent de l'estimation à 155 mots/min. La colonne Durée ET le
+  // cumul doivent afficher la valeur STOCKÉE (9 s / 0 min 09 s), jamais la valeur recalculée (4 s /
+  // 0 min 04 s) — cf. lib/video/duration.ts#beatSeconds (`??`) et
+  // components/video/beat-list.tsx#storedSeconds.
+  it("affiche la durée stockée, pas une durée recalculée côté client", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(BeatList, { beats: [beat({ estimatedDurationSec: 9 })], targetDurationSec: 720 }),
+    );
+    expect(html).toContain("9 s");
+    expect(html).toContain("0 min 09 s");
+  });
 });
 
 describe("DurationMeter", () => {
