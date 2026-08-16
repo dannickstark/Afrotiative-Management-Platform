@@ -287,11 +287,19 @@ async function dispatch(
       if (!variant) return { ok: false, message: "Variante introuvable." };
 
       // Péremption : le contrôle est celui du cœur, à qui l'on rend l'état de la variante tel qu'il
-      // était au submit (mémorisé alors dans `toolArgs`). Relire la valeur du moment reviendrait à
-      // désarmer le contrôle — il ne pourrait plus jamais différer. Le repli sur la valeur courante
-      // ne concerne que les entrées écrites avant cette mémorisation.
+      // était au submit (mémorisé alors dans `toolArgs`). AUCUN repli sur la valeur du moment : relue
+      // juste avant la comparaison, elle serait égale par construction et le contrôle ne pourrait
+      // plus jamais différer — une garde qui ne peut pas échouer est un décor. Une entrée préparée
+      // hors du canal MCP (un humain, dans l'application) n'a pas cette mémoire : on la refuse, elle
+      // s'applique depuis l'écran où elle a été préparée et où son diff est visible.
       const memorise = (entry.toolArgs as { variantUpdatedAt?: string } | null)?.variantUpdatedAt;
-      const variantUpdatedAt = memorise ? new Date(memorise) : variant.updatedAt;
+      if (entry.source !== "mcp" || !memorise) {
+        return {
+          ok: false,
+          message: "Cette entrée de journal a été préparée hors du canal MCP : applique-la depuis l'application, ou resoumets le script par submit_script.",
+        };
+      }
+      const variantUpdatedAt = new Date(memorise);
 
       // LA règle produit : sans sélection explicite, on applique les ajouts et les modifications,
       // JAMAIS les suppressions ni les conflits. Un modèle qui abrège sa réponse ne doit pas pouvoir

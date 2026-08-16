@@ -48,8 +48,10 @@ async function handle(req: Request): Promise<Response> {
 
   // `flush` couvre la fin normale du flux ; le `catch` couvre son abandon (client qui raccroche),
   // qui fait échouer le `pipeTo` sans jamais atteindre `flush`.
-  const relais = new TransformStream({ flush: () => { void fermer(); } });
-  void response.body.pipeTo(relais.writable).catch(() => { void fermer(); });
+  // `.catch(() => {})` sur chaque fermeture : un `close()` qui lèverait deviendrait sinon une
+  // rejection non gérée, dans un chemin où plus personne n'attend la promesse.
+  const relais = new TransformStream({ flush: () => { void fermer().catch(() => {}); } });
+  void response.body.pipeTo(relais.writable).catch(() => { void fermer().catch(() => {}); });
   return new Response(relais.readable, {
     status: response.status, statusText: response.statusText, headers: response.headers,
   });

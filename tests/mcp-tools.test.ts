@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { db, scriptVariants, scriptBeats, scriptJournal } from "@/db";
 import { asc, eq } from "drizzle-orm";
 import { EXAMPLE_PAYLOAD } from "@/lib/video/schema";
+import { prepareImportCore } from "@/lib/video/persist";
 import { callTool, makeActor, cleanupProject, type TestActor } from "./mcp-harness";
 
 let projectId: string | undefined;
@@ -170,6 +171,36 @@ describe("outils MCP", () => {
     const [apres] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, cible.id));
     // Le point : un conflit ne se tranche jamais tout seul.
     expect(apres.spokenText).toContain("rédaction");
+  }, 30_000);
+
+  it("apply_script refuse une entrée préparée hors du canal MCP", async () => {
+    // Un humain prépare un import dans l'application, ne l'applique pas, et colle l'identifiant de
+    // journal dans son chat. Sans refus, l'outil se replierait sur la valeur COURANTE de
+    // `variant.updatedAt` — relue juste avant la comparaison, donc égale par construction : le
+    // contrôle de péremption ne pourrait plus jamais différer, et une édition humaine postérieure
+    // serait écrasée. Une garde qui ne peut pas échouer n'est pas une garde.
+    const avant = await db.select().from(scriptBeats)
+      .where(eq(scriptBeats.variantId, variantId)).orderBy(asc(scriptBeats.position));
+    const payload = structuredClone(EXAMPLE_PAYLOAD);
+    payload.variantes[0].beats = payload.variantes[0].beats
+      .filter((b) => avant.some((x) => x.externalId === b.id));
+    payload.variantes[0].beats[0].texte = "Texte que cette entrée poserait si elle était appliquée.";
+
+    const humain = await prepareImportCore({
+      projectId: projectId!, variantId, raw: JSON.stringify(payload),
+      userId: actor.userId, source: "copier_coller",
+    });
+    expect(humain.ok).toBe(true);
+    if (!humain.ok) throw new Error("préparation humaine inattendue en échec");
+
+    const r = await callTool(actor, "apply_script", { journalId: humain.journalId, variantId });
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("hors du canal MCP");
+
+    // Et rien n'a bougé.
+    const apres = await db.select().from(scriptBeats)
+      .where(eq(scriptBeats.variantId, variantId)).orderBy(asc(scriptBeats.position));
+    expect(apres.map((b) => b.spokenText)).toEqual(avant.map((b) => b.spokenText));
   }, 30_000);
 
   it("chaque écriture est journalisée avec sa source, son outil et son auteur", async () => {
