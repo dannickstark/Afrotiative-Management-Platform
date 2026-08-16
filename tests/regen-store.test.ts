@@ -9,6 +9,7 @@ import {
 
 const ALL = { title: true, body: true, excerpt: true, category: true, tags: true, image: true };
 const createdArticles: string[] = [];
+const createdJobIds: string[] = [];
 
 async function seedArticle(): Promise<{ id: string; title: string }> {
   const title = `Article ${faker.string.uuid()}`;
@@ -18,6 +19,10 @@ async function seedArticle(): Promise<{ id: string; title: string }> {
 }
 
 afterAll(async () => {
+  // Les deux cascades vont vers regen_job_items (articles→items, jobs→items) : supprimer les
+  // articles ne retire donc JAMAIS la ligne regen_jobs parente. On la supprime explicitement, sinon
+  // chaque exécution de ce fichier laisse des jobs orphelins dans la base de dev partagée.
+  if (createdJobIds.length) await db.delete(regenJobs).where(inArray(regenJobs.id, createdJobIds));
   if (createdArticles.length) await db.delete(articles).where(inArray(articles.id, createdArticles));
 });
 
@@ -27,6 +32,7 @@ describe("openRegenJob", () => {
     const r = await openRegenJob({ actorId: null, articles: [a, b], fields: ALL, imageMode: "auto" });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
+    createdJobIds.push(r.jobId);
     const view = await readRegenJob(r.jobId);
     expect(view?.total).toBe(2);
     expect(view?.done).toBe(0);
@@ -39,6 +45,7 @@ describe("openRegenJob", () => {
     const a = await seedArticle();
     const first = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
     expect(first.ok).toBe(true);
+    if (first.ok) createdJobIds.push(first.jobId);
     const second = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
     expect(second.ok).toBe(false);
     if (!second.ok) expect(second.message).toContain("déjà en cours");
@@ -48,10 +55,12 @@ describe("openRegenJob", () => {
     const a = await seedArticle();
     const first = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
     if (!first.ok) throw new Error("setup");
+    createdJobIds.push(first.jobId);
     const [item] = await listJobItems(first.jobId);
     await finishItem(item.id, "ok", null);
     const second = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
     expect(second.ok).toBe(true);
+    if (second.ok) createdJobIds.push(second.jobId);
   });
 });
 
@@ -60,6 +69,7 @@ describe("avancement et clôture", () => {
     const a = await seedArticle(); const b = await seedArticle();
     const r = await openRegenJob({ actorId: null, articles: [a, b], fields: ALL, imageMode: "auto" });
     if (!r.ok) throw new Error("setup");
+    createdJobIds.push(r.jobId);
     const items = await listJobItems(r.jobId);
     await setItemStage(items[0].id, "extracting");
     let view = await readRegenJob(r.jobId);
@@ -75,6 +85,7 @@ describe("avancement et clôture", () => {
     const a = await seedArticle(); const b = await seedArticle();
     const r = await openRegenJob({ actorId: null, articles: [a, b], fields: ALL, imageMode: "auto" });
     if (!r.ok) throw new Error("setup");
+    createdJobIds.push(r.jobId);
     const items = await listJobItems(r.jobId);
     await finishItem(items[0].id, "failed", "boum");
     await finishItem(items[1].id, "awaiting_image", null);
@@ -84,6 +95,7 @@ describe("avancement et clôture", () => {
     const c = await seedArticle();
     const r2 = await openRegenJob({ actorId: null, articles: [c], fields: ALL, imageMode: "auto" });
     if (!r2.ok) throw new Error("setup");
+    createdJobIds.push(r2.jobId);
     const [only] = await listJobItems(r2.jobId);
     await finishItem(only.id, "failed", "boum");
     await finalizeRegenJob(r2.jobId);
@@ -94,6 +106,7 @@ describe("avancement et clôture", () => {
     const a = await seedArticle();
     const r = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
     if (!r.ok) throw new Error("setup");
+    createdJobIds.push(r.jobId);
     expect(await isCancelRequested(r.jobId)).toBe(false);
     await db.update(regenJobs).set({ cancelRequested: true }).where(eq(regenJobs.id, r.jobId));
     expect(await isCancelRequested(r.jobId)).toBe(true);
@@ -103,6 +116,7 @@ describe("avancement et clôture", () => {
     const a = await seedArticle(); const b = await seedArticle();
     const r = await openRegenJob({ actorId: null, articles: [a, b], fields: ALL, imageMode: "auto" });
     if (!r.ok) throw new Error("setup");
+    createdJobIds.push(r.jobId);
     const items = await listJobItems(r.jobId);
     // Un seul item traité, puis annulation : l'autre reste ouvert si finalizeRegenJob ne le ferme pas.
     await finishItem(items[0].id, "ok", null);
@@ -114,5 +128,6 @@ describe("avancement et clôture", () => {
     expect((await readRegenJob(r.jobId))?.done).toBe(1);
     const second = await openRegenJob({ actorId: null, articles: [a, b], fields: ALL, imageMode: "auto" });
     expect(second.ok).toBe(true);
+    if (second.ok) createdJobIds.push(second.jobId);
   });
 });

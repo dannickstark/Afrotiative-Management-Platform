@@ -88,6 +88,12 @@ export async function isCancelRequested(jobId: string): Promise<boolean> {
  * Clôture le job. `failed` est réservé au cas où TOUS les items ont échoué ; sinon `done`, avec le
  * rapport d'échecs partiels porté par les items (même convention que les lots existants). Un job
  * dont l'annulation a été demandée se termine en `cancelled`.
+ *
+ * INVARIANT D'APPEL : finalizeRegenJob n'est appelé qu'une fois la boucle du runner terminée, donc
+ * jamais en concurrence d'un finishItem de ce job (runRegenJob est strictement sériel et l'appelle
+ * depuis son `finally`). C'est ce qui permet à ces quatre requêtes de ne pas être dans une
+ * transaction. Un appelant qui romprait cet invariant verrait un finishItem tardif écraser une
+ * ligne balayée et désynchroniser `done` du statut terminal du job.
  */
 export async function finalizeRegenJob(jobId: string): Promise<void> {
   // Tout item encore NON TERMINÉ à la clôture — job annulé avant de l'atteindre, ou processus mort
