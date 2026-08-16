@@ -308,3 +308,31 @@ export const videoSettingsSchema = z.object({
   wordsPerMinute: z.number().int().min(60, "Cadence trop basse").max(400, "Cadence trop élevée"),
 });
 export type VideoSettingsInput = z.infer<typeof videoSettingsSchema>;
+
+// Task 9 (persistance vidéo) — création de projet. Les valeurs de plateforme/ratio sont dupliquées
+// ici plutôt qu'importées de lib/video/schema : elles décrivent la FORME DU FORMULAIRE de création
+// (un humain choisit une plateforme dans un select), pas le contrat JSON d'import — les deux
+// évoluent pour des raisons différentes même si leurs valeurs coïncident aujourd'hui.
+export const createVideoProjectSchema = z.object({
+  title: z.string().min(1, "Titre requis").max(200),
+  subject: z.string().max(2000).nullable(),
+  platform: z.enum(["youtube_long", "youtube_short", "tiktok", "reel", "interview"]),
+  targetDurationSec: z.number().int().min(5).max(14400).nullable(),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]),
+  articleId: z.string().uuid().nullable(),
+});
+export type CreateVideoProjectInput = z.infer<typeof createVideoProjectSchema>;
+
+// Édition d'un beat depuis l'écran de montage — tous les champs de contenu sont optionnels : seuls
+// ceux effectivement modifiés sont envoyés (updateBeatCore ne touche pas les autres).
+export const updateBeatSchema = z.object({
+  beatId: z.string().uuid(),
+  spokenText: z.string().max(5000).optional(),
+  directionNote: z.string().max(1000).nullable().optional(),
+  screenText: z.string().max(300).nullable().optional(),
+  transitionIn: z.string().max(120).nullable().optional(),
+  transitionOut: z.string().max(120).nullable().optional(),
+  durationOverrideSec: z.number().int().min(0).nullable().optional(),
+  sources: z.array(z.string().url()).max(20).optional(),
+});
+export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
