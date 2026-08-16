@@ -226,7 +226,11 @@ export async function stageSources(
     if (gen.via === "mock") confidence.aiDegraded = true;
     if (emb.via === "mock") { confidence.aiDegraded = true; confidence.clusterUncertain = true; }
     if (gen.via === "mock" || emb.via === "mock") {
-      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) — ${uniqueSources.length} source(s)`);
+      // gen.failure n'existe QUE lorsque gen.via === "mock" (voir generateArticle) — on l'ajoute au
+      // log pour qu'un run de pipeline dégradé dise directement pourquoi (jetons épuisés, quota,
+      // auth refusée, etc.) sans avoir à recouper avec les logs internes du pool.
+      const reason = gen.failure ? ` raison=${gen.failure}` : "";
+      console.warn(`[pipeline] article dégradé (embed=${emb.via}, génération=${gen.via}) — ${uniqueSources.length} source(s)${reason}`);
     }
 
     // SP4 Task 4's scorer: corroboration (sourceCount — the cross-check payoff), cluster
