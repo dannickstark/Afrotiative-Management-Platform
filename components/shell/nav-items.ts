@@ -1,4 +1,4 @@
-import { LayoutDashboard, Inbox, Newspaper, Activity, Settings, LayoutTemplate, Images, Wand2 } from "lucide-react";
+import { LayoutDashboard, Inbox, Newspaper, Activity, Settings, LayoutTemplate, Images, Wand2, Clapperboard } from "lucide-react";
 import type { Role } from "@/lib/auth";
 
 export type NavChild = { href: string; label: string; roles?: Role[] };
@@ -70,6 +70,15 @@ export const NAV_SECTIONS: NavSection[] = [
       // Tâche 14 (Lot 4) : génération ponctuelle pour les contextes à saisie manuelle (citation,
       // bandeau, récap — spec §7).
       { href: "/studio/generer", label: "Génération", icon: Wand2, roles: ["admin", "editor"] },
+    ],
+  },
+  {
+    id: "video",
+    label: "Vidéo",
+    items: [
+      // SP1 : l'écriture se fait en amont dans un chat Claude ; cette entrée mène à l'espace qui
+      // produit le brief et importe la réponse.
+      { href: "/video", label: "Vidéos", icon: Clapperboard },
     ],
   },
   {
