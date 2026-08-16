@@ -281,7 +281,7 @@ export function RenderMode({
   const largeScene = sceneForFormat(scene, largeFormat, format);
   const otherFormats = FORMAT_KEYS.filter((key) => key !== largeFormat);
 
-  const [degraded, setDegraded] = useState(initialDegraded);
+  const [degraded] = useState(initialDegraded);
 
   // Périmée = la scène courante diffère de celle utilisée pour la DERNIÈRE bande de vignettes
   // rendue. Ne concerne QUE la bande (voir le commentaire de FilmstripThumb ci-dessus) — la case
@@ -395,7 +395,6 @@ export function RenderMode({
             <PreviewPane
               templateId={templateId} context={context} scene={largeScene} articles={articles}
               disabled={disabled}
-              onResult={(res) => setDegraded(res?.degraded ?? false)}
             />
           </div>
         </div>
