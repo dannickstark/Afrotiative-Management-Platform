@@ -28,8 +28,20 @@ import type { Scene } from "@/lib/studio/scene";
 // tests/studio-templates-gallery.test.ts#GalleryThumb pour renderTemplateThumbnail) : chaque appel
 // est capturé dans `pending` SANS être résolu — c'est le test qui décide QUAND (et dans quel ordre)
 // chaque promesse se dénoue, pour reproduire une réponse lente arrivée en second.
+//
+// RESTAURÉ en `afterAll` (même recette que tests/studio-templates-gallery.test.ts, lignes 51-53 et
+// 320-321) : `mock.module` est un effet GLOBAL, pas scopé à ce fichier — scripts/test-fast.ts
+// regroupe plusieurs fichiers de la voie pure dans le MÊME process `bun test` (fragmentation en
+// shards). Un mock jamais restauré survivrait donc à ce fichier et serait vu par tout autre fichier
+// du même shard qui atteint la même Server Action (directement, ou via usePreview/PreviewPane) —
+// notamment tests/studio-render-mode.test.ts et tests/studio-no-r2.test.ts. Sans restauration, l'un
+// ou l'autre recevrait ce stub qui ne se résout JAMAIS au lieu de la vraie action, selon la
+// composition du shard — un échec intermittent, différent d'une machine à l'autre, pour une raison
+// n'ayant rien à voir avec le fichier qui échoue.
 type PendingCall = { input: unknown; resolve: (result: unknown) => void };
 const pending: PendingCall[] = [];
+
+const realPreviewActions = await import("@/lib/actions/studio-preview-actions");
 
 mock.module("@/lib/actions/studio-preview-actions", () => ({
   previewTemplate: (input: unknown) =>
@@ -37,6 +49,10 @@ mock.module("@/lib/actions/studio-preview-actions", () => ({
       pending.push({ input, resolve });
     }),
 }));
+
+afterAll(() => {
+  mock.module("@/lib/actions/studio-preview-actions", () => realPreviewActions);
+});
 
 const { usePreview, PREVIEW_DEBOUNCE_MS } = await import("@/hooks/use-preview");
 
