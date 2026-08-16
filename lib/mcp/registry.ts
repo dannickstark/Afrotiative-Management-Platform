@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { payloadSchema, PLATFORMS, RATIOS, BEAT_KINDS } from "@/lib/video/schema";
+import { payloadSchema, PLATFORMS, RATIOS } from "@/lib/video/schema";
 
 // LE registre. Le serveur (app/api/mcp/route.ts) enregistre ce qu'il contient, et l'écran de
 // réglages affiche ce qu'il contient. Un outil ajouté à l'un sans l'autre serait un pouvoir accordé
@@ -78,7 +78,8 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
   {
     name: "update_beat",
     kind: "ecriture",
-    description: "Retouche un beat : texte parlé, note de réalisation, texte à l'écran, transitions.",
+    description:
+      "Retouche un beat : texte parlé, note de réalisation, texte à l'écran, transitions. Le TYPE d'un beat ne se retouche pas ici — il repasse par submit_script, donc par la fusion.",
     inputSchema: {
       beatId: uuid,
       spokenText: z.string().max(20000).optional(),
@@ -86,14 +87,21 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
       screenText: z.string().max(300).nullable().optional(),
       transitionIn: z.string().max(120).nullable().optional(),
       transitionOut: z.string().max(120).nullable().optional(),
-      kind: z.enum(BEAT_KINDS).optional(),
+      // `kind` retiré (revue Task 5) : le cœur (updateBeatCore) ne sait pas l'écrire. Annoncer un
+      // paramètre qu'on refuse ensuite est un mauvais contrat — l'agent voit une capacité qui
+      // n'existe pas, l'essaie, échoue, et ne comprend pas pourquoi.
     },
   },
   {
     name: "reorder_beats",
     kind: "ecriture",
-    description: "Réordonne les beats d'une variante, sans réécrire le script.",
-    inputSchema: { variantId: uuid, order: z.array(uuid).min(1) },
+    description:
+      "Réordonne les beats d'une variante, sans réécrire le script. L'ordre se donne avec les identifiants de beat du contrat (« b-01-accroche »), ceux-là mêmes que tu as écrits.",
+    // Des `externalId`, PAS des UUID (revue Task 5) : l'agent connaît naturellement les identifiants
+    // qu'il a lui-même écrits, et c'est aussi la clé sur laquelle travaille le cœur
+    // (reorderBeatsCore apparie sur `script_beats.external_id`). Réclamer l'UUID de ligne lui
+    // imposerait un aller-retour de lecture pour manipuler une clé qui ne lui dit rien.
+    inputSchema: { variantId: uuid, order: z.array(z.string().min(1).max(120)).min(1) },
   },
   {
     name: "update_insert",

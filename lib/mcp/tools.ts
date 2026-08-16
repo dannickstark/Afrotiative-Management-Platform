@@ -347,13 +347,6 @@ async function dispatch(
 
     case "update_beat": {
       const beatId = args.beatId as string;
-      // Le registre annonce `kind`, que `updateBeatCore` ne sait pas écrire. Refus explicite plutôt
-      // que silence : un agent qui croirait avoir changé le type d'un beat construirait la suite de
-      // son script sur une fausse certitude. Le type se change par submit_script, qui repasse par la
-      // fusion.
-      if (args.kind !== undefined) {
-        throw new Error("Le type d'un beat ne se change pas par update_beat : renvoie le beat corrigé par submit_script.");
-      }
       const { variantId, projectId } = await localiserBeat(beatId);
       const beat = await updateBeatCore({
         beatId,
@@ -372,24 +365,25 @@ async function dispatch(
     case "reorder_beats": {
       const variantId = args.variantId as string;
       const order = args.order as string[];
-      // Le registre exige des UUID (les identifiants de LIGNE, ceux que rend get_script) tandis que
-      // `reorderBeatsCore` travaille sur les `externalId` du contrat (« b-01-accroche »). La
-      // traduction se fait ici, sur une lecture — c'est une adaptation d'interface, pas une règle.
-      const beats = await db.select({ id: scriptBeats.id, externalId: scriptBeats.externalId })
-        .from(scriptBeats).where(eq(scriptBeats.variantId, variantId));
-      const parId = new Map(beats.map((b) => [b.id, b.externalId]));
-      const externalIds = order.map((id) => {
-        const externalId = parId.get(id);
-        if (!externalId) throw new Error(`Beat « ${id} » absent de cette variante.`);
-        return externalId;
-      });
+      // `order` porte les `externalId` du contrat, exactement ce que `reorderBeatsCore` apparie
+      // (`script_beats.external_id`) : aucune traduction, on passe au cœur tel quel.
+      //
+      // Le seul contrôle est celui du périmètre : le cœur apparie par `UPDATE ... WHERE
+      // external_id = ...`, donc un identifiant inconnu n'affecte aucune ligne — il serait ignoré
+      // en silence et l'agent croirait avoir réordonné ce qu'il n'a pas touché.
+      const connus = new Set((await db.select({ externalId: scriptBeats.externalId }).from(scriptBeats)
+        .where(eq(scriptBeats.variantId, variantId))).map((b) => b.externalId));
+      const inconnus = order.filter((externalId) => !connus.has(externalId));
+      if (inconnus.length > 0) {
+        throw new Error(`Beats absents de cette variante : ${inconnus.join(", ")}.`);
+      }
 
-      await reorderBeatsCore({ variantId, order: externalIds });
+      await reorderBeatsCore({ variantId, order });
       await journaliserEcritureDirecte({
         projectId: await projetDeLaVariante(variantId), variantId, toolName: name,
         toolArgs: args, actorUserId: actor.userId,
       });
-      return { ok: true, order: externalIds };
+      return { ok: true, order };
     }
 
     case "update_insert": {

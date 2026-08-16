@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { db, scriptVariants, scriptBeats, scriptJournal } from "@/db";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { EXAMPLE_PAYLOAD } from "@/lib/video/schema";
 import { callTool, makeActor, cleanupProject, type TestActor } from "./mcp-harness";
 
 let projectId: string | undefined;
+let variantId: string;
 let actor: TestActor;
 // Déclaré ici, et non dans le test qui le crée : la base Neon est PARTAGÉE, donc le nettoyage doit
 // avoir lieu même si le test échoue en cours de route.
@@ -50,7 +51,7 @@ describe("outils MCP", () => {
 
   it("apply_script sans sélection n'applique ni suppression ni conflit", async () => {
     const prep = await callTool(actor, "submit_script", { projectId, payload: EXAMPLE_PAYLOAD });
-    const variantId = prep.variantId;
+    variantId = prep.variantId;
     const applied = await callTool(actor, "apply_script", { journalId: prep.journalId, variantId });
     expect(applied.ok).toBe(true);
     expect(applied.applied).toBe(EXAMPLE_PAYLOAD.variantes[0].beats.length);
@@ -78,6 +79,28 @@ describe("outils MCP", () => {
     expect(r).toMatchObject({ ok: true });
     const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, prep.variantId));
     expect(beats.map((b) => b.externalId)).not.toContain(supprime.id);
+  }, 30_000);
+
+  it("reorder_beats réordonne avec les identifiants du contrat, pas des UUID", async () => {
+    const avant = (await db.select().from(scriptBeats)
+      .where(eq(scriptBeats.variantId, variantId)).orderBy(asc(scriptBeats.position)))
+      .map((b) => b.externalId);
+    const voulu = [...avant].reverse();
+
+    const r = await callTool(actor, "reorder_beats", { variantId, order: voulu });
+    expect(r.order).toEqual(voulu);
+
+    const apres = (await db.select().from(scriptBeats)
+      .where(eq(scriptBeats.variantId, variantId)).orderBy(asc(scriptBeats.position)))
+      .map((b) => b.externalId);
+    expect(apres).toEqual(voulu);
+  }, 30_000);
+
+  it("reorder_beats refuse un identifiant inconnu plutôt que de l'ignorer en silence", async () => {
+    // Le cœur apparie par `WHERE external_id = ...` : un identifiant inconnu n'affecte aucune ligne.
+    // Sans ce refus, l'agent croirait avoir réordonné ce qu'il n'a pas touché.
+    await expect(callTool(actor, "reorder_beats", { variantId, order: ["b-99-inexistant"] }))
+      .rejects.toThrow(/absents de cette variante/);
   }, 30_000);
 
   it("chaque écriture est journalisée avec sa source, son outil et son auteur", async () => {
