@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { planRegeneration } from "@/lib/pipeline/regen-plan";
+import { startRegenJobSchema } from "@/lib/validation";
 import type { RegenerateFieldsInput } from "@/lib/validation";
 
 const NONE: RegenerateFieldsInput = { title: false, body: false, excerpt: false, category: false, tags: false, image: false };
@@ -39,5 +40,21 @@ describe("planRegeneration", () => {
     expect(p.imageAction).toBe("from-draft");
     expect(p.abort).toBeNull();
     expect(p.warning).toBeNull();
+  });
+});
+
+describe("startRegenJobSchema", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const fields = { title: true, body: false, excerpt: false, category: false, tags: false, image: false };
+  it("plafonne à 10 articles", () => {
+    expect(startRegenJobSchema.safeParse({ articleIds: Array(11).fill(id), fields }).success).toBe(false);
+    expect(startRegenJobSchema.safeParse({ articleIds: Array(10).fill(id), fields }).success).toBe(true);
+  });
+  it("imageMode vaut auto par défaut", () => {
+    const r = startRegenJobSchema.safeParse({ articleIds: [id], fields });
+    expect(r.success && r.data.imageMode).toBe("auto");
+  });
+  it("refuse une liste vide", () => {
+    expect(startRegenJobSchema.safeParse({ articleIds: [], fields }).success).toBe(false);
   });
 });

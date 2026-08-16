@@ -145,6 +145,16 @@ export const regenerateFieldsSchema = z.object({
 }).refine((f) => Object.values(f).some(Boolean), { message: "Sélectionnez au moins un champ à régénérer." });
 export type RegenerateFieldsInput = z.infer<typeof regenerateFieldsSchema>;
 
+// Entrée de startRegenJob. Le plafond de 10 est la même garde de coût que la barre d'actions du
+// /queue applique côté client (extraction réseau + appel IA par article) — répété ici parce qu'une
+// action serveur ne fait jamais confiance à la garde d'UI.
+export const startRegenJobSchema = z.object({
+  articleIds: z.array(z.string().uuid()).min(1, "Sélectionnez au moins un article.").max(10, "Maximum 10 articles par renvoi."),
+  fields: regenerateFieldsSchema,
+  imageMode: z.enum(["auto", "manual"]).default("auto"),
+});
+export type StartRegenJobInput = z.infer<typeof startRegenJobSchema>;
+
 export const improveInputSchema = z.object({
   instruction: z.string().max(500, "Instruction trop longue (max 500 caractères).").optional(),
 });
