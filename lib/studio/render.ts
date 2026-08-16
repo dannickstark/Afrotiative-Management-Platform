@@ -15,6 +15,14 @@ export type RenderOutcome = {
   height: number;
   degraded: boolean;
   mime: string;
+  /** Qualité, D — les identifiants des calques IMAGE dont la source, une fois préparée, est peinte
+   * AGRANDIE dans son cadre (résolution intrinsèque inférieure au cadre : voir `PreparedImage.lowRes`,
+   * images.ts). Purement INFORMATIF — le rendu réussit exactement comme avant, `degraded` n'est PAS
+   * levé (ce drapeau-là reste réservé à la police d'asset repliée, la seule dégradation du pipeline)
+   * — mais c'est le SEUL endroit d'où l'information peut venir : personne d'autre ne connaît la
+   * taille intrinsèque de la photo, qui arrive d'une URL résolue au moment du rendu. `[]` quand
+   * aucune image n'est agrandie, ou quand la scène n'a aucun calque image. */
+  lowResLayerIds: string[];
 };
 
 export type RenderSceneOptions = {
@@ -34,6 +42,37 @@ export class RenderError extends Error {}
 
 const AUTOFIT_MIN = 12;
 const AUTOFIT_PASSES = 5;
+
+// SURÉCHANTILLONNAGE du rastériseur (qualité, B). resvg rasterisait le SVG à EXACTEMENT la largeur
+// du canevas : chaque trait fin, chaque coin de forme pivotée (shapes.ts), chaque contre-forme de
+// glyphe et chaque module de QR n'avait qu'un seul niveau d'échantillonnage pour être résolu, et
+// ressortait crénelé/gras selon la sous-position au pixel. On rastérise donc à 2× puis on réduit à
+// la taille cible avec un noyau lanczos3 (sharp) — c'est un antialiasing par intégration de 4
+// échantillons par pixel final, nettement plus propre que l'AA analytique d'une passe unique.
+//
+// Effet de bord DÉLIBÉRÉ et important : images.ts prépare déjà les photos jusqu'à 2× le cadre
+// (« assez de marge pour un rendu retina », son commentaire sur `cap`) — marge que le rendu 1×
+// JETAIT ensuite via le rééchantillonnage interne de resvg. À 2×, l'image préparée est peinte
+// quasiment 1:1, donc ce détail déjà téléchargé et déjà décodé sert enfin à quelque chose.
+//
+// Les dimensions de SORTIE ne changent pas : `RenderOutcome.width/height` reste `scene.canvas.*`
+// (voir le `.resize(..., { fit: "fill" })`), donc aucun appelant, aucune ligne `renders`, aucun
+// format de lib/studio/formats.ts n'est affecté.
+const SUPERSAMPLE = 2;
+// Garde-fou : le suréchantillonnage MULTIPLIE PAR 4 le nombre de pixels du PNG intermédiaire, donc
+// il divise par 4 la taille de canevas à partir de laquelle sharp refuse l'entrée (« Input image
+// exceeds pixel limit » — le cas déjà documenté plus bas). Un canevas assez grand pour s'en
+// approcher retombe donc à 1× plutôt que d'échouer : la qualité est un CONFORT, jamais une raison
+// de faire échouer un rendu qui passait avant. 64 Mpx couvre très largement tous les préréglages
+// (le plus grand, story 1080×1920, pèse 8,3 Mpx une fois suréchantillonné).
+const SUPERSAMPLE_PIXEL_BUDGET = 64_000_000;
+
+// Exporté UNIQUEMENT pour être testable seul : vérifier le repli du garde-fou ci-dessus à travers
+// renderScene exigerait de rastériser pour de vrai un canevas de plus de 16 Mpx (plusieurs secondes,
+// des centaines de Mo), pour n'observer au bout du compte que la valeur que cette fonction renvoie.
+export function supersampleScale(width: number, height: number): number {
+  return width * height * SUPERSAMPLE * SUPERSAMPLE <= SUPERSAMPLE_PIXEL_BUDGET ? SUPERSAMPLE : 1;
+}
 
 // fonts.ts (une autre tâche, non modifiable ici) type LoadedFont.weight comme un `number` simple ;
 // satori exige la sous-union littérale 100|200|…|900. Nos propres sources de polices (repli
@@ -243,7 +282,9 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
       const value = opts.values[layer.slot as TokenId]!;
       // Un QR reste un vecteur déjà dimensionné (chemin `<img>` d'imageNode) : pas de taille
       // intrinsèque à remonter, d'où `w:0, h:0` — imageNode ne lit que `uri` pour un calque QR.
-      prepared.set(layer.id, { uri: await qrDataUri(value, layer.fg, layer.bg, layer.margin), w: 0, h: 0 });
+      // `lowRes: false` INCONDITIONNEL : un QR est un vecteur, il n'a pas de résolution intrinsèque
+      // à comparer au cadre (il est net à n'importe quelle taille — voir qrDataUri).
+      prepared.set(layer.id, { uri: await qrDataUri(value, layer.fg, layer.bg, layer.margin), w: 0, h: 0, lowRes: false });
     }
   }));
 
@@ -279,9 +320,13 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
     );
   }
 
+  // Voir SUPERSAMPLE : 2× quand le budget pixels le permet, 1× (comportement d'origine, octet pour
+  // octet) sinon. `scale` est relu plus bas pour décider s'il faut réduire.
+  const scale = supersampleScale(scene.canvas.width, scene.canvas.height);
+
   let png: Buffer;
   try {
-    png = new Resvg(svg, { fitTo: { mode: "width", value: scene.canvas.width } }).render().asPng();
+    png = new Resvg(svg, { fitTo: { mode: "width", value: scene.canvas.width * scale } }).render().asPng();
   } catch (e) {
     console.error("[studio] rasterisation resvg de la scène échouée :", e);
     throw new RenderError("Rasterisation de la scène impossible.", { cause: e });
@@ -301,12 +346,35 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
   // canevas « attendue » par l'utilisateur, ce qui est cohérent avec le fait qu'un canevas
   // "transparent" exporté vers un format sans alpha n'a de toute façon pas de couleur de repli
   // définie ailleurs dans le schéma.
+  //
+  // SOUS-ÉCHANTILLONNAGE DE CHROMINANCE (qualité, A). sharp encode en JPEG avec `chromaSubsampling`
+  // "4:2:0" par défaut en dessous de la qualité 90 : la résolution de COULEUR est alors divisée par
+  // deux sur les deux axes. Sur une photo, c'est invisible (c'est tout l'intérêt du JPEG) ; sur du
+  // contenu GRAPHIQUE — qui est exactement ce que ce moteur produit : du texte plein cadre, des
+  // aplats de couleur de marque, des bordures nettes — c'est LE défaut qui fait « image de mauvaise
+  // qualité » : franges colorées autour des glyphes, bords de formes qui bavent, aplats de marque
+  // qui virent. On force donc "4:4:4" (chrominance à pleine résolution) et on monte la qualité à 92.
+  // Le fichier grossit, ce qui est le bon arbitrage ici : ces images sont l'illustration publiée
+  // d'un article, pas une vignette.
+  //
+  // En WebP, `smartSubsample` joue le même rôle (WebP ne sait pas exprimer un "4:4:4" explicite via
+  // sharp) : il conserve la chrominance là où le contraste local l'exige, ce qui vise précisément
+  // les bords de texte et de formes.
   let bytes: Uint8Array;
   try {
+    // La réduction 2× -> 1× du suréchantillonnage (voir SUPERSAMPLE). `fit: "fill"` fige les
+    // dimensions EXACTES du canevas quelle que soit la dérive d'arrondi de resvg sur la hauteur
+    // (`fitTo` ne contraint que la largeur, la hauteur en découle) — `RenderOutcome.width/height`
+    // reste donc rigoureusement `scene.canvas.*`. À `scale === 1`, aucun resize n'a lieu : le
+    // chemin est celui d'avant ce chantier.
+    const raster =
+      scale === 1
+        ? sharp(png)
+        : sharp(png).resize(scene.canvas.width, scene.canvas.height, { fit: "fill", kernel: "lanczos3" });
     bytes = new Uint8Array(
       encode === "webp"
-        ? await sharp(png).webp({ quality: 88 }).toBuffer()
-        : await sharp(png).removeAlpha().jpeg({ quality: 86, mozjpeg: true }).toBuffer(),
+        ? await raster.webp({ quality: 90, smartSubsample: true }).toBuffer()
+        : await raster.removeAlpha().jpeg({ quality: 92, mozjpeg: true, chromaSubsampling: "4:4:4" }).toBuffer(),
     );
   } catch (e) {
     // Cas reproduit : un canevas surdimensionné (ex. 20000x20000) passe satori et resvg mais fait
@@ -324,5 +392,8 @@ export async function renderScene(opts: RenderSceneOptions): Promise<RenderOutco
     height: scene.canvas.height,
     degraded,
     mime: encode === "webp" ? "image/webp" : "image/jpeg",
+    // Qualité, D — voir RenderOutcome.lowResLayerIds. Parcouru sur `scene.layers` (et non sur la
+    // Map) pour un ordre STABLE, celui de la scène : c'est cet ordre que l'UI affiche.
+    lowResLayerIds: scene.layers.filter((l) => prepared.get(l.id)?.lowRes).map((l) => l.id),
   };
 }

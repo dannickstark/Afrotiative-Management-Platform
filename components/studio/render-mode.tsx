@@ -115,7 +115,8 @@ type ThumbState =
   | { status: "error" };
 
 function FilmstripThumb({
-  templateId, scene, nativeFormat, format, disabled, refreshNonce, onPromote, initialOverflow = false,
+  templateId, scene, nativeFormat, format, disabled, refreshNonce, onPromote,
+  initialOverflow = false, initialLowRes = false,
 }: {
   templateId: string;
   scene: Scene;
@@ -132,6 +133,10 @@ function FilmstripThumb({
   // effet) — sans cette amorce, tests/studio-render-mode.test.ts ne pourrait jamais affirmer que la
   // légende de débordement SUIT réellement un résultat plutôt que d'être un texte figé dans le JSX.
   initialOverflow?: boolean;
+  // Qualité, D — amorce de test UNIQUEMENT, exactement comme `initialOverflow` ci-dessus et pour la
+  // même raison : `lowRes` ne devient vrai qu'après le VRAI aller-retour réseau, qu'un rendu
+  // STATIQUE (react-dom/server) n'exécute jamais.
+  initialLowRes?: boolean;
 }) {
   const preset = FORMAT_PRESETS[format];
   const [state, setState] = useState<ThumbState>({ status: "idle" });
@@ -143,6 +148,11 @@ function FilmstripThumb({
   // rendu PRÉCÉDENT réussi, et inversement un rendu qui RÉUSSIT sans calque en débordement doit bien
   // faire RETOMBER cette alerte (pas de « sticky » optimiste dans un sens comme dans l'autre).
   const [overflow, setOverflow] = useState(initialOverflow);
+  // Qualité, D — même politique de mise à jour que `overflow` juste au-dessus (jamais « sticky »
+  // dans un sens ni dans l'autre), mais l'information est de nature DIFFÉRENTE : elle vient du
+  // moteur lui-même (RenderOutcome.lowResLayerIds) et non d'une mesure approximative faite à côté,
+  // donc pas d'avertissement « approximatif » dans son libellé.
+  const [lowRes, setLowRes] = useState(initialLowRes);
   const requestIdRef = useRef(0);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -198,9 +208,10 @@ function FilmstripThumb({
         if (id !== requestIdRef.current) return;
         setState(res.ok ? { status: "ready", dataUri: res.dataUri } : { status: "error" });
         setOverflow(res.ok && res.overflowingLayerIds.length > 0);
+        setLowRes(res.ok && res.lowResLayerIds.length > 0);
       })
       .catch(() => {
-        if (id === requestIdRef.current) { setState({ status: "error" }); setOverflow(false); }
+        if (id === requestIdRef.current) { setState({ status: "error" }); setOverflow(false); setLowRes(false); }
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId, format, nativeFormat, refreshNonce, disabled, visible]);
@@ -250,6 +261,21 @@ function FilmstripThumb({
           title="Un texte contraint dépasse sa limite de lignes dans ce format — il risque de déborder du cadre. Mesuré avec la police de repli, approximatif si ce calque porte une police personnalisée."
         >
           Texte déborde
+        </span>
+      )}
+      {/* Qualité, D — la contrepartie IMAGE de la note ci-dessus, et la plus utile des deux dans le
+          filmstrip : c'est en changeant de format que le même calque image passe d'un cadre que la
+          photo remplit à un cadre trop grand pour elle (une story 1080×1920 demande bien plus de
+          hauteur qu'un lien Facebook 1200×630). Constatée par le moteur sur les octets réellement
+          téléchargés — pas une estimation, donc pas de réserve « approximatif » ici. */}
+      {lowRes && (
+        <span
+          className="truncate text-[10px] text-amber-600 dark:text-amber-500"
+          data-testid="filmstrip-lowres-badge"
+          data-format={format}
+          title="La photo source est plus petite que son cadre dans ce format : elle est agrandie, donc floue. Réduire le cadre ou fournir une image plus grande — aucun réglage du gabarit ne peut compenser."
+        >
+          Image agrandie
         </span>
       )}
     </button>

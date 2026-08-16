@@ -70,6 +70,13 @@ export async function renderForArticle(
     // recap_card manuels — lib/studio/manual-core.ts n'appelle d'ailleurs pas cette fonction du
     // tout — et l'ancien appel nu à previewArticleImage avant que cette même tâche ne le câble).
     format?: FormatKey;
+    // Qualité, C — le format d'ENCODAGE de sortie. Absent = "jpeg", exactement le comportement
+    // d'avant ce chantier pour tous les appelants qui ne le fournissent pas (lib/diffusion : les
+    // réseaux sociaux restent en JPEG, universellement accepté). lib/wp/publish.ts demande "webp" :
+    // à qualité perçue égale le fichier est nettement plus léger sur du contenu graphique, et
+    // WordPress l'accepte nativement depuis la 5.8. Fait partie de l'empreinte de cache (voir
+    // computeInputHash, store.ts) — sans quoi deux encodages se voleraient mutuellement leur rendu.
+    encode?: "jpeg" | "webp";
   },
 ): Promise<RenderForArticleResult> {
   const store = o.store ?? new R2RenderStore();
@@ -96,7 +103,8 @@ export async function renderForArticle(
     // cette `scene` (pas `template.scene`) qui atteint `renderScene` plus bas.
     const scene = o.format ? relayoutToFormat(template.scene, o.format) : template.scene;
     const inputHash = computeInputHash({
-      templateId: template.templateId, templateVersion: template.version, values, format: o.format,
+      templateId: template.templateId, templateVersion: template.version, values,
+      format: o.format, encode: o.encode,
     });
 
     // Court-circuit AVANT tout rendu : un appel identique (même gabarit, même version, mêmes
@@ -108,7 +116,7 @@ export async function renderForArticle(
     if (cached) return { ok: true, url: cached.url, renderId: cached.id, degraded: cached.degraded };
 
     const out = await renderScene({
-      scene, values, fetchImpl: o.fetchImpl, assets: o.assets ?? new DbAssetLoader(),
+      scene, values, fetchImpl: o.fetchImpl, assets: o.assets ?? new DbAssetLoader(), encode: o.encode,
     });
     const key = storageKeyFor(inputHash, out.mime, new Date());
     const url = await store.put(key, out.bytes, out.mime);
