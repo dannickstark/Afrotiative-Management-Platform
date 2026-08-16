@@ -1,6 +1,12 @@
 import { describe, it, expect, mock } from "bun:test";
 import type { PooledToken } from "@/lib/ai/token-pool";
-import { runWithOpenRouterPool, RATE_LIMIT_COOLDOWN_MS, AUTH_COOLDOWN_MS, type PoolDeps } from "@/lib/ai/with-token-pool";
+import {
+  runWithOpenRouterPool,
+  RATE_LIMIT_COOLDOWN_MS,
+  AUTH_COOLDOWN_MS,
+  ATTEMPTS_PER_TOKEN,
+  type PoolDeps,
+} from "@/lib/ai/with-token-pool";
 
 function tok(id: string, token: string): PooledToken {
   return { id, label: id, token };
@@ -30,23 +36,115 @@ describe("runWithOpenRouterPool", () => {
     expect(markCalls).toEqual([["t1", "ok", undefined]]);
   });
 
-  it("token1 flaky, token2 ok → returns token2's value; marks flaky (no cooldown) then ok; op called twice", async () => {
-    const pool = [tok("t1", "key1"), tok("t2", "key2")];
-    const { deps, markCalls } = fakeDeps(pool);
+  it("pool vide → { ok: false, reason: 'empty_pool' }, op jamais appelé", async () => {
+    const { deps, markCalls } = fakeDeps([]);
     const opSpy = mock(async (apiKey: string) => `result:${apiKey}`);
-    const isFlaky = (v: string) => v === "result:key1";
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r).toEqual({ ok: false, reason: "empty_pool" });
+    expect(opSpy).not.toHaveBeenCalled();
+    expect(markCalls).toEqual([]);
+  });
+
+  it("1 jeton, 1er essai flaky, 2e essai bon → ok:true, op appelé 2 fois, mark une seule fois avec ok", async () => {
+    const pool = [tok("t1", "key1")];
+    const { deps, markCalls } = fakeDeps(pool);
+    let calls = 0;
+    const opSpy = mock(async (apiKey: string) => {
+      calls += 1;
+      return calls === 1 ? "flaky-value" : "good-value";
+    });
+    const isFlaky = (v: string) => v === "flaky-value";
 
     const r = await runWithOpenRouterPool(opSpy, isFlaky, deps);
 
-    expect(r).toEqual({ ok: true, value: "result:key2" });
+    expect(r).toEqual({ ok: true, value: "good-value" });
     expect(opSpy).toHaveBeenCalledTimes(2);
+    expect(markCalls).toEqual([["t1", "ok", undefined]]);
+  });
+
+  it("1 jeton, 2 essais flaky → ok:false reason flaky, un seul mark(t1, flaky)", async () => {
+    const pool = [tok("t1", "key1")];
+    const { deps, markCalls } = fakeDeps(pool);
+    const opSpy = mock(async () => "flaky-value");
+    const isFlaky = () => true;
+
+    const r = await runWithOpenRouterPool(opSpy, isFlaky, deps);
+
+    expect(r).toEqual({ ok: false, reason: "flaky" });
+    expect(opSpy).toHaveBeenCalledTimes(2);
+    expect(markCalls).toEqual([["t1", "flaky", undefined]]);
+  });
+
+  it("1 jeton, 1er essai jette une erreur générique, 2e essai bon → ok:true, un seul mark(t1, ok)", async () => {
+    const pool = [tok("t1", "key1")];
+    const { deps, markCalls } = fakeDeps(pool);
+    let calls = 0;
+    const opSpy = mock(async (apiKey: string) => {
+      calls += 1;
+      if (calls === 1) throw new Error("boom");
+      return `result:${apiKey}`;
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r).toEqual({ ok: true, value: "result:key1" });
+    expect(opSpy).toHaveBeenCalledTimes(2);
+    expect(markCalls).toEqual([["t1", "ok", undefined]]);
+  });
+
+  it("1 jeton qui jette 429 → op appelé une seule fois (pas de réessai), mark rate_limited avec cooldown", async () => {
+    const pool = [tok("t1", "key1")];
+    const { deps, markCalls } = fakeDeps(pool);
+    const opSpy = mock(async () => {
+      throw { statusCode: 429 };
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(opSpy).toHaveBeenCalledTimes(1);
+    expect(markCalls).toEqual([["t1", "rate_limited", RATE_LIMIT_COOLDOWN_MS]]);
+    expect(r).toMatchObject({ ok: false, reason: "rate_limited" });
+  });
+
+  it("1 jeton qui jette 401 → op appelé une seule fois, mark auth_failed avec cooldown", async () => {
+    const pool = [tok("t1", "key1")];
+    const { deps, markCalls } = fakeDeps(pool);
+    const opSpy = mock(async () => {
+      throw { statusCode: 401 };
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(opSpy).toHaveBeenCalledTimes(1);
+    expect(markCalls).toEqual([["t1", "auth_failed", AUTH_COOLDOWN_MS]]);
+    expect(r).toMatchObject({ ok: false, reason: "auth_failed" });
+  });
+
+  it("2 jetons: t1 tout-flaky, t2 429 → reason rate_limited (priorité), detail porte le message du 429", async () => {
+    const pool = [tok("t1", "key1"), tok("t2", "key2")];
+    const { deps, markCalls } = fakeDeps(pool);
+    const opSpy = mock(async (apiKey: string) => {
+      if (apiKey === "key1") return "flaky-value";
+      throw { statusCode: 429, message: "429 Too Many Requests" };
+    });
+    const isFlaky = (v: string) => v === "flaky-value";
+
+    const r = await runWithOpenRouterPool(opSpy, isFlaky, deps);
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("rate_limited");
+      expect(r.detail).toContain("429 Too Many Requests");
+    }
     expect(markCalls).toEqual([
       ["t1", "flaky", undefined],
-      ["t2", "ok", undefined],
+      ["t2", "rate_limited", RATE_LIMIT_COOLDOWN_MS],
     ]);
   });
 
-  it("token1 throws 429, token2 ok → marks rate_limited with cooldown then ok; returns token2", async () => {
+  it("2 jetons: t1 429, t2 ok → inchangé (ok:true, cooldown posé sur t1)", async () => {
     const pool = [tok("t1", "key1"), tok("t2", "key2")];
     const { deps, markCalls } = fakeDeps(pool);
     const opSpy = mock(async (apiKey: string) => {
@@ -63,50 +161,25 @@ describe("runWithOpenRouterPool", () => {
     ]);
   });
 
-  it("token1 throws 401 → marks auth_failed with cooldown, continues to token2", async () => {
-    const pool = [tok("t1", "key1"), tok("t2", "key2")];
-    const { deps, markCalls } = fakeDeps(pool);
-    const opSpy = mock(async (apiKey: string) => {
-      if (apiKey === "key1") throw { statusCode: 401 };
-      return `result:${apiKey}`;
+  it("detail est tronqué à 200 caractères sur un message d'erreur très long", async () => {
+    const pool = [tok("t1", "key1")];
+    const { deps } = fakeDeps(pool);
+    const longMessage = "x".repeat(500);
+    const opSpy = mock(async () => {
+      throw new Error(longMessage);
     });
 
     const r = await runWithOpenRouterPool(opSpy, () => false, deps);
 
-    expect(r).toEqual({ ok: true, value: "result:key2" });
-    expect(markCalls).toEqual([
-      ["t1", "auth_failed", AUTH_COOLDOWN_MS],
-      ["t2", "ok", undefined],
-    ]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("error");
+      expect(r.detail).toBeDefined();
+      expect(r.detail!.length).toBeLessThanOrEqual(200);
+    }
   });
 
-  it("all tokens flaky and/or throw → {ok:false}", async () => {
-    const pool = [tok("t1", "key1"), tok("t2", "key2"), tok("t3", "key3")];
-    const { deps, markCalls } = fakeDeps(pool);
-    const opSpy = mock(async (apiKey: string) => {
-      if (apiKey === "key2") throw new Error("boom");
-      return `result:${apiKey}`; // key1 and key3 succeed but are flaky
-    });
-
-    const r = await runWithOpenRouterPool(opSpy, () => true, deps);
-
-    expect(r).toEqual({ ok: false });
-    expect(opSpy).toHaveBeenCalledTimes(3);
-    expect(markCalls).toEqual([
-      ["t1", "flaky", undefined],
-      ["t2", "error", undefined],
-      ["t3", "flaky", undefined],
-    ]);
-  });
-
-  it("empty pool → {ok:false}, op never called", async () => {
-    const { deps, markCalls } = fakeDeps([]);
-    const opSpy = mock(async (apiKey: string) => `result:${apiKey}`);
-
-    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
-
-    expect(r).toEqual({ ok: false });
-    expect(opSpy).not.toHaveBeenCalled();
-    expect(markCalls).toEqual([]);
+  it("ATTEMPTS_PER_TOKEN vaut 2", () => {
+    expect(ATTEMPTS_PER_TOKEN).toBe(2);
   });
 });
