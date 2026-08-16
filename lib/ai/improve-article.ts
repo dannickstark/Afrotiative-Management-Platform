@@ -50,10 +50,11 @@ export async function improveArticleBody(
         return text.trim();
       }, isFlaky);
       if (r.ok) return { bodyHtml: r.value, via: "openrouter" };
-      // Pool vide ET aucune clé d'environnement = rien n'est configuré, aucun jeton n'a été essayé :
-      // on ne mémorise aucune raison pour que le message final reste « Aucun fournisseur IA
-      // configuré ». Avec cfg.openrouter défini, `empty_pool` est en revanche une vraie anomalie.
-      if (r.reason === "empty_pool" && !cfg.openrouter) continue;
+      // Même règle que generate-article.ts : `unconfigured` (décidé par le pool, pas déduit de
+      // cfg.openrouter) signifie qu'aucun jeton n'a été essayé faute de configuration — rien à
+      // mémoriser, le message final reste « Aucun fournisseur IA configuré ». `empty_pool` signifie
+      // au contraire que des jetons existent mais sont tous indisponibles : on le mémorise.
+      if (r.reason === "unconfigured") continue;
       failure = r.reason;
       failureDetail = r.detail;
       continue;

@@ -15,7 +15,16 @@ export const DETAIL_MAX_LENGTH = 200;
 // les journaux — un jeton, même partiel, ne doit JAMAIS y apparaître. On neutralise donc toute
 // sous-chaîne en forme de clé OpenRouter/OpenAI AVANT la troncature (tronquer d'abord pourrait
 // laisser passer un fragment de clé coupé en deux).
-const KEY_LIKE_PATTERN = /sk-[A-Za-z0-9_-]{8,}/g;
+//
+// Le motif vise la FORME d'une vraie clé, et rien d'autre : un préfixe connu facultatif (`or-v1-`
+// pour OpenRouter, `proj-` pour les clés OpenAI de projet) suivi d'une longue suite continue de
+// caractères alphanumériques ou `_`. Le tiret est volontairement HORS de cette suite : il servait
+// auparavant de liant et transformait des textes parfaitement anodins en « sk-*** » (« unknown
+// model sk-preview-experimental not found » disparaissait en entier). Le seuil de 16 caractères
+// reste très en dessous de la longueur réelle des clés (plusieurs dizaines de caractères), donc
+// aucune vraie clé n'échappe au caviardage, tandis qu'un mot composé usuel — dont chaque segment
+// est court et séparé par des tirets — n'est jamais touché.
+const KEY_LIKE_PATTERN = /sk-(?:or-v1-|proj-)?[A-Za-z0-9_]{16,}/g;
 const KEY_REDACTION = "sk-***";
 
 export function truncateDetail(e: unknown): string | undefined {

@@ -4,9 +4,11 @@
 // dépendance DB/réseau/`"use server"` : testable unitairement sans aucune configuration
 // (voir tests/ai-failure-message.test.ts).
 //
-// "unconfigured" s'ajoute à PoolFailureReason (with-token-pool.ts) : ce cas ne vient jamais du
-// pool lui-même (qui suppose toujours qu'on a essayé au moins un jeton) mais du niveau au-dessus
-// — generateArticle/improveArticleBody — quand AUCUN fournisseur configuré n'a même été tenté.
+// Ce type est exactement PoolFailureReason (with-token-pool.ts). "unconfigured" a deux origines
+// désormais : le pool, quand il constate qu'aucun jeton n'existe (aucune ligne openrouter_tokens
+// ET aucune clé d'environnement — voir lib/ai/token-pool.ts), et le niveau au-dessus —
+// generateArticle/improveArticleBody — quand AUCUN fournisseur configuré n'a même été tenté. Les
+// deux disent la même chose à l'utilisateur, d'où un seul message.
 export type AiFailureReason = "unconfigured" | "empty_pool" | "rate_limited" | "auth_failed" | "flaky" | "error";
 
 // `detail` provient de PoolResult.detail (with-token-pool.ts), DÉJÀ tronqué à 200 caractères par

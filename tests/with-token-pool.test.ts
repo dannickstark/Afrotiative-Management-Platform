@@ -12,10 +12,17 @@ function tok(id: string, token: string): PooledToken {
   return { id, label: id, token };
 }
 
-function fakeDeps(pool: PooledToken[]): { deps: PoolDeps; markCalls: Array<[string | null, string, number | undefined]> } {
+// `configured` par défaut = « il existe au moins un jeton » : c'est le cas de tous les scénarios de
+// rotation ci-dessous, où le pool est justement non vide. Les deux scénarios de pool VIDE le
+// passent explicitement, puisque c'est ce drapeau — et non une déduction de l'appelant à partir de
+// cfg.openrouter — qui distingue « rien de configuré » de « tout est en récupération ».
+function fakeDeps(
+  pool: PooledToken[],
+  configured: boolean = pool.length > 0,
+): { deps: PoolDeps; markCalls: Array<[string | null, string, number | undefined]> } {
   const markCalls: Array<[string | null, string, number | undefined]> = [];
   const deps: PoolDeps = {
-    loadPool: async () => pool,
+    loadPool: async () => ({ tokens: pool, configured }),
     mark: async (id, status, cooldownMs) => {
       markCalls.push([id, status, cooldownMs]);
     },
@@ -36,13 +43,29 @@ describe("runWithOpenRouterPool", () => {
     expect(markCalls).toEqual([["t1", "ok", undefined]]);
   });
 
-  it("pool vide → { ok: false, reason: 'empty_pool' }, op jamais appelé", async () => {
-    const { deps, markCalls } = fakeDeps([]);
+  it("pool vide alors que des jetons EXISTENT (tous inactifs ou en récupération) → reason 'empty_pool'", async () => {
+    // Le cas exact que ce correctif vise : un exploitant n'ayant saisi ses jetons que dans Réglages
+    // (donc sans OPENROUTER_API_KEY) et dont tout le parc est en cooldown. `configured: true` dit
+    // « une configuration existe » — l'utilisateur doit lire le message « jetons indisponibles »,
+    // surtout pas « aucun fournisseur configuré ».
+    const { deps, markCalls } = fakeDeps([], true);
     const opSpy = mock(async (apiKey: string) => `result:${apiKey}`);
 
     const r = await runWithOpenRouterPool(opSpy, () => false, deps);
 
     expect(r).toEqual({ ok: false, reason: "empty_pool" });
+    expect(opSpy).not.toHaveBeenCalled();
+    expect(markCalls).toEqual([]);
+  });
+
+  it("pool vide ET aucune configuration → reason 'unconfigured', op jamais appelé", async () => {
+    // Installation vierge : aucune ligne openrouter_tokens, aucune clé d'environnement.
+    const { deps, markCalls } = fakeDeps([], false);
+    const opSpy = mock(async (apiKey: string) => `result:${apiKey}`);
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r).toEqual({ ok: false, reason: "unconfigured" });
     expect(opSpy).not.toHaveBeenCalled();
     expect(markCalls).toEqual([]);
   });
@@ -198,6 +221,37 @@ describe("runWithOpenRouterPool", () => {
       expect(r.detail).toContain("sk-***");
       expect(r.detail).toContain("401 Unauthorized");
     }
+  });
+
+  it("une clé de forme réelle (sk-or-v1- + longue suite hexadécimale) est caviardée", async () => {
+    // Forme réellement émise par OpenRouter : préfixe sk-or-v1- suivi d'une longue suite continue.
+    const realShapedKey = "sk-or-v1-" + "0123456789abcdef".repeat(4);
+    const { deps } = fakeDeps([tok("t1", "key1")]);
+    const opSpy = mock(async () => {
+      throw new Error(`401 Unauthorized: key ${realShapedKey} is disabled`);
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.detail).toBe("401 Unauthorized: key sk-*** is disabled");
+      expect(r.detail).not.toContain("0123456789abcdef");
+    }
+  });
+
+  it("un mot composé anodin commençant par « sk- » n'est PAS caviardé", async () => {
+    // Le tiret ne fait plus partie de la suite reconnue comme clé : un identifiant de modèle ou un
+    // mot technique tirété survit intact, là où l'ancien motif avalait toute la fin du message.
+    const { deps } = fakeDeps([tok("t1", "key1")]);
+    const opSpy = mock(async () => {
+      throw new Error("unknown model sk-preview-experimental not found");
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toBe("unknown model sk-preview-experimental not found");
   });
 
   it("un objet jeté non-`Error` porteur d'un .message alimente quand même `detail`", async () => {

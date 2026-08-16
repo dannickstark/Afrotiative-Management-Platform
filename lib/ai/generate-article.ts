@@ -79,13 +79,22 @@ export async function generateArticle(
       // TOUJOURS le pool (lib/ai/token-pool.ts), qui charge les jetons de la base et n'ajoute la clé
       // d'environnement que comme membre de secours ; buildOpenRouterModel sait construire un modèle
       // à partir d'un jeton du pool seul (lib/ai/providers.ts).
-      const settings = await getPipelineSettings();
-      const isFlaky = (draft: ArticleDraft) => articleIsFlaky(draft.bodyHtml, settings.openrouterMinContentChars);
+      // Seuil de « brouillon inexploitable » lu PARESSEUSEMENT, à l'intérieur de `op` : sur une
+      // installation sans le moindre jeton, le runner ne rappelle jamais `op`, donc aucune lecture
+      // DB n'a lieu — l'ancienne lecture en amont faisait payer un aller-retour (et transformait une
+      // panne de base en exception remontant hors de generateArticle) à un chemin qui n'en avait
+      // aucun besoin. Mémorisé au premier passage : le pool peut appeler `op` une fois par jeton.
+      let minContentChars: number | undefined;
+      // `isFlaky` n'est appelé par le runner qu'APRÈS un `op` résolu, donc `minContentChars` est
+      // toujours renseigné ici ; le `?? 0` n'est qu'un garde-fou de typage (un seuil de 0 ne
+      // qualifie jamais un brouillon de flaky, on ne rejette donc rien à tort).
+      const isFlaky = (draft: ArticleDraft) => articleIsFlaky(draft.bodyHtml, minContentChars ?? 0);
       // Rotates across every pooled token (DB-managed + the env-configured key as a fallback member —
       // see lib/ai/token-pool.ts), letting a quota error or a flaky/too-short draft on one token fall
       // through to the next rather than failing this provider outright. The generateObject call is left
       // to THROW on error (never caught here) so runWithOpenRouterPool can classify + rotate on it.
       const r = await runWithOpenRouterPool(async (apiKey) => {
+        if (minContentChars === undefined) minContentChars = (await getPipelineSettings()).openrouterMinContentChars;
         const model = buildOpenRouterModel(cfg, apiKey);
         const { object } = await generateObject({
           model,
@@ -98,13 +107,13 @@ export async function generateArticle(
         return object as ArticleDraft;
       }, isFlaky);
       if (r.ok) return { draft: sanitizeDraft(r.value, input.candidateImages), via: "openrouter" };
-      // Pool VIDE alors qu'aucune clé d'environnement n'existe = installation réellement non
-      // configurée (aucun jeton en base, aucune clé) : aucun jeton n'a été essayé, ce n'est donc pas
-      // un échec à mémoriser. On ne touche pas à `failure`, si bien que le retour final reste
-      // "unconfigured" et l'utilisateur lit toujours « Aucun fournisseur IA configuré ». À l'inverse,
-      // si cfg.openrouter EST défini, un pool vide est une vraie anomalie (tous les jetons en
-      // récupération, clé d'environnement absente du pool) et se mémorise telle quelle.
-      if (r.reason === "empty_pool" && !cfg.openrouter) continue;
+      // `unconfigured` vient du pool lui-même (aucune ligne openrouter_tokens ET aucune clé
+      // d'environnement, voir lib/ai/token-pool.ts) : aucun jeton n'a été essayé, il n'y a donc rien
+      // à mémoriser — on laisse `failure` intact pour que le retour final reste "unconfigured" sans
+      // écraser l'échec d'un fournisseur précédent. `empty_pool` en revanche est une vraie anomalie
+      // (des jetons EXISTENT mais dorment tous) et se mémorise telle quelle, y compris — et c'est
+      // tout l'objet de ce correctif — quand ces jetons ne viennent que de Réglages.
+      if (r.reason === "unconfigured") continue;
       // Pool exhausted (every token failed/flaky) — do NOT retry openrouter again, move to the next
       // configured provider in llmOrder, same as the non-openrouter branch falling through below.
       failure = r.reason;

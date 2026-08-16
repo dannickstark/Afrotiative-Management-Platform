@@ -82,17 +82,24 @@ describe("improveArticleBody (no provider configured)", () => {
   beforeAll(() => {
     for (const k of keys) { snap[k] = process.env[k]; delete process.env[k]; }
     // La branche openrouter interroge désormais le pool MÊME sans OPENROUTER_API_KEY (des jetons
-    // peuvent n'exister qu'en base) : on simule ici l'installation vierge, pool vide compris, sans
-    // laisser le runner par défaut tenter un vrai appel réseau.
-    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "empty_pool" });
+    // peuvent n'exister qu'en base) : on simule ici l'installation vierge — c'est le POOL qui
+    // constate qu'il n'existe ni ligne openrouter_tokens ni clé d'environnement et renvoie
+    // `unconfigured` — sans laisser le runner par défaut tenter un vrai appel réseau.
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "unconfigured" });
   });
-  afterAll(() => { for (const k of keys) { if (snap[k] === undefined) delete process.env[k]; else process.env[k] = snap[k]; } });
+  // Restaure AUSSI l'indirection du runner : sans cela, le confinement de ce stub reposait sur le
+  // beforeEach du describe suivant, c'est-à-dire sur l'ordre d'exécution des blocs — et le stub
+  // fuirait vers tout fichier exécuté ensuite si ce describe venait à être déplacé ou isolé.
+  afterAll(() => {
+    for (const k of keys) { if (snap[k] === undefined) delete process.env[k]; else process.env[k] = snap[k]; }
+    runWithOpenRouterPoolImpl = realRunWithOpenRouterPool as unknown as typeof runWithOpenRouterPoolImpl;
+  });
   it("falls back to via:'mock' and returns the body unchanged (caller refuses on mock)", async () => {
     const r = await improveArticleBody({ title: "T", bodyHtml: "<p>Inchangé.</p>" });
     expect(r.via).toBe("mock");
     expect(r.bodyHtml).toBe("<p>Inchangé.</p>");
-    // Pool vide + aucune clé d'environnement = rien de configuré : `empty_pool` n'est PAS mémorisé,
-    // le message historique "unconfigured" est conservé (Task 2).
+    // Rien de configuré : `unconfigured` n'est PAS mémorisé comme un échec de fournisseur, le
+    // message historique "unconfigured" est conservé (Task 2).
     expect(r.failure).toBe("unconfigured");
   });
 });
@@ -173,6 +180,21 @@ describe("improveArticleBody (configured provider, happy path)", () => {
     expect(r.via).toBe("omniroute");
     expect(r.bodyHtml).toBe("<p>Corps produit par le second fournisseur.</p>");
     expect(r.failure).toBeUndefined(); // nominal path (omniroute succeeded) — no failure carried
+  });
+
+  // Pendant du cas généré (tests/ai-fallback.test.ts) : des jetons existent en base mais sont tous
+  // inactifs ou en récupération, et OPENROUTER_API_KEY n'est PAS définie. Le pool renvoie
+  // `empty_pool` (et non `unconfigured`), que l'appelant mémorise tel quel — l'utilisateur lit le
+  // message « jetons indisponibles » au lieu de « aucun fournisseur configuré ».
+  it("mémorise `empty_pool` tel quel SANS OPENROUTER_API_KEY (jetons en base tous indisponibles)", async () => {
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.LLM_ORDER = "openrouter";
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "empty_pool" });
+
+    const r = await improveArticleBody({ title: "T", bodyHtml: "<p>Ancien.</p>" });
+    expect(r.via).toBe("mock");
+    expect(r.bodyHtml).toBe("<p>Ancien.</p>");
+    expect(r.failure).toBe("empty_pool");
   });
 
   it("returns via='mock' with failure='auth_failed' when the OpenRouter pool is the ONLY configured provider and is exhausted", async () => {

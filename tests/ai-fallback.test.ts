@@ -169,7 +169,7 @@ describe("generateArticle fallback chain", () => {
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = (name) => ({ name }); // only reached for omniroute now — openrouter no longer calls buildModel
     let poolCalled = false;
-    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "empty_pool" }; };
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "unconfigured" }; };
     const seen: string[] = [];
     generateObjectImpl = async (opts) => { seen.push((opts.model as { name: string }).name); return { object: goodDraft({ category: "Marchés" }) }; };
 
@@ -225,16 +225,16 @@ describe("generateArticle fallback chain", () => {
     expect(r.failure).toBe("rate_limited");
   });
 
+  // Garantie (a) : installation réellement vierge — aucune ligne openrouter_tokens ET aucune clé
+  // d'environnement. C'est le POOL qui le constate (`unconfigured`, voir lib/ai/token-pool.ts), plus
+  // l'appelant qui le déduisait de cfg.openrouter ; cette raison ne se mémorise pas, donc le message
+  // historique « Aucun fournisseur IA configuré » reste celui que lit l'utilisateur.
   it("returns via='mock' with failure='unconfigured' when llmOrder has no configured provider at all", async () => {
-    // Installation réellement vierge : aucune clé d'environnement ET aucun jeton en base (pool vide).
-    // Le pool EST interrogé (la clé d'env n'est plus le garde-fou) mais `empty_pool` sans
-    // cfg.openrouter ne se mémorise PAS — le message historique « Aucun fournisseur IA configuré »
-    // reste donc celui que lit l'utilisateur.
     delete process.env.OPENROUTER_API_KEY;
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = () => null; // omniroute also has no model → never tried either
     let poolCalled = false;
-    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "empty_pool" }; };
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "unconfigured" }; };
 
     const r = await generateArticle(baseInput);
     expect(poolCalled).toBe(true);
@@ -243,7 +243,22 @@ describe("generateArticle fallback chain", () => {
     expect(r.failureDetail).toBeUndefined();
   });
 
-  it("mémorise `empty_pool` tel quel quand OPENROUTER_API_KEY EST définie (anomalie, pas une absence de configuration)", async () => {
+  // Garantie (b) — la raison d'être de cette branche : des jetons existent (saisis dans Réglages)
+  // mais sont TOUS inactifs ou en période de récupération, et OPENROUTER_API_KEY n'est PAS définie.
+  // Avant ce correctif, l'appelant écrasait ce cas en « unconfigured » parce que cfg.openrouter était
+  // absent ; l'utilisateur doit désormais lire le message spécifique aux jetons indisponibles.
+  it("mémorise `empty_pool` tel quel SANS OPENROUTER_API_KEY (jetons en base tous indisponibles)", async () => {
+    delete process.env.OPENROUTER_API_KEY;
+    setOrder(["openrouter"]);
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "empty_pool" });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("mock");
+    expect(r.failure).toBe("empty_pool");
+  });
+
+  // Garantie (c) : avec une clé d'environnement, `empty_pool` reste mémorisé comme avant.
+  it("mémorise `empty_pool` tel quel quand OPENROUTER_API_KEY EST définie (inchangé)", async () => {
     process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter"]);
     runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "empty_pool" });
@@ -251,6 +266,40 @@ describe("generateArticle fallback chain", () => {
     const r = await generateArticle(baseInput);
     expect(r.via).toBe("mock");
     expect(r.failure).toBe("empty_pool");
+  });
+
+  // Correctif « lecture paresseuse des réglages » : getPipelineSettings() est une vraie lecture DB
+  // (lib/queries/settings.ts, non mémoïsée, avec un insert au premier appel). Elle ne doit avoir lieu
+  // que si un jeton va réellement servir — sinon une installation sans OpenRouter paie un
+  // aller-retour inutile et une panne de base ferait échouer generateArticle au lieu de retomber
+  // proprement sur le mock.
+  it("ne lit PAS les réglages quand le pool n'appelle jamais `op` (aucun jeton utilisable)", async () => {
+    delete process.env.OPENROUTER_API_KEY;
+    setOrder(["openrouter"]);
+    let settingsReads = 0;
+    getPipelineSettingsImpl = async () => { settingsReads += 1; return { openrouterMinContentChars: 400 }; };
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "unconfigured" });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("mock");
+    expect(settingsReads).toBe(0);
+  });
+
+  it("ne lit les réglages QU'UNE fois même si le pool appelle `op` pour plusieurs jetons", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    setOrder(["openrouter"]);
+    let settingsReads = 0;
+    getPipelineSettingsImpl = async () => { settingsReads += 1; return { openrouterMinContentChars: 400 }; };
+    // Simule la rotation réelle : deux jetons, donc deux appels à `op`.
+    runWithOpenRouterPoolImpl = async (op) => {
+      await op("jeton-1");
+      return { ok: true, value: await op("jeton-2") };
+    };
+    generateObjectImpl = async () => ({ object: goodDraft() });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("openrouter");
+    expect(settingsReads).toBe(1);
   });
 
   // Le seul raccord jusqu'ici non testé : chaque étape (le pool produit `detail`, aiFailureMessage
