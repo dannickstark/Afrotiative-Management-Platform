@@ -9,8 +9,11 @@ import { SETTINGS_CHILDREN } from "@/components/shell/nav-items";
 // Une entrée manquante ici n'est pas seulement une icône absente : `Icon` resolue à `undefined`
 // fait planter `<Icon />` (« Element type is invalid »), donc toute nouvelle entrée de
 // SETTINGS_CHILDREN doit gagner la sienne ici dans le MÊME changement — comme /settings/mcp
-// (Task 7) et /settings/video (Task 8) auraient dû l'être dès leur ajout.
-const SETTINGS_ICON: Record<string, typeof Rss> = {
+// (Task 7) et /settings/video (Task 8) auraient dû l'être dès leur ajout. EXPORTÉ pour que
+// tests/settings-nav-icons.test.ts puisse vérifier l'exhaustivité contre SETTINGS_CHILDREN — un
+// `Record<string, X>` n'étant pas exhaustif pour TypeScript, seul un test peut réellement
+// verrouiller cette correspondance.
+export const SETTINGS_ICON: Record<string, typeof Rss> = {
   "/settings/feeds": Rss,
   "/settings/taxonomy": Tags,
   "/settings/team": Users,

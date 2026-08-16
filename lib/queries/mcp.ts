@@ -5,7 +5,7 @@
 // SEUL endroit qui appelle requireUser() + requirePermission() avant de les invoquer. Les tests
 // (tests/mcp-actions.test.ts) appellent ces fonctions *Core directement, sans passer par une
 // session — c'est ce qui rend le test possible sans mock de next/headers.
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db, apiTokens, videoProjects, videoSettings, scriptJournal, user as userTable } from "@/db";
 import { generateToken } from "@/lib/mcp/token";
 import { DEFAULT_BRIEF_TEMPLATE } from "@/lib/video/brief";
@@ -61,12 +61,16 @@ export async function listTokensCore(
 export async function revokeApiTokenCore(
   { tokenId, userId, seesAll }: { tokenId: string; userId: string; seesAll: boolean },
 ): Promise<{ ok: boolean; message?: string }> {
-  const [row] = await db.select({ userId: apiTokens.userId })
+  const [row] = await db.select({ userId: apiTokens.userId, revokedAt: apiTokens.revokedAt })
     .from(apiTokens).where(eq(apiTokens.id, tokenId));
   if (!row) return { ok: false, message: "Jeton introuvable." };
   if (!seesAll && row.userId !== userId) {
     return { ok: false, message: "Vous ne pouvez révoquer que vos propres jetons." };
   }
+  // Court-circuit (round de correction) : sans lui, révoquer deux fois un même jeton réécrit
+  // `revokedAt` avec l'heure de la SECONDE révocation et renvoie quand même `ok: true` — la ligne
+  // ment alors sur le moment réel où le jeton a cessé de fonctionner.
+  if (row.revokedAt) return { ok: false, message: "Ce jeton est déjà révoqué." };
   await db.update(apiTokens).set({ revokedAt: new Date() }).where(eq(apiTokens.id, tokenId));
   return { ok: true };
 }
@@ -127,7 +131,7 @@ export async function recentAgentActivityCore(limit: number): Promise<ActivityRo
     .from(scriptJournal)
     .innerJoin(videoProjects, eq(scriptJournal.projectId, videoProjects.id))
     .leftJoin(userTable, eq(scriptJournal.actorUserId, userTable.id))
-    .where(and(eq(scriptJournal.source, "mcp")))
+    .where(eq(scriptJournal.source, "mcp"))
     .orderBy(desc(scriptJournal.createdAt))
     .limit(limit);
 }

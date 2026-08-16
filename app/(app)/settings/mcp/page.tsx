@@ -8,6 +8,7 @@ import { ConnectionPanel } from "@/components/settings/mcp/connection-panel";
 import { TokenList } from "@/components/settings/mcp/token-list";
 import { ToolCatalog } from "@/components/settings/mcp/tool-catalog";
 import { AgentActivity } from "@/components/settings/mcp/agent-activity";
+import { McpSwitch } from "@/components/settings/mcp/mcp-switch";
 
 const ACTIVITY_LIMIT = 20;
 
@@ -27,13 +28,26 @@ export default async function Page() {
     headers(),
   ]);
 
-  // Adresse dérivée de la configuration d'exécution (hôte de la requête), pas d'une variable
-  // d'environnement dédiée — ce dépôt n'en déclare aucune pour l'origine publique de l'app
-  // (.env.example), et cette adresse doit rester exacte quel que soit l'environnement (local,
-  // preview, production) sans réglage supplémentaire à tenir à jour.
-  const host = h.get("host") ?? "localhost:3000";
-  const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
-  const serverUrl = `${proto}://${host}/api/mcp`;
+  // Adresse dérivée de BETTER_AUTH_URL en priorité — déjà la source canonique de l'URL publique de
+  // l'app dans ce dépôt (lib/auth.ts, better-auth la lit lui-même depuis l'environnement — voir
+  // .env.example). Retombée sur l'en-tête `Host` de la requête UNIQUEMENT à défaut : ce dépôt ne
+  // valide `Host` contre aucune liste d'hôtes autorisés, donc un proxy mal configuré (ou son
+  // absence) pourrait le forger — un extrait de configuration bâti dessus dirigerait alors le
+  // JETON PORTEUR de la personne qui le copie vers une origine tierce. Dans ce cas de repli,
+  // `addressGuessed` le dit explicitement à l'écran plutôt que de laisser croire à une adresse
+  // configurée.
+  const configuredBase = process.env.BETTER_AUTH_URL?.trim().replace(/\/+$/, "");
+  let serverUrl: string;
+  let addressGuessed: boolean;
+  if (configuredBase) {
+    serverUrl = `${configuredBase}/api/mcp`;
+    addressGuessed = false;
+  } else {
+    const host = h.get("host") ?? "localhost:3000";
+    const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+    serverUrl = `${proto}://${host}/api/mcp`;
+    addressGuessed = true;
+  }
 
   return (
     <div className="space-y-6">
@@ -41,10 +55,16 @@ export default async function Page() {
         title="MCP"
         description="Connecte un agent au module vidéo : gestion des jetons, catalogue d'outils et surveillance des écritures."
       />
-      <ConnectionPanel serverUrl={serverUrl} enabled={settings.mcpEnabled} seesAll={seesAll} />
+      <ConnectionPanel
+        serverUrl={serverUrl} enabled={settings.mcpEnabled}
+        seesAll={seesAll} addressGuessed={addressGuessed}
+      />
       <TokenList tokens={tokens} currentUserId={user.id} seesAll={seesAll} />
       <ToolCatalog />
       <AgentActivity activity={activity} />
+      {/* Le geste d'urgence est le DERNIER de l'écran, pas le premier (round de correction) : on
+          branche, on comprend, on surveille, PUIS on coupe. */}
+      {seesAll && <McpSwitch enabled={settings.mcpEnabled} />}
     </div>
   );
 }

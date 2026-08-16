@@ -1,12 +1,15 @@
 "use client";
 // components/settings/mcp/mcp-switch.tsx — Task 7: l'interrupteur d'urgence, isolé dans son PROPRE
-// petit composant client. Séparé de connection-panel.tsx pour deux raisons : (1) c'est la SEULE
-// partie du panneau de connexion qui a besoin d'interactivité (useRouter/useTransition), donc
-// tests/mcp-settings-ui.test.ts peut faire un renderToStaticMarkup(<ConnectionPanel .../>) sans
-// contexte de routeur Next — ce sous-composant n'est monté (donc son useRouter() n'est appelé) que
-// lorsque `seesAll` est vrai, ce que ce test ne demande jamais ; (2) « video:configure » est la
-// SEULE garde qui compte ici — voir lib/actions/mcp-actions.ts's setMcpEnabled, qui refait le même
-// contrôle côté serveur, ce composant n'étant qu'une commodité d'UI.
+// petit composant client, rendu par la PAGE (app/(app)/settings/mcp/page.tsx) APRÈS les quatre
+// panneaux — pas par connection-panel.tsx (round de correction : c'est le DERNIER geste de
+// l'écran, pas le premier — on branche, on comprend, on surveille, puis on coupe). Rester séparé,
+// même déplacé, garde deux propriétés utiles : (1) c'est la SEULE partie de l'écran qui a besoin
+// d'interactivité (useRouter/useTransition), donc tests/mcp-settings-ui.test.ts peut faire un
+// renderToStaticMarkup(<ConnectionPanel .../>) sans contexte de routeur Next, sans que ce fichier
+// n'ait besoin d'être importé du tout ; (2) « video:configure » est la SEULE garde qui compte
+// ici — voir lib/actions/mcp-actions.ts's setMcpEnabled, qui refait le même contrôle côté serveur,
+// ce composant n'étant qu'une commodité d'UI, montée par la page uniquement quand `seesAll` est
+// vrai.
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";

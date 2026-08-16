@@ -1,14 +1,13 @@
-// components/settings/mcp/connection-panel.tsx — Task 7: « Connexion », le premier panneau de
-// /settings/mcp (spec §6). PAS "use client" au niveau du panneau lui-même : il n'affiche que du
-// texte dérivé de ses props (adresse, état) et des extraits de configuration statiques — la SEULE
-// partie interactive (l'interrupteur) est déléguée à McpSwitch (mcp-switch.tsx), un sous-composant
-// client monté UNIQUEMENT quand `seesAll` est vrai. C'est ce qui permet à
+// components/settings/mcp/connection-panel.tsx — Task 7: « Connexion », le premier des quatre
+// panneaux de /settings/mcp (spec §6 : on branche, on comprend, on surveille, on coupe — dans cet
+// ordre). L'interrupteur n'est PLUS rendu ici (round de correction) : il vit dans la page
+// (app/(app)/settings/mcp/page.tsx), APRÈS les quatre panneaux — le geste d'urgence est le
+// DERNIER de l'écran, pas le premier. Ce panneau n'affiche donc que du texte dérivé de ses props
+// (adresse, état) et des extraits de configuration statiques, ce qui permet à
 // tests/mcp-settings-ui.test.ts de faire un renderToStaticMarkup(<ConnectionPanel .../>) sans
-// aucun contexte de routeur Next : ses props par défaut (pas de `seesAll`) ne montent jamais
-// McpSwitch, donc son useRouter() n'est jamais appelé pendant le test.
+// aucun contexte de routeur Next.
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { McpSwitch } from "@/components/settings/mcp/mcp-switch";
 
 // Emplacement, jamais un vrai jeton : les extraits ci-dessous finissent copiés-collés dans des
 // fichiers de configuration qui, eux, finissent parfois dans un dépôt. Un extrait qui contiendrait
@@ -20,12 +19,20 @@ export function ConnectionPanel({
   serverUrl,
   enabled,
   seesAll = false,
+  addressGuessed = false,
 }: {
   serverUrl: string;
   enabled: boolean;
-  // N'affiche l'interrupteur que pour "video:configure" (admin/éditeur) — voir
-  // lib/actions/mcp-actions.ts's setMcpEnabled, la garde qui compte réellement.
+  // Wording seulement (round de correction) : ce panneau ne rend plus l'interrupteur lui-même
+  // (voir la page), mais doit rester exact sur où le trouver quand il dit qu'il existe — jamais
+  // « ci-dessous » pour quelqu'un qui ne le voit pas du tout.
   seesAll?: boolean;
+  // Vrai quand l'adresse a été DEVINÉE depuis l'en-tête `Host` de la requête plutôt que dérivée de
+  // BETTER_AUTH_URL (round de correction) : un `Host` forgé (proxy mal configuré, absence de liste
+  // d'hôtes autorisés) produirait sinon un extrait de configuration qui dirige le JETON PORTEUR
+  // vers une origine tierce sans que quiconque ne le voie. Ce n'est pas une garde — juste rendre
+  // visible ce que l'adresse affichée est, ou n'est pas.
+  addressGuessed?: boolean;
 }) {
   const claudeDesktopConfig = `{
   "mcpServers": {
@@ -51,6 +58,13 @@ export function ConnectionPanel({
           <div className="min-w-0 space-y-1">
             <p className="text-sm text-muted-foreground">Adresse du serveur</p>
             <code className="block truncate rounded-md bg-muted px-2 py-1 text-sm">{serverUrl}</code>
+            {addressGuessed && (
+              <p className="text-xs text-[var(--status-pending)]">
+                Adresse devinée depuis l&#39;en-tête Host de la requête, non configurée
+                (BETTER_AUTH_URL absente) — vérifiez qu&#39;elle correspond bien à votre
+                déploiement avant de partager cet extrait.
+              </p>
+            )}
           </div>
           <Badge
             variant="outline"
@@ -66,8 +80,8 @@ export function ConnectionPanel({
 
         {!enabled && (
           <p className="rounded-md border border-[var(--status-error)]/30 bg-[var(--status-error)]/10 px-3 py-2 text-sm text-[var(--status-error)]">
-            Le serveur MCP est désactivé : aucun jeton, même valide, ne fonctionne tant que
-            l&#39;interrupteur ci-dessous n&#39;est pas rouvert.
+            Le serveur MCP est désactivé : aucun jeton, même valide, ne fonctionne tant qu&#39;il
+            n&#39;est pas réactivé{seesAll ? " — l'interrupteur se trouve en bas de cette page." : "."}
           </p>
         )}
 
@@ -97,8 +111,6 @@ export function ConnectionPanel({
             Code, ou un client MCP compatible avec un jeton porteur.
           </p>
         </div>
-
-        {seesAll && <McpSwitch enabled={enabled} />}
       </CardContent>
     </Card>
   );
