@@ -95,7 +95,7 @@ export async function updateBeatCore(input: {
   transitionOut?: string | null;
   durationOverrideSec?: number | null;
   sources?: string[];
-}): Promise<void> {
+}): Promise<{ spokenText: string; estimatedDurationSec: number; durationOverrideSec: number | null }> {
   // (round de correction 3, N2) : `getVideoSettings()` passe par le `db` global, donc une
   // CONNEXION SÉPARÉE de celle de la transaction ci-dessous (laquelle emprunte SA propre connexion
   // au pool dès `db.transaction(...)`). Appelée depuis L'INTÉRIEUR de la transaction, elle
@@ -106,7 +106,7 @@ export async function updateBeatCore(input: {
   // déjà correctement.
   const { wordsPerMinute } = await getVideoSettings();
 
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     // Ordre de verrouillage (round de correction 4) : `script_variants` D'ABORD, `script_beats`
     // ENSUITE — le même ordre que applyImportCore et revertJournalEntryCore. Sans ce verrou en
     // tête, cette transaction prenait la ligne beat puis attendait la ligne variante, pendant
@@ -159,6 +159,14 @@ export async function updateBeatCore(input: {
     // scriptVariants.updatedAt. Sans ce bump, une édition humaine entre prepareImport et
     // applyImport passerait inaperçue et serait écrasée en silence par l'import.
     await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, current.variantId));
+
+    // Round de correction 1 (Task 12, I3) : renvoyer l'état RÉELLEMENT stocké — `spokenText` déjà
+    // passé par sanitizeArticleHtml, `estimatedDurationSec` déjà recalculé avec la cadence des
+    // réglages. L'appelant (updateBeat, lib/actions/video-actions.ts) relaie ces valeurs telles
+    // quelles pour la mise à jour optimiste côté client, plutôt que de laisser le client réinjecter
+    // son propre HTML non assaini ou recalculer la durée avec une cadence par défaut potentiellement
+    // fausse (BeatList#storedSeconds — même round, I2).
+    return { spokenText, estimatedDurationSec, durationOverrideSec };
   });
 }
 
@@ -166,14 +174,14 @@ export async function updateBeatCore(input: {
 // Édition d'un insert (Task 12, complément de revue)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Round de correction 1 (Task 12, I4) : restreint à la SEULE `url`, comme verrouillé par
+// l'utilisateur (spec §6 : « URL éditable »). Les autres colonnes de beat_inserts (tcIn, tcOut,
+// displayDurationSec, credit, rightsNote) n'ont ni appelant, ni UI, ni test, ni validation calibrée
+// — elles reviendront avec le lot qui les rend éditables plutôt que d'être exposées ici sans
+// couverture.
 export async function updateBeatInsertCore(input: {
   insertId: string;
-  url?: string | null;
-  tcIn?: string | null;
-  tcOut?: string | null;
-  displayDurationSec?: number | null;
-  credit?: string | null;
-  rightsNote?: string | null;
+  url: string | null;
 }): Promise<void> {
   await db.transaction(async (tx) => {
     // Ordre de verrouillage (round de correction 4, inventaire task-9-report.md) : `script_variants`
@@ -204,7 +212,7 @@ export async function updateBeatInsertCore(input: {
     // Une URL corrigée à la main n'a jamais été vérifiée : `linkStatus`/`linkCheckedAt` (posés par
     // un futur vérificateur de liens, hors périmètre ici) mentiraient sur l'URL qui vient de
     // changer si on les laissait tels quels.
-    const urlChanged = input.url !== undefined && input.url !== current.url;
+    const urlChanged = input.url !== current.url;
 
     // script_beats AVANT beat_inserts (ordre ci-dessus) : cette édition d'insert est aussi une
     // édition humaine du beat parent, au même titre qu'updateBeatCore — computeMerge doit savoir
@@ -215,14 +223,11 @@ export async function updateBeatInsertCore(input: {
     }).where(eq(scriptBeats.id, locatedInsert.beatId));
 
     // `r2Key` n'est jamais touché ici : c'est la clé de l'asset rapatrié par le SP2 (upload/miroir
-    // R2), sans rapport avec l'URL source que l'humain corrige à la main.
+    // R2), sans rapport avec l'URL source que l'humain corrige à la main. Seule `url` est écrite
+    // (round de correction 1, I4) — tcIn/tcOut/displayDurationSec/credit/rightsNote restent hors
+    // périmètre tant qu'aucune UI ne les édite.
     await tx.update(beatInserts).set({
-      url: input.url !== undefined ? input.url : current.url,
-      tcIn: input.tcIn !== undefined ? input.tcIn : current.tcIn,
-      tcOut: input.tcOut !== undefined ? input.tcOut : current.tcOut,
-      displayDurationSec: input.displayDurationSec !== undefined ? input.displayDurationSec : current.displayDurationSec,
-      credit: input.credit !== undefined ? input.credit : current.credit,
-      rightsNote: input.rightsNote !== undefined ? input.rightsNote : current.rightsNote,
+      url: input.url,
       linkStatus: urlChanged ? "non_verifie" : current.linkStatus,
       linkCheckedAt: urlChanged ? null : current.linkCheckedAt,
       updatedAt: new Date(),

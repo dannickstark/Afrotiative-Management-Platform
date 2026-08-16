@@ -142,6 +142,24 @@ export function BeatInspector({
     }
   }, [beat?.id]);
 
+  // Round de correction 1 (Task 12, C1) — CORRUPTION DE CONTENU : `RichEditor` ne lit `value` qu'à
+  // la création de l'éditeur Tiptap (`content: value` dans useEditor, jamais resynchronisé) et ne
+  // se démonte que si `SheetContent` n'est pas rendu. Avant ce correctif, `form` n'était JAMAIS remis
+  // à `null` à la fermeture : ouvrir le beat A, fermer, ouvrir le beat B faisait passer un premier
+  // rendu avec `beat` = B mais `form` encore celui de A — la garde `!beat || !form` laissait passer
+  // (form restait non-null), et RichEditor se remontait avec le TEXTE DE A sous l'EN-TÊTE DE B. La
+  // moindre frappe déclenchait alors un `handleSave` qui écrivait le texte de A dans le beat B.
+  // Ce reset (sur `open`, pas sur `beat?.id` — l'effet ci-dessus reste la voie normale de
+  // resynchronisation) garantit qu'à la fermeture, plus aucun état de beat ne survit ; combiné au
+  // `key={beat.id}` posé sur SheetContent plus bas (qui force un remontage complet, RichEditor
+  // compris, à chaque CHANGEMENT direct de beat), les deux mécanismes demandés en revue.
+  useEffect(() => {
+    if (!open) {
+      setForm(null);
+      setInserts([]);
+    }
+  }, [open]);
+
   if (!beat || !form) {
     return <Sheet open={open} onOpenChange={onOpenChange} />;
   }
@@ -159,15 +177,19 @@ export function BeatInspector({
 
   function handleSave() {
     if (!beat || !form) return;
+    const directionNote = form.directionNote.trim() === "" ? null : form.directionNote;
+    const screenText = form.screenText.trim() === "" ? null : form.screenText;
+    const transitionIn = form.transitionIn.trim() === "" ? null : form.transitionIn;
+    const transitionOut = form.transitionOut.trim() === "" ? null : form.transitionOut;
     const durationOverrideSec = form.durationOverride.trim() === "" ? null : Number(form.durationOverride);
     startTransition(async () => {
       const res = await updateBeat({
         beatId: beat.id,
         spokenText: form.spokenText,
-        directionNote: form.directionNote.trim() === "" ? null : form.directionNote,
-        screenText: form.screenText.trim() === "" ? null : form.screenText,
-        transitionIn: form.transitionIn.trim() === "" ? null : form.transitionIn,
-        transitionOut: form.transitionOut.trim() === "" ? null : form.transitionOut,
+        directionNote,
+        screenText,
+        transitionIn,
+        transitionOut,
         durationOverrideSec,
         sources: form.sources,
       });
@@ -176,14 +198,23 @@ export function BeatInspector({
         return;
       }
       toast.success(`Beat « ${beat.externalId} » enregistré.`);
+      // Round de correction 1 (Task 12, I3) : `res.spokenText` est la valeur RÉELLEMENT stockée —
+      // passée par sanitizeArticleHtml côté serveur (lib/video/persist.ts#updateBeatCore) — pas le
+      // HTML brut de Tiptap (`form.spokenText`). BeatList réinjecte cette valeur en
+      // `dangerouslySetInnerHTML` : lui faire porter du HTML jamais assaini, même temporairement
+      // avant le prochain chargement serveur, casse l'invariant « spokenText est toujours assaini »
+      // (contrainte du brief). Même motif pour `estimatedDurationSec` : la valeur stockée, calculée
+      // avec la cadence des réglages, pas recalculée côté client (voir BeatList#storedSeconds).
+      setForm((prev) => (prev ? { ...prev, spokenText: res.spokenText } : prev));
       onSaved({
         id: beat.id,
-        spokenText: form.spokenText,
-        directionNote: form.directionNote.trim() === "" ? null : form.directionNote,
-        screenText: form.screenText.trim() === "" ? null : form.screenText,
-        transitionIn: form.transitionIn.trim() === "" ? null : form.transitionIn,
-        transitionOut: form.transitionOut.trim() === "" ? null : form.transitionOut,
-        durationOverrideSec,
+        spokenText: res.spokenText,
+        directionNote,
+        screenText,
+        transitionIn,
+        transitionOut,
+        durationOverrideSec: res.durationOverrideSec,
+        estimatedDurationSec: res.estimatedDurationSec,
         sources: form.sources,
       });
     });
@@ -203,7 +234,12 @@ export function BeatInspector({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="sm:max-w-lg data-[side=right]:sm:max-w-lg">
+      {/* `key={beat.id}` (round de correction 1, C1) : force un remontage COMPLET — RichEditor
+          compris — à chaque changement direct de beat, en défense en profondeur du reset-on-close
+          ci-dessus. RichEditor n'écoute `value` qu'à la création de son éditeur Tiptap ; sans ce
+          remontage, un changement de beat qui ne passerait pas par un cycle "fermé" intermédiaire
+          laisserait le texte de l'ancien beat affiché sous l'en-tête du nouveau. */}
+      <SheetContent key={beat.id} side="right" className="sm:max-w-lg data-[side=right]:sm:max-w-lg">
         <SheetHeader>
           <SheetTitle>Beat {beat.externalId}</SheetTitle>
           <SheetDescription>

@@ -337,27 +337,22 @@ export const updateBeatSchema = z.object({
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 
-// `HH:MM:SS` ou `HH:MM:SS.mmm` — le format des timecodes portés par beat_inserts.tc_in/tc_out
-// (db/schema.ts, colonnes texte libres) et par insertPayloadSchema (lib/video/schema.ts) côté
-// import.
-const timecodeSchema = z.string().regex(/^\d{2}:\d{2}:\d{2}(\.\d{1,3})?$/, "Timecode invalide (HH:MM:SS ou HH:MM:SS.mmm).");
-
-// Complément Task 12 (revue) — édition d'une URL d'insert depuis l'inspecteur de beat : les URLs
-// d'images/extraits viennent d'un modèle de langage, fréquemment mortes ou fausses, et l'humain
-// doit pouvoir les corriger à la main. Comme les quatre autres points d'entrée gardés de
+// Complément Task 12 (revue), restreint au round de correction 1 (I4) — édition d'une URL d'insert
+// depuis l'inspecteur de beat : les URLs d'images/extraits viennent d'un modèle de langage,
+// fréquemment mortes ou fausses, et l'humain doit pouvoir les corriger à la main. C'était la SEULE
+// décision verrouillée par l'utilisateur (spec §6) ; tcIn/tcOut/displayDurationSec/credit/rightsNote
+// ont été retirés — aucun appelant, aucune UI, aucun test, une validation jamais calibrée. Ils
+// reviendront avec le lot qui les rend éditables. Comme les quatre autres points d'entrée gardés de
 // lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui `url` ne serait contrainte
 // que par le typage TypeScript, effacé au runtime (même motif que reorderBeatsSchema ci-dessus).
 export const updateInsertSchema = z.object({
   insertId: z.string().uuid(),
   // `.url()` seul accepterait n'importe quel schéma (ftp:, javascript:…) — la contrainte http/https
-  // vient du refine, pas de `.url()`.
+  // vient du refine, pas de `.url()`. `null` reste permis (retirer l'URL est un choix humain
+  // légitime) ; seule la clé elle-même n'est pas optionnelle, contrairement à updateBeatSchema où
+  // chaque champ est un no-op s'il est omis — ici c'est le SEUL champ, l'omettre n'aurait aucun sens.
   url: z.string().url("URL invalide.").refine((u) => /^https?:\/\//i.test(u), "URL invalide (http/https uniquement).")
-    .max(2048).nullable().optional(),
-  tcIn: timecodeSchema.nullable().optional(),
-  tcOut: timecodeSchema.nullable().optional(),
-  displayDurationSec: z.number().int().min(0).nullable().optional(),
-  credit: z.string().max(300).nullable().optional(),
-  rightsNote: z.string().max(1000).nullable().optional(),
+    .max(2048).nullable(),
 });
 export type UpdateInsertInput = z.infer<typeof updateInsertSchema>;
 

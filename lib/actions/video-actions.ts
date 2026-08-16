@@ -38,21 +38,31 @@ export async function createVideoProject(
   return { ok: true, id };
 }
 
+// Round de correction 1 (Task 12, I3) : le succès renvoie l'état RÉELLEMENT stocké
+// (`spokenText` assaini par sanitizeArticleHtml, `estimatedDurationSec` recalculé avec la cadence
+// des réglages) — updateBeatCore le renvoie désormais plutôt que `void`. L'appelant client
+// (components/video/beat-inspector.tsx) doit s'en servir pour sa mise à jour optimiste plutôt que
+// de réinjecter son propre HTML Tiptap non assaini ou une durée recalculée côté client.
 export async function updateBeat(
   input: unknown,
-): Promise<{ ok: true } | { ok: false; message: string }> {
+): Promise<
+  | { ok: true; spokenText: string; estimatedDurationSec: number; durationOverrideSec: number | null }
+  | { ok: false; message: string }
+> {
   await guard();
 
   const parsed = updateBeatSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
-  await updateBeatCore(parsed.data);
-  return { ok: true };
+  const beat = await updateBeatCore(parsed.data);
+  revalidatePath("/video");
+  return { ok: true, ...beat };
 }
 
 // Complément Task 12 (revue) — l'humain corrige à la main l'URL d'un insert (spec §6 : « liste des
 // inserts avec URL éditable »). Même garde que le reste de ce fichier ; le cœur DB vit dans
-// updateBeatInsertCore (lib/video/persist.ts), pas ici.
+// updateBeatInsertCore (lib/video/persist.ts), pas ici. Restreint à `url` (round de correction 1,
+// I4) : voir le commentaire de updateInsertSchema (lib/validation.ts).
 export async function updateInsert(
   input: unknown,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -62,6 +72,7 @@ export async function updateInsert(
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
   await updateBeatInsertCore(parsed.data);
+  revalidatePath("/video");
   return { ok: true };
 }
 

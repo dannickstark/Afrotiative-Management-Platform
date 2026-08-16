@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shell/empty-state";
 import { DurationMeter } from "./duration-meter";
 import { BeatInspector } from "./beat-inspector";
-import { beatSeconds, isBreathRisk } from "@/lib/video/duration";
+import { isBreathRisk } from "@/lib/video/duration";
 import { reorderBeats } from "@/lib/actions/video-actions";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +43,17 @@ export type BeatView = {
   inserts: InsertView[];
   sources?: string[];
 };
+
+// Round de correction 1 (Task 12, I2) : durée AFFICHÉE = durée STOCKÉE (`durationOverrideSec ??
+// estimatedDurationSec`), jamais recalculée côté client via `beatSeconds()`. La valeur stockée a
+// été calculée côté serveur avec la cadence des RÉGLAGES (lib/queries/video-settings.ts,
+// configurable), alors que `beatSeconds()` appelée sans second argument retombe sur
+// `DEFAULT_WPM` — dès que le réglage diffère de 155 mots/min, la colonne « Durée » et le cumul
+// contredisaient silencieusement la valeur que la vue montage et les exports du SP2 utiliseront.
+// Même `??` que lib/video/duration.ts#beatSeconds — une durée forcée à 0 reste un choix légitime.
+function storedSeconds(beat: Pick<BeatView, "durationOverrideSec" | "estimatedDurationSec">): number {
+  return beat.durationOverrideSec ?? beat.estimatedDurationSec;
+}
 
 // Libellés français des `beat_kind` (db/schema.ts) — même motif que PLATFORM_LABEL
 // (components/video/project-list.tsx) : une table de correspondance plutôt qu'un `replace` cosmétique,
@@ -81,7 +92,7 @@ export function BeatList({
     setItems(beats);
   }, [beats]);
 
-  const totalSec = items.reduce((sum, b) => sum + beatSeconds(b), 0);
+  const totalSec = items.reduce((sum, b) => sum + storedSeconds(b), 0);
   const selected = items.find((b) => b.id === selectedId) ?? null;
 
   function handleDrop(targetIndex: number) {
@@ -141,6 +152,13 @@ export function BeatList({
                 key={beat.id}
                 data-beat-id={beat.id}
                 className="cursor-pointer"
+                // Round de correction 1 (Task 12, Minor) : la ligne n'était ouvrable qu'à la
+                // souris (`onClick` seul, sans rôle ni piste de tabulation) — l'inspecteur était
+                // inatteignable au clavier. `role="button"` + `tabIndex` + Entrée/Espace en font
+                // un contrôle standard, sans changer le marquage `<tr>` sémantique du tableau.
+                role="button"
+                tabIndex={0}
+                aria-label={`Ouvrir le beat ${beat.externalId}`}
                 draggable
                 // `setData` — pas seulement l'état local `dragId` — parce que Firefox exige un
                 // appel réel à dataTransfer.setData pour amorcer une opération de glisser (même
@@ -152,6 +170,12 @@ export function BeatList({
                   handleDrop(index);
                 }}
                 onClick={() => setSelectedId(beat.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedId(beat.id);
+                  }
+                }}
               >
                 <TableCell className="text-muted-foreground">{index + 1}</TableCell>
                 <TableCell>
@@ -180,7 +204,7 @@ export function BeatList({
                   )}
                 </TableCell>
                 <TableCell className={cn("text-right tabular-nums", breathRisk && "text-[var(--status-pending)]")}>
-                  {beatSeconds(beat)} s
+                  {storedSeconds(beat)} s
                 </TableCell>
               </TableRow>
             );
