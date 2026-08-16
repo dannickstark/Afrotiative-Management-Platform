@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/validation";
 import { aiFailureMessage } from "@/lib/ai/failure-message";
 import { planRegeneration } from "@/lib/pipeline/regen-plan";
+import type { RegenStage } from "@/lib/pipeline/regen-live";
 
 // Cœur de la régénération, par article — extrait de regenerate() (lib/actions/article-actions.ts).
 // Volontairement PLAIN (pas de "use server") : ni requireUser/requirePermission ni revalidatePath
@@ -20,8 +21,8 @@ export async function regenerateArticle(
   articleId: string,
   fields: RegenerateFieldsInput,
   actorId: string | null,
-  opts: { timeoutMs?: number } = {},
-): Promise<{ ok: boolean; message: string; title: string }> {
+  opts: { timeoutMs?: number; imageMode?: "auto" | "manual"; onStage?: (stage: RegenStage) => void | Promise<void> } = {},
+): Promise<{ ok: boolean; message: string; title: string; awaitingImage?: boolean }> {
   // Revalidation défensive : l'appelant valide déjà, mais on ne fait jamais confiance à une entrée
   // non revalidée avant d'écrire.
   const parsed = regenerateFieldsSchema.safeParse(fields);
@@ -48,6 +49,7 @@ export async function regenerateArticle(
   // bornée par le même délai par opération que le chemin d'ingestion (lib/pipeline/run.ts:448) —
   // une source pendue ne peut plus bloquer la régénération indéfiniment. Un échec (ou un
   // dépassement) est best-effort : la source est ignorée, jamais fatale, tant qu'il en reste une.
+  await opts.onStage?.("extracting");
   const results = await Promise.all(sources.map(async (s) => {
     try {
       const r = await withTimeout(extract(s.url), timeoutMs, "Extraction du contenu");
@@ -74,11 +76,13 @@ export async function regenerateArticle(
   const plan = planRegeneration({ fields: parsed.data, candidateCount: candidateImages.length });
   if (plan.abort !== null) return { ok: false, message: plan.abort, title: article.title };
 
+  await opts.onStage?.("generating");
   const { generateArticle } = await import("@/lib/ai/generate-article");
   const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
   const { draft, via, failure, failureDetail } = await generateArticle({ sources: extracted, candidateImages, categories: categoryNames });
   if (via === "mock") return { ok: false, message: aiFailureMessage(failure ?? "unconfigured", "régénération", failureDetail), title: article.title };
 
+  await opts.onStage?.("writing");
   const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
   await applyRegeneration({
     articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
