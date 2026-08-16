@@ -2,6 +2,7 @@ import { db, articles } from "@/db";
 import { eq } from "drizzle-orm";
 import { regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/validation";
 import { aiFailureMessage } from "@/lib/ai/failure-message";
+import { planRegeneration } from "@/lib/pipeline/regen-plan";
 
 // Cœur de la régénération, par article — extrait de regenerate() (lib/actions/article-actions.ts).
 // Volontairement PLAIN (pas de "use server") : ni requireUser/requirePermission ni revalidatePath
@@ -67,6 +68,12 @@ export async function regenerateArticle(
   }
   if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré).", title: article.title };
 
+  // Le plan tranche AVANT de payer un appel LLM : une régénération « image seule » sans le moindre
+  // candidat n'a plus d'objet, et une régénération mixte doit épargner l'image sans renoncer aux
+  // autres champs. Voir lib/pipeline/regen-plan.ts.
+  const plan = planRegeneration({ fields: parsed.data, candidateCount: candidateImages.length });
+  if (plan.abort !== null) return { ok: false, message: plan.abort, title: article.title };
+
   const { generateArticle } = await import("@/lib/ai/generate-article");
   const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
   const { draft, via, failure, failureDetail } = await generateArticle({ sources: extracted, candidateImages, categories: categoryNames });
@@ -75,8 +82,11 @@ export async function regenerateArticle(
   const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
   await applyRegeneration({
     articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
-    draft, fields: parsed.data, sourceCount: extracted.length, categoryNames, actorId,
+    draft, fields: plan.effectiveFields, sourceCount: extracted.length, categoryNames, actorId,
   });
 
-  return { ok: true, message: "Article régénéré — déposé en revue.", title: article.title };
+  const message = plan.warning !== null
+    ? `Article régénéré — déposé en revue. ${plan.warning}`
+    : "Article régénéré — déposé en revue.";
+  return { ok: true, message, title: article.title };
 }

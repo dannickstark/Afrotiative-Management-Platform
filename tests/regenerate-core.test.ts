@@ -203,3 +203,37 @@ describe("regenerateArticle — extraction", () => {
     expect(seenSources).toBe(1);
   }, 15000);
 });
+
+describe("regenerateArticle — image sans candidat", () => {
+  it("image SEULE et zéro candidat : échoue sans appeler l'IA et sans toucher l'article", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg", imageCredit: "Ancien" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
+    let called = false;
+    generateArticleImpl = async () => { called = true; return { draft: draftFixture, via: "openrouter" }; };
+
+    const r = await regenerateArticle(articleId, { title: false, body: false, excerpt: false, category: false, tags: false, image: true }, null, { timeoutMs: 5000 });
+
+    expect(r.ok).toBe(false);
+    expect(r.message).toBe("Aucune image candidate trouvée — image inchangée.");
+    expect(called).toBe(false);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg");
+    expect(row.imageCredit).toBe("Ancien");
+  });
+
+  it("image + titre et zéro candidat : applique le titre, épargne l'image, avertit", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
+    generateArticleImpl = async () => ({ draft: { ...draftFixture, title: "Titre tout neuf" }, via: "openrouter" });
+
+    const r = await regenerateArticle(articleId, { title: true, body: false, excerpt: false, category: false, tags: false, image: true }, null, { timeoutMs: 5000 });
+
+    expect(r.ok).toBe(true);
+    expect(r.message).toContain("Aucune image candidate trouvée");
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.title).toBe("Titre tout neuf");
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg");
+  });
+});
