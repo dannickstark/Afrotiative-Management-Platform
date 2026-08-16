@@ -29,13 +29,18 @@
 ### Task 1: Schéma — jetons, interrupteur, colonnes de journal
 
 **Files:**
-- Modify: `db/schema.ts` (ajouts en fin de fichier + deux colonnes sur des tables existantes)
+- Modify: `db/schema.ts` (ajouts en fin de fichier + trois colonnes sur des tables existantes), `lib/queries/video-settings.ts`, `db/seed.ts`
 - Create: `db/migrations/00XX_*.sql` (généré)
 - Test: `tests/mcp-schema.test.ts`
 
 **Interfaces:**
 - Consumes: `videoSettings`, `scriptJournal`, `user` (tables existantes)
-- Produces: table `apiTokens` ; colonne `mcpEnabled` sur `videoSettings` ; colonnes `toolArgs` et `reviewedAt` sur `scriptJournal`
+- Produces: table `apiTokens` ; colonne `mcpEnabled` sur `videoSettings` ; colonnes `toolArgs` et `reviewedAt` sur `scriptJournal` ; **`getVideoSettings()` renvoie désormais `{ briefTemplate, wordsPerMinute, mcpEnabled }`**
+
+**Point à ne pas manquer** : la Task 4 lit `settings.mcpEnabled` via `getVideoSettings()`. Cette
+fonction ne renvoie aujourd'hui que `briefTemplate` et `wordsPerMinute` — il faut **étendre son type
+de retour et sa projection**, sans quoi l'interrupteur ne serait jamais lu et ne fermerait rien.
+Étendre aussi le semis de `db/seed.ts`.
 
 - [ ] **Step 1: Écrire le test qui échoue**
 
@@ -68,6 +73,18 @@ describe("schéma MCP", () => {
     expect(cols).toContain("toolArgs");
     expect(cols).toContain("reviewedAt");
   });
+});
+```
+
+Et, dans `tests/video-settings.test.ts` (fichier existant), ajouter :
+
+```ts
+import { VIDEO_SETTINGS_KEYS } from "@/lib/queries/video-settings";
+
+it("les réglages vidéo exposent l'interrupteur MCP", () => {
+  // Le point : sans ce champ dans la projection, l'interrupteur ne serait jamais lu et ne
+  // fermerait rien — la garde de la Task 4 serait un décor.
+  expect(VIDEO_SETTINGS_KEYS).toContain("mcpEnabled");
 });
 ```
 
@@ -712,6 +729,23 @@ git commit -m "feat(mcp): authentification par jeton porteur et garde de l'inter
 **Interfaces:**
 - Consumes: `TOOL_REGISTRY` (Task 3), `authenticateMcp` (Task 4), et le cœur du SP1 : `createVideoProjectCore`, `prepareImportCore`, `applyImportCore`, `updateBeatCore`, `reorderBeatsCore`, `updateBeatInsertCore` (`lib/video/persist.ts`) ; `buildBrief` (`lib/video/brief.ts`) ; `listVideoProjects`, `getVariantBeats` (`lib/queries/video.ts`)
 - Produces: `registerTools(server: McpServer, actor: McpActor): void` (`lib/mcp/tools.ts`)
+
+**Valeurs de retour imposées** (l'agent construit sa suite d'appels dessus — une forme approximative
+le forcerait à deviner) :
+
+```ts
+// submit_script
+| { ok: true; journalId: string; variantId: string; diff: Diff }
+| { ok: false; issues: Issue[] }        // path, message, received — tels quels
+// apply_script
+| { ok: true; applied: number; order: string[] }
+| { ok: false; message: string }        // refus métier du cœur, message français
+// create_video_project
+{ projectId: string; variantId: string; brief: string }
+```
+
+`submit_script` **résout** le `variantId` (celui fourni, ou celui de la variante correspondant à la
+plateforme du payload) et le renvoie : sans lui, l'agent ne pourrait pas enchaîner sur `apply_script`.
 
 Comportement imposé :
 - Chaque outil d'écriture appelle `requirePermission(actor.role, "video", "manage")` **avant** d'agir.
