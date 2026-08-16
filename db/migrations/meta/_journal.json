@@ -155,6 +155,13 @@
       "when": 1786886503986,
       "tag": "0021_common_jean_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1786902542430,
+      "tag": "0022_medical_maximus",
+      "breakpoints": true
     }
   ]
 }

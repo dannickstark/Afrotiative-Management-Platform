@@ -139,7 +139,11 @@ async function main() {
   // que si la table est vide, pour ne jamais écraser un modèle déjà personnalisé par une équipe.
   const existingVideoSettings = await db.select({ id: videoSettings.id }).from(videoSettings).limit(1);
   if (!existingVideoSettings[0]) {
-    await db.insert(videoSettings).values({ briefTemplate: DEFAULT_BRIEF_TEMPLATE, wordsPerMinute: DEFAULT_WPM });
+    await db.insert(videoSettings).values({
+      briefTemplate: DEFAULT_BRIEF_TEMPLATE,
+      wordsPerMinute: DEFAULT_WPM,
+      mcpEnabled: true,
+    });
   }
 
   console.log(`Seed OK: ${inserted.length} articles, ${seedUsers.length} users.`);
