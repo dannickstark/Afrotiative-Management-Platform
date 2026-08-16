@@ -37,7 +37,7 @@ export async function authenticateMcp(authorizationHeader: string | null): Promi
   if (!tokenMatches(raw, row.tokenHash)) return { ok: false, status: 401, message: REJECT };
 
   const [owner] = await db.select().from(userTable).where(eq(userTable.id, row.userId)).limit(1);
-  if (!owner || !isSessionUsable(owner as { banned: boolean })) {
+  if (!owner || !isSessionUsable(owner)) {
     return { ok: false, status: 401, message: REJECT };
   }
 
@@ -45,6 +45,6 @@ export async function authenticateMcp(authorizationHeader: string | null): Promi
 
   return {
     ok: true,
-    actor: { userId: row.userId, role: (owner as { role: Role }).role, tokenId: row.id },
+    actor: { userId: row.userId, role: owner.role, tokenId: row.id },
   };
 }
