@@ -580,3 +580,158 @@ export const renders = pgTable("renders", {
   uniqueIndex("renders_input_hash_unique").on(t.inputHash),
   index("renders_subject_idx").on(t.subjectType, t.subjectId),
 ]);
+
+// ---- Module Vidéo (SP1 : contrat, brief & import) ----
+export const videoProjectStatus = pgEnum("video_project_status", [
+  "brouillon", "en_ecriture", "pret_a_tourner", "tourne", "en_montage", "publie", "archive",
+]);
+export const scriptPlatform = pgEnum("script_platform", [
+  "youtube_long", "youtube_short", "tiktok", "reel", "interview",
+]);
+export const beatKind = pgEnum("beat_kind", [
+  "narration", "question", "reponse", "insert", "broll",
+  "transition", "texte_ecran", "son", "note",
+]);
+export const takeStatus = pgEnum("take_status", ["bonne", "mauvaise", "a_revoir"]);
+export const insertKind = pgEnum("insert_kind", ["image", "video", "extrait", "graphique", "fichier"]);
+// `interdit` = refusé par le garde SSRF (lib/url-guard.ts) ; `mort` = URL légitime qui ne répond
+// plus. Les deux se lisent différemment côté monteur, d'où deux valeurs et non une.
+export const linkStatus = pgEnum("link_status", ["non_verifie", "ok", "mort", "interdit"]);
+export const scriptJournalSource = pgEnum("script_journal_source", ["copier_coller", "mcp", "manuel"]);
+export const scriptJournalOutcome = pgEnum("script_journal_outcome", ["rejete", "applique", "annule"]);
+
+export const videoProjects = pgTable("video_projects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull(),
+  subject: text("subject"),
+  status: videoProjectStatus("status").notNull().default("brouillon"),
+  // Origine double (spec §décision 6) : un projet dérive d'un article approuvé OU naît autonome.
+  articleId: uuid("article_id").references(() => articles.id),
+  createdBy: text("created_by").references(() => user.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  index("video_projects_status_idx").on(t.status),
+  index("video_projects_article_idx").on(t.articleId),
+]);
+
+export const scriptVariants = pgTable("script_variants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => videoProjects.id, { onDelete: "cascade" }),
+  platform: scriptPlatform("platform").notNull(),
+  targetDurationSec: integer("target_duration_sec"),
+  aspectRatio: text("aspect_ratio").notNull().default("16:9"),
+  position: integer("position").notNull(),
+  // Ouverte au SP6 (variantes dérivées) : une variante TikTok pointe vers le YouTube long dont elle
+  // dérive. Nulle partout au SP1.
+  derivedFromId: uuid("derived_from_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("script_variants_project_position_uq").on(t.projectId, t.position),
+  index("script_variants_project_idx").on(t.projectId),
+]);
+
+// DÉCLARÉE AVANT script_beats : scriptBeats.speakerId la référence. Ouverte au SP5.
+export const interviewSpeakers = pgTable("interview_speakers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => videoProjects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  role: text("role"),
+  consentGiven: boolean("consent_given").notNull().default(false),
+  consentNote: text("consent_note"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const scriptBeats = pgTable("script_beats", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  variantId: uuid("variant_id").notNull().references(() => scriptVariants.id, { onDelete: "cascade" }),
+  // L'identifiant stable venant du JSON — LA clé de fusion. Sans lui, un ré-import ne peut que
+  // remplacer (spec §5.3).
+  externalId: text("external_id").notNull(),
+  position: integer("position").notNull(),
+  kind: beatKind("kind").notNull(),
+  spokenText: text("spoken_text").notNull().default(""),
+  directionNote: text("direction_note"),
+  screenText: text("screen_text"),
+  transitionIn: text("transition_in"),
+  transitionOut: text("transition_out"),
+  estimatedDurationSec: integer("estimated_duration_sec").notNull().default(0),
+  durationOverrideSec: integer("duration_override_sec"),
+  framing: jsonb("framing").$type<Record<string, unknown>>().notNull().default({}),
+  speakerId: uuid("speaker_id").references(() => interviewSpeakers.id),
+  answersBeatId: uuid("answers_beat_id"),
+  sources: jsonb("sources").$type<string[]>().notNull().default([]),
+  // Le fragment de payload EXACTEMENT tel qu'appliqué au dernier import : c'est la « base » de la
+  // fusion à trois voies. Sans lui, impossible de distinguer « Claude a changé ce beat » de
+  // « l'humain l'a changé », et un ré-import écrase en silence.
+  importedSnapshot: jsonb("imported_snapshot").$type<Record<string, unknown>>(),
+  locallyEditedAt: timestamp("locally_edited_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("script_beats_variant_external_uq").on(t.variantId, t.externalId),
+  // PAS d'unicité sur position : un réordonnancement écrit plusieurs lignes dans une transaction et
+  // passerait par des états transitoirement en doublon. La continuité est une invariante
+  // applicative, reconstruite par applyMerge (spec §1.4).
+  index("script_beats_variant_position_idx").on(t.variantId, t.position),
+]);
+
+export const beatInserts = pgTable("beat_inserts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  beatId: uuid("beat_id").notNull().references(() => scriptBeats.id, { onDelete: "cascade" }),
+  kind: insertKind("kind").notNull(),
+  url: text("url"),
+  r2Key: text("r2_key"),
+  tcIn: text("tc_in"),
+  tcOut: text("tc_out"),
+  displayDurationSec: integer("display_duration_sec"),
+  credit: text("credit"),
+  rightsNote: text("rights_note"),
+  linkStatus: linkStatus("link_status").notNull().default("non_verifie"),
+  linkCheckedAt: timestamp("link_checked_at"),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("beat_inserts_beat_idx").on(t.beatId)]);
+
+// Ouverte au SP4 (journal de prises).
+export const beatTakes = pgTable("beat_takes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  beatId: uuid("beat_id").notNull().references(() => scriptBeats.id, { onDelete: "cascade" }),
+  number: integer("number").notNull(),
+  status: takeStatus("status").notNull(),
+  startedAt: timestamp("started_at"),
+  note: text("note"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [uniqueIndex("beat_takes_beat_number_uq").on(t.beatId, t.number)]);
+
+// Une seule table pour TOUT ce qui vient de l'extérieur : import collé (SP1) et écriture d'agent
+// MCP (SP1 bis). C'est ce qui rend l'écriture complète des agents réversible.
+export const scriptJournal = pgTable("script_journal", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => videoProjects.id, { onDelete: "cascade" }),
+  variantId: uuid("variant_id").references(() => scriptVariants.id, { onDelete: "set null" }),
+  source: scriptJournalSource("source").notNull(),
+  toolName: text("tool_name"),
+  actorUserId: text("actor_user_id").references(() => user.id),
+  schemaVersion: text("schema_version"),
+  // Conservé BRUT, avant toute normalisation : quand un import échoue, la seule façon de
+  // diagnostiquer est de relire ce que le modèle a produit, pas ce que le parseur en a compris.
+  rawPayload: jsonb("raw_payload"),
+  errorReport: jsonb("error_report").$type<unknown[]>().notNull().default([]),
+  diff: jsonb("diff").$type<Record<string, unknown>>().notNull().default({}),
+  applied: jsonb("applied").$type<Record<string, unknown>>().notNull().default({}),
+  outcome: scriptJournalOutcome("outcome").notNull(),
+  revertedAt: timestamp("reverted_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [index("script_journal_project_idx").on(t.projectId, t.createdAt)]);
+
+export const videoSettings = pgTable("video_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  briefTemplate: text("brief_template").notNull(),
+  wordsPerMinute: integer("words_per_minute").notNull().default(155),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedBy: text("updated_by").references(() => user.id),
+});

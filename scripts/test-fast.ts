@@ -73,6 +73,7 @@ const PURE_FILES = new Set<string>([
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
   "studio-snap.test.ts", "studio-texte-panel.test.ts", "studio-token-picker.test.ts",
   "studio-tokens.test.ts", "studio-use-preview.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
+  "video-schema-db.test.ts",
   "with-token-pool.test.ts", "wp-client.test.ts", "wp-config.test.ts",
 ]);
 
