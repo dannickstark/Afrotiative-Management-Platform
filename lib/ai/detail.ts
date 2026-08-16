@@ -13,18 +13,27 @@ export const DETAIL_MAX_LENGTH = 200;
 // Rédaction défensive : un message d'erreur fournisseur (ou d'un proxy en amont) peut recopier la
 // clé qui vient d'être refusée. Ce message finit dans une chaîne affichée à l'utilisateur et dans
 // les journaux — un jeton, même partiel, ne doit JAMAIS y apparaître. On neutralise donc toute
-// sous-chaîne en forme de clé OpenRouter/OpenAI AVANT la troncature (tronquer d'abord pourrait
-// laisser passer un fragment de clé coupé en deux).
+// sous-chaîne en forme de clé (OpenRouter, OpenAI classique/projet/service-account/admin) AVANT la
+// troncature (tronquer d'abord pourrait laisser passer un fragment de clé coupé en deux).
 //
-// Le motif vise la FORME d'une vraie clé, et rien d'autre : un préfixe connu facultatif (`or-v1-`
-// pour OpenRouter, `proj-` pour les clés OpenAI de projet) suivi d'une longue suite continue de
-// caractères alphanumériques ou `_`. Le tiret est volontairement HORS de cette suite : il servait
-// auparavant de liant et transformait des textes parfaitement anodins en « sk-*** » (« unknown
-// model sk-preview-experimental not found » disparaissait en entier). Le seuil de 16 caractères
-// reste très en dessous de la longueur réelle des clés (plusieurs dizaines de caractères), donc
-// aucune vraie clé n'échappe au caviardage, tandis qu'un mot composé usuel — dont chaque segment
-// est court et séparé par des tirets — n'est jamais touché.
-const KEY_LIKE_PATTERN = /sk-(?:or-v1-|proj-)?[A-Za-z0-9_]{16,}/g;
+// Historique de ce motif, pour éviter de le re-casser dans un sens ou dans l'autre :
+//   1) une première version interdisait le tiret dans le corps de la clé → elle mangeait « unknown
+//      model sk-preview-experimental not found » en entier (le tiret servait de simple liant dans
+//      un mot composé anodin) ;
+//   2) le correctif suivant a donc EXCLU le tiret du corps reconnu comme clé — mais ça a rouvert un
+//      trou : `sk-proj-…` (clés de projet OpenAI, encodées en base64url) contient légitimement des
+//      `-`/`_` tôt dans le corps, et ces vraies clés traversaient alors non caviardées.
+//
+// Le signal qui permet de distinguer les deux SANS réintroduire le premier bug : une vraie clé
+// contient au moins un CHIFFRE quelque part dans sa longue suite continue, alors qu'un mot composé
+// anodin (« preview-experimental », etc.) n'en contient jamais. On autorise donc `-` et `_` dans le
+// corps reconnu (pour couvrir base64url), mais on n'accepte le caviardage que si ce corps contient
+// au moins un chiffre — d'où les deux lookaheads : l'un vérifie la longueur minimale (16, très en
+// dessous des dizaines de caractères d'une vraie clé), l'autre exige la présence d'un chiffre.
+// Si un jour ce motif est retouché : NE PAS ré-exclure le tiret du corps (ça recasse `sk-proj-…`),
+// et NE PAS retirer l'exigence de chiffre (ça recasse « sk-preview-experimental »).
+const KEY_LIKE_PATTERN =
+  /sk-(?:or-v1-|proj-|svcacct-|admin-)?(?=[A-Za-z0-9_-]{16,})(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{16,}/g;
 const KEY_REDACTION = "sk-***";
 
 export function truncateDetail(e: unknown): string | undefined {

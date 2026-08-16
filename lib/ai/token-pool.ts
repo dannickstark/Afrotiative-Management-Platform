@@ -64,8 +64,11 @@ export async function loadOpenRouterPoolState(cfg: PipelineConfig = getPipelineC
   return { tokens, configured: rows.length > 0 || envKey !== null };
 }
 
-// Vue historique (jetons utilisables uniquement), conservée telle quelle pour les appelants qui
-// n'ont que faire de la distinction ci-dessus — notamment lib/diffusion/caption.ts.
+// Vue historique (jetons utilisables uniquement, sans le drapeau `configured`), conservée pour ne
+// pas casser sa couverture de test dédiée (tests/openrouter-token-pool.test.ts) : c'est aujourd'hui
+// sa seule utilisatrice. Les appelants applicatifs (lib/ai/with-token-pool.ts, dont dépend à son
+// tour lib/diffusion/caption.ts via runWithOpenRouterPool) sont passés à `loadOpenRouterPoolState`,
+// qui distingue « pool vide » de « rien de configuré ».
 export async function getOpenRouterTokenPool(cfg: PipelineConfig = getPipelineConfig()): Promise<PooledToken[]> {
   return (await loadOpenRouterPoolState(cfg)).tokens;
 }

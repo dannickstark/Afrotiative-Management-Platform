@@ -1,5 +1,6 @@
 import { describe, it, expect, mock } from "bun:test";
 import type { PooledToken } from "@/lib/ai/token-pool";
+import { truncateDetail } from "@/lib/ai/detail";
 import {
   runWithOpenRouterPool,
   RATE_LIMIT_COOLDOWN_MS,
@@ -253,6 +254,64 @@ describe("runWithOpenRouterPool", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.detail).toBe("unknown model sk-preview-experimental not found");
   });
+
+  // Motif de `KEY_LIKE_PATTERN` (lib/ai/detail.ts) : couverture table-driven de toutes les formes de
+  // clé qui doivent être caviardées et de tout ce qui doit y survivre intact, dans les deux sens
+  // (`truncateDetail` teste directement le module pur, sans passer par le pool).
+  const REDACTION_CASES: Array<{ label: string; input: string; expectRedacted: boolean }> = [
+    {
+      label: "sk-or-v1- + longue suite hexadécimale (forme réelle OpenRouter)",
+      input: `error: key sk-or-v1-${"0123456789abcdef".repeat(4)} rejected`,
+      expectRedacted: true,
+    },
+    {
+      label: "sk-proj- + corps base64url contenant `-`/`_` tôt dans le corps",
+      input: "error: key sk-proj-AbC-1_23xyzLongTail1234567890 rejected",
+      expectRedacted: true,
+    },
+    {
+      label: "sk-svcacct- + longue suite alphanumérique",
+      input: "error: key sk-svcacct-AbCdEf0123456789ghij rejected",
+      expectRedacted: true,
+    },
+    {
+      label: "sk-admin- + longue suite alphanumérique",
+      input: "error: key sk-admin-AbCdEf0123456789ghij rejected",
+      expectRedacted: true,
+    },
+    {
+      label: "sk- nu + longue suite alphanumérique (forme classique OpenAI)",
+      input: "error: key sk-AbCdEf0123456789ghijklmnop rejected",
+      expectRedacted: true,
+    },
+    {
+      label: "fixture courte existante (sk-or-v1-abcdef0123456789)",
+      input: "401 Unauthorized: invalid key sk-or-v1-abcdef0123456789 rejected",
+      expectRedacted: true,
+    },
+    {
+      label: "mot composé anodin sans chiffre (sk-preview-experimental)",
+      input: "unknown model sk-preview-experimental not found",
+      expectRedacted: false,
+    },
+    {
+      label: "mot tireté anodin quelconque commençant par sk-, sans chiffre",
+      input: "sk-legacy-fallback-mode is not supported",
+      expectRedacted: false,
+    },
+  ];
+
+  for (const { label, input, expectRedacted } of REDACTION_CASES) {
+    it(`truncateDetail : ${label} → ${expectRedacted ? "caviardé" : "intact"}`, () => {
+      const out = truncateDetail(new Error(input));
+      if (expectRedacted) {
+        expect(out).toContain("sk-***");
+        expect(out).not.toBe(input);
+      } else {
+        expect(out).toBe(input);
+      }
+    });
+  }
 
   it("un objet jeté non-`Error` porteur d'un .message alimente quand même `detail`", async () => {
     // Sémantique tolérante retenue comme unique implémentation dans lib/ai/detail.ts : les SDK
