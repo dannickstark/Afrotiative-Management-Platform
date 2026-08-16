@@ -10,6 +10,7 @@ import { publishArticle } from "@/lib/wp/publish";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import type { ArticleDraft } from "@/lib/ai/schema";
 import type { MissingField } from "@/lib/pipeline/completeness";
+import { aiFailureMessage } from "@/lib/ai/failure-message";
 import { z } from "zod";
 
 export async function acquireLock(id: string) {
@@ -93,8 +94,8 @@ export async function improveWithAi(articleId: string, input?: ImproveActionInpu
   if (!article) return { ok: false, message: "Article introuvable." };
 
   const { improveArticleBody } = await import("@/lib/ai/improve-article");
-  const { bodyHtml, via } = await improveArticleBody({ title: article.title, bodyHtml: article.bodyHtml, instruction: instruction.data.instruction });
-  if (via === "mock") return { ok: false, message: "Aucun fournisseur IA configuré — amélioration impossible." };
+  const { bodyHtml, via, failure, failureDetail } = await improveArticleBody({ title: article.title, bodyHtml: article.bodyHtml, instruction: instruction.data.instruction });
+  if (via === "mock") return { ok: false, message: aiFailureMessage(failure ?? "unconfigured", "amélioration", failureDetail) };
 
   // Reuse applyRegeneration with a body-only "draft": only bodyHtml is applied (fields.body=true).
   const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
