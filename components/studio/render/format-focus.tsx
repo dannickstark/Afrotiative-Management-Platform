@@ -36,6 +36,11 @@ export interface FormatFocusProps {
   onFormatChange: (format: FormatKey) => void;
   /** Résultats connus de la planche — alimente les puces d'alerte de la bande de formats. */
   outcomes: Partial<Record<FormatKey, TileOutcome>>;
+  /** Incrémenté par « Actualiser » (render-mode.tsx) — le bouton reste dans la barre d'outils même
+   *  en inspection (render-mode.tsx ne le démonte pas selon `focused`), donc le format inspecté doit
+   *  lui aussi se relancer, exactement comme chaque tuile visible de la planche. Défaut 0 pour les
+   *  tests statiques qui ne l'exercent pas. */
+  refreshToken?: number;
   // Amorce de test UNIQUEMENT — même convention que RenderModeProps.initialDegraded.
   initialState?: PreviewState;
 }
@@ -43,6 +48,7 @@ export interface FormatFocusProps {
 export function FormatFocus({
   templateId, scene, nativeFormat, format, articleId, disabled,
   view, onViewChange, onExit, onFormatChange, outcomes, initialState,
+  refreshToken = 0,
 }: FormatFocusProps) {
   const preset = FORMAT_PRESETS[format];
   // Le relayout vers `format` est fait par le hook lui-même (`previewKeyFor`,
@@ -50,6 +56,17 @@ export function FormatFocus({
   // (revue finale, Important 2 : parité structurelle avec `export.ts`).
   const live = usePreview({ templateId, scene, format, nativeFormat, articleId, enabled: !disabled });
   const state = initialState ?? live.state;
+
+  // « Actualiser » — même mécanisme que ProofTile (proof-sheet.tsx) : relance CE format sans
+  // attendre le différé, sans redéclencher au montage ni à un simple changement de format (le
+  // format inspecté a déjà sa propre requête via `key`, `refreshToken` ne doit rien y ajouter).
+  const lastRefreshToken = useRef(refreshToken);
+  useEffect(() => {
+    if (refreshToken === lastRefreshToken.current) return;
+    lastRefreshToken.current = refreshToken;
+    live.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
 
   // ← / → / Échap. La DÉCISION vit dans lib/studio/studio-mode.ts (pure, testée sans DOM) ; ce
   // composant ne fait que traduire l'événement réel du navigateur en littéral avant de l'interroger.

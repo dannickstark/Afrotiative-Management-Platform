@@ -71,6 +71,11 @@ export function RenderMode({
     initialOutcomes ?? {},
   );
   const [exporting, setExporting] = useState<{ done: number; total: number } | null>(null);
+  // « Actualiser » (correctif de revue finale, Critique 1) : incrémenté par `refreshAll` ci-dessous,
+  // transmis à ProofSheet/FormatFocus puis à chaque tuile visible, qui appelle sa PROPRE
+  // `refresh()` (hooks/use-preview.ts) au changement — jamais au montage. C'est ce qui manquait à
+  // l'ancienne version : purger le cache seul ne fait rien tant que rien ne redemande une donnée.
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const handleTileOutcome = useCallback((key: FormatKey, outcome: TileOutcome) => {
     setOutcomes((prev) => {
@@ -99,16 +104,29 @@ export function RenderMode({
     onViewChange({ ...view, selectedId: null });
   }
 
-  // Purge les entrées CE GABARIT (jamais tout le cache — correctif de revue, chantier D Tâche 6) et
-  // laisse les tuiles visibles se relancer. `previewCache` a une portée MODULE, partagée par tous les
-  // gabarits ouverts pendant la session (lib/studio/preview-cache.ts) : un `clear()` global aurait
-  // fait payer à un utilisateur qui bascule entre plusieurs gabarits le coût d'un VRAI rendu
-  // satori/resvg/sharp pour CHAQUE tuile de CHAQUE AUTRE gabarit, alors que rien n'y avait changé.
-  // Le seul cas qu'un hachage de scène ne peut pas voir, pour CE gabarit : une image source modifiée
-  // à distance, dont l'URL n'a pas changé.
+  // Purge les entrées CE GABARIT (jamais tout le cache — correctif de revue, chantier D Tâche 6) PUIS
+  // relance les tuiles visibles — correctif de revue finale, Critique 1 : la version d'origine ne
+  // faisait que la première moitié. Ni `key` (fonction pure des props inchangées), ni `enabled`, ni
+  // le `nonce` privé de chaque instance de `usePreview` ne bougeaient : aucune tuile ne redemandait
+  // rien, elle repeignait juste sa donnée déjà en mémoire — le SEUL cas que ce bouton existe pour
+  // couvrir (une image source modifiée à distance, dont l'URL n'a pas changé) n'était donc jamais
+  // couvert. `refreshToken` porte maintenant ce second signal : chaque tuile (ou le format en
+  // inspection) observe son changement et appelle sa PROPRE `refresh()` — qui purge sa propre entrée
+  // ET contourne le différé de 800 ms, exactement comme le ferait un clic manuel ordinaire
+  // (hooks/use-preview.ts). `previewCache` a une portée MODULE, partagée par tous les gabarits
+  // ouverts pendant la session : un `clear()` global aurait fait payer à un utilisateur qui bascule
+  // entre plusieurs gabarits le coût d'un VRAI rendu satori/resvg/sharp pour CHAQUE tuile de CHAQUE
+  // AUTRE gabarit, alors que rien n'y avait changé.
+  //
+  // `setOutcomes({})` a disparu : les tuiles qui refetchent RÉELLEMENT reportent leur propre résultat
+  // via `onTileOutcome` dès que leur état change (hooks/use-preview.ts → proof-sheet.tsx), la carte
+  // `outcomes` se repeuple donc D'ELLE-MÊME, clé par clé. La vider ici l'aurait rendue provisoirement
+  // FAUSSE (silencieusement saine) plutôt que simplement en retard, et ne l'aurait jamais reconstruite
+  // si aucun changement de `ready`/`overflow`/`lowRes` ne se produisait entre-temps — exactement le
+  // bug observé (la pastille disparaissait et ne revenait jamais).
   function refreshAll() {
     previewCache.deleteByTemplate(templateId);
-    setOutcomes({});
+    setRefreshToken((n) => n + 1);
   }
 
   async function exportAll() {
@@ -200,7 +218,7 @@ export function RenderMode({
         <ProofSheet
           templateId={templateId} scene={scene} nativeFormat={format} articleId={articleId}
           disabled={disabled} onFocus={focusFormat} onTileOutcome={handleTileOutcome}
-          initialOutcomes={initialOutcomes}
+          initialOutcomes={initialOutcomes} refreshToken={refreshToken}
         />
       ) : (
         <FormatFocus
@@ -208,7 +226,7 @@ export function RenderMode({
           articleId={articleId} disabled={disabled}
           view={view} onViewChange={onViewChange}
           onExit={exitFocus} onFormatChange={focusFormat}
-          outcomes={outcomes}
+          outcomes={outcomes} refreshToken={refreshToken}
         />
       )}
     </div>

@@ -34,6 +34,10 @@ export interface ProofSheetProps {
   onFocus: (format: FormatKey) => void;
   /** Remonte le résultat de CHAQUE tuile au parent, qui en compose la pastille d'agrégation. */
   onTileOutcome: (format: FormatKey, outcome: TileOutcome) => void;
+  /** Incrémenté par « Actualiser » (render-mode.tsx) — chaque tuile relance son propre `refresh()`
+   *  au changement, sans redéclencher au montage. Défaut 0 pour les tests statiques qui ne
+   *  l'exercent pas (react-dom/server n'exécute aucun effet, cette prop y est donc inerte). */
+  refreshToken?: number;
   // Amorce de test UNIQUEMENT — même convention que RenderModeProps.initialDegraded : la vraie
   // composition ne la fournit JAMAIS. `react-dom/server` n'exécute aucun effet, donc sans elle
   // aucun test statique ne pourrait atteindre un état post-réseau.
@@ -42,12 +46,16 @@ export interface ProofSheetProps {
 
 function ProofTile({
   templateId, scene, nativeFormat, format, articleId, disabled, onFocus, onTileOutcome, initial,
+  refreshToken,
 }: {
   templateId: string; scene: Scene; nativeFormat: FormatKey; format: FormatKey;
   articleId: string | null; disabled?: boolean;
   onFocus: (f: FormatKey) => void;
   onTileOutcome: (f: FormatKey, o: TileOutcome) => void;
   initial?: TileOutcome;
+  /** Incrémenté par « Actualiser » (render-mode.tsx) — voir l'effet ci-dessous, qui appelle
+   *  `refresh()` sur chaque changement APRÈS le montage. */
+  refreshToken: number;
 }) {
   const preset = FORMAT_PRESETS[format];
   const containerRef = useRef<HTMLDivElement>(null);
@@ -72,9 +80,24 @@ function ProofTile({
   // scène déjà relayoutée : c'est ce qui garantit que la clé de cache hachée par `usePreview` et la
   // scène effectivement envoyée au rendu proviennent du MÊME appel, jamais de deux calculs qui
   // pourraient diverger (revue finale, Important 2).
-  const { state } = usePreview({
+  const { state, refresh } = usePreview({
     templateId, scene, format, nativeFormat, articleId, enabled: visible && !disabled,
   });
+
+  // « Actualiser » (render-mode.tsx#refreshAll) : purge d'abord le cache de CE gabarit (côté
+  // parent), puis relance chaque tuile VISIBLE — c'est la seconde moitié de la spec (§5) que le
+  // simple `previewCache.deleteByTemplate` + `setOutcomes({})` d'origine ne livrait pas (revue
+  // finale, Critique 1). `refresh()` réutilise le mécanisme déjà éprouvé de hooks/use-preview.ts —
+  // contourne le différé de 800 ms comme un clic manuel le ferait. Le premier rendu de la tuile n'est
+  // PAS un « refresh » : `refreshToken` démarre à 0 et ne change qu'au clic, mais un montage tardif
+  // (tuile qui vient d'entrer dans le viewport) pourrait recevoir un `refreshToken` déjà non nul —
+  // d'où le suivi de la DERNIÈRE valeur vue plutôt qu'un simple booléen « premier rendu ».
+  const lastRefreshToken = useRef(refreshToken);
+  useEffect(() => {
+    if (refreshToken === lastRefreshToken.current) return;
+    lastRefreshToken.current = refreshToken;
+    refresh();
+  }, [refreshToken, refresh]);
 
   const outcome: TileOutcome = state.status === "ready"
     ? { ready: true, overflow: state.overflow, lowRes: state.lowRes }
@@ -188,6 +211,7 @@ function ProofTile({
 
 export function ProofSheet({
   templateId, scene, nativeFormat, articleId, disabled, onFocus, onTileOutcome, initialOutcomes,
+  refreshToken = 0,
 }: ProofSheetProps) {
   return (
     <div
@@ -202,6 +226,7 @@ export function ProofSheet({
           articleId={articleId} disabled={disabled}
           onFocus={onFocus} onTileOutcome={onTileOutcome}
           initial={initialOutcomes?.[format]}
+          refreshToken={refreshToken}
         />
       ))}
     </div>
