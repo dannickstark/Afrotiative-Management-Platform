@@ -40,6 +40,9 @@ const LAST_STATUS_LABEL: Record<string, string> = {
   rate_limited: "Quota atteint",
   auth_failed: "Clé refusée",
   flaky: "Réponse faible",
+  // Le jeton a fonctionné — c'est le modèle qui n'a pas rendu de structure exploitable. Libellé
+  // distinct d'« Erreur » pour que l'exploitant ne parte pas soupçonner une clé saine.
+  no_object: "Réponse non structurée",
   error: "Erreur",
 };
 
@@ -72,6 +75,8 @@ function tokenBadgeStyle(t: { active: boolean; lastStatus: string | null; cooldo
       return "bg-[var(--status-approved)]/15 text-[var(--status-approved)] border-[var(--status-approved)]/30";
     case "rate_limited":
     case "flaky":
+    // Ambre et non rouge : rien ne cloche sur le jeton lui-même (voir LAST_STATUS_LABEL).
+    case "no_object":
       return "bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30";
     case "auth_failed":
     case "error":

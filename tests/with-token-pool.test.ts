@@ -1,4 +1,5 @@
 import { describe, it, expect, mock } from "bun:test";
+import { NoObjectGeneratedError } from "ai";
 import type { PooledToken } from "@/lib/ai/token-pool";
 import { truncateDetail } from "@/lib/ai/detail";
 import {
@@ -11,6 +12,18 @@ import {
 
 function tok(id: string, token: string): PooledToken {
   return { id, label: id, token };
+}
+
+// Erreur telle que generateObject la jette quand le modèle n'a pas rendu d'objet exploitable — seul
+// le vrai constructeur pose le marqueur reconnu par NoObjectGeneratedError.isInstance.
+function noObjectError(message: string): NoObjectGeneratedError {
+  return new NoObjectGeneratedError({
+    message,
+    response: { id: "r", timestamp: new Date(0), modelId: "openai/gpt-4o-mini" },
+    // Non lu par la rotation — fixture minimale plutôt que toute la forme LanguageModelUsage.
+    usage: {} as ConstructorParameters<typeof NoObjectGeneratedError>[0]["usage"],
+    finishReason: "stop",
+  });
 }
 
 // `configured` par défaut = « il existe au moins un jeton » : c'est le cas de tous les scénarios de
@@ -326,6 +339,69 @@ describe("runWithOpenRouterPool", () => {
 
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.detail).toBe("upstream indisponible");
+  });
+
+  // --- Échec côté MODÈLE (NoObjectGeneratedError) : ne consomme PAS le pool ---------------------
+  // Un objet non généré/non conforme signifie que la requête a abouti chez le fournisseur : la clé
+  // est bonne, c'est le modèle qui n'a pas rendu de JSON exploitable. Rejouer la MÊME requête avec
+  // une autre clé ne peut que reproduire l'échec, en brûlant les jetons suivants pour rien (et en
+  // faisant croire, côté tableau de bord OpenRouter, que tout le parc est sollicité). On accorde
+  // donc un second essai sur le MÊME jeton, puis on abandonne immédiatement le fournisseur.
+  it("2 jetons, t1 jette NoObjectGenerated deux fois → arrêt immédiat, t2 JAMAIS essayé", async () => {
+    const pool = [tok("t1", "key1"), tok("t2", "key2")];
+    const { deps, markCalls } = fakeDeps(pool);
+    const opSpy = mock(async () => {
+      throw noObjectError("No object generated: response did not match schema.");
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(opSpy).toHaveBeenCalledTimes(ATTEMPTS_PER_TOKEN); // 2 essais sur t1, rien sur t2
+    expect(opSpy).not.toHaveBeenCalledWith("key2");
+    expect(markCalls).toEqual([["t1", "no_object", undefined]]);
+    expect(r).toMatchObject({ ok: false, reason: "no_object" });
+  });
+
+  it("NoObjectGenerated au 1er essai puis succès sur le MÊME jeton → ok:true, un seul mark(ok)", async () => {
+    const pool = [tok("t1", "key1"), tok("t2", "key2")];
+    const { deps, markCalls } = fakeDeps(pool);
+    let calls = 0;
+    const opSpy = mock(async (apiKey: string) => {
+      calls += 1;
+      if (calls === 1) throw noObjectError("No object generated: could not parse the response.");
+      return `result:${apiKey}`;
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r).toEqual({ ok: true, value: "result:key1" });
+    expect(opSpy).toHaveBeenCalledTimes(2);
+    expect(markCalls).toEqual([["t1", "ok", undefined]]);
+  });
+
+  it("aucun cooldown n'est posé sur un échec no_object (le jeton reste immédiatement réutilisable)", async () => {
+    const { deps, markCalls } = fakeDeps([tok("t1", "key1")]);
+    const opSpy = mock(async () => {
+      throw noObjectError("No object generated: the model did not return a response.");
+    });
+
+    await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(markCalls).toEqual([["t1", "no_object", undefined]]);
+  });
+
+  it("un jeton en quota (429) laisse toujours la rotation continuer jusqu'au suivant", async () => {
+    // Garde-fou de non-régression : l'arrêt anticipé ne concerne QUE no_object.
+    const pool = [tok("t1", "key1"), tok("t2", "key2")];
+    const { deps } = fakeDeps(pool);
+    const opSpy = mock(async (apiKey: string) => {
+      if (apiKey === "key1") throw { statusCode: 429 };
+      return `result:${apiKey}`;
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r).toEqual({ ok: true, value: "result:key2" });
   });
 
   it("ATTEMPTS_PER_TOKEN vaut 2", () => {
