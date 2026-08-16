@@ -1,18 +1,24 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Rss, Tags, Users, Plug, SlidersHorizontal, Share2 } from "lucide-react";
+import { Rss, Tags, Users, Plug, SlidersHorizontal, Share2, Clapperboard, Bot } from "lucide-react";
 import type { Role } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { SETTINGS_CHILDREN } from "@/components/shell/nav-items";
 
+// Une entrée manquante ici n'est pas seulement une icône absente : `Icon` resolue à `undefined`
+// fait planter `<Icon />` (« Element type is invalid »), donc toute nouvelle entrée de
+// SETTINGS_CHILDREN doit gagner la sienne ici dans le MÊME changement — comme /settings/mcp
+// (Task 7) et /settings/video (Task 8) auraient dû l'être dès leur ajout.
 const SETTINGS_ICON: Record<string, typeof Rss> = {
   "/settings/feeds": Rss,
   "/settings/taxonomy": Tags,
   "/settings/team": Users,
   "/settings/integrations": Plug,
   "/settings/pipeline": SlidersHorizontal,
+  "/settings/video": Clapperboard,
   "/settings/social": Share2,
+  "/settings/mcp": Bot,
 };
 
 export function SettingsNav({ role }: { role: Role }) {
