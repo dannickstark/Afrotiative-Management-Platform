@@ -61,13 +61,13 @@ describe("previewCacheKey", () => {
       .not.toBe(previewCacheKey(TPL, fixtureScene(), "ig_portrait", null));
   });
 
-  it("les champs séparés par des caractères de contrôle ne créent pas d'ambiguïté — e.g. `articleId` contenant `|` ne peut pas se confondre avec un réassignement aux mauvais champs", () => {
+  it("les limites de champs ne peuvent pas être décalées par le contenu — même avec `templateId` contenant le séparateur", () => {
     // Si la clé était naïvement `.join("|")`, ces deux appels produiraient la même clé :
-    //   ["tpl", "a|b", "c", ...].join("|")  →  "tpl|a|b|c|..."
-    //   ["tpl", "a", "b|c", ...].join("|")  →  "tpl|a|b|c|..."
-    // Avec JSON.stringify, les limites de champs sont explicites et immuables.
-    const a = previewCacheKey(TPL, fixtureScene(), "a|b" as any, "c");
-    const b = previewCacheKey(TPL, fixtureScene(), "a", "b|c");
+    //   ["tpl", "ig_portrait", "story|x", len, hash].join("|")  →  "tpl|ig_portrait|story|x|len|hash"
+    //   ["tpl|ig_portrait", "story", "x", len, hash].join("|")  →  "tpl|ig_portrait|story|x|len|hash"
+    // Avec JSON.stringify, les limites de champs sont explicites et immuables, donc les deux clés diffèrent.
+    const a = previewCacheKey("tpl", fixtureScene(), "ig_portrait", "story|x");
+    const b = previewCacheKey("tpl|ig_portrait", fixtureScene(), "story", "x");
     expect(a).not.toBe(b);
   });
 });

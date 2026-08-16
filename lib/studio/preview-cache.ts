@@ -27,8 +27,8 @@ export type CachedPreview = {
 // au seul hachage : elle porte AUSSI la longueur de la sérialisation. Deux scènes distinctes
 // doivent alors collisionner sur le hachage ET faire exactement la même longueur d'octets pour se
 // confondre — un régime bien plus sûr, pour un coût nul. Les limites des champs sont sérialisées
-// en JSON, donc ni une collision du hachage, ni une longueur identique, ni même une assignation de
-// valeurs aux mauvais champs ne peut survenir.
+// en JSON : un faux hit exige toujours une collision du hachage ET une longueur identique, mais les
+// limites de champs ne peuvent plus être décalées par le contenu d'une valeur.
 function fnv1a(input: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
