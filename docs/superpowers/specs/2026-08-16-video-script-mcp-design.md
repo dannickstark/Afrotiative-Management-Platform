@@ -143,25 +143,94 @@ Deux colonnes s'ajoutent à `script_journal` :
 `reviewedAt` est ce qui matérialise le garde-fou 2. Sans lui, « non relue » serait une intention,
 pas un état.
 
-## 6. Interface
+## 6. Interface — Réglages → MCP (`/settings/mcp`)
 
-- **Réglages → Jetons d'API** (`/settings/tokens`) : créer (le jeton s'affiche une fois), lister
-  (nom, préfixe, dernière utilisation, propriétaire), révoquer. Un membre voit ses propres jetons ;
-  un admin les voit tous. Instructions de branchement copiables pour Claude Code et Claude Desktop.
-- **Marqueur « non relue »** sur la liste `/video` et dans l'historique du journal, effacé quand un
-  humain ouvre le projet.
-- Copie en français, comme le reste de la console.
+Une **section de réglages dédiée**, sixième entrée de `SETTINGS_CHILDREN`, et non une simple page
+de jetons. Elle répond aux quatre questions que se pose réellement quelqu'un qui branche un agent
+sur sa console : *comment je le connecte ? qu'a-t-il le droit de faire ? qu'a-t-il fait ? comment
+je l'arrête ?*
+
+Quatre panneaux, dans cet ordre — l'ordre compte : on branche, on comprend, on surveille, on coupe.
+
+### 6.1 Connexion
+
+- L'**adresse du serveur** (`https://<hôte>/api/mcp`), copiable. Dérivée de la configuration
+  d'exécution, jamais saisie à la main : une URL recopiée de travers produit une panne opaque.
+- Un **état du serveur** en une ligne : actif / désactivé, transport, version du contrat.
+- Des **extraits de configuration prêts à coller**, un par client (Claude Code, Claude Desktop,
+  agent tiers en HTTP), avec un emplacement visible pour le jeton — jamais un vrai jeton
+  pré-inséré : un extrait contenant un secret finit dans un dépôt.
+- Pour claude.ai web, une mention explicite que le connecteur exige OAuth et arrive au SP1 ter.
+  Mieux vaut le dire que laisser l'utilisateur essayer et échouer.
+
+### 6.2 Jetons d'API
+
+Créer (le jeton s'affiche **une seule fois**), lister (nom, préfixe, propriétaire, dernière
+utilisation, date de création), révoquer. Un membre voit ses propres jetons ; un admin voit tous
+ceux de l'équipe. Un jeton jamais utilisé et un jeton inutilisé depuis longtemps se distinguent
+d'un coup d'œil — c'est ainsi qu'on repère celui qu'on a oublié sur une machine.
+
+### 6.3 Ce qu'un agent peut faire
+
+La liste des outils exposés, en lecture seule, avec pour chacun une phrase en français et une
+marque **lecture** ou **écriture**. Deux raisons, aucune décorative : c'est la seule façon pour
+l'utilisateur de savoir ce qu'il autorise en distribuant un jeton, et c'est ce qui rend visible
+l'absence de `revert` — donc le fait que seul un humain revient en arrière.
+
+La liste est **dérivée du registre d'outils**, jamais réécrite à la main. Un outil ajouté sans
+apparaître ici serait un pouvoir accordé en silence.
+
+### 6.4 Activité récente
+
+Les dernières écritures d'agents : horodatage, outil, projet, propriétaire du jeton, résultat, et
+le marqueur **« non relue »**. Chaque ligne mène au projet concerné. C'est le journal `script_journal`
+du SP1 filtré sur `source: "mcp"` — aucune nouvelle table, aucune nouvelle vérité.
+
+Cet écran ne permet **pas** d'annuler : l'annulation vit dans le projet, avec son contexte. On
+surveille ici, on répare là-bas.
+
+### 6.5 L'interrupteur
+
+Un **commutateur global** qui refuse toutes les requêtes MCP, réservé à l'admin, conservé dans
+`video_settings`. Lorsqu'il est fermé, le serveur répond 503 avec un message explicite plutôt qu'un
+silence.
+
+Je l'ajoute sans qu'il ait été demandé, pour une raison précise : la seule réponse disponible
+aujourd'hui à « un agent se comporte mal, maintenant » serait de révoquer les jetons un par un —
+c'est-à-dire de couper aussi tous ceux qui vont bien, et de devoir les recréer ensuite. Un
+interrupteur est le geste qu'on veut avoir sous la main un jour où l'on n'a pas le temps de
+réfléchir. Sa fermeture est journalisée, avec qui et quand.
+
+**Variante délibérément écartée** : un mode « lecture seule » qui laisserait les agents lire mais
+pas écrire. Il double les états à tester pour un bénéfice qui n'apparaît que dans un scénario
+étroit ; l'interrupteur binaire est le geste d'urgence, et les droits RBAC couvrent déjà la
+granularité.
+
+### 6.6 Ailleurs dans l'application
+
+Le marqueur **« non relue »** apparaît aussi sur la liste `/video` et dans l'historique du journal
+d'un projet, effacé quand un humain ouvre le projet. La surveillance ne doit pas exiger d'aller la
+chercher dans les réglages.
+
+Copie en français, comme le reste de la console.
 
 ## 7. Fichiers
 
 | Fichier | Rôle |
 |---|---|
-| `app/api/mcp/route.ts` | transport Streamable HTTP, authentification, enregistrement des outils |
+| `app/api/mcp/route.ts` | transport Streamable HTTP, authentification, garde de l'interrupteur, enregistrement des outils |
 | `lib/mcp/auth.ts` | génération, hachage, vérification des jetons (pur, testable) |
-| `lib/mcp/tools.ts` | définition des outils : schéma d'entrée dérivé, délégation au cœur |
-| `lib/actions/token-actions.ts` | création et révocation, gardées |
-| `app/(app)/settings/tokens/page.tsx`, `components/settings/token-list.tsx` | écran |
-| `db/schema.ts` | `api_tokens`, plus `toolArgs` et `reviewedAt` sur `script_journal` |
+| `lib/mcp/registry.ts` | **le registre d'outils** : nom, description française, lecture/écriture, schéma d'entrée dérivé. Source unique dont dépendent le serveur ET le panneau §6.3 |
+| `lib/mcp/tools.ts` | implémentation des outils : délégation au cœur du SP1 |
+| `lib/queries/mcp.ts` | jetons visibles selon le rôle, activité récente (journal filtré `source: "mcp"`) |
+| `lib/actions/token-actions.ts` | création, révocation, bascule de l'interrupteur — toutes gardées |
+| `app/(app)/settings/mcp/page.tsx` | l'écran, quatre panneaux |
+| `components/settings/mcp/connection-panel.tsx` | adresse, état, extraits de configuration par client |
+| `components/settings/mcp/token-list.tsx` | création, liste, révocation |
+| `components/settings/mcp/tool-catalog.tsx` | catalogue dérivé du registre |
+| `components/settings/mcp/agent-activity.tsx` | activité récente + marqueurs « non relue » |
+| `components/shell/nav-items.ts` | sixième entrée de `SETTINGS_CHILDREN` |
+| `db/schema.ts` | `api_tokens` ; `toolArgs` et `reviewedAt` sur `script_journal` ; `mcpEnabled` sur `video_settings` |
 
 ## 8. Cas limites décidés
 
@@ -175,17 +244,40 @@ pas un état.
   l'`outcome`) s'appliquent sans modification.
 - **Payload dépassant les bornes du contrat** (500 beats, 10 variantes) → erreur de validation
   ordinaire, renvoyée à l'agent.
+- **Interrupteur fermé** → 503 avec un message explicite (« le serveur MCP est désactivé dans les
+  réglages »), avant même la vérification du jeton : inutile de faire travailler l'authentification
+  quand la porte est close, et l'agent reçoit une cause actionnable plutôt qu'un 401 trompeur.
+- **Interrupteur fermé pendant qu'un appel est en cours** → l'appel en vol se termine ; la fermeture
+  vaut pour les requêtes suivantes. Interrompre une transaction en cours ferait plus de dégâts que
+  le comportement qu'on cherche à arrêter.
+- **Dernier jeton d'un utilisateur révoqué** → aucun effet de bord : la révocation est douce
+  (`revokedAt`), l'historique du journal garde son sens et continue de nommer la personne.
+
+### Droits sur l'écran de réglages
+
+- **Voir `/settings/mcp`, créer et révoquer ses propres jetons** : `video:manage` — donc les trois
+  rôles, journaliste compris. C'est lui qui écrit les scripts ; lui refuser un jeton reviendrait à
+  lui refuser l'outil.
+- **Voir les jetons de toute l'équipe et actionner l'interrupteur** : `video:configure` — donc admin
+  et éditeur, la même séparation que les réglages du module au SP1.
+- Le panneau d'activité récente est visible par tous ceux qui accèdent à l'écran : la surveillance
+  n'a d'intérêt que si elle est partagée.
 
 ## 9. Tests
 
 **Purs** (`bun run test:pure`) — génération de jeton (préfixe, longueur, unicité) ; hachage et
 vérification, y compris le refus d'un jeton révoqué ; comparaison à temps constant ; dérivation des
-schémas d'entrée des outils depuis le contrat ; forme du rapport d'erreurs renvoyé à l'agent.
+schémas d'entrée des outils depuis le contrat ; forme du rapport d'erreurs renvoyé à l'agent ; le
+**catalogue affiché correspond exactement au registre** (un outil enregistré et absent du catalogue,
+ou l'inverse, doit faire échouer la suite — c'est ce qui empêche un pouvoir accordé en silence) ;
+les extraits de configuration ne contiennent **jamais** de jeton réel.
 
 **Base** — un jeton valide obtient une réponse et une seule ; un jeton révoqué est refusé ; un jeton
 de journaliste peut écrire un script mais pas atteindre les réglages ; une écriture d'agent est
 journalisée avec `source: "mcp"`, le bon `toolName` et le bon `actorUserId` ; `apply_script` sans
-sélection n'applique ni suppression ni conflit ; `reviewedAt` reste `null` jusqu'à ouverture humaine.
+sélection n'applique ni suppression ni conflit ; `reviewedAt` reste `null` jusqu'à ouverture humaine ;
+**interrupteur fermé → 503 même avec un jeton parfaitement valide**, et sa bascule est journalisée ;
+un journaliste ne voit que ses propres jetons et ne peut pas actionner l'interrupteur.
 
 ## 10. Hors périmètre
 
