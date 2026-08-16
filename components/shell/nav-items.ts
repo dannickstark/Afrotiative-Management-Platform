@@ -24,6 +24,9 @@ export const SETTINGS_CHILDREN: NavChild[] = [
   // (lib/actions/openrouter-token-actions.ts). Still excludes journalist.
   { href: "/settings/integrations", label: "Intégrations", roles: ["admin", "editor"] },
   { href: "/settings/pipeline", label: "Pipeline", roles: ["admin"] },
+  // Task 8 (module Vidéo) : le modèle de brief et la cadence de lecture — même paire de rôles que
+  // Sources RSS/Catégories & Tags/Intégrations ci-dessus (video:manage, lib/permissions.ts).
+  { href: "/settings/video", label: "Vidéo", roles: ["admin", "editor"] },
   // D1 §6: admin-only (social:manage) — the editor gets read/send from the article page's
   // Diffusion panel, not this administration surface (same split as team/integrations/pipeline
   // above, all admin-only for the analogous reason).

@@ -298,3 +298,13 @@ export function validateCategoryColor(
   }
   return { ok: true, data: input };
 }
+
+// Réglages du module vidéo (Task 8) : le modèle de brief (style maison, édité au fil du temps) et
+// la cadence de lecture (mots/minute) servant à estimer la durée parlée d'un beat.
+export const videoSettingsSchema = z.object({
+  briefTemplate: z.string().min(1, "Le modèle de brief ne peut pas être vide").max(20000),
+  // Bornes larges mais réelles : sous 60 mots/min on ne parle plus, au-dessus de 400 on n'articule
+  // plus. Hors de là, c'est une saisie erronée, pas un choix.
+  wordsPerMinute: z.number().int().min(60, "Cadence trop basse").max(400, "Cadence trop élevée"),
+});
+export type VideoSettingsInput = z.infer<typeof videoSettingsSchema>;
