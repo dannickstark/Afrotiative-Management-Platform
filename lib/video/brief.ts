@@ -58,6 +58,8 @@ Règles dures :
   de fusionner tes corrections sans écraser le travail déjà fait.
 - Ne réutilise jamais un \`id\` pour un autre beat. Un \`id\` est **unique** dans une variante.
 - Pour un insert vidéo, \`tc_out\` doit être postérieur à \`tc_in\`.
+- Toute URL (\`url\` d'un insert, entrées de \`sources\`) doit commencer par \`http://\` ou \`https://\`.
+  Aucun autre schéma n'est accepté. Énoncé ici parce que JSON-Schema ne l'exprime pas.
 - N'invente aucune clé : toute clé absente du schéma fait échouer l'import.
 
 ### Schéma JSON

@@ -6,6 +6,12 @@ import {
   createVideoProjectCore, prepareImportCore, applyImportCore, revertJournalEntryCore, updateBeatCore,
   updateBeatInsertCore,
 } from "@/lib/video/persist";
+import { listVideoProjects } from "@/lib/queries/video";
+
+// Les identifiants de TOUS les beats de l'exemple embarqué, dérivés plutôt que recopiés : l'exemple
+// a gagné un troisième beat (« b-03-cloture », sans insert) au round de correction final pour couvrir
+// l'I1, et une liste écrite en dur ici aurait silencieusement cessé de tout accepter.
+const EXAMPLE_BEAT_IDS = EXAMPLE_PAYLOAD.variantes[0].beats.map((b) => b.id);
 
 // Construit un payload à une seule variante ("youtube_long", la variante par défaut du projet de
 // test) portant exactement les beats fournis — utilitaire pour les scénarios de modification /
@@ -40,17 +46,17 @@ describe("import de bout en bout", () => {
     const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId)))[0];
     const r = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.diff.added).toHaveLength(2);
+    if (r.ok) expect(r.diff.added).toHaveLength(EXAMPLE_BEAT_IDS.length);
   });
 
   it("l'application écrit les beats et l'instantané d'import", async () => {
     const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId)))[0];
     const prepared = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
     if (!prepared.ok) throw new Error("diff attendu");
-    await applyImportCore({ journalId: prepared.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+    await applyImportCore({ journalId: prepared.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
 
     const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id));
-    expect(beats).toHaveLength(2);
+    expect(beats).toHaveLength(EXAMPLE_BEAT_IDS.length);
     expect(beats.every((b) => b.importedSnapshot !== null)).toBe(true);
     expect(beats.find((b) => b.externalId === "b-01-accroche")!.estimatedDurationSec).toBeGreaterThan(0);
   });
@@ -112,19 +118,19 @@ describe("import de bout en bout", () => {
       const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId2)))[0];
       const prepared = await prepareImportCore({ projectId: projectId2, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
       if (!prepared.ok) throw new Error("diff attendu");
-      const first = await applyImportCore({ journalId: prepared.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+      const first = await applyImportCore({ journalId: prepared.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
       expect(first.ok).toBe(true);
 
       const beatsAfterFirst = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id));
-      expect(beatsAfterFirst).toHaveLength(2);
+      expect(beatsAfterFirst).toHaveLength(EXAMPLE_BEAT_IDS.length);
 
       const freshVariant = (await db.select().from(scriptVariants).where(eq(scriptVariants.id, variant.id)))[0];
-      const second = await applyImportCore({ journalId: prepared.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: freshVariant.updatedAt });
+      const second = await applyImportCore({ journalId: prepared.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: freshVariant.updatedAt });
       expect(second.ok).toBe(false);
 
       // La double application n'a RIEN écrit de plus (pas de doublon sur script_beats_variant_external_uq).
       const beatsAfterSecond = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id));
-      expect(beatsAfterSecond).toHaveLength(2);
+      expect(beatsAfterSecond).toHaveLength(EXAMPLE_BEAT_IDS.length);
     } finally {
       await db.delete(videoProjects).where(eq(videoProjects.id, projectId2));
     }
@@ -219,7 +225,7 @@ describe("cohérence variante ⇄ journal", () => {
     const [variantB] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantBId));
     const r = await applyImportCore({
       journalId: prepared.journalId, variantId: variantBId,
-      accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variantB.updatedAt,
+      accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variantB.updatedAt,
     });
     expect(r.ok).toBe(false);
 
@@ -256,7 +262,7 @@ describe("concurrence sur applyImportCore (I4)", () => {
 
     const call = () => applyImportCore({
       journalId: prepared.journalId, variantId: variant.id,
-      accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt,
+      accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt,
     });
     const [r1, r2] = await Promise.all([call(), call()]);
 
@@ -268,7 +274,7 @@ describe("concurrence sur applyImportCore (I4)", () => {
     // pas quatre (une paire par tentative) — la preuve porte sur l'état de la base, pas seulement
     // sur les statuts de retour.
     const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id));
-    expect(beats).toHaveLength(2);
+    expect(beats).toHaveLength(EXAMPLE_BEAT_IDS.length);
   }, 20000);
 });
 
@@ -290,7 +296,7 @@ describe("ordre de verrouillage import ⇄ édition humaine (round 4)", () => {
       const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
       const seed = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
       if (!seed.ok) throw new Error("diff attendu");
-      const seeded = await applyImportCore({ journalId: seed.journalId, variantId, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+      const seeded = await applyImportCore({ journalId: seed.journalId, variantId, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
       expect(seeded.ok).toBe(true);
 
       // Second import : réécrit les DEUX beats existants — l'import et l'édition humaine se
@@ -299,8 +305,9 @@ describe("ordre de verrouillage import ⇄ édition humaine (round 4)", () => {
       beat0.texte = "Texte réécrit par le modèle, seconde passe.";
       const beat1 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[1]);
       beat1.texte = "Second beat également réécrit, seconde passe.";
+      const beat2 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[2]);
       const [fresh] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
-      const prepared = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(payloadWithBeats([beat0, beat1])), userId: null, source: "copier_coller" });
+      const prepared = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(payloadWithBeats([beat0, beat1, beat2])), userId: null, source: "copier_coller" });
       if (!prepared.ok) throw new Error("diff attendu");
 
       const [target] = await db.select().from(scriptBeats)
@@ -308,7 +315,7 @@ describe("ordre de verrouillage import ⇄ édition humaine (round 4)", () => {
 
       const [edit, apply] = await Promise.allSettled([
         updateBeatCore({ beatId: target.id, spokenText: "Édition humaine concurrente de l'import." }),
-        applyImportCore({ journalId: prepared.journalId, variantId, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: fresh.updatedAt }),
+        applyImportCore({ journalId: prepared.journalId, variantId, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: fresh.updatedAt }),
       ]);
 
       // Le point du test : AUCUNE des deux transactions ne remonte d'exception brute. Laquelle des
@@ -344,7 +351,7 @@ describe("annulation d'une entrée de journal", () => {
     const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId)))[0];
     const seedPrep = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
     if (!seedPrep.ok) throw new Error("diff attendu");
-    await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+    await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
 
     const [beforeModify] = await db.select().from(scriptBeats)
       .where(and(eq(scriptBeats.variantId, variant.id), eq(scriptBeats.externalId, "b-01-accroche")));
@@ -355,7 +362,8 @@ describe("annulation d'une entrée de journal", () => {
     const beat0 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
     beat0.texte = "Texte modifié pour le test d'annulation.";
     const beat1 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[1]);
-    const modifyPayload = payloadWithBeats([beat0, beat1]);
+    const beat2 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[2]);
+    const modifyPayload = payloadWithBeats([beat0, beat1, beat2]);
 
     const prepared = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(modifyPayload), userId: null, source: "copier_coller" });
     if (!prepared.ok) throw new Error("diff attendu");
@@ -387,7 +395,7 @@ describe("annulation d'une entrée de journal", () => {
     if (existing.length === 0) {
       const seedPrep = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
       if (!seedPrep.ok) throw new Error("diff attendu");
-      await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+      await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
     }
 
     const freshVariant = (await db.select().from(scriptVariants).where(eq(scriptVariants.id, variant.id)))[0];
@@ -396,7 +404,8 @@ describe("annulation d'une entrée de journal", () => {
     expect(beforeRemove).toBeTruthy();
 
     const beat0 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
-    const removePayload = payloadWithBeats([beat0]); // "b-02-contexte" absent → proposé en suppression
+    const beat2 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[2]);
+    const removePayload = payloadWithBeats([beat0, beat2]); // "b-02-contexte" absent → proposé en suppression
 
     const prepared = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(removePayload), userId: null, source: "copier_coller" });
     if (!prepared.ok) throw new Error("diff attendu");
@@ -427,7 +436,7 @@ describe("annulation d'une entrée de journal", () => {
       const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId2)))[0];
       const seedPrep = await prepareImportCore({ projectId: projectId2, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
       if (!seedPrep.ok) throw new Error("diff attendu");
-      await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+      await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
 
       const freshVariant = (await db.select().from(scriptVariants).where(eq(scriptVariants.id, variant.id)))[0];
       const newBeat = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
@@ -435,10 +444,11 @@ describe("annulation d'une entrée de journal", () => {
       newBeat.texte = "Nouvelle accroche en tête, insérée par cet import.";
       const beat0 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
       const beat1 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[1]);
+      const beat2 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[2]);
       // "b-00-intro" en tête → b-01-accroche et b-02-contexte glissent d'une position, SANS que leur
       // contenu ne change (donc ni `modified` ni `conflicts` pour eux, uniquement `added` pour
       // "b-00-intro").
-      const payload = payloadWithBeats([newBeat, beat0, beat1]);
+      const payload = payloadWithBeats([newBeat, beat0, beat1, beat2]);
 
       const prepared = await prepareImportCore({ projectId: projectId2, variantId: variant.id, raw: JSON.stringify(payload), userId: null, source: "copier_coller" });
       if (!prepared.ok) throw new Error("diff attendu");
@@ -449,7 +459,7 @@ describe("annulation d'une entrée de journal", () => {
       expect(applied.ok).toBe(true);
 
       const afterApply = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id)).orderBy(asc(scriptBeats.position));
-      expect(afterApply.map((b) => b.externalId)).toEqual(["b-00-intro", "b-01-accroche", "b-02-contexte"]);
+      expect(afterApply.map((b) => b.externalId)).toEqual(["b-00-intro", ...EXAMPLE_BEAT_IDS]);
 
       const reverted = await revertJournalEntryCore(prepared.journalId);
       expect(reverted.ok).toBe(true);
@@ -457,7 +467,7 @@ describe("annulation d'une entrée de journal", () => {
       const afterRevert = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id)).orderBy(asc(scriptBeats.position));
       // "b-00-intro" a été créé par cet import → retiré par l'annulation. b-01/b-02 retrouvent leurs
       // positions d'avant (0 et 1).
-      expect(afterRevert.map((b) => b.externalId)).toEqual(["b-01-accroche", "b-02-contexte"]);
+      expect(afterRevert.map((b) => b.externalId)).toEqual(EXAMPLE_BEAT_IDS);
       expect(afterRevert.find((b) => b.externalId === "b-01-accroche")!.position).toBe(0);
       expect(afterRevert.find((b) => b.externalId === "b-02-contexte")!.position).toBe(1);
     } finally {
@@ -471,13 +481,14 @@ describe("annulation d'une entrée de journal", () => {
       let variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId2)))[0];
       const seedPrep = await prepareImportCore({ projectId: projectId2, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
       if (!seedPrep.ok) throw new Error("diff attendu");
-      await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+      await applyImportCore({ journalId: seedPrep.journalId, variantId: variant.id, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt });
       variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.id, variant.id)))[0];
 
       const beat0v1 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
       beat0v1.texte = "Première modification (C1).";
       const beat1 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[1]);
-      const payload1 = payloadWithBeats([beat0v1, beat1]);
+      const beat2 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[2]);
+      const payload1 = payloadWithBeats([beat0v1, beat1, beat2]);
 
       const prepared1 = await prepareImportCore({ projectId: projectId2, variantId: variant.id, raw: JSON.stringify(payload1), userId: null, source: "copier_coller" });
       if (!prepared1.ok) throw new Error("diff attendu");
@@ -488,7 +499,7 @@ describe("annulation d'une entrée de journal", () => {
 
       const beat0v2 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
       beat0v2.texte = "Seconde modification (C2), postérieure.";
-      const payload2 = payloadWithBeats([beat0v2, beat1]);
+      const payload2 = payloadWithBeats([beat0v2, beat1, beat2]);
 
       const prepared2 = await prepareImportCore({ projectId: projectId2, variantId: variant.id, raw: JSON.stringify(payload2), userId: null, source: "copier_coller" });
       if (!prepared2.ok) throw new Error("diff attendu");
@@ -548,4 +559,119 @@ describe("édition d'un insert", () => {
     const [afterVariant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
     expect(afterVariant.updatedAt.getTime()).toBeGreaterThan(beforeVariant.updatedAt.getTime());
   });
+});
+
+// Round de correction final, I1 — LE test qui manquait et qui a laissé passer l'asymétrie de forme
+// des inserts. `ours.inserts` est reconstruit depuis les colonnes de `beat_inserts` (les sept clés,
+// toujours) ; `base.inserts` l'était depuis le jsonb `importedSnapshot`, où Zod 4 n'avait jamais
+// ajouté les clés optionnelles absentes du payload d'origine. computeMerge comparant par
+// `JSON.stringify`, `differs(ours.inserts, base.inserts)` restait vrai À JAMAIS.
+describe("aller-retour d'un payload à inserts partiels (I1)", () => {
+  let projectId: string;
+  let variantId: string;
+
+  // Un insert dont `tc_in`, `tc_out`, `credit` et `droits` sont OMIS — pas mis à `null`, omis. C'est
+  // la forme qu'un modèle produit spontanément, et c'est elle qui déclenchait le défaut.
+  const payloadAInsertsPartiels: Payload = {
+    schema_version: EXAMPLE_PAYLOAD.schema_version,
+    projet: EXAMPLE_PAYLOAD.projet,
+    variantes: [{
+      plateforme: "youtube_long", duree_cible_sec: null, ratio: null,
+      beats: [
+        {
+          id: "b-01-partiel", type: "narration", texte: "Un beat porteur d'un insert aux clés optionnelles omises.",
+          inserts: [{ type: "image", url: "https://exemple.com/photo.jpg", duree_affichage_sec: 4 }],
+        },
+        // Un beat SANS aucun insert, dans le même payload : l'autre moitié du point aveugle.
+        { id: "b-02-sans-insert", type: "narration", texte: "Un beat sans le moindre insert." },
+      ] as Payload["variantes"][number]["beats"],
+    }],
+  };
+
+  beforeAll(async () => { ({ projectId, variantId } = await newProject("Test — Babadampulu (inserts partiels I1)")); });
+  afterAll(async () => { await db.delete(videoProjects).where(eq(videoProjects.id, projectId)); });
+
+  it("ré-importer le même payload à inserts partiels donne un diff strictement vide", async () => {
+    const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+    const first = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(payloadAInsertsPartiels), userId: null, source: "copier_coller" });
+    if (!first.ok) throw new Error(`diff attendu : ${JSON.stringify(first.issues)}`);
+    const applied = await applyImportCore({
+      journalId: first.journalId, variantId,
+      accept: ["b-01-partiel", "b-02-sans-insert"], variantUpdatedAt: variant.updatedAt,
+    });
+    expect(applied.ok).toBe(true);
+
+    const second = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(payloadAInsertsPartiels), userId: null, source: "copier_coller" });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.diff.added).toHaveLength(0);
+      expect(second.diff.modified).toHaveLength(0);
+      expect(second.diff.conflicts).toHaveLength(0);
+      expect(second.diff.removed).toHaveLength(0);
+    }
+  }, 20000);
+
+  // Le dommage réel de l'I1 : `inserts` toujours dans `ourChanged`, donc tout changement d'insert
+  // venu de Claude arrivait en CONFLIT au lieu d'une modification auto-fusionnable — et ce conflit
+  // est celui que l'UI n'affichait pas (C1) et qui, coché, écrasait tout le reste. Dépend du test
+  // précédent (beats déjà importés) : bun:test exécute les `it` d'un describe dans l'ordre.
+  it("un changement d'insert venu de Claude est une modification, jamais un conflit", async () => {
+    const modifie = structuredClone(payloadAInsertsPartiels);
+    modifie.variantes[0].beats[0].inserts![0].url = "https://exemple.com/autre-photo.jpg";
+
+    const r = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(modifie), userId: null, source: "copier_coller" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.diff.conflicts).toHaveLength(0);
+      expect(r.diff.modified.map((m) => m.externalId)).toEqual(["b-01-partiel"]);
+      expect(r.diff.modified[0].fields).toEqual(["inserts"]);
+    }
+  }, 20000);
+});
+
+// Round de correction final, I2 — spec §4 : « `durationOverrideSec`, quand il est posé, l'emporte
+// PARTOUT ». La colonne `estimated_duration_sec` portait deux grandeurs différentes selon l'écrivain
+// (l'estimation pure côté import, l'override côté `updateBeatCore`), et les deux lieux de lecture
+// divergeaient : /video sommait `estimatedDurationSec` seul, la vue Écriture affichait
+// `durationOverrideSec ?? estimatedDurationSec`. Pour un beat à durée forcée puis retouché par un
+// import, les deux écrans se contredisaient.
+describe("accord des totaux de durée (I2)", () => {
+  let projectId: string;
+  let variantId: string;
+
+  beforeAll(async () => { ({ projectId, variantId } = await newProject("Test — Babadampulu (durées I2)")); });
+  afterAll(async () => { await db.delete(videoProjects).where(eq(videoProjects.id, projectId)); });
+
+  it("le total de /video s'accorde avec celui de la vue Écriture pour un beat à durée forcée", async () => {
+    const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+    const prepared = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
+    if (!prepared.ok) throw new Error("diff attendu");
+    expect((await applyImportCore({ journalId: prepared.journalId, variantId, accept: EXAMPLE_BEAT_IDS, variantUpdatedAt: variant.updatedAt })).ok).toBe(true);
+
+    // Durée FORCÉE, délibérément très éloignée de l'estimation du texte : sans le correctif, la
+    // colonne « estimated » aurait absorbé cet override et les deux totaux auraient coïncidé par
+    // accident, sans rien prouver.
+    const [cible] = await db.select().from(scriptBeats)
+      .where(and(eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, "b-01-accroche")));
+    const FORCEE = 137;
+    const maj = await updateBeatCore({ beatId: cible.id, durationOverrideSec: FORCEE });
+    expect(maj.durationOverrideSec).toBe(FORCEE);
+    // La colonne « estimated » reste fidèle à son nom : l'ESTIMATION du texte, jamais l'override.
+    expect(maj.estimatedDurationSec).not.toBe(FORCEE);
+
+    const [stocke] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, cible.id));
+    expect(stocke.estimatedDurationSec).toBe(maj.estimatedDurationSec);
+
+    // Ce qu'affiche la vue Écriture (components/video/beat-list.tsx#storedSeconds), calculé
+    // exactement comme elle.
+    const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variantId));
+    const totalEcriture = beats.reduce((s, b) => s + (b.durationOverrideSec ?? b.estimatedDurationSec), 0);
+
+    // Ce qu'affiche /video (lib/queries/video.ts#listVideoProjects).
+    const totalListe = (await listVideoProjects()).find((p) => p.id === projectId)!.estimatedSec;
+
+    expect(totalListe).toBe(totalEcriture);
+    // Et la durée forcée pèse bien pour 137 s dans ce total, pas pour l'estimation du texte.
+    expect(totalEcriture).toBe(beats.filter((b) => b.id !== cible.id).reduce((s, b) => s + b.estimatedDurationSec, 0) + FORCEE);
+  }, 20000);
 });

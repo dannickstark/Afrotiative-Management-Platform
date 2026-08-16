@@ -56,6 +56,42 @@ describe("contrat vidéo", () => {
     expect(payloadSchema.safeParse(p).success).toBe(false);
   });
 
+  // Round de correction final, I3 — spec §2.2 : « `url` : http/https uniquement ». `z.string().url()`
+  // nu laissait passer `javascript:`, `data:` et `ftp:` sur les DEUX champs d'URL du contrat, alors
+  // que le chemin d'édition manuelle (lib/validation.ts#updateInsertSchema) contraignait déjà le
+  // protocole. L'import est le chemin par lequel les URLs arrivent réellement dans le produit.
+  describe("URLs : http/https uniquement (I3)", () => {
+    const REFUSEES = ["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "ftp://exemple.com/a.jpg"];
+
+    for (const mauvaise of REFUSEES) {
+      it(`refuse « ${mauvaise} » comme url d'insert`, () => {
+        const p = valid();
+        p.variantes[0].beats[0].inserts![0].url = mauvaise;
+        expect(payloadSchema.safeParse(p).success).toBe(false);
+      });
+
+      it(`refuse « ${mauvaise} » dans sources`, () => {
+        const p = valid();
+        p.variantes[0].beats[0].sources = [mauvaise];
+        expect(payloadSchema.safeParse(p).success).toBe(false);
+      });
+    }
+
+    it("accepte http et https sur les deux champs", () => {
+      const p = valid();
+      p.variantes[0].beats[0].inserts![0].url = "http://exemple.com/a.jpg";
+      p.variantes[0].beats[0].sources = ["https://exemple.com/article"];
+      expect(payloadSchema.safeParse(p).success).toBe(true);
+    });
+  });
+
+  // Round de correction final, I1 — le point aveugle qui a rendu l'asymétrie de forme des inserts
+  // invisible : tant que tous les beats de l'exemple portaient un insert, rien ne comparait la liste
+  // vide produite par un payload à celle produite par les colonnes.
+  it("l'exemple embarqué contient un beat sans aucun insert", () => {
+    expect(EXAMPLE_PAYLOAD.variantes[0].beats.some((b) => (b.inserts ?? []).length === 0)).toBe(true);
+  });
+
   it("produit un JSON-Schema fermé, utilisable dans le brief", () => {
     const js = contractJsonSchema() as Record<string, unknown>;
     expect(js.type).toBe("object");

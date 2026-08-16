@@ -3,10 +3,10 @@ import {
 } from "@/db";
 import { and, asc, eq, gt, inArray, ne } from "drizzle-orm";
 import {
-  applyMerge, computeMerge, parseIncoming, stripEnvelope, type BeatRow, type BeatSnapshot,
-  type Diff, type Issue, type Mutations,
+  applyMerge, computeMerge, normalizeInserts, parseIncoming, stripEnvelope, type BeatRow,
+  type BeatSnapshot, type Diff, type Issue, type Mutations,
 } from "@/lib/video/import";
-import { beatSeconds } from "@/lib/video/duration";
+import { estimateSeconds } from "@/lib/video/duration";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import type { InsertPayload, VariantPayload } from "@/lib/video/schema";
@@ -26,7 +26,12 @@ type DbLike = typeof db | Tx;
 // Refus MÉTIER (validation, péremption, conflit) plutôt qu'échec technique — distingué des erreurs
 // DB réelles pour que applyImportCore/revertJournalEntryCore puissent les convertir en
 // `{ ok: false, message }` français sans avaler une vraie panne (round de correction 2, I4).
-class RefusalError extends Error {}
+// Exportée (round de correction final) : `updateBeatCore`/`updateBeatInsertCore` renvoient une
+// valeur utile plutôt qu'un `{ ok, message }`, elles LÈVENT donc leurs refus au lieu de les
+// retourner. Sans cette classe visible, leurs appelants gardés (lib/actions/video-actions.ts) ne
+// pouvaient pas distinguer « Beat introuvable » — un refus métier routinier — d'une vraie panne DB,
+// et laissaient remonter les deux en erreur serveur brute côté client.
+export class RefusalError extends Error {}
 
 // L'état d'un beat capturé AVANT une mutation — c'est l'unique matière première d'une annulation
 // fidèle. `applied` (colonne jsonb, aucune migration requise) porte ces instantanés en plus des
@@ -138,7 +143,17 @@ export async function updateBeatCore(input: {
       ? input.durationOverrideSec
       : current.durationOverrideSec;
 
-    const estimatedDurationSec = beatSeconds({ spokenText, durationOverrideSec }, wordsPerMinute);
+    // Round de correction final, I2 : la colonne `estimated_duration_sec` porte TOUJOURS
+    // l'ESTIMATION PURE, jamais l'override. L'ancienne version écrivait ici
+    // `beatSeconds({…, durationOverrideSec})`, donc l'override dans une colonne nommée « estimated »
+    // — alors que les deux chemins d'écriture d'import (applyImportCore) y écrivaient l'estimation.
+    // Une même colonne portait ainsi deux grandeurs différentes selon l'écrivain, et les lieux de
+    // lecture divergeaient à leur tour : /video sommait `estimatedDurationSec` seul quand la vue
+    // Écriture affichait `durationOverrideSec ?? estimatedDurationSec`. Le spec §4 tranche :
+    // « `durationOverrideSec`, quand il est posé, l'emporte partout » — c'est donc aux LECTURES
+    // d'appliquer le `??` (lib/queries/video.ts, components/video/beat-list.tsx), pas à l'écriture
+    // d'écraser l'estimation.
+    const estimatedDurationSec = estimateSeconds(spokenText, wordsPerMinute);
 
     await tx.update(scriptBeats).set({
       spokenText,
@@ -326,15 +341,11 @@ function normalizeSnapshot(raw: unknown): BeatSnapshot | null {
     transitionIn: s.transitionIn,
     transitionOut: s.transitionOut,
     sources: s.sources ?? [],
-    inserts: (s.inserts ?? []).map((ins) => ({
-      type: ins.type,
-      url: ins.url,
-      tc_in: ins.tc_in,
-      tc_out: ins.tc_out,
-      duree_affichage_sec: ins.duree_affichage_sec,
-      credit: ins.credit,
-      droits: ins.droits,
-    })),
+    // `normalizeInserts` (lib/video/import.ts) et non un mapping local : c'est LE producteur commun
+    // de la forme des inserts (round de correction final, I1). Les instantanés jsonb écrits avant ce
+    // correctif peuvent porter des clés optionnelles absentes — elles reprennent ici la valeur
+    // `null`, donc la même forme que celle produite depuis les colonnes et depuis le payload.
+    inserts: normalizeInserts(s.inserts),
   };
 }
 
@@ -356,11 +367,11 @@ async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
   const insertsByBeat = new Map<string, InsertPayload[]>();
   for (const ins of inserts) {
     const list = insertsByBeat.get(ins.beatId) ?? [];
-    // Mêmes clés, dans le même ordre que insertPayloadSchema (lib/video/schema.ts) : type, url,
-    // tc_in, tc_out, duree_affichage_sec, credit, droits — computeMerge compare les instantanés par
-    // JSON.stringify, donc une forme différente pour une valeur identique produirait un conflit
-    // fantôme (vérifié à nouveau au round de correction 2).
-    list.push({
+    // Mêmes clés, dans le même ordre que insertPayloadSchema (lib/video/schema.ts) — garanti par
+    // `normalizeInserts`, le producteur commun (round de correction final, I1) plutôt que par un
+    // mapping recopié ici : computeMerge compare les instantanés par JSON.stringify, donc une forme
+    // différente pour une valeur identique produit un conflit fantôme.
+    list.push(...normalizeInserts([{
       type: ins.kind,
       url: ins.url,
       tc_in: ins.tcIn,
@@ -368,7 +379,7 @@ async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
       duree_affichage_sec: ins.displayDurationSec,
       credit: ins.credit,
       droits: ins.rightsNote,
-    });
+    }]));
     insertsByBeat.set(ins.beatId, list);
   }
 
@@ -660,7 +671,7 @@ export async function applyImportCore(args: {
           directionNote: snapshot.directionNote, screenText: snapshot.screenText,
           transitionIn: snapshot.transitionIn, transitionOut: snapshot.transitionOut,
           sources: snapshot.sources,
-          estimatedDurationSec: beatSeconds({ spokenText: snapshot.spokenText, durationOverrideSec: null }, wordsPerMinute),
+          estimatedDurationSec: estimateSeconds(snapshot.spokenText, wordsPerMinute),
           // L'instantané devient la nouvelle base de fusion, et l'édition locale est remise à zéro :
           // ce beat est désormais exactement ce que le dernier import a posé.
           importedSnapshot: snapshot, locallyEditedAt: null,
@@ -675,7 +686,7 @@ export async function applyImportCore(args: {
           directionNote: snapshot.directionNote, screenText: snapshot.screenText,
           transitionIn: snapshot.transitionIn, transitionOut: snapshot.transitionOut,
           sources: snapshot.sources,
-          estimatedDurationSec: beatSeconds({ spokenText: snapshot.spokenText, durationOverrideSec: null }, wordsPerMinute),
+          estimatedDurationSec: estimateSeconds(snapshot.spokenText, wordsPerMinute),
           importedSnapshot: snapshot, locallyEditedAt: null, updatedAt: new Date(),
         }).where(and(eq(scriptBeats.variantId, args.variantId), eq(scriptBeats.externalId, patch.externalId)));
         await replaceBeatInserts(tx, patch.externalId, args.variantId, snapshot.inserts);

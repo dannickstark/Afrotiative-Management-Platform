@@ -17,11 +17,24 @@ export const RATIOS = ["16:9", "9:16", "1:1"] as const;
 export const TC_RE = /^\d{2}:\d{2}:\d{2}(\.\d{1,3})?$/;
 export const BEAT_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
+// Spec §2.2 : « `url` : http/https uniquement ». `z.string().url()` nu laisse passer
+// `javascript:alert(1)`, `data:text/html,…` et `ftp://…` — c'est exactement la raison pour laquelle
+// le chemin d'édition manuelle (lib/validation.ts#updateInsertSchema) ajoute une contrainte de
+// schéma. L'import est le chemin par lequel les URLs arrivent RÉELLEMENT dans le produit, il ne
+// pouvait pas rester le seul non protégé.
+//
+// `z.url({ protocol })` et non un `.refine()` : c'est un contrôle natif de Zod, donc
+// `z.toJSONSchema()` (contractJsonSchema, envoyé au chat) ne le fait pas disparaître différemment
+// d'un raffinement — la règle reste par ailleurs énoncée en toutes lettres dans le brief
+// (lib/video/brief.ts#contractBlock), comme toutes celles que JSON-Schema n'exprime pas.
+const HTTP_PROTOCOL = /^https?$/;
+const httpUrl = (max: number) => z.url({ protocol: HTTP_PROTOCOL }).max(max);
+
 // `.nullish()` partout sur l'optionnel : un modèle produit indifféremment `null` et l'absence de
 // clé, et refuser l'un des deux ferait échouer des payloads sémantiquement identiques.
 export const insertPayloadSchema = z.strictObject({
   type: z.enum(["image", "video", "extrait", "graphique", "fichier"]),
-  url: z.string().url().max(2048).nullish(),
+  url: httpUrl(2048).nullish(),
   tc_in: z.string().regex(TC_RE).nullish(),
   tc_out: z.string().regex(TC_RE).nullish(),
   duree_affichage_sec: z.number().int().min(1).max(600).nullish(),
@@ -37,7 +50,7 @@ export const beatPayloadSchema = z.strictObject({
   texte_ecran: z.string().max(300).nullish(),
   transition_entree: z.string().max(120).nullish(),
   transition_sortie: z.string().max(120).nullish(),
-  sources: z.array(z.string().url()).max(20).nullish(),
+  sources: z.array(httpUrl(2048)).max(20).nullish(),
   inserts: z.array(insertPayloadSchema).max(20).nullish(),
 });
 
@@ -124,6 +137,21 @@ export const EXAMPLE_PAYLOAD: Payload = {
               droits: null,
             },
           ],
+        },
+        // Un beat SANS aucun insert. Il manquait à l'exemple, et c'est ce point aveugle qui a laissé
+        // passer l'asymétrie de forme des inserts (round de correction final, I1) : tant que tous
+        // les beats de l'exemple portaient un insert, aucun test de bout en bout ne comparait la
+        // liste vide produite par le payload à celle produite par les colonnes.
+        {
+          id: "b-03-cloture",
+          type: "narration",
+          texte: "Ce qu'il faut retenir, et ce que ça coûterait de le répliquer ailleurs.",
+          note_realisation: "Retour plan serré, débit ralenti.",
+          texte_ecran: null,
+          transition_entree: null,
+          transition_sortie: null,
+          sources: [],
+          inserts: [],
         },
       ],
     },

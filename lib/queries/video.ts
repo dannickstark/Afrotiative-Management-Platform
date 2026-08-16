@@ -31,13 +31,23 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   const variantIds = variants.map((v) => v.id);
   const beats = variantIds.length > 0
     ? await db.select({
-      variantId: scriptBeats.variantId, estimatedDurationSec: scriptBeats.estimatedDurationSec,
+      variantId: scriptBeats.variantId,
+      estimatedDurationSec: scriptBeats.estimatedDurationSec,
+      durationOverrideSec: scriptBeats.durationOverrideSec,
     }).from(scriptBeats).where(inArray(scriptBeats.variantId, variantIds))
     : [];
 
   const durationByVariant = new Map<string, number>();
   for (const b of beats) {
-    durationByVariant.set(b.variantId, (durationByVariant.get(b.variantId) ?? 0) + b.estimatedDurationSec);
+    // Round de correction final, I2 : `durationOverrideSec ?? estimatedDurationSec`, la MÊME règle
+    // que la vue Écriture (components/video/beat-list.tsx#storedSeconds) et que
+    // lib/video/duration.ts#beatSeconds. Sommer `estimatedDurationSec` seul faisait afficher à
+    // /video l'estimation d'un beat à durée forcée, pendant que /video/[id] en affichait l'override
+    // — deux totaux contradictoires pour le même script. Spec §4 : « `durationOverrideSec`, quand
+    // il est posé, l'emporte partout ». `??` et non `||` : une durée forcée à 0 (un beat muet) est
+    // un choix humain légitime.
+    const seconds = b.durationOverrideSec ?? b.estimatedDurationSec;
+    durationByVariant.set(b.variantId, (durationByVariant.get(b.variantId) ?? 0) + seconds);
   }
 
   const variantsByProject = new Map<string, typeof variants>();
