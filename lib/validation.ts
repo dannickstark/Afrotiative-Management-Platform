@@ -159,6 +159,16 @@ export const startRegenJobSchema = z.object({
 });
 export type StartRegenJobInput = z.infer<typeof startRegenJobSchema>;
 
+// Choix d'image manuel. `null` = « Aucune image » : on vide la liste en attente SANS toucher à
+// l'image en place (l'invariant « ne jamais détruire une image » vaut aussi pour un choix humain —
+// vider l'image est une action distincte, disponible dans le panneau image de l'article).
+export const imagePickSchema = z.object({
+  url: z.string().url(),
+  credit: z.string().nullable(),
+  sourceUrl: z.string().url().nullable(),
+}).nullable();
+export type ImagePickInput = z.infer<typeof imagePickSchema>;
+
 export const improveInputSchema = z.object({
   instruction: z.string().max(500, "Instruction trop longue (max 500 caractères).").optional(),
 });

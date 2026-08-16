@@ -2,7 +2,7 @@
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
-import { startRegenJobSchema, type StartRegenJobInput } from "@/lib/validation";
+import { startRegenJobSchema, type StartRegenJobInput, imagePickSchema, type ImagePickInput } from "@/lib/validation";
 import type { RegenJobView } from "@/lib/pipeline/regen-live";
 
 /**
@@ -63,4 +63,16 @@ export async function cancelRegenJob(jobId: string): Promise<void> {
   await db.update(regenJobs).set({ cancelRequested: true })
     .where(and(eq(regenJobs.id, jobId), isNull(regenJobs.finishedAt)));
   revalidatePath("/queue");
+}
+
+/** Choix d'image manuel depuis le bac / l'assistant du /queue. */
+export async function pickRegeneratedImage(articleId: string, choice: ImagePickInput): Promise<{ ok: boolean; message: string }> {
+  const user = await requireUser();
+  requirePermission(user.role, "article", "regenerate");
+  const parsed = imagePickSchema.safeParse(choice);
+  if (!parsed.success) return { ok: false, message: "Choix invalide." };
+  const { applyImagePick } = await import("@/lib/pipeline/regen-store");
+  const r = await applyImagePick(articleId, parsed.data, user.id);
+  revalidatePath("/queue"); revalidatePath(`/article/${articleId}`);
+  return r;
 }

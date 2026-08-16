@@ -1,4 +1,4 @@
-import { db, regenJobs, regenJobItems } from "@/db";
+import { db, regenJobs, regenJobItems, articles, articleRevisions } from "@/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { RegenerateFieldsInput } from "@/lib/validation";
 import type { RegenStage, RegenItemStatus, RegenJobView } from "@/lib/pipeline/regen-live";
@@ -112,6 +112,48 @@ export async function finalizeRegenJob(jobId: string): Promise<void> {
   const allFailed = items.length > 0 && items.every((i) => i.status === "failed");
   const status = cancelled ? "cancelled" : allFailed ? "failed" : "done";
   await db.update(regenJobs).set({ status, finishedAt: new Date() }).where(eq(regenJobs.id, jobId));
+}
+
+/**
+ * Applique un choix d'image manuel. Le cœur vit ici (module plain, testable sans contexte de
+ * requête) ; l'action pickRegeneratedImage n'ajoute que RBAC + revalidation autour.
+ *
+ * L'URL choisie DOIT figurer dans la liste en attente de CET article : le client envoie une URL,
+ * et une action serveur ne fait jamais confiance à une URL arbitraire venue du navigateur (elle
+ * finirait en `src` d'une image publiée). `choice === null` = « Aucune image » : on vide l'attente
+ * sans jamais effacer l'image en place.
+ */
+export async function applyImagePick(
+  articleId: string,
+  choice: { url: string; credit: string | null; sourceUrl: string | null } | null,
+  actorId: string | null,
+): Promise<{ ok: boolean; message: string }> {
+  const [article] = await db.select().from(articles).where(eq(articles.id, articleId));
+  if (!article) return { ok: false, message: "Article introuvable." };
+
+  if (choice === null) {
+    await db.update(articles).set({ pendingImageCandidates: null }).where(eq(articles.id, articleId));
+    return { ok: true, message: "Aucune image retenue — image inchangée." };
+  }
+
+  const pending = article.pendingImageCandidates ?? [];
+  const match = pending.find((c) => c.url === choice.url);
+  if (match === undefined) return { ok: false, message: "Cette image ne fait pas partie des candidates." };
+
+  await db.transaction(async (tx) => {
+    await tx.insert(articleRevisions).values({
+      articleId, actorId, action: "image choisie",
+      detail: `Image retenue : ${match.url}\n— Image précédente : ${article.featuredImageUrl ?? "(aucune)"}`,
+    });
+    await tx.update(articles).set({
+      featuredImageUrl: match.url,
+      imageCredit: choice.credit ?? match.mediaName,
+      imageSourceUrl: choice.sourceUrl ?? match.sourceUrl,
+      pendingImageCandidates: null,
+      updatedAt: new Date(),
+    }).where(eq(articles.id, articleId));
+  });
+  return { ok: true, message: "Image à la une mise à jour." };
 }
 
 export async function readRegenJob(jobId: string): Promise<RegenJobView | null> {
