@@ -69,6 +69,21 @@ describe("computeMerge", () => {
     const d = computeMerge([r], [beat("b-99", { texte: "à lui" })]);
     expect(d.conflicts).toHaveLength(1);
   });
+
+  it("un beat sans importedSnapshot dont le payload est identique au snapshot courant n'apparaît nulle part", () => {
+    const r: BeatRow = { externalId: "b-99", position: 0, snapshot: toSnapshot(beat("b-99")), importedSnapshot: null };
+    const d = computeMerge([r], [beat("b-99")]);
+    expect(d.added).toEqual([]);
+    expect(d.modified).toEqual([]);
+    expect(d.conflicts).toEqual([]);
+  });
+
+  it("un beat sans importedSnapshot dont un seul champ diffère est en conflit sur ce seul champ", () => {
+    const r: BeatRow = { externalId: "b-99", position: 0, snapshot: toSnapshot(beat("b-99")), importedSnapshot: null };
+    const d = computeMerge([r], [beat("b-99", { texte: "réécrit par Claude" })]);
+    expect(d.conflicts).toHaveLength(1);
+    expect(d.conflicts[0].fields).toEqual(["spokenText"]);
+  });
 });
 
 describe("applyMerge", () => {

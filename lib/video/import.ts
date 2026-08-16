@@ -202,8 +202,19 @@ export function computeMerge(current: BeatRow[], next: BeatPayload[]): Diff {
 
     const base = row.importedSnapshot;
     const ours = row.snapshot;
-    const theirChanged = MERGE_FIELDS.filter((f) => !base || differs(theirs[f], base[f]));
-    const ourChanged = MERGE_FIELDS.filter((f) => !base || differs(ours[f], base[f]));
+
+    // Sans base (beat jamais importé, créé à la main), impossible de savoir si l'état actuel vient
+    // d'une édition humaine ou d'un import : on ne tranche donc jamais tout seul, mais on ne fabrique
+    // pas non plus un conflit fantôme là où les deux versions coïncident.
+    if (base === null) {
+      const diffFields = MERGE_FIELDS.filter((f) => differs(theirs[f], ours[f]));
+      if (diffFields.length === 0) return; // identique : rien à signaler
+      diff.conflicts.push({ externalId: payloadBeat.id, fields: diffFields, base, ours, theirs, position: index });
+      return;
+    }
+
+    const theirChanged = MERGE_FIELDS.filter((f) => differs(theirs[f], base[f]));
+    const ourChanged = MERGE_FIELDS.filter((f) => differs(ours[f], base[f]));
     if (theirChanged.length === 0) return; // inchangé côté Claude
 
     const contested = theirChanged.filter((f) => ourChanged.includes(f) && differs(theirs[f], ours[f]));
