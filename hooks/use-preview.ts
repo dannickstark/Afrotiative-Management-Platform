@@ -17,7 +17,8 @@ import type { FormatKey } from "@/lib/studio/formats";
 // Différé 800 ms après stabilisation, exactement comme avant : l'aperçu n'écrit rien côté serveur,
 // un différé plus court que l'autosauvegarde (1500 ms) n'a donc pas le même coût. Et la scène
 // ENVOYÉE est toujours celle des props — jamais le brouillon en base, qui peut avoir ~700 ms de
-// retard (voir le correctif « Critique 1, revue Lot 2 » documenté dans preview-pane.tsx).
+// retard (voir le correctif « Critique 1, revue Lot 2 » documenté dans
+// tests/studio-preview.test.ts, autour des lignes 339-347).
 export const PREVIEW_DEBOUNCE_MS = 800;
 
 export type PreviewState =

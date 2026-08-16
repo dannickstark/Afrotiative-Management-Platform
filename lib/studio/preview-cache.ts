@@ -69,6 +69,16 @@ export interface PreviewCache {
   set(key: string, value: CachedPreview): void;
   delete(key: string): void;
   clear(): void;
+  /** Supprime toutes les entrées d'UN SEUL gabarit — jamais tout le cache (chantier D, Tâche 6,
+   *  correctif de revue) : la portée MODULE de `previewCache` (voir l'en-tête du fichier) est
+   *  partagée par TOUS les gabarits ouverts pendant la session, donc un « Actualiser » scopé à un
+   *  gabarit ne doit décharger QUE ses propres rendus, jamais ceux d'un autre gabarit encore valides.
+   *  Compare le PREMIER ÉLÉMENT DÉCODÉ de la clé (`JSON.parse(key)[0]`, voir `previewCacheKey`
+   *  ci-dessus) à `templateId` — jamais un `startsWith` sur la clé brute (non décodée), qui
+   *  confondrait par exemple "tpl" et "tpl-2" : les deux commencent par la même sous-chaîne, mais
+   *  seule la première COMPOSANTE JSON compte comme identité de gabarit. Retourne le nombre
+   *  d'entrées supprimées. */
+  deleteByTemplate(templateId: string): number;
   /** Total estimé actuellement retenu, en octets. */
   bytes(): number;
   /** Clés dans l'ordre LRU, de la plus ancienne à la plus récente. */
@@ -116,6 +126,23 @@ export function createPreviewCache(maxBytes: number): PreviewCache {
     },
     delete: drop,
     clear() { map.clear(); total = 0; },
+    deleteByTemplate(templateId) {
+      let count = 0;
+      for (const key of [...map.keys()]) {
+        let matches: boolean;
+        try {
+          const parsed: unknown = JSON.parse(key);
+          matches = Array.isArray(parsed) && parsed[0] === templateId;
+        } catch {
+          // Clé non-JSON (jamais produite par previewCacheKey, mais un appelant de `set` pourrait en
+          // théorie forger sa propre clé) : ne correspond à aucun templateId, ignorée plutôt que de
+          // planter l'éviction des autres entrées.
+          matches = false;
+        }
+        if (matches) { drop(key); count++; }
+      }
+      return count;
+    },
     bytes: () => total,
     keys: () => [...map.keys()],
   };

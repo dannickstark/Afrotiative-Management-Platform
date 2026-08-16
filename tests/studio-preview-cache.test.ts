@@ -130,6 +130,49 @@ describe("createPreviewCache — éviction bornée en OCTETS", () => {
   });
 });
 
+describe("createPreviewCache — deleteByTemplate (chantier D, Tâche 6, correctif de revue)", () => {
+  it("supprime les entrées du gabarit A, laisse intactes celles du gabarit B", () => {
+    const c = createPreviewCache(10_000);
+    const keyA = previewCacheKey("tpl-a", fixtureScene(), "ig_portrait", null);
+    const keyB = previewCacheKey("tpl-b", fixtureScene(), "ig_portrait", null);
+    c.set(keyA, entry(100));
+    c.set(keyB, entry(100));
+    const dropped = c.deleteByTemplate("tpl-a");
+    expect(dropped).toBe(1);
+    expect(c.get(keyA)).toBeUndefined();
+    expect(c.get(keyB)).toBeDefined();
+  });
+
+  // Le cas qui piège un `startsWith` naïf sur la clé BRUTE (non décodée) : "tpl" est un préfixe
+  // littéral de "tpl-2", et la clé encodée de "tpl-2" (`["tpl-2", …]`) commence bien par la chaîne
+  // `["tpl` — le même préfixe que celle de "tpl" (`["tpl",…]`) jusqu'à la virgule. Seule la
+  // comparaison sur le PREMIER ÉLÉMENT DÉCODÉ (JSON.parse(key)[0] === templateId) distingue les deux.
+  it("un templateId préfixe d'un autre (« tpl » vs « tpl-2 ») n'évince PAS l'autre gabarit", () => {
+    const c = createPreviewCache(10_000);
+    const keyShort = previewCacheKey("tpl", fixtureScene(), "ig_portrait", null);
+    const keyLong = previewCacheKey("tpl-2", fixtureScene(), "ig_portrait", null);
+    c.set(keyShort, entry(100));
+    c.set(keyLong, entry(100));
+
+    const droppedShort = c.deleteByTemplate("tpl");
+    expect(droppedShort).toBe(1);
+    expect(c.get(keyShort)).toBeUndefined();
+    expect(c.get(keyLong)).toBeDefined(); // "tpl-2" doit survivre à l'éviction de "tpl"
+
+    const droppedLong = c.deleteByTemplate("tpl-2");
+    expect(droppedLong).toBe(1);
+    expect(c.get(keyLong)).toBeUndefined();
+  });
+
+  it("templateId absent du cache : ne supprime rien, renvoie 0", () => {
+    const c = createPreviewCache(10_000);
+    const key = previewCacheKey("tpl-a", fixtureScene(), "ig_portrait", null);
+    c.set(key, entry(100));
+    expect(c.deleteByTemplate("tpl-inconnu")).toBe(0);
+    expect(c.get(key)).toBeDefined();
+  });
+});
+
 describe("l'instance partagée", () => {
   it("existe et porte le budget documenté", () => {
     expect(PREVIEW_CACHE_MAX_BYTES).toBe(48 * 1024 * 1024);

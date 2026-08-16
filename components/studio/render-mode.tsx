@@ -98,11 +98,15 @@ export function RenderMode({
     onViewChange({ ...view, selectedId: null });
   }
 
-  // Purge les entrées de la scène courante puis laisse les tuiles visibles se relancer. Le seul cas
-  // qu'un hachage de scène ne peut pas voir : une image source modifiée à distance, dont l'URL n'a
-  // pas changé.
+  // Purge les entrées CE GABARIT (jamais tout le cache — correctif de revue, chantier D Tâche 6) et
+  // laisse les tuiles visibles se relancer. `previewCache` a une portée MODULE, partagée par tous les
+  // gabarits ouverts pendant la session (lib/studio/preview-cache.ts) : un `clear()` global aurait
+  // fait payer à un utilisateur qui bascule entre plusieurs gabarits le coût d'un VRAI rendu
+  // satori/resvg/sharp pour CHAQUE tuile de CHAQUE AUTRE gabarit, alors que rien n'y avait changé.
+  // Le seul cas qu'un hachage de scène ne peut pas voir, pour CE gabarit : une image source modifiée
+  // à distance, dont l'URL n'a pas changé.
   function refreshAll() {
-    previewCache.clear();
+    previewCache.deleteByTemplate(templateId);
     setOutcomes({});
   }
 
