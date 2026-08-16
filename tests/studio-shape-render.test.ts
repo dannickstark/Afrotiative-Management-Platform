@@ -294,17 +294,24 @@ describe("renderScene() — chaque forme survit à minSize et à un aspect très
     // image entièrement bleue (calque jamais peint, exception avalée, rendu dégradé) les passait toutes
     // les deux. Il faut donc montrer que quelque chose EST peint dans la colonne du calque.
     //
-    // Et ce témoin ne peut pas être un « remplissage » : sur une colonne de 1 px, AUCUN pixel de sortie
-    // n'est intégralement couvert (mesuré — le plus rouge lu est rgba(152,23,152) en x=0, un mélange
-    // franc mais hors tolérance des deux couleurs primaires). Affirmer « remplissage » ici serait un
-    // faux témoin, et ce programme a déjà tranché qu'un témoin absent vaut mieux qu'un faux. On affirme
-    // donc ce qui est VRAI et suffisant : le pixel n'est ni le fond ni le remplissage — c'est un
-    // mélange — et sa composante ROUGE est très au-dessus de celle du fond (0), donc du remplissage y
-    // est bien arrivé. La colonne peinte, plus les deux négatifs, disent « dans son cadre, et nulle
-    // part ailleurs ».
-    const dansLaColonne = px(0, 399);
-    const canaux = /^rgba\((\d+),(\d+),(\d+),\d+\)$/.exec(dansLaColonne);
-    expect(`(0,399) mélange : ${canaux !== null} — lu ${dansLaColonne}`).toBe(`(0,399) mélange : true — lu ${dansLaColonne}`);
+    // MISE À JOUR (chantier qualité d'image, suréchantillonnage 2×). Ce témoin affirmait un MÉLANGE
+    // en (0,399), sur la mesure d'alors : « sur une colonne de 1 px, AUCUN pixel de sortie n'est
+    // intégralement couvert (le plus rouge lu est rgba(152,23,152)) ». Cette mesure décrivait en
+    // réalité une LIMITE DU RASTÉRISEUR, pas la géométrie : à la DERNIÈRE ligne du triangle, la base
+    // occupe toute la largeur du cadre, donc ce pixel EST intégralement couvert — l'anticrénelage en
+    // une seule passe le sous-couvrait. Rastérisé à 2× puis réduit, il se lit désormais
+    // rgba(241,0,16) (re-mesuré), soit « remplissage » à la tolérance de ce fichier.
+    //
+    // On affirme donc le fait NOUVEAU et PLUS FORT — la colonne est réellement peinte, pas seulement
+    // teintée — plutôt que de relâcher l'assertion pour retomber sur l'ancienne. Le témoin de mélange
+    // n'est pas perdu pour autant : il DÉMÉNAGE à mi-hauteur (0,200), où le triangle ne couvre
+    // vraiment qu'une fraction du pixel — une couverture partielle qu'aucune quantité
+    // d'échantillonnage ne transformera jamais en aplat, contrairement à celle de la ligne de base.
+    expect(px(0, 399)).toBe("remplissage");
+
+    const aMiHauteur = px(0, 200);
+    const canaux = /^rgba\((\d+),(\d+),(\d+),\d+\)$/.exec(aMiHauteur);
+    expect(`(0,200) mélange : ${canaux !== null} — lu ${aMiHauteur}`).toBe(`(0,200) mélange : true — lu ${aMiHauteur}`);
     expect(Number(canaux![1])).toBeGreaterThan(80); // rouge : le fond en a 0 (± tolérance 24)
   });
 });

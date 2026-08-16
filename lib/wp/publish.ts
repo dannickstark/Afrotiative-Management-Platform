@@ -256,7 +256,16 @@ async function buildPublishPayload(
   // à la une : un gabarit article_image résolu dont le canevas natif diffère (ex. repris d'un autre
   // format, ou le gabarit par défaut du contexte) est désormais RELAYOUTÉ (relayoutToFormat, T2)
   // avant rendu, au lieu d'être téléversé à ses dimensions d'origine quelles qu'elles soient.
-  const render = await renderForArticle(article.id, { context: "article_image", store, format: "website_featured" });
+  // `encode: "webp"` (qualité, C) — l'image à la une part sur le WEB, où WebP est universellement
+  // lu (WordPress l'accepte nativement depuis la 5.8, et le téléversement ci-dessous relaie le
+  // Content-Type que R2 renvoie, donc rien d'autre n'a à savoir quel format a été produit). À
+  // qualité perçue égale il pèse nettement moins qu'un JPEG sur du contenu graphique — texte plein
+  // cadre et aplats de marque, exactement ce que ce moteur produit. Les canaux SOCIAUX, eux, ne
+  // reçoivent pas cette option et restent en JPEG (lib/diffusion) : les plateformes réencodent de
+  // toute façon, et le JPEG y est le format sans mauvaise surprise.
+  const render = await renderForArticle(article.id, {
+    context: "article_image", store, format: "website_featured", encode: "webp",
+  });
   if (render.ok) {
     // { ok: true, url } : un rendu a été produit — c'est CETTE url qui sera téléversée ci-dessous,
     // à la place de l'image brute. { ok: true, url: null } : aucun gabarit résolu pour ce

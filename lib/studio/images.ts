@@ -9,7 +9,19 @@ export class ImageFetchError extends Error {}
 // de Satori est bogué — spike, Tâche 1) se calcule à partir de la taille EFFECTIVE de l'image peinte,
 // elle-même dérivée de la taille INTRINSÈQUE de l'asset préparé. Seul `prepareImage` connaît cette
 // intrinsèque (il vient de la décoder), il la remonte donc.
-export type PreparedImage = { uri: string; w: number; h: number };
+export type PreparedImage = {
+  uri: string;
+  w: number;
+  h: number;
+  /** Qualité, D — `true` quand l'image préparée est peinte AGRANDIE dans son cadre, c'est-à-dire
+   * quand la source n'avait pas assez de pixels pour le remplir (`paintedScale > 1`, au-delà d'une
+   * tolérance de 5 % qui absorbe les arrondis entiers de `.resize()`). C'est la seule cause de flou
+   * que le moteur ne peut PAS corriger : `withoutEnlargement` refuse à raison de suréchantillonner
+   * ici, mais le fond CSS de Satori étire quand même l'image sur le cadre au moment de peindre —
+   * silencieusement. Remonté à l'appelant (render.ts -> preview-core.ts -> l'éditeur) pour que ce
+   * soit DIT plutôt que constaté après publication. N'a AUCUN effet sur le rendu lui-même. */
+  lowRes: boolean;
+};
 
 export type PrepareImageOptions = {
   url: string;
@@ -160,6 +172,7 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedI
   let out: Buffer;
   let ow: number;
   let oh: number;
+  let scaleToPainted: number;
   try {
     // D'abord la préparation SEULE — son encodage donne la taille RÉELLE de l'image préparée
     // (info.width/height), dont l'appelant a besoin pour `effImg` ET dont le bloc flou ci-dessous a
@@ -238,6 +251,12 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedI
     ow = bounded.info.width;
     oh = bounded.info.height;
 
+    // L'échelle prepared->peint, calculée UNE FOIS ici : elle sert à DEUX choses désormais — le
+    // drapeau `lowRes` juste en dessous, et la correction du sigma du flou plus bas (où elle était
+    // calculée auparavant, à l'intérieur du `if (blur)`). Même appel, mêmes arguments : déplacer ce
+    // calcul ne change RIEN au flou, il le rend seulement disponible aux deux usages.
+    scaleToPainted = paintedScale(sizing, fw, fh, ow, oh, opts.tileScale, opts.customSize);
+
     // LE FLOU, indépendant du plafond (revue de branche). sharp attend un sigma, pas un rayon CSS, et
     // `blur/2` approche le flou d'un navigateur À LA RÉSOLUTION DU CADRE. Mais le flou est appliqué ICI,
     // à la résolution PRÉPARÉE (bornée, jusqu'à 2×cadre), et Satori redimensionne ENSUITE l'image
@@ -249,8 +268,7 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedI
     // (moyenne géométrique des axes) pour stretch/custom — voir `paintedScale`.
     let prepared = bounded.data;
     if (blur && blur > 0) {
-      const s = paintedScale(opts.sizing ?? "cover", fw, fh, ow, oh, opts.tileScale, opts.customSize);
-      const sigma = Math.max(0.3, (blur / 2) / s);
+      const sigma = Math.max(0.3, (blur / 2) / scaleToPainted);
       prepared = await sharp(bounded.data).blur(sigma).png().toBuffer();
     }
 
@@ -269,5 +287,7 @@ export async function prepareImage(opts: PrepareImageOptions): Promise<PreparedI
     throw new ImageFetchError(`Le fichier téléchargé depuis « ${url} » n'est pas une image exploitable.`, { cause: e });
   }
 
-  return { uri: `data:image/png;base64,${out.toString("base64")}`, w: ow, h: oh };
+  // Tolérance 1,05 (voir PreparedImage.lowRes) : un `.resize()` arrondit à l'entier, une source
+  // exactement à la taille du cadre peut donc ressortir à un facteur 1,001 sans être « trop petite ».
+  return { uri: `data:image/png;base64,${out.toString("base64")}`, w: ow, h: oh, lowRes: scaleToPainted > 1.05 };
 }

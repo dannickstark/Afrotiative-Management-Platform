@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import satori from "satori";
 import { Resvg } from "@resvg/resvg-js";
 import sharp from "sharp";
-import { renderScene } from "@/lib/studio/render";
+import { renderScene, supersampleScale } from "@/lib/studio/render";
 import { sceneToElement, type SatoriNode } from "@/lib/studio/element";
 import { loadFallbackFonts, type LoadedFont } from "@/lib/studio/fonts";
 import type { Scene } from "@/lib/studio/scene";
@@ -39,16 +39,31 @@ let fonts: LoadedFont[];
 beforeAll(async () => { fonts = await loadFallbackFonts(); });
 
 // Réplique EXACTE des étapes 5 de renderScene() : satori(width/height/fonts/embedFont:true) ->
-// Resvg(fitTo width) -> sharp().removeAlpha().jpeg({quality:86, mozjpeg:true}). Le test
-// « fidélité » plus bas vérifie que cette réplique n'a pas dérivé.
+// Resvg(fitTo width × suréchantillonnage) -> sharp().resize(lanczos3).removeAlpha().jpeg(
+// {quality:92, mozjpeg:true, chromaSubsampling:"4:4:4"}). Le test « fidélité » plus bas vérifie que
+// cette réplique n'a pas dérivé.
+//
+// MISE À JOUR (chantier qualité d'image) : le rastériseur suréchantillonne désormais à 2× puis
+// réduit en lanczos3, et l'encodeur JPEG ne sous-échantillonne plus la chrominance. Le témoin de
+// fidélité ci-dessous a rougi EXACTEMENT comme son propre commentaire l'annonçait (« changer un
+// seul paramètre de probe (quality, mozjpeg, embedFont, fitTo) le rend faux immédiatement ») — la
+// réplique est resynchronisée ici, et `supersampleScale` est IMPORTÉ du module de production plutôt
+// que recopié, pour qu'un futur changement de budget pixels ne puisse pas la faire dériver en
+// silence.
 async function probe(node: SatoriNode, width: number, height: number): Promise<Uint8Array> {
   const svg = await satori(node as never, {
     width, height,
     fonts: fonts as unknown as Parameters<typeof satori>[1]["fonts"],
     embedFont: true,
   });
-  const png = new Resvg(svg, { fitTo: { mode: "width", value: width } }).render().asPng();
-  return new Uint8Array(await sharp(png).removeAlpha().jpeg({ quality: 86, mozjpeg: true }).toBuffer());
+  const scale = supersampleScale(width, height);
+  const png = new Resvg(svg, { fitTo: { mode: "width", value: width * scale } }).render().asPng();
+  const raster = scale === 1
+    ? sharp(png)
+    : sharp(png).resize(width, height, { fit: "fill", kernel: "lanczos3" });
+  return new Uint8Array(
+    await raster.removeAlpha().jpeg({ quality: 92, mozjpeg: true, chromaSubsampling: "4:4:4" }).toBuffer(),
+  );
 }
 
 const FILL = "#FF0000";   // rouge pur

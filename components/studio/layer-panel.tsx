@@ -113,7 +113,12 @@ function RenameField({ layer, dispatch }: { layer: Layer; dispatch: Dispatch<Edi
         if (e.key === "Enter") e.currentTarget.blur();
         else if (e.key === "Escape") { setValue(layer.name); setEditing(false); e.currentTarget.blur(); }
       }}
-      className="h-6 min-w-0 flex-1 px-1.5 text-xs"
+      // Impeccable `layout` : `min-w-20` donne au nom un PLANCHER de 80px. Avec le `flex-wrap` de la
+      // ligne (voir LayerRow), atteindre ce plancher fait passer le groupe d'actions à la ligne
+      // suivante plutôt que de comprimer le champ jusqu'à disparaître. 80px et non 96 : mesuré dans
+      // le tiroir (panneau à sa largeur par défaut, 212px), 96 poussait le NOM lui-même à la ligne et
+      // faisait des lignes à trois niveaux — le plancher doit céder avant le nom, pas l'inverse.
+      className="h-6 min-w-20 flex-1 px-1.5 text-xs"
     />
   );
 }
@@ -131,7 +136,15 @@ function LayerRow({
   return (
     <li
       data-layer-row-id={layer.id}
-      className="flex items-center gap-1 rounded-lg border border-transparent px-1.5 py-1 aria-selected:border-border aria-selected:bg-muted"
+      // Impeccable `layout` : `flex-wrap` ajouté. Cette ligne porte sept contrôles — six boutons
+      // `icon-sm` (28px) plus une glyphe de type — soit ~222px de chrome INCOMPRESSIBLE avant que le
+      // champ de nom reçoive un seul pixel. Or le panneau est redimensionnable jusqu'à 180px : le
+      // `min-w-0 flex-1` de RenameField s'écrasait alors à zéro et la ligne débordait le
+      // `overflow-hidden` du panneau, rognant le bouton Supprimer. Un membre de groupe (`pl-4`)
+      // atteignait la largeur négative. La ligne se REPLIE désormais sur deux niveaux au lieu de
+      // rogner : le nom du calque — le seul CONTENU de la ligne — cesse d'être la première variable
+      // sacrifiée.
+      className="flex flex-wrap items-center gap-1 rounded-lg border border-transparent px-1.5 py-1 aria-selected:border-border aria-selected:bg-muted"
       aria-selected={selected}
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/layer-id", layer.id)}
@@ -173,34 +186,41 @@ function LayerRow({
 
       <RenameField layer={layer} dispatch={dispatch} />
 
-      <Button
-        type="button" variant="ghost" size="icon-sm"
-        data-action="move-up" data-layer-id={layer.id}
-        aria-label="Monter le calque"
-        disabled={atTop}
-        onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "up")))}
-      >
-        <ChevronUp />
-      </Button>
-      <Button
-        type="button" variant="ghost" size="icon-sm"
-        data-action="move-down" data-layer-id={layer.id}
-        aria-label="Descendre le calque"
-        disabled={atBottom}
-        onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "down")))}
-      >
-        <ChevronDown />
-      </Button>
+      {/* Impeccable `layout` : réordonner et supprimer forment UN groupe, désormais explicite. En
+          `ml-auto`, il est poussé au bord droit tant qu'il partage la ligne du nom, et — comme il se
+          replie d'un seul bloc — il atterrit ALIGNÉ À DROITE sur une deuxième ligne quand le panneau
+          est trop étroit, au lieu de laisser les trois boutons retomber un à un sous la case
+          « œil ». La ligne se réorganise donc en deux niveaux lisibles plutôt qu'en escalier. */}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <Button
+          type="button" variant="ghost" size="icon-sm"
+          data-action="move-up" data-layer-id={layer.id}
+          aria-label="Monter le calque"
+          disabled={atTop}
+          onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "up")))}
+        >
+          <ChevronUp />
+        </Button>
+        <Button
+          type="button" variant="ghost" size="icon-sm"
+          data-action="move-down" data-layer-id={layer.id}
+          aria-label="Descendre le calque"
+          disabled={atBottom}
+          onClick={() => dispatch(reorderLayer(layer.id, nextIndexForMove(index, "down")))}
+        >
+          <ChevronDown />
+        </Button>
 
-      <Button
-        type="button" variant="ghost" size="icon-sm"
-        data-action="delete" data-layer-id={layer.id}
-        aria-label="Supprimer le calque"
-        disabled={layer.locked}
-        onClick={() => dispatch(deleteLayer(layer.id))}
-      >
-        <Trash2 />
-      </Button>
+        <Button
+          type="button" variant="ghost" size="icon-sm"
+          data-action="delete" data-layer-id={layer.id}
+          aria-label="Supprimer le calque"
+          disabled={layer.locked}
+          onClick={() => dispatch(deleteLayer(layer.id))}
+        >
+          <Trash2 />
+        </Button>
+      </div>
     </li>
   );
 }
@@ -269,12 +289,14 @@ export function LayerPanel({ scene, selectedIds, dispatch }: LayerPanelProps) {
   const lastIndex = scene.layers.length - 1;
   const rows = rowsGrouped(entries);
 
+  // Impeccable `layout` : le titre « Calques » rendu ici est SUPPRIMÉ. `PanelHost` (le squelette
+  // commun des six catégories) affiche déjà `RAIL_LABELS[open]` — c'est-à-dire « Calques » — dans sa
+  // barre de titre, et l'entrée du rail juste à gauche porte le même mot : trois fois le même libellé
+  // sur ~270px. C'était par ailleurs le seul panneau à se donner un titre propre, et le seul à le
+  // composer en `text-sm font-medium` là où tous les autres emploient l'en-tête de section
+  // `font-heading text-xs uppercase`.
   return (
     <div className="flex flex-col gap-2" data-testid="layer-panel">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">Calques</span>
-      </div>
-
       <div className="flex flex-wrap gap-1">
         {ADD_TYPES.map((type) => {
           const Icon = TYPE_ICON[type];
@@ -294,6 +316,15 @@ export function LayerPanel({ scene, selectedIds, dispatch }: LayerPanelProps) {
           );
         })}
       </div>
+
+      {/* Impeccable `layout` : le message de liste vide REMONTE avant la liste. Il était rendu APRÈS
+          le `<ul>`, donc dernier dans l'ordre de lecture — dans la seule situation où il est le seul
+          contenu à lire. */}
+      {entries.length === 0 && (
+        <p className="px-1.5 py-4 text-center text-xs text-muted-foreground">
+          Aucun calque — ajoutez-en un ci-dessus.
+        </p>
+      )}
 
       <ul className="flex flex-col gap-1">
         {rows.map((row) => {
@@ -323,12 +354,6 @@ export function LayerPanel({ scene, selectedIds, dispatch }: LayerPanelProps) {
           );
         })}
       </ul>
-
-      {entries.length === 0 && (
-        <p className="px-1.5 py-4 text-center text-xs text-muted-foreground">
-          Aucun calque — ajoutez-en un ci-dessus.
-        </p>
-      )}
     </div>
   );
 }

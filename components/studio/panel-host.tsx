@@ -48,9 +48,18 @@ export function PanelHost({ open, onOpenChange, search, primaryAction, children,
       data-testid="panel-host"
       data-panel={open}
       style={{ width }}
-      className="flex shrink-0 flex-col gap-2 overflow-hidden rounded-lg border"
+      // Impeccable `layout` : même correction que le rail (components/studio/rail.tsx) — le cadre
+      // complet `rounded-lg border` devient un `border-r` seul, et la surface devient explicitement
+      // `bg-card`. Le rail et ce panneau sont les deux moitiés d'UN SEUL instrument (on choisit une
+      // catégorie à gauche, son contenu s'ouvre ici) : cousus bord à bord et séparés par un simple
+      // filet, ils se lisent enfin comme un bloc continu au lieu de deux cartes voisines à égalité
+      // avec le canevas.
+      className="flex shrink-0 flex-col gap-2 overflow-hidden border-r bg-card"
     >
-      <div className="flex items-center justify-between border-b px-2 py-1.5">
+      {/* Impeccable `layout` : le padding du panneau passe de 8px à 12px (l'échelon `sm` de
+          DESIGN.md), en-tête et corps confondus — l'ancien `px-2` était le seul endroit de la coque à
+          descendre sous l'échelle, et il collait les listes contre le filet. */}
+      <div className="flex items-center justify-between border-b px-3 py-2">
         {/* Chantier E Tâche 5 (finition de marque) : `font-heading` — le TITRE du panneau accosté,
             au même titre typographique que h1/h2 de PageHeader (globals.css, « Type scale »). */}
         <span className="font-heading text-sm font-medium">{RAIL_LABELS[open]}</span>
@@ -70,10 +79,10 @@ export function PanelHost({ open, onOpenChange, search, primaryAction, children,
           qu'un nœud passé en `search`/`primaryAction` atterrit RÉELLEMENT dans la zone dédiée du
           skeleton, pas seulement « quelque part dans le panneau » — exactement le doute que la revue
           soulève pour ces deux slots. */}
-      {search && <div className="px-2 pt-2" data-testid="panel-search">{search}</div>}
-      {primaryAction && <div className="px-2" data-testid="panel-primary-action">{primaryAction}</div>}
+      {search && <div className="px-3 pt-2" data-testid="panel-search">{search}</div>}
+      {primaryAction && <div className="px-3" data-testid="panel-primary-action">{primaryAction}</div>}
 
-      <div className="flex-1 overflow-auto px-2 pb-2">{children}</div>
+      <div className="flex-1 overflow-auto px-3 pb-3">{children}</div>
     </div>
   );
 }

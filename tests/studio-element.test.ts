@@ -23,7 +23,7 @@ const scene: Scene = {
 
 // Properties Pro P1, Tâche 3 — la map associe désormais un ID à une `PreparedImage` (`{ uri, w, h }`),
 // pas à une simple URI : le chemin de rendu d'une IMAGE (fond CSS) a besoin de la taille intrinsèque.
-const images = new Map([["bg", { uri: "data:image/png;base64,AAAA", w: 1200, h: 675 }]]);
+const images = new Map([["bg", { uri: "data:image/png;base64,AAAA", w: 1200, h: 675, lowRes: false }]]);
 
 describe("sceneToElement", () => {
   it("produit une racine aux dimensions du canevas", () => {
@@ -177,7 +177,7 @@ describe("sceneToElement", () => {
         },
       ],
     };
-    const imgMap = new Map([["img", { uri: "data:image/png;base64,AAAA", w: 80, h: 80 }]]);
+    const imgMap = new Map([["img", { uri: "data:image/png;base64,AAAA", w: 80, h: 80, lowRes: false }]]);
     const root = sceneToElement(radiusImageScene, imgMap);
     const children = (root.props as { children: { props: Record<string, unknown> }[] }).children;
     const containerProps = children[0].props;
@@ -251,7 +251,7 @@ describe("sceneToElement", () => {
         },
       ],
     };
-    const qrMap = new Map([["qr1", { uri: "data:image/png;base64,QRCODE", w: 0, h: 0 }]]);
+    const qrMap = new Map([["qr1", { uri: "data:image/png;base64,QRCODE", w: 0, h: 0, lowRes: false }]]);
     const root = sceneToElement(qrScene, qrMap);
     const children = (root.props as { children: { props: { "data-layer": string; style: Record<string, unknown> } }[] }).children;
     expect(children).toHaveLength(1);

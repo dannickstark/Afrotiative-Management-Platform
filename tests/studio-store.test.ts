@@ -57,6 +57,27 @@ describe("computeInputHash", () => {
   it("`format` présent produit une empreinte DIFFÉRENTE de son absence, même valeur de gabarit/version/valeurs par ailleurs", () => {
     expect(computeInputHash({ ...baseInput, format: "story" })).not.toBe(computeInputHash(baseInput));
   });
+
+  // Qualité, C — `encode` (nouveau champ OPTIONNEL), MÊME correctif de sécurité de cache que
+  // `format` juste au-dessus : lib/wp/publish.ts demande désormais du WebP là où les canaux sociaux
+  // restent en JPEG. Sans `encode` dans l'empreinte, le second appelant trouverait le rendu du
+  // premier en cache et servirait un fichier au MAUVAIS format — avec l'extension et le
+  // Content-Type de l'autre, puisque tous deux viennent de `out.mime`.
+  it("change si `encode` change (JPEG et WebP ne collisionnent JAMAIS en cache)", () => {
+    expect(computeInputHash({ ...baseInput, format: "website_featured", encode: "webp" }))
+      .not.toBe(computeInputHash({ ...baseInput, format: "website_featured", encode: "jpeg" }));
+  });
+
+  it("`encode` absent produit EXACTEMENT l'empreinte d'avant ce chantier (aucune invalidation du cache existant)", () => {
+    // Les DEUX canoniques historiques doivent être préservés : avec `format` et sans.
+    expect(computeInputHash({ ...baseInput, encode: undefined })).toBe(computeInputHash(baseInput));
+    expect(computeInputHash({ ...baseInput, format: "story", encode: undefined }))
+      .toBe(computeInputHash({ ...baseInput, format: "story" }));
+  });
+
+  it("`encode` présent produit une empreinte DIFFÉRENTE de son absence", () => {
+    expect(computeInputHash({ ...baseInput, encode: "jpeg" })).not.toBe(computeInputHash(baseInput));
+  });
 });
 
 describe("storageKeyFor", () => {

@@ -61,7 +61,7 @@ export interface PreviewPaneProps {
 type PreviewState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ready"; dataUri: string; degraded: boolean }
+  | { status: "ready"; dataUri: string; degraded: boolean; lowRes: boolean }
   | { status: "error"; message: string };
 
 export function PreviewPane({ templateId, context, scene, articles, disabled, onResult }: PreviewPaneProps) {
@@ -84,7 +84,9 @@ export function PreviewPane({ templateId, context, scene, articles, disabled, on
       // instantané enregistré côté serveur.
       const res = await previewTemplate({ templateId, scene, articleId: articleId ?? undefined });
       if (id !== requestIdRef.current) return;
-      setState(res.ok ? { status: "ready", dataUri: res.dataUri, degraded: res.degraded } : { status: "error", message: res.message });
+      setState(res.ok
+        ? { status: "ready", dataUri: res.dataUri, degraded: res.degraded, lowRes: res.lowResLayerIds.length > 0 }
+        : { status: "error", message: res.message });
       onResult?.(res.ok ? { degraded: res.degraded } : null);
     } catch (e) {
       if (id !== requestIdRef.current) return;
@@ -113,6 +115,19 @@ export function PreviewPane({ templateId, context, scene, articles, disabled, on
         <div className="flex items-center gap-2">
           {state.status === "ready" && state.degraded && (
             <Badge variant="secondary" data-testid="preview-degraded-badge">Rendu dégradé</Badge>
+          )}
+          {/* Qualité, D — la SEULE cause de flou que le moteur ne peut pas corriger : la photo
+              source a moins de pixels que le cadre où elle est peinte, elle est donc étirée (voir
+              PreparedImage.lowRes, lib/studio/images.ts). Constatée sur les octets réellement
+              téléchargés pendant CE rendu, pas estimée. Le dire ICI est le seul moment utile : après
+              publication, l'image est déjà en ligne et rien dans le gabarit ne peut la rattraper. */}
+          {state.status === "ready" && state.lowRes && (
+            <Badge
+              variant="secondary" data-testid="preview-lowres-badge"
+              title="La photo source est plus petite que le cadre où elle est peinte : elle est agrandie, donc floue. Réduire le cadre ou fournir une image plus grande — aucun réglage du gabarit ne peut compenser."
+            >
+              Image agrandie
+            </Badge>
           )}
           <Button
             type="button" variant="outline" size="icon-sm"

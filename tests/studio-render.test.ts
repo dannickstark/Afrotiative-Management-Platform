@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import sharp from "sharp";
-import { renderScene, fitFontSize, RenderError } from "@/lib/studio/render";
+import { renderScene, fitFontSize, supersampleScale, RenderError } from "@/lib/studio/render";
 import { MissingTokensError } from "@/lib/studio/values";
 import { loadFallbackFonts, type AssetLoader, type LoadedFont } from "@/lib/studio/fonts";
 import type { Scene, TextLayer } from "@/lib/studio/scene";
@@ -402,5 +402,99 @@ describe("renderScene — canal alpha", () => {
     expect(out.mime).toBe("image/jpeg");
     const meta = await sharp(Buffer.from(out.bytes)).metadata();
     expect(meta.hasAlpha).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// QUALITÉ D'IMAGE (chantier « images de faible qualité »). Trois défauts d'ENCODAGE/RASTERISATION,
+// indépendants de la mise en page : ils ne changent ni les dimensions de sortie, ni la scène, ni
+// aucun contrat d'appelant — seulement le nombre de pixels échantillonnés et la façon dont ils sont
+// compressés. Les tests ci-dessous verrouillent chacun de ces réglages, parce qu'ils sont
+// exactement le genre de valeur qu'une refonte ultérieure remettrait « au défaut » sans le voir.
+// ---------------------------------------------------------------------------------------------
+describe("renderScene — qualité d'encodage", () => {
+  it("encode le JPEG en chrominance PLEINE (4:4:4), pas au défaut 4:2:0 de sharp", async () => {
+    // LE défaut le plus visible sur du contenu graphique : sous la qualité 90, sharp sous-échantillonne
+    // la chrominance en 4:2:0 (résolution de COULEUR divisée par deux sur les deux axes), ce qui
+    // frange les bords de glyphes et fait baver les aplats de marque. Invisible sur une photo,
+    // ruineux sur une carte titrée — c'est-à-dire sur tout ce que ce moteur produit.
+    const out = await renderScene({ scene: agribusinessScene(), values, fetchImpl: fixtureFetch });
+    const meta = await sharp(Buffer.from(out.bytes)).metadata();
+    expect(meta.chromaSubsampling).toBe("4:4:4");
+  });
+
+  it("rend aux dimensions EXACTES du canevas malgré le suréchantillonnage 2x", async () => {
+    // Le suréchantillonnage rastérise à 2x puis réduit : une hauteur IMPAIRE est le cas où une
+    // réduction naïve (ou un simple `fitTo` sans resize) dériverait d'un pixel. Le contrat public
+    // — RenderOutcome.width/height ET les pixels réels — reste `scene.canvas.*`, au pixel près.
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 601, height: 337, background: "#101010" },
+      layers: [
+        { ...b, id: "dot", name: "Point", frame: { x: 10, y: 10, w: 20, h: 20 },
+          type: "shape", shape: "rect", fill: "#FF0000" },
+      ],
+    };
+    const out = await renderScene({ scene, values: {} });
+    expect(out.width).toBe(601);
+    expect(out.height).toBe(337);
+    const meta = await sharp(Buffer.from(out.bytes)).metadata();
+    expect(meta.width).toBe(601);
+    expect(meta.height).toBe(337);
+  });
+
+  it("suréchantillonne à 2x sous le budget pixels, et RETOMBE à 1x au-dessus", () => {
+    // Le repli n'est pas un raffinement : à 2x, le PNG intermédiaire a QUATRE fois plus de pixels,
+    // donc la taille de canevas à partir de laquelle sharp refuse l'entrée est divisée par quatre.
+    // Un canevas qui rendait avant ce chantier doit continuer à rendre — la qualité ne doit jamais
+    // transformer un rendu qui passait en rendu qui échoue.
+    for (const [w, h] of [[1200, 675], [1080, 1920], [1600, 900]] as const) {
+      expect(supersampleScale(w, h)).toBe(2);
+    }
+    // 4200x4000 = 16,8 Mpx -> 67,2 Mpx suréchantillonné, au-dessus du budget.
+    expect(supersampleScale(4200, 4000)).toBe(1);
+  });
+});
+
+describe("renderScene — image source plus petite que son cadre", () => {
+  it("signale le calque dont la photo est peinte AGRANDIE", async () => {
+    // Le fixture fait 800x800 ; le cadre du calque « bg » fait 1200x675 en `cover`. La fenêtre
+    // focale extraite (800x450) est donc peinte agrandie d'un facteur 1,5 : irrécupérablement
+    // floue, et RIEN dans le gabarit ne peut y remédier. Le moteur est le seul à pouvoir le
+    // constater (lui seul a décodé les octets), d'où cette remontée.
+    const out = await renderScene({ scene: agribusinessScene(), values, fetchImpl: fixtureFetch });
+    expect(out.lowResLayerIds).toEqual(["bg"]);
+    // Purement informatif : le rendu réussit et `degraded` reste réservé à la police repliée.
+    expect(out.degraded).toBe(false);
+  });
+
+  it("ne signale RIEN quand la source couvre largement son cadre", async () => {
+    // Même fixture 800x800, cadre 400x225 : la source a de la marge, elle est RÉDUITE pour être
+    // peinte. Un avertissement ici serait du bruit permanent — et rendrait le vrai cas inaudible.
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 400, height: 225, background: "#000000" },
+      layers: [
+        { ...b, id: "bg", name: "Fond", frame: { x: 0, y: 0, w: 400, h: 225 },
+          type: "image", source: { kind: "slot", slot: "article.image" }, fit: "cover" },
+      ],
+    };
+    const out = await renderScene({
+      scene, values: { "article.image": "https://cdn.test/photo.png" }, fetchImpl: fixtureFetch,
+    });
+    expect(out.lowResLayerIds).toEqual([]);
+  });
+
+  it("ne signale jamais un calque QR (un vecteur n'a pas de résolution intrinsèque)", async () => {
+    const scene: Scene = {
+      schemaVersion: 1,
+      canvas: { width: 300, height: 300, background: "#FFFFFF" },
+      layers: [
+        { ...b, id: "qr1", name: "QR", frame: { x: 20, y: 20, w: 260, h: 260 },
+          type: "qr", slot: "article.url", fg: "#000000", bg: "#FFFFFF", margin: 1 },
+      ],
+    };
+    const out = await renderScene({ scene, values: { "article.url": "https://afrotiative.com/a" } });
+    expect(out.lowResLayerIds).toEqual([]);
   });
 });

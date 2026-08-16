@@ -44,16 +44,30 @@ export class MemoryRenderStore implements RenderStore {
 // pour les appelants qui ne le fournissent toujours pas (lib/studio/manual-core.ts ; tout contexte
 // sans notion de format cible) préserve EXACTEMENT les empreintes déjà en base pour ces chemins —
 // aucune invalidation de cache non nécessaire.
+//
+// `encode` (qualité, C) — MÊME discipline, MÊME raison, un cran plus loin : le format d'ENCODAGE de
+// sortie fait maintenant partie des entrées (lib/wp/publish.ts demande du WebP, les autres
+// appelants restent en JPEG). Deux appelants partageant gabarit, valeurs et format cible mais
+// demandant des encodages DIFFÉRENTS produisent deux fichiers différents — sans `encode` dans
+// l'empreinte, le second trouverait le rendu du premier en cache et servirait un JPEG là où un WebP
+// était demandé (ou l'inverse), avec l'extension et le Content-Type de l'autre. Absent, le canonique
+// est STRICTEMENT celui d'avant ce chantier : aucune empreinte déjà en base n'est invalidée, donc
+// aucun re-rendu inutile de tout le cache existant.
 export function computeInputHash(input: {
   templateId: string;
   templateVersion: number;
   values: TokenValues;
   format?: string;
+  encode?: string;
 }): string {
   const sorted = Object.keys(input.values).sort().map((k) => [k, input.values[k as keyof TokenValues]]);
-  const canonical = input.format !== undefined
-    ? JSON.stringify([input.templateId, input.templateVersion, sorted, input.format])
-    : JSON.stringify([input.templateId, input.templateVersion, sorted]);
+  const canonical = input.encode !== undefined
+    // `input.format ?? null` (et non l'omission) : c'est un NOUVEAU canonique, il n'a aucune
+    // empreinte historique à préserver — il doit seulement rester non ambigu entre ses propres cas.
+    ? JSON.stringify([input.templateId, input.templateVersion, sorted, input.format ?? null, input.encode])
+    : input.format !== undefined
+      ? JSON.stringify([input.templateId, input.templateVersion, sorted, input.format])
+      : JSON.stringify([input.templateId, input.templateVersion, sorted]);
   return createHash("sha256").update(canonical).digest("hex");
 }
 

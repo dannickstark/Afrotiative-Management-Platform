@@ -48,6 +48,12 @@ export type PreviewResult =
        * chargée via `assets` juste au-dessus) — voir le commentaire de FilmstripThumb
        * (components/studio/render-mode.tsx) pour la portée exacte de cette approximation. */
       overflowingLayerIds: string[];
+      /** Qualité, D — les identifiants des calques image peints AGRANDIS (source trop petite pour
+       * son cadre), tels que le MOTEUR les a constatés pendant CE rendu (RenderOutcome.lowResLayerIds,
+       * lib/studio/render.ts). Contrairement à `overflowingLayerIds` ci-dessus, ce n'est PAS une
+       * mesure approximative faite à côté du rendu : c'est un fait observé sur les octets réellement
+       * téléchargés. `[]` quand aucune image n'est agrandie. */
+      lowResLayerIds: string[];
     }
   | { ok: false; message: string };
 
@@ -139,7 +145,7 @@ export async function previewTemplateCore(input: PreviewTemplateInput): Promise<
     const overflowIds = input.format ? await overflowingLayerIds(scene, input.format) : [];
     return {
       ok: true, dataUri: `data:${out.mime};base64,${Buffer.from(out.bytes).toString("base64")}`,
-      degraded: out.degraded, overflowingLayerIds: overflowIds,
+      degraded: out.degraded, overflowingLayerIds: overflowIds, lowResLayerIds: out.lowResLayerIds,
     };
   } catch (e) {
     // Même politique que renderForArticle (lib/studio/index.ts) : message français sans détail
