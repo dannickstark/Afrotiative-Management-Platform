@@ -107,6 +107,27 @@ export async function updateBeatCore(input: {
   const { wordsPerMinute } = await getVideoSettings();
 
   await db.transaction(async (tx) => {
+    // Ordre de verrouillage (round de correction 4) : `script_variants` D'ABORD, `script_beats`
+    // ENSUITE — le même ordre que applyImportCore et revertJournalEntryCore. Sans ce verrou en
+    // tête, cette transaction prenait la ligne beat puis attendait la ligne variante, pendant
+    // qu'un import concurrent tenait la variante et voulait écrire ce même beat : un ABBA que
+    // Postgres tranche par un `deadlock detected` — une exception brute, pas un refus métier,
+    // qui remonterait illisible jusqu'à l'utilisateur. C'est exactement la collision que rend
+    // probable le scénario « l'utilisateur édite entre la préparation et l'application ».
+    //
+    // Cette première lecture est SANS verrou : elle ne sert qu'à connaître la variante à
+    // verrouiller (`variantId` n'est porté que par la ligne beat). Un `select` nu ne pose aucun
+    // verrou de ligne, il ne peut donc pas participer au cycle. L'état faisant autorité est relu
+    // ci-dessous, une fois la variante verrouillée — tous les écrivains de beats de cette variante
+    // passent désormais par ce verrou, la relecture est donc stable jusqu'au commit.
+    const [located] = await tx.select({ variantId: scriptBeats.variantId }).from(scriptBeats)
+      .where(eq(scriptBeats.id, input.beatId));
+    if (!located) throw new RefusalError("Beat introuvable.");
+
+    const [variant] = await tx.select({ id: scriptVariants.id }).from(scriptVariants)
+      .where(eq(scriptVariants.id, located.variantId)).for("update");
+    if (!variant) throw new RefusalError("Variante introuvable pour ce beat.");
+
     const [current] = await tx.select().from(scriptBeats).where(eq(scriptBeats.id, input.beatId));
     if (!current) throw new RefusalError("Beat introuvable.");
 
@@ -147,6 +168,15 @@ export async function updateBeatCore(input: {
 
 export async function reorderBeatsCore(input: { variantId: string; order: string[] }): Promise<void> {
   await db.transaction(async (tx) => {
+    // Ordre de verrouillage (round de correction 4) : `script_variants` D'ABORD, `script_beats`
+    // ENSUITE — même motif que updateBeatCore ci-dessus. Un réordonnancement humain concurrent
+    // d'un import sur la même variante prenait sinon les lignes beats avant la variante, à
+    // rebours de applyImportCore/revertJournalEntryCore : ABBA, donc `deadlock detected`.
+    // Effet secondaire bienvenu : le bump de `scriptVariants.updatedAt` en fin de transaction
+    // n'est plus racé — deux réordonnancements concurrents sur la même variante sérialisent ici.
+    await tx.select({ id: scriptVariants.id }).from(scriptVariants)
+      .where(eq(scriptVariants.id, input.variantId)).for("update");
+
     for (const [index, externalId] of input.order.entries()) {
       await tx.update(scriptBeats)
         .set({ position: index, updatedAt: new Date() })

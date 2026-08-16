@@ -271,6 +271,65 @@ describe("concurrence sur applyImportCore (I4)", () => {
   }, 20000);
 });
 
+// Round de correction 4 : ordre d'acquisition des verrous. `updateBeatCore` prenait la ligne
+// `script_beats` AVANT la ligne `script_variants`, à rebours d'`applyImportCore` qui verrouille la
+// variante en tête puis écrit les beats — un ABBA que Postgres tranche par un `deadlock detected`
+// (SQLSTATE 40P01) remonté BRUT jusqu'à la server action, pas par un refus métier français.
+// Mesuré sur le code d'avant le correctif (commit 866054b) avec ce scénario exact : 11 deadlocks
+// sur 12 exécutions. Après le correctif : 0 sur 12, puis 0 sur les exécutions de ce test.
+describe("ordre de verrouillage import ⇄ édition humaine (round 4)", () => {
+  // Le scénario est rejoué TROIS fois, sur trois projets distincts : la toute première itération
+  // d'un processus neuf ne déclenche PAS l'interblocage (pool de connexions froid — l'ouverture de
+  // la seconde connexion décale l'entrelacement juste assez), c'est seulement à partir de la
+  // deuxième que la course se produit. Un test à une seule itération passait donc à tort sur le
+  // code bugué (vérifié : 3 exécutions, 3 succès), ce qui n'aurait rien verrouillé du tout.
+  async function scenarioUneFois(n: number): Promise<void> {
+    const { projectId, variantId } = await newProject(`Test — Babadampulu (verrouillage round 4, ${n})`);
+    try {
+      const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+      const seed = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
+      if (!seed.ok) throw new Error("diff attendu");
+      const seeded = await applyImportCore({ journalId: seed.journalId, variantId, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt });
+      expect(seeded.ok).toBe(true);
+
+      // Second import : réécrit les DEUX beats existants — l'import et l'édition humaine se
+      // disputent donc réellement les mêmes lignes `script_beats`, pas seulement la variante.
+      const beat0 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
+      beat0.texte = "Texte réécrit par le modèle, seconde passe.";
+      const beat1 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[1]);
+      beat1.texte = "Second beat également réécrit, seconde passe.";
+      const [fresh] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+      const prepared = await prepareImportCore({ projectId, variantId, raw: JSON.stringify(payloadWithBeats([beat0, beat1])), userId: null, source: "copier_coller" });
+      if (!prepared.ok) throw new Error("diff attendu");
+
+      const [target] = await db.select().from(scriptBeats)
+        .where(and(eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, "b-01-accroche")));
+
+      const [edit, apply] = await Promise.allSettled([
+        updateBeatCore({ beatId: target.id, spokenText: "Édition humaine concurrente de l'import." }),
+        applyImportCore({ journalId: prepared.journalId, variantId, accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: fresh.updatedAt }),
+      ]);
+
+      // Le point du test : AUCUNE des deux transactions ne remonte d'exception brute. Laquelle des
+      // deux gagne la course n'est pas déterministe et n'est donc pas assertée — l'import perdant
+      // repart avec un refus métier français (péremption), jamais avec un 40P01.
+      expect(edit.status).toBe("fulfilled");
+      expect(apply.status).toBe("fulfilled");
+      if (apply.status === "fulfilled" && !apply.value.ok) {
+        expect(apply.value.message).toContain("périmé");
+      }
+    } finally {
+      // Nettoyage dans un `finally` : la base Neon est PARTAGÉE, un échec en cours de route ne doit
+      // pas y laisser de projet orphelin.
+      await db.delete(videoProjects).where(eq(videoProjects.id, projectId));
+    }
+  }
+
+  it("une édition humaine concurrente d'une application d'import n'échoue jamais sur un deadlock", async () => {
+    for (let n = 1; n <= 3; n++) await scenarioUneFois(n);
+  }, 60000);
+});
+
 // Round de correction 1, ruling 2 : `applyImportCore` capture l'état antérieur de chaque beat
 // touché (`applied.before`), ce qui rend l'annulation d'une modification ou d'une suppression
 // réellement fidèle — pas seulement celle d'une création.
