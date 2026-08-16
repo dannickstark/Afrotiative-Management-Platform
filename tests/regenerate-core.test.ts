@@ -34,10 +34,10 @@ mock.module("@/lib/extract", () => ({
   extractExternal: (url: string) => extractExternalImpl(url),
 }));
 
-let generateArticleImpl: () => Promise<{ draft: ArticleDraft; via: string; failure?: AiFailureReason; failureDetail?: string }> =
+let generateArticleImpl: (input?: unknown) => Promise<{ draft: ArticleDraft; via: string; failure?: AiFailureReason; failureDetail?: string }> =
   async () => { throw new Error("generateArticleImpl not set"); };
 mock.module("@/lib/ai/generate-article", () => ({
-  generateArticle: () => generateArticleImpl(),
+  generateArticle: (input: unknown) => generateArticleImpl(input),
 }));
 
 // regenerate-core.ts importe aussi dynamiquement @/lib/pipeline/regenerate (applyRegeneration) —
@@ -117,6 +117,21 @@ describe("regenerateArticle (cœur unitaire)", () => {
     expect(r.ok).toBe(false);
     expect(r.message).toBe(aiFailureMessage("rate_limited", "régénération", "429 too many requests"));
     expect(r.title).toBe("Article rate-limited");
+  });
+
+  // Le cœur de l'économie de tokens : generateArticle doit RECEVOIR la sélection et l'article
+  // courant, sinon il redemande la rédaction d'un corps entier qu'on jette ensuite.
+  it("transmet `fields` et l'article courant à generateArticle", async () => {
+    let seen: { fields?: unknown; current?: unknown } | undefined;
+    generateArticleImpl = async (input) => {
+      seen = input as { fields?: unknown; current?: unknown };
+      return { draft: {} as ArticleDraft, via: "mock" };
+    };
+    const id = await seedArticleWithSource({ title: "Article à titrer", bodyHtml: "<p>Corps conservé.</p>" });
+    const fields = { title: true, body: false, excerpt: false, category: false, tags: false, image: false };
+    await regenerateArticle(id, fields, "acteur");
+    expect(seen?.fields).toEqual(fields);
+    expect(seen?.current).toEqual({ title: "Article à titrer", bodyHtml: "<p>Corps conservé.</p>" });
   });
 
   it("retombe sur le message \"unconfigured\" quand generateArticle renvoie via:\"mock\" sans `failure` (compatibilité ascendante)", async () => {

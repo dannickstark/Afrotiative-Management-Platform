@@ -46,7 +46,13 @@ export async function regenerateArticle(
 
   const { generateArticle } = await import("@/lib/ai/generate-article");
   const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
-  const { draft, via, failure, failureDetail } = await generateArticle({ sources: extracted, candidateImages, categories: categoryNames });
+  // `fields` et `current` rendent la génération consciente de la sélection : quand « Corps » est
+  // décoché, generateArticle ne demande plus la rédaction d'un article entier (>90 % des tokens de
+  // sortie) et s'appuie sur le corps existant pour rester cohérent avec lui.
+  const { draft, via, failure, failureDetail } = await generateArticle({
+    sources: extracted, candidateImages, categories: categoryNames,
+    fields: parsed.data, current: { title: article.title, bodyHtml: article.bodyHtml },
+  });
   if (via === "mock") return { ok: false, message: aiFailureMessage(failure ?? "unconfigured", "régénération", failureDetail), title: article.title };
 
   const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
