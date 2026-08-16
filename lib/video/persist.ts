@@ -23,6 +23,11 @@ type JournalOutcome = "rejete" | "en_attente" | "applique" | "annule";
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DbLike = typeof db | Tx;
 
+// Refus MÉTIER (validation, péremption, conflit) plutôt qu'échec technique — distingué des erreurs
+// DB réelles pour que applyImportCore/revertJournalEntryCore puissent les convertir en
+// `{ ok: false, message }` français sans avaler une vraie panne (round de correction 2, I4).
+class RefusalError extends Error {}
+
 // L'état d'un beat capturé AVANT une mutation — c'est l'unique matière première d'une annulation
 // fidèle. `applied` (colonne jsonb, aucune migration requise) porte ces instantanés en plus des
 // `Mutations` déjà journalisées (round de correction 1, ruling 2) : sans eux, "annuler" une
@@ -37,7 +42,9 @@ type BeforeBeat = {
   durationOverrideSec: number | null;
   estimatedDurationSec: number;
 };
-type AppliedRecord = Mutations & { before: BeforeBeat[] };
+// `before` optionnel (round de correction 2, I10) : les entrées "applique" écrites avant son
+// introduction n'en portent pas — revertJournalEntryCore doit le tolérer, pas planter dessus.
+type AppliedRecord = Mutations & { before?: BeforeBeat[] };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Création de projet
@@ -89,33 +96,40 @@ export async function updateBeatCore(input: {
   durationOverrideSec?: number | null;
   sources?: string[];
 }): Promise<void> {
-  const [current] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, input.beatId));
-  if (!current) throw new Error("Beat introuvable.");
+  await db.transaction(async (tx) => {
+    const [current] = await tx.select().from(scriptBeats).where(eq(scriptBeats.id, input.beatId));
+    if (!current) throw new RefusalError("Beat introuvable.");
 
-  // `spokenText` vient de l'éditeur riche du monteur — même assainisseur que le corps d'article
-  // (spec §8) : on ne fait jamais confiance à du HTML posé côté client sans repasser par DOMPurify.
-  const spokenText = input.spokenText !== undefined ? sanitizeArticleHtml(input.spokenText) : current.spokenText;
-  const durationOverrideSec = input.durationOverrideSec !== undefined
-    ? input.durationOverrideSec
-    : current.durationOverrideSec;
+    // `spokenText` vient de l'éditeur riche du monteur — même assainisseur que le corps d'article
+    // (spec §8) : on ne fait jamais confiance à du HTML posé côté client sans repasser par DOMPurify.
+    const spokenText = input.spokenText !== undefined ? sanitizeArticleHtml(input.spokenText) : current.spokenText;
+    const durationOverrideSec = input.durationOverrideSec !== undefined
+      ? input.durationOverrideSec
+      : current.durationOverrideSec;
 
-  const { wordsPerMinute } = await getVideoSettings();
-  const estimatedDurationSec = beatSeconds({ spokenText, durationOverrideSec }, wordsPerMinute);
+    const { wordsPerMinute } = await getVideoSettings();
+    const estimatedDurationSec = beatSeconds({ spokenText, durationOverrideSec }, wordsPerMinute);
 
-  await db.update(scriptBeats).set({
-    spokenText,
-    directionNote: input.directionNote !== undefined ? input.directionNote : current.directionNote,
-    screenText: input.screenText !== undefined ? input.screenText : current.screenText,
-    transitionIn: input.transitionIn !== undefined ? input.transitionIn : current.transitionIn,
-    transitionOut: input.transitionOut !== undefined ? input.transitionOut : current.transitionOut,
-    sources: input.sources !== undefined ? input.sources : current.sources,
-    durationOverrideSec,
-    estimatedDurationSec,
-    // Une édition humaine explicite : ce beat s'écarte désormais potentiellement de son dernier
-    // import, donc computeMerge doit le savoir au prochain ré-import.
-    locallyEditedAt: new Date(),
-    updatedAt: new Date(),
-  }).where(eq(scriptBeats.id, input.beatId));
+    await tx.update(scriptBeats).set({
+      spokenText,
+      directionNote: input.directionNote !== undefined ? input.directionNote : current.directionNote,
+      screenText: input.screenText !== undefined ? input.screenText : current.screenText,
+      transitionIn: input.transitionIn !== undefined ? input.transitionIn : current.transitionIn,
+      transitionOut: input.transitionOut !== undefined ? input.transitionOut : current.transitionOut,
+      sources: input.sources !== undefined ? input.sources : current.sources,
+      durationOverrideSec,
+      estimatedDurationSec,
+      // Une édition humaine explicite : ce beat s'écarte désormais potentiellement de son dernier
+      // import, donc computeMerge doit le savoir au prochain ré-import.
+      locallyEditedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(scriptBeats.id, input.beatId));
+
+    // (round de correction 2, C1) : le contrôle de péremption d'applyImportCore compare
+    // scriptVariants.updatedAt. Sans ce bump, une édition humaine entre prepareImport et
+    // applyImport passerait inaperçue et serait écrasée en silence par l'import.
+    await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, current.variantId));
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +143,9 @@ export async function reorderBeatsCore(input: { variantId: string; order: string
         .set({ position: index, updatedAt: new Date() })
         .where(and(eq(scriptBeats.variantId, input.variantId), eq(scriptBeats.externalId, externalId)));
     }
+    // (round de correction 2, C1) : même raison que updateBeatCore — un réordonnancement humain
+    // entre prepareImport et applyImport doit rendre l'aperçu périmé.
+    await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, input.variantId));
   });
 }
 
@@ -136,7 +153,7 @@ export async function reorderBeatsCore(input: { variantId: string; order: string
 // Import — préparation (lecture seule hors journal)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function writeJournal(args: {
+async function writeJournal(dbLike: DbLike, args: {
   projectId: string;
   variantId: string | null;
   source: JournalSource;
@@ -147,7 +164,7 @@ async function writeJournal(args: {
   diff: Record<string, unknown>;
   outcome: JournalOutcome;
 }): Promise<string> {
-  const [entry] = await db.insert(scriptJournal).values({
+  const [entry] = await dbLike.insert(scriptJournal).values({
     projectId: args.projectId,
     variantId: args.variantId,
     source: args.source,
@@ -173,6 +190,39 @@ function rawPayloadForJournal(raw: string): unknown {
   }
 }
 
+// Postgres réordonne les clés d'un objet jsonb au stockage (observé : par longueur de clé, puis
+// alphabétique — ni l'ordre d'insertion, ni un ordre stable côté application). `importedSnapshot`
+// relu depuis la colonne jsonb n'a donc PAS le même ordre de clés que `theirs`, reconstruit à
+// chaque appel dans l'ordre canonique par toSnapshot()/cette fonction. computeMerge (lib/video/
+// import.ts, module pur, non modifiable ici) compare les instantanés par `JSON.stringify(a) !==
+// JSON.stringify(b)` — sensible à l'ordre des clés. Sans cette normalisation, TOUT beat déjà
+// importé ressortait "modifié" à chaque nouvelle préparation, même sur un ré-import strictement
+// identique (trouvé en écrivant le test de l'I7 du round de correction 2 — la cause réelle n'était
+// pas l'assainissement asymétrique visé par l'I7, mais ce réordonnancement jsonb ; les deux bugs
+// produisaient le même symptôme).
+function normalizeSnapshot(raw: unknown): BeatSnapshot | null {
+  if (raw == null) return null;
+  const s = raw as BeatSnapshot;
+  return {
+    kind: s.kind,
+    spokenText: s.spokenText,
+    directionNote: s.directionNote,
+    screenText: s.screenText,
+    transitionIn: s.transitionIn,
+    transitionOut: s.transitionOut,
+    sources: s.sources ?? [],
+    inserts: (s.inserts ?? []).map((ins) => ({
+      type: ins.type,
+      url: ins.url,
+      tc_in: ins.tc_in,
+      tc_out: ins.tc_out,
+      duree_affichage_sec: ins.duree_affichage_sec,
+      credit: ins.credit,
+      droits: ins.droits,
+    })),
+  };
+}
+
 // Charge l'état complet (colonnes brutes incluses : id, durationOverrideSec, estimatedDurationSec,
 // locallyEditedAt) — dbLike accepte aussi bien `db` que `tx` : capturer l'état "avant" dans
 // applyImportCore doit se faire DANS la transaction, sur la même connexion que les écritures qui
@@ -191,9 +241,10 @@ async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
   const insertsByBeat = new Map<string, InsertPayload[]>();
   for (const ins of inserts) {
     const list = insertsByBeat.get(ins.beatId) ?? [];
-    // Mêmes clés, dans le même ordre que insertPayloadSchema (lib/video/schema.ts) : computeMerge
-    // compare les instantanés par JSON.stringify, donc une forme différente pour une valeur
-    // identique produirait un conflit fantôme.
+    // Mêmes clés, dans le même ordre que insertPayloadSchema (lib/video/schema.ts) : type, url,
+    // tc_in, tc_out, duree_affichage_sec, credit, droits — computeMerge compare les instantanés par
+    // JSON.stringify, donc une forme différente pour une valeur identique produirait un conflit
+    // fantôme (vérifié à nouveau au round de correction 2).
     list.push({
       type: ins.kind,
       url: ins.url,
@@ -223,15 +274,25 @@ async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
       sources: b.sources,
       inserts: insertsByBeat.get(b.id) ?? [],
     } as BeatSnapshot,
-    importedSnapshot: (b.importedSnapshot as unknown as BeatSnapshot | null) ?? null,
+    importedSnapshot: normalizeSnapshot(b.importedSnapshot),
   }));
 }
 
-async function loadBeatRows(variantId: string): Promise<BeatRow[]> {
-  const full = await loadFullBeatRows(db, variantId);
+async function loadBeatRows(dbLike: DbLike, variantId: string): Promise<BeatRow[]> {
+  const full = await loadFullBeatRows(dbLike, variantId);
   return full.map((r) => ({
     externalId: r.externalId, position: r.position, snapshot: r.snapshot, importedSnapshot: r.importedSnapshot,
   }));
+}
+
+// spokenText d'un beat de payload, assaini AVANT tout calcul de diff (round de correction 2, I7) :
+// `importedSnapshot` est écrit APRÈS sanitizeArticleHtml (voir sanitizeSnapshot plus bas), donc
+// comparer un `theirs` non assaini au `base`/`ours` (tous deux assainis) ferait apparaître une
+// "modification fantôme" à chaque ré-import du même payload, indéfiniment, dès que l'assainisseur
+// change quoi que ce soit au texte (entités HTML, espaces, etc). Assainir ICI, avant computeMerge,
+// remet `base` et `theirs` dans le même espace.
+function sanitizeIncomingBeats(beats: VariantPayload["beats"]): VariantPayload["beats"] {
+  return beats.map((b) => ({ ...b, texte: b.texte != null ? sanitizeArticleHtml(b.texte) : b.texte }));
 }
 
 export async function prepareImportCore(args: {
@@ -243,7 +304,7 @@ export async function prepareImportCore(args: {
 }): Promise<{ ok: true; journalId: string; diff: Diff } | { ok: false; issues: Issue[] }> {
   const parsed = parseIncoming(args.raw);
   if (!parsed.ok) {
-    await writeJournal({
+    await writeJournal(db, {
       projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
       schemaVersion: null, rawPayload: rawPayloadForJournal(args.raw), errorReport: parsed.issues,
       diff: {}, outcome: "rejete",
@@ -255,7 +316,7 @@ export async function prepareImportCore(args: {
   const targetVariant = existingVariants.find((v) => v.id === args.variantId);
   if (!targetVariant) {
     const issues: Issue[] = [{ path: "variantId", message: "Variante introuvable pour ce projet." }];
-    await writeJournal({
+    await writeJournal(db, {
       projectId: args.projectId, variantId: null, source: args.source, userId: args.userId,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
       errorReport: issues, diff: {}, outcome: "rejete",
@@ -263,13 +324,23 @@ export async function prepareImportCore(args: {
     return { ok: false, issues };
   }
 
+  // « Aucun import partiel » (round de correction 1 ruling 3, étendu au round de correction 2 C3) :
+  // TOUTES les issues sont calculées d'abord, sans écrire une seule ligne — y compris celle du
+  // payload qui ne contient aucune variante correspondant à la variante ciblée. Une variante ne
+  // doit jamais être créée si le payload est par ailleurs rejeté pour une tout autre raison.
+  const issues: Issue[] = [];
+
+  const matchingVariante = parsed.payload.variantes.find((v) => v.plateforme === targetVariant.platform);
+  if (!matchingVariante) {
+    issues.push({
+      path: "variantes",
+      message: `le payload ne contient aucune variante « ${targetVariant.platform} ».`,
+    });
+  }
+
   // Variante absente (spec §8) : une plateforme du payload qui n'a pas encore de variante dans le
   // projet en obtient une, à condition que plateforme/durée cible/ratio soient tous les trois
-  // présents — sinon on réclame les trois champs plutôt que de deviner. « Aucun import partiel »
-  // (round de correction 1, ruling 3) : on calcule la TOTALITÉ des issues d'abord, sans rien
-  // écrire — une variante ne doit jamais être créée si une AUTRE variante du même payload,
-  // rencontrée plus tard dans le tableau, s'avère invalide.
-  const missingVariantIssues: Issue[] = [];
+  // présents — sinon on réclame les trois champs plutôt que de deviner.
   const variantsToCreate: {
     plateforme: VariantPayload["plateforme"]; dureeCibleSec: number; ratio: string;
   }[] = [];
@@ -282,58 +353,54 @@ export async function prepareImportCore(args: {
       });
       knownPlatforms.add(variante.plateforme); // le payload répète parfois la même plateforme absente
     } else {
-      missingVariantIssues.push({
+      issues.push({
         path: `variantes[${vi}]`,
         message: "plateforme, duree_cible_sec et ratio sont requis pour créer une nouvelle variante.",
       });
     }
   }
-  if (missingVariantIssues.length > 0) {
-    await writeJournal({
+
+  if (issues.length > 0) {
+    await writeJournal(db, {
       projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
-      errorReport: missingVariantIssues, diff: {}, outcome: "rejete",
+      errorReport: issues, diff: {}, outcome: "rejete",
     });
-    return { ok: false, issues: missingVariantIssues };
+    return { ok: false, issues };
   }
 
-  let variants = existingVariants;
-  for (const v of variantsToCreate) {
-    const nextPosition = variants.reduce((max, existing) => Math.max(max, existing.position), -1) + 1;
-    const [created] = await db.insert(scriptVariants).values({
-      projectId: args.projectId,
-      platform: v.plateforme,
-      targetDurationSec: v.dureeCibleSec,
-      aspectRatio: v.ratio,
-      position: nextPosition,
-    }).returning();
-    variants = [...variants, created];
-  }
+  // matchingVariante est garanti non-null ici : l'issue correspondante aurait fait retourner plus
+  // haut. TypeScript ne le sait pas — assertion explicite plutôt qu'un `!` silencieux.
+  if (!matchingVariante) throw new Error("Invariant rompu : matchingVariante devrait être défini ici.");
 
-  const refreshedTarget = variants.find((v) => v.id === args.variantId) ?? targetVariant;
-  const matchingVariante = parsed.payload.variantes.find((v) => v.plateforme === refreshedTarget.platform);
-  if (!matchingVariante) {
-    const noVariantIssues: Issue[] = [{
-      path: "variantes",
-      message: `le payload ne contient aucune variante « ${refreshedTarget.platform} ».`,
-    }];
-    await writeJournal({
-      projectId: args.projectId, variantId: refreshedTarget.id, source: args.source, userId: args.userId,
-      schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
-      errorReport: noVariantIssues, diff: {}, outcome: "rejete",
+  // (round de correction 2, C3/I8) : les créations de variantes manquantes se font dans UNE seule
+  // transaction — une boucle d'insert non transactionnelle laisserait la première variante créée
+  // en base si une insertion suivante échouait en cours de route.
+  if (variantsToCreate.length > 0) {
+    await db.transaction(async (tx) => {
+      let position = existingVariants.reduce((max, v) => Math.max(max, v.position), -1) + 1;
+      for (const v of variantsToCreate) {
+        await tx.insert(scriptVariants).values({
+          projectId: args.projectId,
+          platform: v.plateforme,
+          targetDurationSec: v.dureeCibleSec,
+          aspectRatio: v.ratio,
+          position: position++,
+        });
+      }
     });
-    return { ok: false, issues: noVariantIssues };
   }
 
-  const currentBeats = await loadBeatRows(refreshedTarget.id);
-  const diff = computeMerge(currentBeats, matchingVariante.beats);
+  const currentBeats = await loadBeatRows(db, targetVariant.id);
+  const sanitizedBeats = sanitizeIncomingBeats(matchingVariante.beats);
+  const diff = computeMerge(currentBeats, sanitizedBeats);
 
   // Journalisée mais PAS encore appliquée : outcome "en_attente" (round de correction 1). Distinct
   // d'"annule" (qui signifie « revenu en arrière ») — une requête sur les imports annulés ne doit
   // pas remonter les diffs simplement en attente de décision. applyImportCore la fait passer à
   // "applique" au moment décisif, et refuse d'agir si l'entrée n'est plus "en_attente".
-  const journalId = await writeJournal({
-    projectId: args.projectId, variantId: refreshedTarget.id, source: args.source, userId: args.userId,
+  const journalId = await writeJournal(db, {
+    projectId: args.projectId, variantId: targetVariant.id, source: args.source, userId: args.userId,
     schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
     errorReport: [], diff: diff as unknown as Record<string, unknown>, outcome: "en_attente",
   });
@@ -345,57 +412,56 @@ export async function prepareImportCore(args: {
 // Import — application (une seule transaction)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function resolveBeatId(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  variantId: string,
-  externalId: string,
-): Promise<string> {
+async function resolveBeatId(tx: Tx, variantId: string, externalId: string): Promise<string> {
   const [row] = await tx.select({ id: scriptBeats.id }).from(scriptBeats)
     .where(and(eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, externalId)));
   if (!row) throw new Error(`Beat introuvable pour la mise à jour des inserts (${externalId}).`);
   return row.id;
 }
 
-function insertValuesFor(beatId: string, inserts: BeatSnapshot["inserts"]) {
-  return inserts.map((ins, i) => ({
-    beatId,
-    kind: ins.type,
-    url: ins.url ?? null,
-    tcIn: ins.tc_in ?? null,
-    tcOut: ins.tc_out ?? null,
-    displayDurationSec: ins.duree_affichage_sec ?? null,
-    credit: ins.credit ?? null,
-    rightsNote: ins.droits ?? null,
-    position: i,
+// Réécrit intégralement les `beat_inserts` du beat visé, en reportant `r2Key`/`linkStatus`/
+// `linkCheckedAt` depuis les lignes existantes par appariement sur la position (round de
+// correction 2, point hors revue) : ces trois colonnes n'existent pas dans `BeatSnapshot` (donc
+// pas dans le payload d'import), et les perdre à chaque ré-import effacerait silencieusement le
+// travail d'un futur sous-projet qui les peuple (vérification de lien, upload R2). Fonctionne aussi
+// pour un beat flambant neuf : `existing` est alors vide, donc `carry` reste `undefined` et les
+// colonnes prennent leur défaut — comportement inchangé pour une création.
+async function replaceBeatInserts(
+  tx: Tx,
+  externalId: string,
+  variantId: string,
+  inserts: BeatSnapshot["inserts"],
+): Promise<void> {
+  const beatId = await resolveBeatId(tx, variantId, externalId);
+  const existing = await tx.select().from(beatInserts)
+    .where(eq(beatInserts.beatId, beatId))
+    .orderBy(asc(beatInserts.position));
+  await tx.delete(beatInserts).where(eq(beatInserts.beatId, beatId));
+  if (inserts.length === 0) return;
+
+  await tx.insert(beatInserts).values(inserts.map((ins, i) => {
+    const carry = existing[i];
+    return {
+      beatId,
+      kind: ins.type,
+      url: ins.url ?? null,
+      tcIn: ins.tc_in ?? null,
+      tcOut: ins.tc_out ?? null,
+      displayDurationSec: ins.duree_affichage_sec ?? null,
+      credit: ins.credit ?? null,
+      rightsNote: ins.droits ?? null,
+      position: i,
+      r2Key: carry?.r2Key ?? null,
+      linkStatus: carry?.linkStatus ?? "non_verifie",
+      linkCheckedAt: carry?.linkCheckedAt ?? null,
+    };
   }));
 }
 
-async function insertBeatInserts(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  externalId: string,
-  variantId: string,
-  inserts: BeatSnapshot["inserts"],
-): Promise<void> {
-  if (inserts.length === 0) return;
-  const beatId = await resolveBeatId(tx, variantId, externalId);
-  await tx.insert(beatInserts).values(insertValuesFor(beatId, inserts));
-}
-
-async function replaceBeatInserts(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  externalId: string,
-  variantId: string,
-  inserts: BeatSnapshot["inserts"],
-): Promise<void> {
-  const beatId = await resolveBeatId(tx, variantId, externalId);
-  await tx.delete(beatInserts).where(eq(beatInserts.beatId, beatId));
-  if (inserts.length > 0) {
-    await tx.insert(beatInserts).values(insertValuesFor(beatId, inserts));
-  }
-}
-
 // spokenText vient d'un modèle et transite par un éditeur riche — il passe par le même
-// assainisseur que le corps d'article (spec §8).
+// assainisseur que le corps d'article (spec §8). Idempotent : le payload entrant a déjà été
+// assaini avant computeMerge (sanitizeIncomingBeats), donc ce second passage est une garantie
+// défensive, pas un besoin fonctionnel.
 function sanitizeSnapshot(s: BeatSnapshot): BeatSnapshot {
   return { ...s, spokenText: sanitizeArticleHtml(s.spokenText) };
 }
@@ -403,101 +469,127 @@ function sanitizeSnapshot(s: BeatSnapshot): BeatSnapshot {
 export async function applyImportCore(args: {
   journalId: string; variantId: string; accept: string[]; variantUpdatedAt: Date;
 }): Promise<{ ok: true; applied: number } | { ok: false; message: string }> {
-  const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, args.variantId));
-  if (!variant) return { ok: false as const, message: "Variante introuvable." };
-  // Péremption : le diff a été calculé sur un état qui a bougé depuis. Appliquer quand même
-  // écraserait une modification qu'on n'a jamais montrée à l'utilisateur.
-  if (variant.updatedAt.getTime() !== args.variantUpdatedAt.getTime()) {
-    return { ok: false as const, message: "L'aperçu est périmé — recalculez le diff avant d'appliquer." };
-  }
-
-  const [entry] = await db.select().from(scriptJournal).where(eq(scriptJournal.id, args.journalId));
-  if (!entry) return { ok: false as const, message: "Entrée de journal introuvable." };
-  // Refuse une entrée déjà appliquée ou déjà annulée : appliquer deux fois la même entrée, ou
-  // appliquer une entrée annulée, écrirait une seconde fois des mutations déjà (dés)actées.
-  if (entry.outcome !== "en_attente") {
-    return {
-      ok: false as const,
-      message: "Cette entrée n'est plus en attente d'application (déjà appliquée ou annulée).",
-    };
-  }
-
   const { wordsPerMinute } = await getVideoSettings();
-  const mutations = applyMerge(entry.diff as unknown as Diff, { accept: args.accept });
 
-  await db.transaction(async (tx) => {
-    // Capture l'état ANTÉRIEUR de tous les beats que la mutation va toucher — updates, removes, et
-    // ceux dont seule la position change — AVANT toute écriture. C'est la seule matière première
-    // d'une annulation fidèle (round de correction 1, ruling 2) : `Mutations` seule ne décrit que
-    // l'état d'arrivée.
-    const currentRows = await loadFullBeatRows(tx, args.variantId);
-    const updateIds = new Set(mutations.update.map((u) => u.externalId));
-    const removeIds = new Set(mutations.remove);
-    const orderIndex = new Map(mutations.order.map((id, i) => [id, i]));
-    const before: BeforeBeat[] = currentRows
-      .filter((row) => updateIds.has(row.externalId) || removeIds.has(row.externalId)
-        || orderIndex.get(row.externalId) !== undefined && orderIndex.get(row.externalId) !== row.position)
-      .map((row) => ({
-        externalId: row.externalId,
-        snapshot: row.snapshot,
-        importedSnapshot: row.importedSnapshot,
-        position: row.position,
-        locallyEditedAt: row.locallyEditedAt ? row.locallyEditedAt.toISOString() : null,
-        durationOverrideSec: row.durationOverrideSec,
-        estimatedDurationSec: row.estimatedDurationSec,
-      }));
+  try {
+    const applied = await db.transaction(async (tx) => {
+      // `for("update")` (round de correction 2, I4) : verrouille la ligne de journal pour la durée
+      // de la transaction. Deux applyImportCore concurrents sur le MÊME journalId sérialisent ici —
+      // le second ne lit l'entrée qu'après le commit (ou rollback) du premier, et voit alors son
+      // véritable outcome ("applique"), pas un "en_attente" périmé lu hors transaction.
+      const [entry] = await tx.select().from(scriptJournal).where(eq(scriptJournal.id, args.journalId)).for("update");
+      if (!entry) throw new RefusalError("Entrée de journal introuvable.");
 
-    for (const row of mutations.create) {
-      const snapshot = sanitizeSnapshot(row.snapshot);
-      await tx.insert(scriptBeats).values({
-        variantId: args.variantId, externalId: row.externalId,
-        position: mutations.order.indexOf(row.externalId),
-        kind: snapshot.kind, spokenText: snapshot.spokenText,
-        directionNote: snapshot.directionNote, screenText: snapshot.screenText,
-        transitionIn: snapshot.transitionIn, transitionOut: snapshot.transitionOut,
-        sources: snapshot.sources,
-        estimatedDurationSec: beatSeconds({ spokenText: snapshot.spokenText, durationOverrideSec: null }, wordsPerMinute),
-        // L'instantané devient la nouvelle base de fusion, et l'édition locale est remise à zéro :
-        // ce beat est désormais exactement ce que le dernier import a posé.
-        importedSnapshot: snapshot, locallyEditedAt: null,
-      });
-      await insertBeatInserts(tx, row.externalId, args.variantId, snapshot.inserts);
-    }
+      // (round de correction 2, C2) : journalId et variantId arrivent tous deux du client — sans ce
+      // contrôle, un diff calculé sur la variante A pourrait être appliqué à la variante B.
+      if (entry.variantId !== args.variantId) {
+        throw new RefusalError("Cette entrée de journal ne correspond pas à la variante ciblée.");
+      }
+      if (entry.outcome !== "en_attente") {
+        throw new RefusalError("Cette entrée n'est plus en attente d'application (déjà appliquée ou annulée).");
+      }
 
-    for (const patch of mutations.update) {
-      const snapshot = sanitizeSnapshot(patch.snapshot);
-      await tx.update(scriptBeats).set({
-        kind: snapshot.kind, spokenText: snapshot.spokenText,
-        directionNote: snapshot.directionNote, screenText: snapshot.screenText,
-        transitionIn: snapshot.transitionIn, transitionOut: snapshot.transitionOut,
-        sources: snapshot.sources,
-        estimatedDurationSec: beatSeconds({ spokenText: snapshot.spokenText, durationOverrideSec: null }, wordsPerMinute),
-        importedSnapshot: snapshot, locallyEditedAt: null, updatedAt: new Date(),
-      }).where(and(eq(scriptBeats.variantId, args.variantId), eq(scriptBeats.externalId, patch.externalId)));
-      await replaceBeatInserts(tx, patch.externalId, args.variantId, snapshot.inserts);
-    }
+      const [variant] = await tx.select().from(scriptVariants).where(eq(scriptVariants.id, args.variantId));
+      if (!variant) throw new RefusalError("Variante introuvable.");
+      // Cohérence projet ⇄ variante ⇄ entrée : la variante ciblée doit appartenir au même projet
+      // que celui journalisé par prepareImportCore.
+      if (entry.projectId !== variant.projectId) {
+        throw new RefusalError("Incohérence entre le projet de l'entrée de journal et celui de la variante.");
+      }
+      // Péremption : le diff a été calculé sur un état qui a bougé depuis. Appliquer quand même
+      // écraserait une modification qu'on n'a jamais montrée à l'utilisateur.
+      if (variant.updatedAt.getTime() !== args.variantUpdatedAt.getTime()) {
+        throw new RefusalError("L'aperçu est périmé — recalculez le diff avant d'appliquer.");
+      }
 
-    if (mutations.remove.length > 0) {
-      await tx.delete(scriptBeats).where(and(
-        eq(scriptBeats.variantId, args.variantId), inArray(scriptBeats.externalId, mutations.remove),
-      ));
-    }
+      const mutations = applyMerge(entry.diff as unknown as Diff, { accept: args.accept });
 
-    // Réordonnancement APRÈS ajouts et suppressions : l'ordre porte sur les beats survivants.
-    for (const [index, externalId] of mutations.order.entries()) {
-      await tx.update(scriptBeats).set({ position: index }).where(and(
-        eq(scriptBeats.variantId, args.variantId), eq(scriptBeats.externalId, externalId),
-      ));
-    }
+      // Capture l'état ANTÉRIEUR de tous les beats que la mutation va toucher — updates, removes, et
+      // ceux dont seule la position change — AVANT toute écriture. C'est la seule matière première
+      // d'une annulation fidèle (round de correction 1, ruling 2) : `Mutations` seule ne décrit que
+      // l'état d'arrivée.
+      const currentRows = await loadFullBeatRows(tx, args.variantId);
+      const updateIds = new Set(mutations.update.map((u) => u.externalId));
+      const removeIds = new Set(mutations.remove);
+      const orderIndex = new Map(mutations.order.map((id, i) => [id, i]));
+      const before: BeforeBeat[] = currentRows
+        .filter((row) => updateIds.has(row.externalId) || removeIds.has(row.externalId)
+          || orderIndex.get(row.externalId) !== undefined && orderIndex.get(row.externalId) !== row.position)
+        .map((row) => ({
+          externalId: row.externalId,
+          snapshot: row.snapshot,
+          importedSnapshot: row.importedSnapshot,
+          position: row.position,
+          locallyEditedAt: row.locallyEditedAt ? row.locallyEditedAt.toISOString() : null,
+          durationOverrideSec: row.durationOverrideSec,
+          estimatedDurationSec: row.estimatedDurationSec,
+        }));
 
-    await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, args.variantId));
-    const appliedRecord: AppliedRecord = { ...mutations, before };
-    await tx.update(scriptJournal)
-      .set({ outcome: "applique", applied: appliedRecord as unknown as Record<string, unknown> })
-      .where(eq(scriptJournal.id, args.journalId));
-  });
+      for (const row of mutations.create) {
+        const snapshot = sanitizeSnapshot(row.snapshot);
+        await tx.insert(scriptBeats).values({
+          variantId: args.variantId, externalId: row.externalId,
+          position: mutations.order.indexOf(row.externalId),
+          kind: snapshot.kind, spokenText: snapshot.spokenText,
+          directionNote: snapshot.directionNote, screenText: snapshot.screenText,
+          transitionIn: snapshot.transitionIn, transitionOut: snapshot.transitionOut,
+          sources: snapshot.sources,
+          estimatedDurationSec: beatSeconds({ spokenText: snapshot.spokenText, durationOverrideSec: null }, wordsPerMinute),
+          // L'instantané devient la nouvelle base de fusion, et l'édition locale est remise à zéro :
+          // ce beat est désormais exactement ce que le dernier import a posé.
+          importedSnapshot: snapshot, locallyEditedAt: null,
+        });
+        await replaceBeatInserts(tx, row.externalId, args.variantId, snapshot.inserts);
+      }
 
-  return { ok: true as const, applied: mutations.create.length + mutations.update.length };
+      for (const patch of mutations.update) {
+        const snapshot = sanitizeSnapshot(patch.snapshot);
+        await tx.update(scriptBeats).set({
+          kind: snapshot.kind, spokenText: snapshot.spokenText,
+          directionNote: snapshot.directionNote, screenText: snapshot.screenText,
+          transitionIn: snapshot.transitionIn, transitionOut: snapshot.transitionOut,
+          sources: snapshot.sources,
+          estimatedDurationSec: beatSeconds({ spokenText: snapshot.spokenText, durationOverrideSec: null }, wordsPerMinute),
+          importedSnapshot: snapshot, locallyEditedAt: null, updatedAt: new Date(),
+        }).where(and(eq(scriptBeats.variantId, args.variantId), eq(scriptBeats.externalId, patch.externalId)));
+        await replaceBeatInserts(tx, patch.externalId, args.variantId, snapshot.inserts);
+      }
+
+      if (mutations.remove.length > 0) {
+        await tx.delete(scriptBeats).where(and(
+          eq(scriptBeats.variantId, args.variantId), inArray(scriptBeats.externalId, mutations.remove),
+        ));
+      }
+
+      // Réordonnancement APRÈS ajouts et suppressions : l'ordre porte sur les beats survivants.
+      for (const [index, externalId] of mutations.order.entries()) {
+        await tx.update(scriptBeats).set({ position: index }).where(and(
+          eq(scriptBeats.variantId, args.variantId), eq(scriptBeats.externalId, externalId),
+        ));
+      }
+
+      await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, args.variantId));
+
+      const appliedRecord: AppliedRecord = { ...mutations, before };
+      // Mise à jour CONDITIONNELLE (round de correction 2, I4) : `outcome = 'en_attente'` dans le
+      // `where`, en plus du verrou `for("update")` ci-dessus — double garde, l'une pessimiste
+      // (verrou), l'autre optimiste (condition + vérification du nombre de lignes affectées).
+      const updatedJournal = await tx.update(scriptJournal)
+        .set({ outcome: "applique", applied: appliedRecord as unknown as Record<string, unknown> })
+        .where(and(eq(scriptJournal.id, args.journalId), eq(scriptJournal.outcome, "en_attente")))
+        .returning({ id: scriptJournal.id });
+      if (updatedJournal.length === 0) {
+        throw new RefusalError("Cette entrée n'est plus en attente d'application (déjà appliquée ou annulée).");
+      }
+
+      return mutations.create.length + mutations.update.length;
+    });
+
+    return { ok: true as const, applied };
+  } catch (e) {
+    if (e instanceof RefusalError) return { ok: false as const, message: e.message };
+    throw e;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -519,6 +611,16 @@ export async function revertJournalEntryCore(
   if (!entry.variantId) return { ok: false, message: "Variante introuvable pour cette entrée." };
 
   const applied = entry.applied as unknown as AppliedRecord;
+  // (round de correction 2, I10) : les entrées "applique" écrites avant l'introduction de
+  // `applied.before` n'en portent pas — refus explicite plutôt qu'un TypeError sur `undefined`.
+  if (!applied.before) {
+    return {
+      ok: false,
+      message: "Cette entrée est antérieure à l'enregistrement de l'état d'avant, elle n'est pas annulable.",
+    };
+  }
+  const before = applied.before;
+
   const touchedIds = new Set([
     ...applied.create.map((r) => r.externalId),
     ...applied.update.map((u) => u.externalId),
@@ -551,7 +653,26 @@ export async function revertJournalEntryCore(
     }
   }
 
-  const beforeByExternalId = new Map(applied.before.map((b) => [b.externalId, b]));
+  // (round de correction 2, I6) : même classe de perte de travail que C1, côté annulation cette
+  // fois. Un `updateBeat` humain posté APRÈS cet import (donc après `entry.createdAt`) sur l'un des
+  // beats que cette entrée a créés/modifiés serait écrasé en silence par la restauration de
+  // `applied.before`. Seuls create/update ont une ligne vivante à vérifier — un beat supprimé par
+  // cette entrée n'a plus de ligne en base.
+  const liveTouchedIds = [...applied.create.map((r) => r.externalId), ...applied.update.map((u) => u.externalId)];
+  if (liveTouchedIds.length > 0) {
+    const liveBeats = await db.select().from(scriptBeats).where(and(
+      eq(scriptBeats.variantId, entry.variantId), inArray(scriptBeats.externalId, liveTouchedIds),
+    ));
+    const editedSince = liveBeats.filter((b) => b.locallyEditedAt && b.locallyEditedAt.getTime() > entry.createdAt.getTime());
+    if (editedSince.length > 0) {
+      return {
+        ok: false,
+        message: `Une édition manuelle postérieure à cet import existe sur : ${editedSince.map((b) => b.externalId).join(", ")} — annulation impossible.`,
+      };
+    }
+  }
+
+  const beforeByExternalId = new Map(before.map((b) => [b.externalId, b]));
 
   await db.transaction(async (tx) => {
     const variantId = entry.variantId as string;
@@ -598,11 +719,16 @@ export async function revertJournalEntryCore(
 
     // 4. Restaure les positions de TOUS les beats capturés dans `before` — y compris ceux dont
     // seule la position avait bougé lors de l'application, sans modification de contenu.
-    for (const b of applied.before) {
+    for (const b of before) {
       await tx.update(scriptBeats).set({ position: b.position }).where(and(
         eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, b.externalId),
       ));
     }
+
+    // (round de correction 2, I5) : une entrée "en_attente" préparée avant cette annulation reste
+    // applicable après elle sans ce bump, alors que son diff porte sur un état que l'annulation
+    // vient de défaire.
+    await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, variantId));
 
     await tx.update(scriptJournal).set({ outcome: "annule", revertedAt: new Date() }).where(eq(scriptJournal.id, journalId));
   });

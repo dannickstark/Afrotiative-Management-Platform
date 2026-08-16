@@ -336,3 +336,40 @@ export const updateBeatSchema = z.object({
   sources: z.array(z.string().url()).max(20).optional(),
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
+
+// Round de correction 2 (Task 9, I9) : prepareImport/applyImport/reorderBeats/revertJournalEntry
+// ne reposaient que sur du typage TypeScript — effacé au runtime, donc sans garde réelle sur un
+// point d'entrée réseau (`source` non contraint à l'enum, `variantUpdatedAt` supposé être une
+// `Date` alors qu'un JSON body en fait toujours une string, ids non contraints en UUID). Même motif
+// que createVideoProjectSchema/updateBeatSchema ci-dessus.
+export const journalSourceEnum = z.enum(["copier_coller", "mcp", "manuel"]);
+
+export const prepareImportSchema = z.object({
+  projectId: z.string().uuid(),
+  variantId: z.string().uuid(),
+  raw: z.string().min(1, "Le contenu collé ne peut pas être vide.").max(2_000_000),
+  source: journalSourceEnum,
+});
+export type PrepareImportInput = z.infer<typeof prepareImportSchema>;
+
+export const applyImportSchema = z.object({
+  journalId: z.string().uuid(),
+  variantId: z.string().uuid(),
+  accept: z.array(z.string().min(1)).max(1000),
+  // `coerce.date()` : le body JSON d'une server action transporte toujours une string, jamais une
+  // vraie Date — sans coercion, `.getTime()` sur la valeur reçue lèverait avant même d'atteindre le
+  // contrôle de péremption.
+  variantUpdatedAt: z.coerce.date(),
+});
+export type ApplyImportInput = z.infer<typeof applyImportSchema>;
+
+export const reorderBeatsSchema = z.object({
+  variantId: z.string().uuid(),
+  order: z.array(z.string().min(1)).min(1, "Ordre vide.").max(1000),
+});
+export type ReorderBeatsInput = z.infer<typeof reorderBeatsSchema>;
+
+export const revertJournalEntrySchema = z.object({
+  journalId: z.string().uuid(),
+});
+export type RevertJournalEntryInput = z.infer<typeof revertJournalEntrySchema>;

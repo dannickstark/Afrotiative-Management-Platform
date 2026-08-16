@@ -2,7 +2,10 @@
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { createVideoProjectSchema, updateBeatSchema } from "@/lib/validation";
+import {
+  createVideoProjectSchema, updateBeatSchema, prepareImportSchema, applyImportSchema,
+  reorderBeatsSchema, revertJournalEntrySchema,
+} from "@/lib/validation";
 import {
   createVideoProjectCore, updateBeatCore, reorderBeatsCore,
   prepareImportCore, applyImportCore, revertJournalEntryCore,
@@ -48,46 +51,55 @@ export async function updateBeat(
 }
 
 export async function reorderBeats(
-  variantId: string,
-  order: string[],
+  input: unknown,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   await guard();
 
-  if (!variantId || order.length === 0) return { ok: false, message: "Réordonnancement invalide." };
+  const parsed = reorderBeatsSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
-  await reorderBeatsCore({ variantId, order });
+  await reorderBeatsCore(parsed.data);
   return { ok: true };
 }
 
-export async function prepareImport(input: {
-  projectId: string;
-  variantId: string;
-  raw: string;
-  source: "copier_coller" | "mcp" | "manuel";
-}): Promise<{ ok: true; journalId: string; diff: Diff } | { ok: false; issues: Issue[] }> {
+export async function prepareImport(
+  input: unknown,
+): Promise<{ ok: true; journalId: string; diff: Diff } | { ok: false; issues: Issue[] }> {
   const u = await guard();
-  return prepareImportCore({ ...input, userId: u.id });
+
+  const parsed = prepareImportSchema.safeParse(input);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+    };
+  }
+
+  return prepareImportCore({ ...parsed.data, userId: u.id });
 }
 
-export async function applyImport(input: {
-  journalId: string;
-  variantId: string;
-  accept: string[];
-  variantUpdatedAt: Date;
-}): Promise<{ ok: true; applied: number } | { ok: false; message: string }> {
+export async function applyImport(
+  input: unknown,
+): Promise<{ ok: true; applied: number } | { ok: false; message: string }> {
   await guard();
 
-  const result = await applyImportCore(input);
+  const parsed = applyImportSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+
+  const result = await applyImportCore(parsed.data);
   if (result.ok) revalidatePath("/video");
   return result;
 }
 
 export async function revertJournalEntry(
-  journalId: string,
+  input: unknown,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   await guard();
 
-  const result = await revertJournalEntryCore(journalId);
+  const parsed = revertJournalEntrySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+
+  const result = await revertJournalEntryCore(parsed.data.journalId);
   if (result.ok) revalidatePath("/video");
   return result;
 }
