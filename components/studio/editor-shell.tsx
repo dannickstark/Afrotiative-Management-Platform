@@ -796,13 +796,15 @@ function EditorShellInner({
           />
         </div>
 
-        {/* Impeccable `layout` : le ModeSwitch rejoint la condition `layout !== "too-small"` qui
-            gouverne déjà toute la piste droite. Sous 768px le corps rend `TooSmallState` QUEL QUE SOIT
-            `mode` (voir plus bas) : le sélecteur restait donc focusable et changeait d'état sans le
-            moindre effet visible — la même malhonnêteté que le correctif du chantier A Tâche 4 avait
-            retirée à annuler/rétablir, laissée en place ici par oubli. */}
+        {/* Tâche 8 : le ModeSwitch reste monté quel que soit `layout` — retirer la garde
+            `layout !== "too-small"` (héritée du chantier A Tâche 4, qui la posait pour la même raison
+            que le reste de cette piste droite) était CORRECT tant que `too-small` amputait les DEUX
+            modes. Ce n'est plus le cas (voir plus bas : `too-small` ne garde plus que Montage) — sous
+            768px, ce sélecteur est désormais le SEUL chemin vers Rendu réel, il doit donc rester
+            atteignable. `montageDisabled` désactive uniquement son côté Montage, dont la mise en page
+            à quatre régions ne tient toujours pas sous ce palier. */}
         <div className="flex items-center justify-center">
-          {layout !== "too-small" && <ModeSwitch mode={mode} onChange={changeMode} />}
+          <ModeSwitch mode={mode} onChange={changeMode} montageDisabled={layout === "too-small"} />
         </div>
 
         {/* Impeccable `layout` : `gap-2` uniforme -> une cadence à deux temps. Cette piste porte TROIS
@@ -825,7 +827,18 @@ function EditorShellInner({
               Chantier B, Tâche 3 (additif) : le slot de zoom REJOINT ce même groupe conditionnel — le
               brief le nomme explicitement (« follow how undo/redo are gated ») : c'est un contrôle
               d'ÉDITION du canevas au même titre qu'annuler/rétablir, jamais un simple affichage, donc
-              il n'a pas plus sa place qu'eux dans l'en-tête lecture seule `too-small`. */}
+              il n'a pas plus sa place qu'eux dans l'en-tête lecture seule `too-small`.
+
+              Repassage Tâche 8 (revue des gardes `too-small`) : cette garde reste `layout ===
+              "too-small"` SEUL, sans condition de `mode` — donc TOUJOURS masquée sous 768px, y compris
+              désormais en Rendu réel (qui, lui, n'est plus soumis à `TooSmallState`). Zoom/annuler/
+              rétablir n'ont de toute façon aucun sens hors du canevas Montage : rien à amputer. Publier
+              et l'historique des versions sont moins tranchés — DESIGN.md range le mobile en « quick
+              consult/approve », ce qui pourrait plaider pour un accès à Publier depuis la planche sur
+              téléphone. Laissé masqué ici délibérément : ni le brief ni la Tâche 8 ne portent sur cette
+              piste d'actions, et l'étendre serait ajouter une capacité neuve hors du périmètre « rendre
+              la planche atteignable » de cette tâche — signalé comme point ouvert dans le rapport de
+              Tâche 8 plutôt que tranché ici. */}
           {layout !== "too-small" && (
             <>
               {/* Le slot de zoom (spec Studio Pro chantier A Tâche 2, câblé ICI par le chantier B
@@ -988,9 +1001,20 @@ function EditorShellInner({
           se lisent comme un bloc continu, et la seule vraie respiration de l'écran est le pourtour du
           plan de travail lui-même. */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {layout === "too-small" ? (
+        {/* Refonte « Rendu réel » (Tâche 8) : `too-small` ne garde plus QUE Montage. Rendu réel est de
+            la CONSULTATION — une grille d'images n'a besoin ni de rail, ni de panneau accosté, ni
+            d'inspecteur — et DESIGN.md pose la posture « mobile is for quick consult/approve ». C'est
+            donc la seule surface du studio qui a sa place sur un téléphone. Montage, lui, cède toujours
+            la place à TooSmallState sous 768px : sa mise en page à quatre régions n'y tient pas. */}
+        {mode === "rendu" ? (
+          <RenderMode
+            templateId={template.id} context={template.context} scene={state.scene} format={template.format}
+            articles={previewArticles} disabled={!storageConfigured}
+            view={view} onViewChange={setView}
+          />
+        ) : layout === "too-small" ? (
           <TooSmallState scene={state.scene} images={canvasImages} width={template.width} height={template.height} />
-        ) : mode === "montage" ? (
+        ) : (
           <>
             <Rail selected={prefs.openPanel} onSelect={selectRailCategory} />
 
@@ -1247,12 +1271,6 @@ function EditorShellInner({
               </Sheet>
             )}
           </>
-        ) : (
-          <RenderMode
-            templateId={template.id} context={template.context} scene={state.scene} format={template.format}
-            articles={previewArticles} disabled={!storageConfigured}
-            view={view} onViewChange={setView}
-          />
         )}
       </div>
     </div>

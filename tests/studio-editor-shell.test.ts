@@ -1,5 +1,6 @@
 import { describe, it, expect, mock, beforeAll, afterAll, afterEach } from "bun:test";
 import React from "react";
+import { act } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { installDom, mount, click, pressKey } from "./dom-harness";
 import type { Scene } from "@/lib/studio/scene";
@@ -362,6 +363,45 @@ describe("EditorShell — réactif : editorLayoutMode pilote la composition rée
     expect(container.querySelector('[data-action="version-history"]')).not.toBeNull();
     expect(container.querySelector('[data-action="publish"]')).not.toBeNull();
 
+    unmount();
+  });
+
+  // Tâche 8 — Rendu réel n'est plus soumis à `too-small` : une grille d'images n'a besoin ni de
+  // rail, ni de panneau accosté, ni d'inspecteur, contrairement à Montage (voir le test 700px
+  // ci-dessus, laissé INCHANGÉ — c'est toujours l'état par défaut de la coque).
+  it("700px + Rendu réel : la planche remplace TooSmallState — une grille d'images n'a besoin ni de rail ni d'inspecteur", async () => {
+    const { container, unmount } = await mountAtWidth(700);
+
+    // On part de Montage (l'état initial de la coque) : TooSmallState, comme le test voisin l'exige.
+    expect(container.querySelector('[data-testid="editor-too-small"]')).not.toBeNull();
+
+    // Le ModeSwitch DOIT rester monté ici, sans quoi ce clic serait impossible — et Rendu réel
+    // inatteignable sur téléphone. C'est la preuve positive de la garde retirée en Tâche 8.
+    const rendu = container.querySelector('[data-action="mode-rendu"]') as HTMLButtonElement | null;
+    expect(rendu).not.toBeNull();
+    await act(async () => { rendu!.click(); });
+
+    expect(container.querySelector('[data-testid="render-mode"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="proof-sheet"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="editor-too-small"]')).toBeNull();
+    // Et toujours aucune des quatre régions de Montage.
+    expect(container.querySelector('[data-testid="editor-rail"]')).toBeNull();
+
+    unmount();
+  });
+
+  it("700px : le côté Montage du ModeSwitch est désactivé — sa mise en page à quatre régions n'y tient pas", async () => {
+    const { container, unmount } = await mountAtWidth(700);
+    const montage = container.querySelector('[data-action="mode-montage"]') as HTMLButtonElement | null;
+    expect(montage).not.toBeNull();
+    expect(montage!.disabled).toBe(true);
+    unmount();
+  });
+
+  it("1400px : le côté Montage reste actif — la désactivation suit RÉELLEMENT le palier, elle n'est pas figée", async () => {
+    const { container, unmount } = await mountAtWidth(1400);
+    const montage = container.querySelector('[data-action="mode-montage"]') as HTMLButtonElement | null;
+    expect(montage!.disabled).toBe(false);
     unmount();
   });
 });

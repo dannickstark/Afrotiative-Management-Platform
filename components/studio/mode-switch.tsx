@@ -14,9 +14,12 @@ export interface ModeSwitchProps {
   mode: StudioMode;
   onChange: (mode: StudioMode) => void;
   className?: string;
+  // Tâche 8 : additive et optionnelle (défaut `undefined` -> `false`) — ne désactive QUE le côté
+  // Montage, jamais Rendu réel (voir editor-shell.tsx, où `too-small` ne garde plus que Montage).
+  montageDisabled?: boolean;
 }
 
-export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
+export function ModeSwitch({ mode, onChange, className, montageDisabled }: ModeSwitchProps) {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
@@ -78,6 +81,8 @@ export function ModeSwitch({ mode, onChange, className }: ModeSwitchProps) {
         type="button"
         aria-pressed={mode === "montage"}
         data-action="mode-montage"
+        disabled={montageDisabled}
+        title={montageDisabled ? "Montage nécessite un écran plus large — la mise en page (rail, panneau, canevas, inspecteur) n'y tient pas." : undefined}
         onClick={() => onChange("montage")}
         className={cn(
           "rounded-full px-3 py-1.5 text-sm font-medium transition-colors",

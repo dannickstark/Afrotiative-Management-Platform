@@ -304,3 +304,34 @@ describe("ModeSwitch — le comportement que `role=\"group\"` oblige, prouvé pa
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 8 — `montageDisabled` : additive, et ne touche JAMAIS le côté Rendu réel. C'est ce qui
+// garde la planche atteignable sous 768px une fois que editor-shell.tsx ne monte plus `TooSmallState`
+// pour ce mode-là (voir tests/studio-editor-shell.test.ts pour la preuve DOM correspondante).
+describe("ModeSwitch — Montage indisponible sous 768px", () => {
+  it("désactive le côté Montage et dit pourquoi", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModeSwitch, { mode: "rendu" as const, onChange: () => {}, montageDisabled: true }),
+    );
+    const montage = html.match(/<button[^>]*data-action="mode-montage"[^>]*>/)![0];
+    expect(montage).toContain("disabled");
+    expect(montage).toMatch(/écran plus large/);
+  });
+
+  it("laisse le côté Montage actif par défaut — la prop est additive", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModeSwitch, { mode: "montage" as const, onChange: () => {} }),
+    );
+    const montage = html.match(/<button[^>]*data-action="mode-montage"[^>]*>/)![0];
+    expect(montage).not.toContain("disabled");
+  });
+
+  it("le côté « Rendu réel » n'est JAMAIS désactivé — c'est précisément lui qui doit rester atteignable", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModeSwitch, { mode: "montage" as const, onChange: () => {}, montageDisabled: true }),
+    );
+    const rendu = html.match(/<button[^>]*data-action="mode-rendu"[^>]*>/)![0];
+    expect(rendu).not.toContain("disabled");
+  });
+});
