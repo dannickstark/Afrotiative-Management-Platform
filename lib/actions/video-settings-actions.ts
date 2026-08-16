@@ -6,7 +6,12 @@ import { videoSettingsSchema, type VideoSettingsInput } from "@/lib/validation";
 
 async function guard() {
   const u = await requireUser();
-  requirePermission(u.role, "video", "manage");
+  // "configure", pas "manage" (round de correction 1) : "manage" est accordé aux trois rôles,
+  // journaliste compris, pour l'édition des projets/beats vidéo — mais les RÉGLAGES du module
+  // (modèle de brief, cadence) doivent rester admin/éditeur, comme SETTINGS_CHILDREN le prévoit
+  // déjà pour /settings/video. Cette action est le vrai point d'entrée réseau : la garde compte
+  // ici autant que sur la page.
+  requirePermission(u.role, "video", "configure");
   return u;
 }
 

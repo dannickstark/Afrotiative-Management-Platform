@@ -13,6 +13,23 @@ describe("droits vidéo", () => {
   it("une action inconnue reste refusée", () => {
     expect(can("journalist", "video", "publish")).toBe(false);
   });
+
+  // Round de correction 1 (Task 8) : "configure" gate /settings/video (modèle de brief,
+  // cadence) et doit rester distinct de "manage" — le journaliste garde "manage" (édition des
+  // projets/beats vidéo) mais pas "configure" (réglages du module, réservés à admin/éditeur,
+  // comme SETTINGS_CHILDREN le prévoit pour l'entrée de nav correspondante).
+  it("« configure » est refusé au journaliste, accordé à l'éditeur et à l'admin", () => {
+    expect(can("journalist", "video", "configure")).toBe(false);
+    expect(can("editor", "video", "configure")).toBe(true);
+    expect(can("admin", "video", "configure")).toBe(true);
+  });
+
+  it("les trois rôles conservent « read » et « manage » malgré l'ajout de « configure »", () => {
+    for (const role of ["admin", "editor", "journalist"] as const) {
+      expect(can(role, "video", "read")).toBe(true);
+      expect(can(role, "video", "manage")).toBe(true);
+    }
+  });
 });
 
 describe("navigation vidéo", () => {

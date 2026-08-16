@@ -5,7 +5,7 @@ import { VideoSettingsForm } from "@/components/video/video-settings-form";
 
 export default async function Page() {
   const user = await requireUser();
-  requirePermission(user.role, "video", "manage");
+  requirePermission(user.role, "video", "configure");
   const settings = await getVideoSettings();
   return <VideoSettingsForm settings={settings} />;
 }
