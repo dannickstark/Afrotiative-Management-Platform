@@ -14,6 +14,9 @@ const STATUS_OPTIONS: ArticleStatus[] = [
 const SOURCE_LABEL: Record<string, string> = {
   all: "Toutes les sources", single: "Source unique", multiple: "Sources multiples",
 };
+const IMG_LABEL: Record<string, string> = {
+  all: "Toutes les images", pending: "Images à choisir",
+};
 
 export function QueueFilters({
   filters, categories,
@@ -103,6 +106,19 @@ export function QueueFilters({
           <SelectItem value="all">Toutes les sources</SelectItem>
           <SelectItem value="single">Source unique</SelectItem>
           <SelectItem value="multiple">Sources multiples</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <Select
+        value={filters.pendingImage ? "pending" : "all"}
+        onValueChange={(v) => setParams({ img: v && v !== "all" ? v : undefined })}
+      >
+        <SelectTrigger className="w-[190px]">
+          <SelectValue placeholder="Images">{(v: string) => IMG_LABEL[v] ?? IMG_LABEL.all}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">Toutes les images</SelectItem>
+          <SelectItem value="pending">Images à choisir</SelectItem>
         </SelectContent>
       </Select>
     </div>
