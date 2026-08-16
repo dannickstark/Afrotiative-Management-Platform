@@ -4,11 +4,21 @@ import {
 } from "@/components/shell/nav-items";
 
 describe("visibleNavItems", () => {
-  it("un journaliste ne voit ni Réglages ni Exécutions", () => {
+  it("un journaliste ne voit ni Exécutions ni les cinq sous-pages de Réglages fermées à son rôle", () => {
     const hrefs = visibleNavItems("journalist").map((i) => i.href);
-    expect(hrefs).not.toContain("/settings");
     expect(hrefs).not.toContain("/runs");
     expect(hrefs).toContain("/queue");
+  });
+
+  it("un journaliste voit Réglages réduit à sa seule entrée autorisée, MCP (round de correction Task 7)", () => {
+    // video:manage est accordé aux TROIS rôles (lib/rbac.ts) — le journaliste gère donc ses
+    // propres jetons MCP, c'est lui qui écrit les scripts vidéo. Sans ce chemin de navigation, le
+    // droit existerait sans accès : filterSections retire les cinq autres sous-pages (chacune
+    // fermée à journalist par son propre `roles` sur SETTINGS_CHILDREN), donc Réglages survit avec
+    // exactement un enfant.
+    const settings = visibleNavItems("journalist").find((i) => i.href === "/settings");
+    expect(settings).toBeDefined();
+    expect(settings!.items!.map((c) => c.href)).toEqual(["/settings/mcp"]);
   });
 
   it("un éditeur voit Réglages avec exactement ses cinq sous-pages autorisées", () => {

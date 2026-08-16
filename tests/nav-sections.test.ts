@@ -27,11 +27,19 @@ describe("NAV_SECTIONS", () => {
 });
 
 describe("visibleNavSections", () => {
-  it("un journaliste ne voit ni Exécutions ni Réglages", () => {
-    const hrefs = visibleNavSections("journalist").flatMap((s) => s.items.map((i) => i.href));
+  it("un journaliste ne voit pas Exécutions, mais voit Réglages réduit à MCP (round de correction Task 7)", () => {
+    // video:manage (lib/rbac.ts) est accordé aux trois rôles — le journaliste gère donc ses
+    // propres jetons MCP depuis /settings/mcp. La section "reglages" et son élément /settings
+    // restent ouverts à journalist pour lui donner ce chemin ; les cinq autres sous-pages restent
+    // fermées via leur propre `roles` sur SETTINGS_CHILDREN.
+    const sections = visibleNavSections("journalist");
+    const hrefs = sections.flatMap((s) => s.items.map((i) => i.href));
     expect(hrefs).toContain("/queue");
     expect(hrefs).not.toContain("/runs");
-    expect(hrefs).not.toContain("/settings");
+    expect(hrefs).toContain("/settings");
+
+    const settings = sections.flatMap((s) => s.items).find((i) => i.href === "/settings");
+    expect(settings!.items!.map((c) => c.href)).toEqual(["/settings/mcp"]);
   });
 
   it("un éditeur voit Réglages mais seulement ses sous-pages autorisées", () => {

@@ -92,11 +92,18 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "reglages",
     label: "Réglages",
-    roles: ["admin", "editor"],
+    // Task 7 (round de correction) : ouvert à "journalist" — sinon /settings/mcp existe dans
+    // SETTINGS_CHILDREN sans qu'aucun chemin de navigation n'y mène jamais pour ce rôle, alors
+    // même qu'il détient video:manage et gère donc ses propres jetons (c'est lui qui écrit les
+    // scripts vidéo). Le filtrage à trois niveaux de filterSections fait le reste : les cinq
+    // autres sous-pages restent fermées (leurs propres `roles` sur SETTINGS_CHILDREN excluent
+    // toujours journalist), donc un journaliste ne voit ici que « Réglages » réduit à sa seule
+    // entrée « MCP ».
+    roles: ["admin", "editor", "journalist"],
     items: [
       {
         href: "/settings", label: "Réglages", icon: Settings,
-        roles: ["admin", "editor"], items: SETTINGS_CHILDREN,
+        roles: ["admin", "editor", "journalist"], items: SETTINGS_CHILDREN,
       },
     ],
   },
