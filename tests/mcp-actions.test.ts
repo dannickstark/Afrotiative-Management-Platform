@@ -53,6 +53,15 @@ describe("listTokensCore", () => {
     const rows = await listTokensCore({ userId: editor.userId, seesAll: true });
     expect(rows.some((r) => r.userId === journalist.userId)).toBe(true);
   });
+
+  // Round de correction final, I2 : le spec §6.2 promet « nom, préfixe, PROPRIÉTAIRE, dernière
+  // utilisation, date de création ». Sans cette jointure, la vue « toute l'équipe » — seul intérêt
+  // du droit video:configure sur ce panneau — nommait les jetons sans jamais dire à qui ils sont.
+  it("nomme le porteur de chaque jeton", async () => {
+    const rows = await listTokensCore({ userId: editor.userId, seesAll: true });
+    const sien = rows.find((r) => r.userId === journalist.userId);
+    expect(sien?.ownerName).toBe("Porteur de test réglages MCP");
+  });
 });
 
 describe("revokeApiTokenCore", () => {

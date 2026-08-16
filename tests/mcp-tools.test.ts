@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { db, scriptVariants, scriptBeats, scriptJournal } from "@/db";
 import { asc, eq } from "drizzle-orm";
-import { EXAMPLE_PAYLOAD } from "@/lib/video/schema";
+import { EXAMPLE_PAYLOAD, beatPayloadSchema, insertPayloadSchema, payloadSchema } from "@/lib/video/schema";
 import { prepareImportCore } from "@/lib/video/persist";
 import { callTool, makeActor, cleanupProject, type TestActor } from "./mcp-harness";
 
@@ -11,6 +11,11 @@ let actor: TestActor;
 // Déclaré ici, et non dans le test qui le crée : la base Neon est PARTAGÉE, donc le nettoyage doit
 // avoir lieu même si le test échoue en cours de route.
 let lecteur: TestActor | null = null;
+// L'aller-retour (C1) travaille sur SON PROPRE projet : sur celui des autres tests, une retouche
+// humaine a fait diverger l'état actuel de l'instantané du dernier import, et une relecture fidèle
+// y produirait légitimement une modification. Le défaut visé se mesure sur un script fraîchement
+// appliqué, où relire puis resoumettre ne peut RIEN changer.
+let projetAllerRetour: string | undefined;
 
 beforeAll(async () => { actor = await makeActor("editor"); });
 afterAll(async () => {
@@ -18,6 +23,7 @@ afterAll(async () => {
   // test et son jeton doivent tout de même partir — sinon ils s'accumulent, run après run.
   try {
     await cleanupProject(projectId);
+    await cleanupProject(projetAllerRetour);
   } finally {
     if (lecteur) await lecteur.cleanup();
     if (actor) await actor.cleanup();
@@ -218,6 +224,62 @@ describe("outils MCP", () => {
     expect(applied.length).toBeGreaterThan(0);
     expect(applied.every((r) => r.reviewedAt === null)).toBe(true);
   }, 30_000);
+
+  // ── Round de correction final, C1 ──────────────────────────────────────────
+  // Le test qui manquait, et qui aurait attrapé le défaut : `get_script` rendait le vocabulaire
+  // INTERNE (`id` = l'UUID de ligne, `kind`, `spokenText`, `directionNote`…) alors que le contrat
+  // attend `id` = l'externalId, `type`, `texte`, `note_realisation`… L'agent qui lit, révise et
+  // resoumet en reportant `id` → `id` envoyait des UUID comme identifiants de beats ; un UUID
+  // satisfait BEAT_ID_RE, donc rien ne le refusait. computeMerge y voyait N suppressions et N
+  // ajouts ; les suppressions ne s'appliquent pas par défaut, les ajouts oui — et le script était
+  // DUPLIQUÉ, sans erreur visible nulle part. C'est exactement le mode d'échec que get_script
+  // existait pour supprimer.
+  it("aller-retour get_script → submit_script : la charge utile relue, resoumise telle quelle, ne produit AUCUN diff", async () => {
+    const cree = await callTool(actor, "create_video_project", {
+      title: "Test MCP — aller-retour", platform: "youtube_long", targetDurationSec: 720,
+    });
+    projetAllerRetour = cree.projectId;
+
+    const prep = await callTool(actor, "submit_script", { projectId: cree.projectId, payload: EXAMPLE_PAYLOAD });
+    expect(prep.ok).toBe(true);
+    const applique = await callTool(actor, "apply_script", { journalId: prep.journalId, variantId: prep.variantId });
+    expect(applique.ok).toBe(true);
+    expect(applique.applied).toBe(EXAMPLE_PAYLOAD.variantes[0].beats.length);
+
+    const lu = await callTool(actor, "get_script", { variantId: prep.variantId });
+
+    // 1. Ce qui est rendu EST le contrat — pas une forme qui lui ressemble.
+    expect(payloadSchema.safeParse(lu.payload).success).toBe(true);
+    const beatLu = lu.payload.variantes[0].beats[0];
+    expect(Object.keys(beatLu).sort()).toEqual(Object.keys(beatPayloadSchema.shape).sort());
+    const insertLu = lu.payload.variantes[0].beats
+      .flatMap((b: { inserts: unknown[] }) => b.inserts)[0] as Record<string, unknown>;
+    expect(Object.keys(insertLu).sort()).toEqual(Object.keys(insertPayloadSchema.shape).sort());
+    // `id` est l'identifiant du CONTRAT, jamais l'UUID de ligne.
+    expect(lu.payload.variantes[0].beats.map((b: { id: string }) => b.id))
+      .toEqual(EXAMPLE_PAYLOAD.variantes[0].beats.map((b) => b.id));
+
+    // 2. L'UUID reste accessible — sous un nom qui ne peut pas être confondu avec la clé du
+    //    contrat, et qui est exactement l'argument attendu par update_beat / update_insert.
+    const interne = lu.identifiantsInternes.find((x: { id: string }) => x.id === beatLu.id);
+    expect(interne.beatId).toMatch(/^[0-9a-f-]{36}$/);
+    await callTool(actor, "update_beat", { beatId: interne.beatId, spokenText: beatLu.texte });
+
+    // 3. LE point : resoumettre ce qu'on vient de lire, sans y toucher, ne propose RIEN.
+    const relu = await callTool(actor, "get_script", { variantId: prep.variantId });
+    const resoumis = await callTool(actor, "submit_script", {
+      projectId: cree.projectId, payload: relu.payload,
+    });
+    expect(resoumis.ok).toBe(true);
+    expect(resoumis.diff.added).toEqual([]);
+    expect(resoumis.diff.modified).toEqual([]);
+    expect(resoumis.diff.conflicts).toEqual([]);
+    expect(resoumis.diff.removed).toEqual([]);
+
+    // 4. Et le script n'a pas doublé : c'était le symptôme silencieux.
+    const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, prep.variantId));
+    expect(beats.length).toBe(EXAMPLE_PAYLOAD.variantes[0].beats.length);
+  }, 60_000);
 
   it("un porteur sans droit d'écriture est refusé", async () => {
     lecteur = await makeActor("journalist", { revokeVideoManage: true });

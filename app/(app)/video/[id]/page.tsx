@@ -5,7 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import { briefVarsFor, getVideoProject } from "@/lib/queries/video";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
-import { markProjectReviewedCore } from "@/lib/video/persist";
+import { hasBeforeState, markProjectReviewedCore } from "@/lib/video/persist";
 import { PageHeader } from "@/components/shell/page-header";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { BriefPanel } from "@/components/video/brief-panel";
@@ -106,6 +106,10 @@ export default async function VideoProjectPage({
     rawPayload: j.rawPayload,
     revertedAt: j.revertedAt ? j.revertedAt.toISOString() : null,
     reviewedAt: j.reviewedAt ? j.reviewedAt.toISOString() : null,
+    // Round de correction final, I3 : le MÊME prédicat que la garde serveur
+    // (lib/video/persist.ts#hasBeforeState), pas une seconde lecture du jsonb écrite ici — sinon
+    // l'écran et le serveur pourraient un jour ne plus s'accorder sur ce qui est annulable.
+    revertable: hasBeforeState(j.applied),
   }));
 
   return (

@@ -15,6 +15,10 @@ export type TokenRow = {
   id: string;
   userId: string;
   name: string;
+  // Le PORTEUR du jeton (round de correction final, I2) : le spec §6.2 le promet, et sans lui la vue
+  // « toute l'équipe » — seul intérêt du droit video:configure sur ce panneau — montre à un admin des
+  // jetons sans dire à qui ils sont. `null` seulement si la ligne utilisateur a disparu.
+  ownerName: string | null;
   prefix: string;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
@@ -45,12 +49,16 @@ export async function listTokensCore(
     id: apiTokens.id,
     userId: apiTokens.userId,
     name: apiTokens.name,
+    ownerName: userTable.name,
     prefix: apiTokens.prefix,
     lastUsedAt: apiTokens.lastUsedAt,
     revokedAt: apiTokens.revokedAt,
     createdAt: apiTokens.createdAt,
   })
     .from(apiTokens)
+    // `leftJoin` et non `innerJoin` : un jeton dont la ligne utilisateur aurait disparu doit rester
+    // VISIBLE — et donc révocable — plutôt que de sortir silencieusement de la liste.
+    .leftJoin(userTable, eq(apiTokens.userId, userTable.id))
     .where(seesAll ? undefined : eq(apiTokens.userId, userId))
     .orderBy(desc(apiTokens.createdAt));
 }

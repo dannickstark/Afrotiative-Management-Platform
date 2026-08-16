@@ -46,6 +46,13 @@ export type JournalEntryView = {
   // (lib/video/persist.ts#markProjectReviewedCore) ne touche jamais les entrées "copier_coller" ou
   // "manuel", posées par un humain qui n'a rien à relire.
   reviewedAt: string | null;
+  // Round de correction final, I3 : `applied.before` est-il présent ? Autrement dit, cette entrée
+  // porte-t-elle l'état d'AVANT sans lequel aucune annulation fidèle n'est dérivable
+  // (lib/video/persist.ts#hasBeforeState). Les écritures DIRECTES d'agent (update_beat,
+  // reorder_beats, update_insert, create_video_project) sont journalisées "applique" avec un
+  // `applied` vide : sans ce drapeau, elles offraient un bouton « Annuler » qui ne pouvait que
+  // refuser — et avec un motif faux (« entrée antérieure à l'enregistrement de l'état d'avant »).
+  revertable: boolean;
 };
 
 function JournalRow({ entry }: { entry: JournalEntryView }) {
@@ -73,7 +80,8 @@ function JournalRow({ entry }: { entry: JournalEntryView }) {
     });
   }
 
-  const canRevert = entry.outcome === "applique" && !entry.revertedAt;
+  // `revertable` en plus de l'issue : un recours qui ne peut pas aboutir ne doit pas être offert.
+  const canRevert = entry.outcome === "applique" && !entry.revertedAt && entry.revertable;
 
   return (
     <li className="space-y-2 rounded-md border p-3 text-sm">

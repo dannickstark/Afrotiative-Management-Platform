@@ -3,7 +3,7 @@ import { installDom, mount, click, flush } from "./dom-harness";
 import * as React from "react";
 import { DiffReview } from "@/components/video/diff-review";
 import { IssueList } from "@/components/video/import-panel";
-import type { Diff } from "@/lib/video/import";
+import { defaultAccept, type Diff } from "@/lib/video/import";
 
 let teardown: () => void;
 beforeAll(() => { teardown = installDom(); });
@@ -31,6 +31,22 @@ describe("DiffReview", () => {
     click(container.querySelector("[data-testid=apply]") as HTMLElement);
     await flush();
     expect(accepted!.sort()).toEqual(["b-01", "b-03"]);
+    unmount();
+  });
+
+  // Round de correction final, I1 : le test d'accord qui manquait. La sélection par défaut REND UE
+  // par ce composant doit être exactement celle que lib/video/import.ts#defaultAccept calcule — la
+  // même que consomme le canal agent (lib/mcp/tools.ts#apply_script), qui, lui, n'a aucune revue
+  // humaine derrière. Tant que les deux canaux écrivaient la règle chacun de leur côté, rien ne
+  // signalait qu'elle avait évolué d'un seul côté.
+  it("coche exactement ce que la règle partagée retient — même règle que le canal agent", async () => {
+    let accepted: string[] | null = null;
+    const { container, unmount } = await mount(
+      React.createElement(DiffReview, { diff, onApply: (a: string[]) => { accepted = a; } }),
+    );
+    click(container.querySelector("[data-testid=apply]") as HTMLElement);
+    await flush();
+    expect(accepted!.sort()).toEqual([...defaultAccept(diff)].sort());
     unmount();
   });
 

@@ -97,7 +97,13 @@ export function TokenList({
         ) : (
           <div className="space-y-2">
             {tokens.map((t) => (
-              <TokenListRow key={t.id} token={t} canRevoke={seesAll || t.userId === currentUserId} />
+              <TokenListRow
+                key={t.id} token={t} canRevoke={seesAll || t.userId === currentUserId}
+                // Le porteur n'est nommé que quand il APPREND quelque chose : dans la vue « toute
+                // l'équipe » (spec §6.2), et jamais sur ses propres jetons — répéter son propre nom
+                // sur chaque ligne n'aiderait personne à savoir à qui sont les autres.
+                owner={seesAll && t.userId !== currentUserId ? t.ownerName : null}
+              />
             ))}
           </div>
         )}
@@ -121,7 +127,11 @@ export function TokenList({
   );
 }
 
-function TokenListRow({ token, canRevoke }: { token: TokenRow; canRevoke: boolean }) {
+function TokenListRow({
+  token, canRevoke, owner,
+}: {
+  token: TokenRow; canRevoke: boolean; owner: string | null;
+}) {
   const router = useRouter();
   const [isRevoking, startRevoke] = useTransition();
   const revoked = token.revokedAt !== null;
@@ -148,6 +158,7 @@ function TokenListRow({ token, canRevoke }: { token: TokenRow; canRevoke: boolea
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate font-medium">{token.name}</span>
           <code className="text-xs text-muted-foreground">{token.prefix}…</code>
+          {owner && <span className="truncate text-xs text-muted-foreground">{owner}</span>}
           {revoked && (
             <Badge variant="outline" className="bg-[var(--status-draft)]/15 text-[var(--status-draft)] border-[var(--status-draft)]/30">
               Révoqué

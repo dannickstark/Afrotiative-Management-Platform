@@ -8,15 +8,15 @@ import { TOOL_REGISTRY, type ToolSpec } from "@/lib/mcp/registry";
 import { requirePermission } from "@/lib/rbac";
 import type { McpActor } from "@/lib/mcp/auth";
 import {
-  applyImportCore, createVideoProjectCore, prepareImportCore, reorderBeatsCore, updateBeatCore,
-  updateBeatInsertCore,
+  applyImportCore, createVideoProjectCore, prepareImportCore, readScriptCore, reorderBeatsCore,
+  updateBeatCore, updateBeatInsertCore,
 } from "@/lib/video/persist";
 import { buildBrief } from "@/lib/video/brief";
 import { getVideoSettings } from "@/lib/queries/video-settings";
-import { briefVarsFor, getVariantBeats, listVideoProjects } from "@/lib/queries/video";
+import { briefVarsFor, listVideoProjects } from "@/lib/queries/video";
 import { getArticle } from "@/lib/queries/article";
 import { payloadSchema, type Payload } from "@/lib/video/schema";
-import type { Diff } from "@/lib/video/import";
+import { defaultAccept, type Diff } from "@/lib/video/import";
 
 // Ce module ne contient AUCUNE logique de contrat, de fusion ni de persistance : il traduit un
 // appel d'outil en appel du cœur du SP1, et rien d'autre. C'est la raison pour laquelle
@@ -163,26 +163,18 @@ async function dispatch(
       return listVideoProjects();
 
     case "get_script": {
-      const variantId = args.variantId as string;
-      const beats = await getVariantBeats(variantId);
-      return beats.map((b) => ({
-        id: b.id,
-        externalId: b.externalId,
-        position: b.position,
-        kind: b.kind,
-        spokenText: b.spokenText,
-        directionNote: b.directionNote,
-        screenText: b.screenText,
-        transitionIn: b.transitionIn,
-        transitionOut: b.transitionOut,
-        sources: b.sources,
-        estimatedDurationSec: b.durationOverrideSec ?? b.estimatedDurationSec,
-        inserts: b.inserts.map((i) => ({
-          id: i.id, type: i.kind, url: i.url, tc_in: i.tcIn, tc_out: i.tcOut,
-          duree_affichage_sec: i.displayDurationSec, credit: i.credit, droits: i.rightsNote,
-          linkStatus: i.linkStatus,
-        })),
-      }));
+      // Rendu par le CŒUR (readScriptCore), dans le vocabulaire du CONTRAT, et non recomposé ici à
+      // la main (round de correction final, C1). L'ancienne version rendait le vocabulaire interne
+      // pour les beats (`id` = l'UUID de ligne, `kind`, `spokenText`, `directionNote`…) et celui du
+      // contrat pour les inserts (`type`, `tc_in`, `droits`) : DEUX conventions dans une seule charge
+      // utile. L'agent qui lisait, révisait et resoumettait en reportant `id` → `id` envoyait des
+      // UUID comme identifiants de beats ; un UUID satisfait BEAT_ID_RE, donc rien ne le refusait,
+      // computeMerge y voyait N suppressions (non appliquées par défaut) et N ajouts (appliqués) —
+      // le script était DUPLIQUÉ, sans erreur visible. `payload` se resoumet désormais tel quel à
+      // `submit_script`, et un test d'aller-retour verrouille le diff vide.
+      const script = await readScriptCore(args.variantId as string);
+      if (!script) throw new Error("Variante introuvable.");
+      return script;
     }
 
     case "get_video_brief": {
@@ -301,14 +293,13 @@ async function dispatch(
       }
       const variantUpdatedAt = new Date(memorise);
 
-      // LA règle produit : sans sélection explicite, on applique les ajouts et les modifications,
-      // JAMAIS les suppressions ni les conflits. Un modèle qui abrège sa réponse ne doit pas pouvoir
-      // effacer un beat par omission, et un conflit ne se tranche jamais tout seul.
-      const diff = entry.diff as unknown as Diff;
-      const accept = (args.accept as string[] | undefined) ?? [
-        ...(diff.added ?? []).map((a) => a.externalId),
-        ...(diff.modified ?? []).map((m) => m.externalId),
-      ];
+      // LA règle produit (ajouts et modifications retenus, jamais les suppressions ni les conflits)
+      // vient de lib/video/import.ts#defaultAccept — la MÊME fonction que la revue humaine
+      // (components/video/diff-review.tsx), pas une seconde copie (round de correction final, I1).
+      // C'est le garde-fou n°1 contre l'effacement d'un beat par omission, et il s'applique ici sans
+      // aucune revue humaine : le voir diverger de l'autre canal était le risque le plus coûteux.
+      const diff = entry.diff as unknown as Partial<Diff>;
+      const accept = (args.accept as string[] | undefined) ?? defaultAccept(diff);
 
       const result = await applyImportCore({ journalId, variantId, accept, variantUpdatedAt });
 

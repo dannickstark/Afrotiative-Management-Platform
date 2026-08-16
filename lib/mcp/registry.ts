@@ -25,7 +25,7 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
     name: "get_script",
     kind: "lecture",
     description:
-      "Renvoie l'état actuel des beats d'une variante. À appeler avant toute révision : c'est ce qui permet de corriger un script plutôt que de le réécrire entièrement.",
+      "Renvoie l'état actuel d'une variante sous la forme du contrat JSON lui-même (`payload`), révisable puis resoumettable tel quel à submit_script, plus les identifiants internes (`beatId`, `insertId`) qu'exigent update_beat et update_insert. À appeler avant toute révision : c'est ce qui permet de corriger un script plutôt que de le réécrire entièrement.",
     inputSchema: { variantId: uuid },
   },
   {
