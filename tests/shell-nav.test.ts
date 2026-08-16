@@ -11,10 +11,12 @@ describe("visibleNavItems", () => {
     expect(hrefs).toContain("/queue");
   });
 
-  it("un éditeur voit Réglages avec exactement ses quatre sous-pages autorisées", () => {
+  it("un éditeur voit Réglages avec exactement ses cinq sous-pages autorisées", () => {
     // Task 9 (OpenRouter token pool) : l'éditeur gagne l'accès à /settings/integrations —
     // même droit llmTokens:manage que la page et les actions du bassin de jetons.
     // Task 8 (module Vidéo) : l'éditeur gagne aussi /settings/video — même droit video:manage.
+    // Task 7 (SP1 bis, serveur MCP) : l'éditeur gagne aussi /settings/mcp — même droit
+    // video:manage que la page (app/(app)/settings/mcp/page.tsx).
     const settings = visibleNavItems("editor").find((i) => i.href === "/settings");
     expect(settings).toBeDefined();
     expect(settings!.items!.map((c) => c.href)).toEqual([
@@ -22,14 +24,16 @@ describe("visibleNavItems", () => {
       "/settings/taxonomy",
       "/settings/integrations",
       "/settings/video",
+      "/settings/mcp",
     ]);
   });
 
-  it("un admin voit les sept sous-pages de Réglages (D1 §6 ajoute Réseaux sociaux, Task 8 ajoute Vidéo)", () => {
+  it("un admin voit les huit sous-pages de Réglages (D1 §6 ajoute Réseaux sociaux, Task 8 ajoute Vidéo, Task 7 ajoute MCP)", () => {
     const settings = visibleNavItems("admin").find((i) => i.href === "/settings");
-    expect(settings!.items).toHaveLength(7);
+    expect(settings!.items).toHaveLength(8);
     expect(settings!.items!.map((c) => c.href)).toContain("/settings/social");
     expect(settings!.items!.map((c) => c.href)).toContain("/settings/video");
+    expect(settings!.items!.map((c) => c.href)).toContain("/settings/mcp");
   });
 
   it("un parent dont tous les enfants sont refusés n'est pas rendu", () => {

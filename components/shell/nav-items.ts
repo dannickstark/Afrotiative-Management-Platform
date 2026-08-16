@@ -31,6 +31,11 @@ export const SETTINGS_CHILDREN: NavChild[] = [
   // Diffusion panel, not this administration surface (same split as team/integrations/pipeline
   // above, all admin-only for the analogous reason).
   { href: "/settings/social", label: "Réseaux sociaux", roles: ["admin"] },
+  // Task 7 (serveur MCP) — page gardée par "video:manage" (lib/rbac.ts), pas "video:configure"
+  // comme Vidéo ci-dessus : les TROIS rôles ont accès à l'écran (chacun gère au moins SES PROPRES
+  // jetons), l'interrupteur et la vue "toute l'équipe" restant réservés à video:configure à
+  // l'intérieur même de la page (app/(app)/settings/mcp/page.tsx).
+  { href: "/settings/mcp", label: "MCP", roles: ["admin", "editor", "journalist"] },
 ];
 
 // NOTE sur `href: "/settings"` : il n'existe pas de page à cette adresse (app/(app)/settings/
