@@ -5,13 +5,13 @@ import { aiFailureMessage } from "@/lib/ai/failure-message";
 import { planRegeneration } from "@/lib/pipeline/regen-plan";
 import type { RegenStage } from "@/lib/pipeline/regen-live";
 
-// Cœur de la régénération, par article — extrait de regenerate() (lib/actions/article-actions.ts).
+// Cœur de la régénération, par article — appelé depuis lib/pipeline/regen-job.ts pour chaque
+// article du job de renvoi à l'IA (lot ET unitaire, voir lib/actions/regen-actions.ts).
 // Volontairement PLAIN (pas de "use server") : ni requireUser/requirePermission ni revalidatePath
-// ici — l'appelant possède la garde RBAC et la revalidation (l'action unitaire regenerate et
-// regenerateInQueue, appelé en boucle par la barre d'actions du /queue). Les imports RESTENT
-// DYNAMIQUES (await import) pour que le graphe d'extraction/génération lourd (jsdom) n'entre jamais
-// dans l'analyse statique des modules "use server" appelants — même raison que le commentaire
-// d'origine au-dessus de regenerate(). Exception délibérée : l'import de `aiFailureMessage`
+// ici — l'appelant (startRegenJob) possède la garde RBAC, et c'est le job lui-même qui pilote la
+// revalidation. Les imports RESTENT DYNAMIQUES (await import) pour que le graphe d'extraction/
+// génération lourd (jsdom) n'entre jamais dans l'analyse statique des modules "use server"
+// appelants. Exception délibérée : l'import de `aiFailureMessage`
 // (lib/ai/failure-message.ts) reste STATIQUE — ce module est pur (aucune dépendance DB/réseau/
 // jsdom), il ne réintroduit donc rien de lourd dans l'analyse statique et n'a pas à suivre la
 // règle des imports dynamiques ci-dessus.

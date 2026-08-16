@@ -1,5 +1,6 @@
 "use client";
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, RefreshCw } from "lucide-react";
 import {
@@ -7,7 +8,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { regenerate } from "@/lib/actions/article-actions";
+import { startRegenJob } from "@/lib/actions/regen-actions";
+import { RegenProgress } from "@/components/queue/regen-progress";
+import type { RegenJobView } from "@/lib/pipeline/regen-live";
 import type { RegenerateFieldsInput } from "@/lib/validation";
 
 type FieldKey = keyof RegenerateFieldsInput;
@@ -25,9 +28,11 @@ const ALL_CHECKED: RegenerateFieldsInput = { title: true, body: true, excerpt: t
 // Lets the editor pick exactly which fields get overwritten by a fresh AI pass over the
 // article's existing sources — a full "regenerate everything" is just all six boxes checked.
 export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { articleId: string; disabled?: boolean }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<RegenerateFieldsInput>(ALL_CHECKED);
   const [isPending, startTransition] = useTransition();
+  const [jobId, setJobId] = useState<string | null>(null);
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
@@ -45,19 +50,23 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
   function handleConfirm() {
     if (noneChecked) return;
     startTransition(async () => {
-      try {
-        const r = await regenerate(articleId, fields);
-        if (r.ok) {
-          toast.success(r.message);
-          setOpen(false);
-          setFields(ALL_CHECKED);
-        } else {
-          toast.error(r.message);
-        }
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Échec du renvoi à l'IA.");
-      }
+      // imageMode n'est pas encore choisissable par l'utilisateur (Tâche 19) : on passe le
+      // littéral "auto" en attendant.
+      const r = await startRegenJob({ articleIds: [articleId], fields, imageMode: "auto" });
+      if (!r.ok) { toast.error(r.message); return; }
+      setJobId(r.jobId);
     });
+  }
+
+  function handleJobFinished(job: RegenJobView) {
+    setJobId(null);
+    const item = job.items[0];
+    if (item?.status === "failed") toast.error(item.message ?? "Échec du renvoi à l'IA.");
+    else if (item?.status === "awaiting_image") toast.success("Sources extraites — image à choisir.");
+    else toast.success("Article régénéré — déposé en revue.");
+    setOpen(false);
+    setFields(ALL_CHECKED);
+    router.refresh();
   }
 
   return (
@@ -78,16 +87,17 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
                 id={`regen-${key}`}
                 type="checkbox"
                 checked={fields[key]}
-                disabled={isPending}
+                disabled={isPending || jobId !== null}
                 onChange={() => toggle(key)}
               />
               {label}
             </Label>
           ))}
         </div>
+        {jobId !== null && <RegenProgress key={jobId} jobId={jobId} onFinished={handleJobFinished} />}
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)} disabled={isPending}>Annuler</Button>
-          <Button type="button" onClick={handleConfirm} disabled={isPending || noneChecked}>
+          <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)} disabled={isPending || jobId !== null}>Annuler</Button>
+          <Button type="button" onClick={handleConfirm} disabled={isPending || jobId !== null || noneChecked}>
             {isPending ? <Loader2 className="animate-spin" aria-hidden /> : <RefreshCw aria-hidden />}
             {isPending ? "Régénération…" : "Régénérer"}
           </Button>

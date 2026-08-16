@@ -5,8 +5,8 @@ import type { ArticleDraft } from "@/lib/ai/schema";
 import type { AiFailureReason } from "@/lib/ai/failure-message";
 import { faker } from "@faker-js/faker";
 
-// regenerateArticle est le cœur unitaire partagé par regenerate (action unitaire) et
-// regenerateInQueue (appelé en boucle par la barre d'actions du /queue, un article par appel).
+// regenerateArticle est le cœur unitaire appelé pour chaque article du job de renvoi à l'IA
+// (lib/pipeline/regen-job.ts, déclenché par startRegenJob — lot ET unitaire, voir Tâche 11).
 // Il est PLAIN (pas de "use server") : ni RBAC ni revalidatePath ici, donc on peut
 // l'exercer directement sous `bun test`, sans mocker session/next-cache.
 //
