@@ -1,4 +1,4 @@
-import { db, apiTokens, videoProjects, user as userTable } from "@/db";
+import { db, apiTokens, videoProjects, videoSettings, user as userTable } from "@/db";
 import { eq } from "drizzle-orm";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -45,6 +45,36 @@ export async function makeActor(
       // `api_tokens.user_id` est en cascade, mais on supprime explicitement : le nettoyage doit
       // rester lisible même si la contrainte change.
       await db.delete(apiTokens).where(eq(apiTokens.id, token.id));
+      await db.delete(userTable).where(eq(userTable.id, userId));
+    },
+  };
+}
+
+export type TestUser = { userId: string; role: Role; cleanup: () => Promise<void> };
+
+/**
+ * Un utilisateur de test SANS jeton d'API — pour Task 6 (requêtes/actions de réglages), qui
+ * s'authentifie par session (`requireUser`), pas par jeton porteur comme `makeActor` ci-dessus.
+ */
+export async function makeUser(role: Role): Promise<TestUser> {
+  const userId = `test-mcp-settings-${crypto.randomUUID()}`;
+  await db.insert(userTable).values({
+    id: userId,
+    name: "Porteur de test réglages MCP",
+    email: `${userId}@exemple.test`,
+    role,
+  });
+  return {
+    userId,
+    role,
+    cleanup: async () => {
+      // `video_settings` est une ligne UNIQUE ET PARTAGÉE (lib/queries/video-settings.ts) : si ce
+      // porteur a basculé l'interrupteur MCP pendant le test (setMcpEnabledCore écrit
+      // `updatedBy`), la ligne partagée pointe encore vers lui. Sans ce détachement, la suppression
+      // de l'utilisateur ci-dessous violerait `video_settings_updated_by_user_id_fk` — pas parce que
+      // le produit se comporte mal, mais parce qu'un utilisateur DE TEST est réellement supprimé en
+      // fin de test, ce qu'un compte réel (banni, jamais effacé) ne subit jamais.
+      await db.update(videoSettings).set({ updatedBy: null }).where(eq(videoSettings.updatedBy, userId));
       await db.delete(userTable).where(eq(userTable.id, userId));
     },
   };
