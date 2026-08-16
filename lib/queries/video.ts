@@ -1,8 +1,54 @@
-import { db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, articles } from "@/db";
-import { asc, desc, eq, inArray } from "drizzle-orm";
+import { db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, articles, distributions } from "@/db";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { PLATFORM_LABEL } from "@/lib/video/labels";
+import { getWpConfig } from "@/lib/wp/config";
+import { wpPostUrl } from "@/lib/wp/post-url";
+import type { BriefVars } from "@/lib/video/brief";
 
 // Lectures pour les écrans du module vidéo. Aucune écriture ici — le cœur d'écriture vit dans
 // lib/video/persist.ts.
+
+/**
+ * LES variables du brief, pour ses DEUX consommateurs : la page projet (app/(app)/video/[id]/page.tsx,
+ * qui l'affiche à l'humain) et l'outil MCP (lib/mcp/tools.ts, qui le remet à l'agent). Rassemblées ici
+ * au round de correction 1 de la Task 5 (SP1 bis) : les deux chemins construisaient le même objet
+ * ligne à ligne — même arrondi en minutes, même repli sur l'URL WordPress — et auraient divergé à la
+ * première retouche de l'un des deux, sans que rien ne le signale. L'agent aurait alors écrit sous un
+ * brief que l'humain ne voit pas.
+ *
+ * Le repli sur l'URL de l'article est volontairement « gracieux » : l'URL publique n'existe qu'après
+ * diffusion WordPress et n'est jamais reconstruite autrement.
+ */
+export async function briefVarsFor(
+  project: { title: string; subject: string | null; articleId: string | null },
+  variant: { platform: string; targetDurationSec: number | null; aspectRatio: string } | null,
+): Promise<BriefVars> {
+  let articleTitre = "";
+  let articleUrl = "";
+  let articleExtrait = "";
+  if (project.articleId) {
+    const [article] = await db.select().from(articles).where(eq(articles.id, project.articleId));
+    if (article) {
+      articleTitre = article.title;
+      articleExtrait = article.excerpt ?? "";
+      const [dist] = await db.select().from(distributions)
+        .where(and(eq(distributions.articleId, project.articleId), eq(distributions.channel, "wordpress")))
+        .limit(1);
+      articleUrl = wpPostUrl(getWpConfig()?.baseUrl ?? null, dist?.externalId ?? null) ?? "";
+    }
+  }
+
+  return {
+    titre: project.title,
+    sujet: project.subject ?? "",
+    plateforme: variant ? (PLATFORM_LABEL[variant.platform] ?? variant.platform) : "",
+    duree_cible: variant?.targetDurationSec ? `${Math.round(variant.targetDurationSec / 60)} min` : "",
+    ratio: variant?.aspectRatio ?? "",
+    article_titre: articleTitre,
+    article_url: articleUrl,
+    article_extrait: articleExtrait,
+  };
+}
 
 export type VideoProjectListRow = {
   id: string;

@@ -16,8 +16,43 @@ async function handle(req: Request): Promise<Response> {
   const server = new McpServer({ name: "afrotiative-video", version: "1.0.0" });
   registerTools(server, auth.actor);
   const transport = new WebStandardStreamableHTTPServerTransport({});
-  await server.connect(transport);
-  return transport.handleRequest(req);
+
+  // Serveur et transport sont créés PAR REQUÊTE : sans fermeture, chaque appel laisserait derrière
+  // lui un serveur relié à un transport vivant, une fuite proportionnelle au trafic.
+  let ferme = false;
+  const fermer = async () => {
+    if (ferme) return;
+    ferme = true;
+    await transport.close();
+    await server.close();
+  };
+
+  let response: Response;
+  try {
+    await server.connect(transport);
+    response = await transport.handleRequest(req);
+  } catch (e) {
+    await fermer();
+    throw e;
+  }
+
+  // `handleRequest` rend sa réponse AVANT que le corps ne soit écrit : la charge utile arrive par un
+  // flux SSE que le transport alimente ensuite. Fermer ici, tout de suite, tronquerait donc la
+  // réponse au lieu de simplement libérer — la fermeture est accrochée à la FIN du flux (`flush`),
+  // et à son abandon si le client raccroche. Une réponse sans corps (202, 200 vide) n'a
+  // rien à attendre.
+  if (!response.body) {
+    await fermer();
+    return response;
+  }
+
+  // `flush` couvre la fin normale du flux ; le `catch` couvre son abandon (client qui raccroche),
+  // qui fait échouer le `pipeTo` sans jamais atteindre `flush`.
+  const relais = new TransformStream({ flush: () => { void fermer(); } });
+  void response.body.pipeTo(relais.writable).catch(() => { void fermer(); });
+  return new Response(relais.readable, {
+    status: response.status, statusText: response.statusText, headers: response.headers,
+  });
 }
 
 export { handle as GET, handle as POST, handle as DELETE };

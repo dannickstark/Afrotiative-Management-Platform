@@ -13,9 +13,14 @@ let lecteur: TestActor | null = null;
 
 beforeAll(async () => { actor = await makeActor("editor"); });
 afterAll(async () => {
-  await cleanupProject(projectId);
-  if (lecteur) await lecteur.cleanup();
-  if (actor) await actor.cleanup();
+  // try/finally : la base Neon est PARTAGÉE. Si la suppression du projet échoue, l'utilisateur de
+  // test et son jeton doivent tout de même partir — sinon ils s'accumulent, run après run.
+  try {
+    await cleanupProject(projectId);
+  } finally {
+    if (lecteur) await lecteur.cleanup();
+    if (actor) await actor.cleanup();
+  }
 });
 
 describe("outils MCP", () => {
@@ -61,7 +66,12 @@ describe("outils MCP", () => {
     reduced.variantes[0].beats.pop(); // un beat disparaît → suppression proposée
     const prep2 = await callTool(actor, "submit_script", { projectId, payload: reduced });
     expect(prep2.diff.removed.length).toBe(1);
-    await callTool(actor, "apply_script", { journalId: prep2.journalId, variantId });
+    // Assertion indispensable : sans elle, un `{ ok: false }` pour n'importe quelle autre raison
+    // laisserait le nombre de beats inchangé et le test resterait vert sans jamais avoir éprouvé la
+    // sélection par défaut.
+    const applied2 = await callTool(actor, "apply_script", { journalId: prep2.journalId, variantId });
+    expect(applied2.ok).toBe(true);
+    expect(applied2.applied).toBe(0);
 
     const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variantId));
     // Le point : la suppression a été PROPOSÉE, jamais appliquée sans demande nommée.
@@ -101,6 +111,65 @@ describe("outils MCP", () => {
     // Sans ce refus, l'agent croirait avoir réordonné ce qu'il n'a pas touché.
     await expect(callTool(actor, "reorder_beats", { variantId, order: ["b-99-inexistant"] }))
       .rejects.toThrow(/absents de cette variante/);
+  }, 30_000);
+
+  it("un refus de péremption reste un refus au second essai", async () => {
+    // Le déroulé complet : l'agent prépare, un humain édite, l'agent applique (refus), puis
+    // réessaie — ce que fait un agent qui ne sait que réessayer. Si le second appel passait,
+    // l'édition humaine serait écrasée sans que personne ne l'ait vue.
+    const beatsAvant = await db.select().from(scriptBeats)
+      .where(eq(scriptBeats.variantId, variantId)).orderBy(asc(scriptBeats.position));
+    const payload = structuredClone(EXAMPLE_PAYLOAD);
+    payload.variantes[0].beats = payload.variantes[0].beats
+      .filter((b) => beatsAvant.some((x) => x.externalId === b.id));
+
+    const prep = await callTool(actor, "submit_script", { projectId, payload });
+    expect(prep.ok).toBe(true);
+
+    // L'édition humaine, postérieure à la préparation du diff.
+    await callTool(actor, "update_beat", {
+      beatId: beatsAvant[0].id, spokenText: "Correction humaine entre la préparation et l'application.",
+    });
+
+    const premier = await callTool(actor, "apply_script", { journalId: prep.journalId, variantId });
+    expect(premier.ok).toBe(false);
+    expect(premier.message).toContain("périmé");
+
+    const second = await callTool(actor, "apply_script", { journalId: prep.journalId, variantId });
+    expect(second.ok).toBe(false);
+    expect(second.message).toContain("périmé");
+
+    // Et la correction humaine est toujours là.
+    const [beat] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, beatsAvant[0].id));
+    expect(beat.spokenText).toContain("Correction humaine");
+  }, 30_000);
+
+  it("apply_script sans sélection n'applique pas un conflit", async () => {
+    // L'autre moitié de la règle produit. Un conflit se fabrique en faisant diverger les DEUX côtés
+    // du même champ depuis le dernier import : l'humain retouche le texte, l'agent en propose un
+    // autre.
+    const beats = await db.select().from(scriptBeats)
+      .where(eq(scriptBeats.variantId, variantId)).orderBy(asc(scriptBeats.position));
+    const cible = beats[0];
+    await callTool(actor, "update_beat", {
+      beatId: cible.id, spokenText: "Version écrite par la rédaction, à ne pas perdre.",
+    });
+
+    const payload = structuredClone(EXAMPLE_PAYLOAD);
+    payload.variantes[0].beats = payload.variantes[0].beats
+      .filter((b) => beats.some((x) => x.externalId === b.id));
+    const propose = payload.variantes[0].beats.find((b) => b.id === cible.externalId)!;
+    propose.texte = "Version proposée par l'agent, en concurrence avec celle de la rédaction.";
+
+    const prep = await callTool(actor, "submit_script", { projectId, payload });
+    expect(prep.diff.conflicts.map((c: { externalId: string }) => c.externalId)).toContain(cible.externalId);
+
+    const r = await callTool(actor, "apply_script", { journalId: prep.journalId, variantId: prep.variantId });
+    expect(r.ok).toBe(true);
+
+    const [apres] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, cible.id));
+    // Le point : un conflit ne se tranche jamais tout seul.
+    expect(apres.spokenText).toContain("rédaction");
   }, 30_000);
 
   it("chaque écriture est journalisée avec sa source, son outil et son auteur", async () => {

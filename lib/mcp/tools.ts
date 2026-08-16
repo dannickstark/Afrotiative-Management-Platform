@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, ilike, inArray } from "drizzle-orm";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-  db, articles, beatInserts, distributions, scriptBeats, scriptJournal, scriptVariants, videoProjects,
+  db, articles, beatInserts, scriptBeats, scriptJournal, scriptVariants, videoProjects,
 } from "@/db";
 import { TOOL_REGISTRY, type ToolSpec } from "@/lib/mcp/registry";
 import { requirePermission } from "@/lib/rbac";
@@ -11,14 +11,12 @@ import {
   applyImportCore, createVideoProjectCore, prepareImportCore, reorderBeatsCore, updateBeatCore,
   updateBeatInsertCore,
 } from "@/lib/video/persist";
-import { buildBrief, type BriefVars } from "@/lib/video/brief";
+import { buildBrief } from "@/lib/video/brief";
 import { getVideoSettings } from "@/lib/queries/video-settings";
-import { getVariantBeats, listVideoProjects } from "@/lib/queries/video";
+import { briefVarsFor, getVariantBeats, listVideoProjects } from "@/lib/queries/video";
 import { getArticle } from "@/lib/queries/article";
 import { payloadSchema, type Payload } from "@/lib/video/schema";
 import type { Diff } from "@/lib/video/import";
-import { getWpConfig } from "@/lib/wp/config";
-import { wpPostUrl } from "@/lib/wp/post-url";
 
 // Ce module ne contient AUCUNE logique de contrat, de fusion ni de persistance : il traduit un
 // appel d'outil en appel du cœur du SP1, et rien d'autre. C'est la raison pour laquelle
@@ -75,11 +73,11 @@ export function registerTools(server: McpServer, actor: McpActor): void {
 // Journal
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Les écritures d'import (submit_script / apply_script) sont déjà journalisées par le cœur, qui
-// écrit `source`, `actorUserId`, le payload brut et le diff. Il ne connaît en revanche ni le nom de
-// l'outil ni ses arguments : on les appose ici, sur la ligne qu'il vient d'écrire. `toolName` porte
-// le DERNIER outil qui a touché l'entrée (submit puis apply agissent sur la même ligne de journal —
-// c'est le cœur qui la fait passer d'"en_attente" à "applique", il n'en crée pas une seconde).
+// `submit_script` passe désormais `toolName`/`toolArgs` directement à `prepareImportCore`, qui les
+// écrit avec la ligne. Cette apposition ne sert plus qu'à `apply_script` : submit et apply agissent
+// sur la MÊME ligne de journal (le cœur la fait passer d'"en_attente" à "applique", il n'en crée pas
+// une seconde), et `toolName` porte donc le dernier outil qui l'a touchée. L'appelant est tenu de
+// reporter les clés qu'il ne veut pas perdre — `variantUpdatedAt` au premier chef.
 async function apposerOutil(
   journalId: string, toolName: string, toolArgs: Record<string, unknown>,
 ): Promise<void> {
@@ -134,10 +132,10 @@ async function localiserBeat(beatId: string): Promise<{ variantId: string; proje
   return { variantId: b.variantId, projectId: await projetDeLaVariante(b.variantId) };
 }
 
-// Le brief, construit exactement comme la page projet le fait (app/(app)/video/[id]/page.tsx) :
-// mêmes variables, même repli « gracieux » sur l'URL publique de l'article, qui n'existe qu'après
-// diffusion WordPress. La plateforme part en valeur brute (`youtube_long`) et non en libellé : le
-// libellé vit dans un composant client, qu'un module serveur n'a pas à importer.
+// Le brief remis à l'agent, construit à partir des MÊMES variables que celui affiché à l'humain :
+// `briefVarsFor` (lib/queries/video.ts) est le producteur unique depuis le round de correction 2 (I4).
+// Les deux chemins les assemblaient auparavant ligne à ligne et auraient divergé à la première
+// retouche — l'agent aurait écrit sous un brief que personne ne voit.
 async function construireBrief(projectId: string, variantId?: string): Promise<{
   brief: string; variantId: string | null;
 }> {
@@ -145,43 +143,12 @@ async function construireBrief(projectId: string, variantId?: string): Promise<{
   if (!project) throw new Error("Projet introuvable.");
 
   const variants = await variantesDuProjet(projectId);
-  const variant = variantId ? variants.find((v) => v.id === variantId) : variants[0];
+  const variant = (variantId ? variants.find((v) => v.id === variantId) : variants[0]) ?? null;
 
-  let articleTitre = "";
-  let articleUrl = "";
-  let articleExtrait = "";
-  if (project.articleId) {
-    const [article] = await db.select().from(articles).where(eq(articles.id, project.articleId));
-    if (article) {
-      articleTitre = article.title;
-      articleExtrait = article.excerpt ?? "";
-      const [dist] = await db.select().from(distributions)
-        .where(and(eq(distributions.articleId, project.articleId), eq(distributions.channel, "wordpress")))
-        .limit(1);
-      articleUrl = wpPostUrl(getWpConfig()?.baseUrl ?? null, dist?.externalId ?? null) ?? "";
-    }
-  }
-
-  const vars: BriefVars = {
-    titre: project.title,
-    sujet: project.subject ?? "",
-    plateforme: variant?.platform ?? "",
-    duree_cible: variant?.targetDurationSec ? `${Math.round(variant.targetDurationSec / 60)} min` : "",
-    ratio: variant?.aspectRatio ?? "",
-    article_titre: articleTitre,
-    article_url: articleUrl,
-    article_extrait: articleExtrait,
-  };
-
+  const vars = await briefVarsFor(project, variant);
   const settings = await getVideoSettings();
   return { brief: buildBrief(settings.briefTemplate, vars).text, variantId: variant?.id ?? null };
 }
-
-// Cadrage par défaut quand l'agent ne le précise pas : vertical pour les formats courts, horizontal
-// sinon. Même règle que celle qu'un humain applique dans la boîte de dialogue de création.
-const RATIO_PAR_DEFAUT: Record<string, string> = {
-  youtube_long: "16:9", interview: "16:9", youtube_short: "9:16", tiktok: "9:16", reel: "9:16",
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dispatch
@@ -251,13 +218,14 @@ async function dispatch(
 
     // ── Écritures ─────────────────────────────────────────────────────────
     case "create_video_project": {
-      const platform = args.platform as string;
       const projectId = await createVideoProjectCore({
         title: args.title as string,
         subject: (args.subject as string | undefined) ?? null,
-        platform,
+        platform: args.platform as string,
         targetDurationSec: (args.targetDurationSec as number | undefined) ?? null,
-        aspectRatio: (args.aspectRatio as string | undefined) ?? RATIO_PAR_DEFAUT[platform] ?? "16:9",
+        // Même défaut que la boîte de dialogue de création (components/video/new-project-dialog.tsx) :
+        // "16:9", fixe.
+        aspectRatio: (args.aspectRatio as string | undefined) ?? "16:9",
         articleId: (args.articleId as string | undefined) ?? null,
         userId: actor.userId,
       });
@@ -285,25 +253,25 @@ async function dispatch(
         ?? variants[0];
       const variantId = (args.variantId as string | undefined) ?? variant.id;
 
-      // `raw` est une chaîne côté cœur : `prepareImportCore` la journalise telle quelle en cas de
-      // JSON illisible. Le payload MCP arrive déjà désérialisé, on le re-sérialise donc — l'aller-
-      // retour est sans perte sur une valeur issue de JSON.
-      const result = await prepareImportCore({
-        projectId, variantId, raw: JSON.stringify(payload), userId: actor.userId, source: "mcp",
-      });
-
       // `variantUpdatedAt` mémorisé dans `toolArgs` : c'est l'état de la variante sur lequel ce diff
       // a été calculé. apply_script le rendra au cœur, dont le contrôle de péremption compare par
       // égalité stricte. Sans cette mémoire, apply_script relirait la valeur du moment et le contrôle
       // ne pourrait plus rien détecter — une édition humaine survenue entre les deux appels serait
       // écrasée en silence.
+      //
+      // Passés AU cœur (round de correction 2, I2) plutôt qu'apposés après coup : sur un rejet, le
+      // cœur ne rend aucun identifiant de ligne, et retrouver « la plus récente du projet » pouvait
+      // écrire ces arguments sur l'entrée d'un import concurrent — donc lui donner la mémoire d'un
+      // AUTRE état de variante. La ligne est désormais écrite juste, du premier coup.
+      //
+      // `raw` est une chaîne côté cœur : `prepareImportCore` la journalise telle quelle en cas de
+      // JSON illisible. Le payload MCP arrive déjà désérialisé, on le re-sérialise donc — l'aller-
+      // retour est sans perte sur une valeur issue de JSON.
       const toolArgs = { projectId, variantId, variantUpdatedAt: variant.updatedAt.toISOString() };
-
-      // Journalisé dans les DEUX cas : un rejet de validation est justement ce qu'un humain doit
-      // pouvoir relire quand un agent tourne en rond. En rejet, le cœur n'a rendu aucun identifiant
-      // de ligne — on retrouve celle qu'il vient d'écrire par la plus récente du projet.
-      const journalId = result.ok ? result.journalId : await derniereEntree(projectId);
-      if (journalId) await apposerOutil(journalId, name, toolArgs);
+      const result = await prepareImportCore({
+        projectId, variantId, raw: JSON.stringify(payload), userId: actor.userId, source: "mcp",
+        toolName: name, toolArgs,
+      });
 
       if (!result.ok) return { ok: false, issues: result.issues };
       return { ok: true, journalId: result.journalId, variantId, diff: result.diff };
@@ -335,8 +303,17 @@ async function dispatch(
       ];
 
       const result = await applyImportCore({ journalId, variantId, accept, variantUpdatedAt });
-      await apposerOutil(journalId, name, { journalId, variantId, accept });
+
+      // L'apposition n'a lieu QU'APRÈS un succès, et elle CONSERVE `variantUpdatedAt` (round de
+      // correction 2, C1). Un refus du cœur (« aperçu périmé ») annule sa transaction : l'entrée
+      // reste "en_attente", donc applicable. Écraser `toolArgs` au passage effaçait la mémoire de
+      // l'état d'origine — au second essai, l'outil se repliait sur la valeur COURANTE de la
+      // variante, le contrôle ne pouvait plus différer, et l'édition humaine qui venait d'être
+      // signalée était écrasée sans que personne ne l'ait vue.
       if (!result.ok) return { ok: false, message: result.message };
+      await apposerOutil(journalId, name, {
+        ...(entry.toolArgs ?? {}), journalId, variantId, accept,
+      });
 
       // L'ordre RÉELLEMENT en base après application — pas celui que la fusion visait : c'est ce que
       // l'agent doit reprendre pour son prochain envoi.
@@ -406,16 +383,4 @@ async function dispatch(
       // sans branche ici échoue bruyamment plutôt que de renvoyer `undefined`.
       throw new Error(`Outil sans implémentation : ${name}`);
   }
-}
-
-// `prepareImportCore` écrit sa ligne de journal lui-même et ne rend son identifiant qu'en cas de
-// succès — sur un rejet, il n'y a pas d'autre moyen de retrouver la ligne qu'il vient d'écrire que
-// de relire la plus récente du projet. Lecture immédiatement consécutive à l'écriture, sur la même
-// base : la fenêtre de course est celle d'un second import du MÊME projet lancé dans l'intervalle,
-// ce qui n'échangerait que l'étiquette d'outil de deux lignes par ailleurs identiques.
-async function derniereEntree(projectId: string): Promise<string | null> {
-  const [row] = await db.select({ id: scriptJournal.id }).from(scriptJournal)
-    .where(eq(scriptJournal.projectId, projectId))
-    .orderBy(desc(scriptJournal.createdAt)).limit(1);
-  return row?.id ?? null;
 }

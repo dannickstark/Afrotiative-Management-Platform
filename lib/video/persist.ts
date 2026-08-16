@@ -293,11 +293,21 @@ async function writeJournal(dbLike: DbLike, args: {
   errorReport: unknown[];
   diff: Record<string, unknown>;
   outcome: JournalOutcome;
+  // Provenance MCP (SP1 bis, Task 5) : le nom de l'outil et ses arguments, écrits DU PREMIER COUP
+  // avec la ligne. L'appelant MCP les apposait auparavant par une seconde requête, ce qui l'obligeait
+  // — sur un rejet, où aucun identifiant n'est rendu — à retrouver « la ligne la plus récente du
+  // projet » : deux imports concurrents sur le même projet pouvaient alors s'échanger leurs
+  // arguments, donc leur mémoire de l'état de la variante. Le chemin humain ne passe rien
+  // (`source: "copier_coller"`), et les colonnes restent nulles comme avant.
+  toolName?: string | null;
+  toolArgs?: Record<string, unknown> | null;
 }): Promise<string> {
   const [entry] = await dbLike.insert(scriptJournal).values({
     projectId: args.projectId,
     variantId: args.variantId,
     source: args.source,
+    toolName: args.toolName ?? null,
+    toolArgs: args.toolArgs ?? null,
     actorUserId: args.userId,
     schemaVersion: args.schemaVersion,
     rawPayload: args.rawPayload,
@@ -427,11 +437,14 @@ export async function prepareImportCore(args: {
   raw: string;
   userId: string | null;
   source: JournalSource;
+  // Renseignés par le seul appelant MCP (lib/mcp/tools.ts) : voir writeJournal ci-dessus.
+  toolName?: string | null;
+  toolArgs?: Record<string, unknown> | null;
 }): Promise<{ ok: true; journalId: string; diff: Diff } | { ok: false; issues: Issue[] }> {
   const parsed = parseIncoming(args.raw);
   if (!parsed.ok) {
     await writeJournal(db, {
-      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
+      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
       schemaVersion: null, rawPayload: rawPayloadForJournal(args.raw), errorReport: parsed.issues,
       diff: {}, outcome: "rejete",
     });
@@ -443,7 +456,7 @@ export async function prepareImportCore(args: {
   if (!targetVariant) {
     const issues: Issue[] = [{ path: "variantId", message: "Variante introuvable pour ce projet." }];
     await writeJournal(db, {
-      projectId: args.projectId, variantId: null, source: args.source, userId: args.userId,
+      projectId: args.projectId, variantId: null, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
       errorReport: issues, diff: {}, outcome: "rejete",
     });
@@ -488,7 +501,7 @@ export async function prepareImportCore(args: {
 
   if (issues.length > 0) {
     await writeJournal(db, {
-      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
+      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
       errorReport: issues, diff: {}, outcome: "rejete",
     });
@@ -526,7 +539,7 @@ export async function prepareImportCore(args: {
   // pas remonter les diffs simplement en attente de décision. applyImportCore la fait passer à
   // "applique" au moment décisif, et refuse d'agir si l'entrée n'est plus "en_attente".
   const journalId = await writeJournal(db, {
-    projectId: args.projectId, variantId: targetVariant.id, source: args.source, userId: args.userId,
+    projectId: args.projectId, variantId: targetVariant.id, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
     schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
     errorReport: [], diff: diff as unknown as Record<string, unknown>, outcome: "en_attente",
   });

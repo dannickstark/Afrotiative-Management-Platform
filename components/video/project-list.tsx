@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Film } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyState } from "@/components/shell/empty-state";
+import { PLATFORM_LABEL } from "@/lib/video/labels";
 
 // Task 10 (écran de liste vidéo) — ligne minimale consommée par ProjectList ; produite par
 // listVideoProjects (lib/queries/video.ts).
@@ -13,16 +14,6 @@ export type ProjectRow = {
   estimatedSec: number;
   articleTitle: string | null;
   updatedAt: Date;
-};
-
-// Libellés français des plateformes — même table que celle attendue côté formulaire de création
-// (new-project-dialog.tsx) et côté brief (Task 11, app/(app)/video/[id]/page.tsx).
-export const PLATFORM_LABEL: Record<string, string> = {
-  youtube_long: "YouTube long",
-  youtube_short: "Short YouTube",
-  tiktok: "TikTok",
-  reel: "Reel",
-  interview: "Interview",
 };
 
 // Le statut est déjà un mot français en base (enum video_project_status) — seul le tiret bas est
