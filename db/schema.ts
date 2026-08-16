@@ -300,6 +300,45 @@ export const pipelineSteps = pgTable("pipeline_steps", {
   at: timestamp("at").notNull().defaultNow(),
 });
 
+// ---- « Renvoyer à l'IA » asynchrone (job détaché + progression sondée) ----
+// Volontairement SÉPARÉ de pipeline_runs : l'index unique partiel « un seul run actif » de cette
+// table doit rester valable, et une régénération doit pouvoir tourner PENDANT une ingestion.
+// Les colonnes de statut sont en `text` et non en pgEnum : drizzle applique toutes les migrations
+// en attente dans UNE transaction, et PostgreSQL interdit de référencer une valeur d'enum ajoutée
+// dans cette même transaction (SQLSTATE 55P04) — voir le long commentaire sur pipeline_runs.
+export const regenJobs = pgTable("regen_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actorId: text("actor_id").references(() => user.id),
+  fields: jsonb("fields").notNull(),        // RegenerateFieldsInput
+  imageMode: text("image_mode").notNull().default("auto"), // auto | manual (câblé en phase 3)
+  total: integer("total").notNull(),
+  done: integer("done").notNull().default(0),
+  status: text("status").notNull().default("running"), // running | done | failed | cancelled
+  cancelRequested: boolean("cancel_requested").notNull().default(false),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const regenJobItems = pgTable("regen_job_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  jobId: uuid("job_id").notNull().references(() => regenJobs.id, { onDelete: "cascade" }),
+  articleId: uuid("article_id").notNull().references(() => articles.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),           // instantané, pour un rapport d'échec lisible
+  stage: text("stage").notNull().default("queued"), // queued | extracting | generating | writing
+  status: text("status").notNull().default("pending"), // pending | ok | failed | awaiting_image
+  message: text("message"),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+}, (t) => [
+  // Un article est dans AU PLUS un item non terminé : deux jobs ne peuvent pas régénérer le même
+  // article en même temps (double écriture, révisions entrelacées). Prédicat sur `finished_at is
+  // null` et non sur `status`, pour la même raison d'immutabilité que pipeline_runs_one_running.
+  // `awaiting_image` est TERMINAL : finished_at est renseigné, l'article redevient éligible — le
+  // choix d'image en attente vit dans articles.pending_image_candidates, pas dans le job.
+  uniqueIndex("regen_job_items_one_inflight_per_article").on(t.articleId).where(sql`${t.finishedAt} is null`),
+  index("regen_job_items_job_idx").on(t.jobId),
+]);
+
 // ---- pipeline settings (DB-backed, admin-editable singleton — SP1) ----
 // Always exactly one row, id=1. Env vars (MAX_ITEMS_PER_RUN, CLUSTER_THRESHOLD, …) remain the seed
 // default for the very first read (see getPipelineSettings()); after that this table is the
