@@ -73,12 +73,15 @@ async function seedArticleWithSource(overrides: Partial<typeof articles.$inferIn
 }
 
 afterAll(async () => {
-  if (createdArticleIds.length) await db.delete(articles).where(inArray(articles.id, createdArticleIds));
-  // Restauration réelle : les factories mock.module ci-dessus délèguent toujours à ces variables,
-  // donc les repointer sur les fonctions réelles rend leur comportement d'origine à tout fichier
-  // exécuté après celui-ci (mock.restore() ne défait pas mock.module dans cette version de Bun).
+  // Restauration réelle EN PREMIER : les factories mock.module ci-dessus délèguent toujours à ces
+  // variables, donc les repointer sur les fonctions réelles rend leur comportement d'origine à tout
+  // fichier exécuté après celui-ci (mock.restore() ne défait pas mock.module dans cette version de
+  // Bun). L'ordre compte : le nettoyage DB ci-dessous peut jeter (base indisponible, ligne
+  // verrouillée) et abandonnerait alors les mocks en place pour tout le reste du processus `bun
+  // test` — exactement la fuite que cette restauration existe pour empêcher.
   extractExternalImpl = realExtractExternal as unknown as typeof extractExternalImpl;
   generateArticleImpl = realGenerateArticle as unknown as typeof generateArticleImpl;
+  if (createdArticleIds.length) await db.delete(articles).where(inArray(articles.id, createdArticleIds));
 });
 
 describe("regenerateArticle (cœur unitaire)", () => {
