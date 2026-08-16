@@ -11,22 +11,25 @@ describe("visibleNavItems", () => {
     expect(hrefs).toContain("/queue");
   });
 
-  it("un éditeur voit Réglages avec exactement ses trois sous-pages autorisées", () => {
+  it("un éditeur voit Réglages avec exactement ses quatre sous-pages autorisées", () => {
     // Task 9 (OpenRouter token pool) : l'éditeur gagne l'accès à /settings/integrations —
     // même droit llmTokens:manage que la page et les actions du bassin de jetons.
+    // Task 8 (module Vidéo) : l'éditeur gagne aussi /settings/video — même droit video:manage.
     const settings = visibleNavItems("editor").find((i) => i.href === "/settings");
     expect(settings).toBeDefined();
     expect(settings!.items!.map((c) => c.href)).toEqual([
       "/settings/feeds",
       "/settings/taxonomy",
       "/settings/integrations",
+      "/settings/video",
     ]);
   });
 
-  it("un admin voit les six sous-pages de Réglages (D1 §6 ajoute Réseaux sociaux)", () => {
+  it("un admin voit les sept sous-pages de Réglages (D1 §6 ajoute Réseaux sociaux, Task 8 ajoute Vidéo)", () => {
     const settings = visibleNavItems("admin").find((i) => i.href === "/settings");
-    expect(settings!.items).toHaveLength(6);
+    expect(settings!.items).toHaveLength(7);
     expect(settings!.items!.map((c) => c.href)).toContain("/settings/social");
+    expect(settings!.items!.map((c) => c.href)).toContain("/settings/video");
   });
 
   it("un parent dont tous les enfants sont refusés n'est pas rendu", () => {

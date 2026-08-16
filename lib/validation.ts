@@ -298,3 +298,97 @@ export function validateCategoryColor(
   }
   return { ok: true, data: input };
 }
+
+// Réglages du module vidéo (Task 8) : le modèle de brief (style maison, édité au fil du temps) et
+// la cadence de lecture (mots/minute) servant à estimer la durée parlée d'un beat.
+export const videoSettingsSchema = z.object({
+  briefTemplate: z.string().min(1, "Le modèle de brief ne peut pas être vide").max(20000),
+  // Bornes larges mais réelles : sous 60 mots/min on ne parle plus, au-dessus de 400 on n'articule
+  // plus. Hors de là, c'est une saisie erronée, pas un choix.
+  wordsPerMinute: z.number().int().min(60, "Cadence trop basse").max(400, "Cadence trop élevée"),
+});
+export type VideoSettingsInput = z.infer<typeof videoSettingsSchema>;
+
+// Task 9 (persistance vidéo) — création de projet. Les valeurs de plateforme/ratio sont dupliquées
+// ici plutôt qu'importées de lib/video/schema : elles décrivent la FORME DU FORMULAIRE de création
+// (un humain choisit une plateforme dans un select), pas le contrat JSON d'import — les deux
+// évoluent pour des raisons différentes même si leurs valeurs coïncident aujourd'hui.
+export const createVideoProjectSchema = z.object({
+  title: z.string().min(1, "Titre requis").max(200),
+  subject: z.string().max(2000).nullable(),
+  platform: z.enum(["youtube_long", "youtube_short", "tiktok", "reel", "interview"]),
+  targetDurationSec: z.number().int().min(5).max(14400).nullable(),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]),
+  articleId: z.string().uuid().nullable(),
+});
+export type CreateVideoProjectInput = z.infer<typeof createVideoProjectSchema>;
+
+// Édition d'un beat depuis l'écran de montage — tous les champs de contenu sont optionnels : seuls
+// ceux effectivement modifiés sont envoyés (updateBeatCore ne touche pas les autres).
+export const updateBeatSchema = z.object({
+  beatId: z.string().uuid(),
+  spokenText: z.string().max(5000).optional(),
+  directionNote: z.string().max(1000).nullable().optional(),
+  screenText: z.string().max(300).nullable().optional(),
+  transitionIn: z.string().max(120).nullable().optional(),
+  transitionOut: z.string().max(120).nullable().optional(),
+  durationOverrideSec: z.number().int().min(0).nullable().optional(),
+  sources: z.array(z.string().url()).max(20).optional(),
+});
+export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
+
+// Complément Task 12 (revue), restreint au round de correction 1 (I4) — édition d'une URL d'insert
+// depuis l'inspecteur de beat : les URLs d'images/extraits viennent d'un modèle de langage,
+// fréquemment mortes ou fausses, et l'humain doit pouvoir les corriger à la main. C'était la SEULE
+// décision verrouillée par l'utilisateur (spec §6) ; tcIn/tcOut/displayDurationSec/credit/rightsNote
+// ont été retirés — aucun appelant, aucune UI, aucun test, une validation jamais calibrée. Ils
+// reviendront avec le lot qui les rend éditables. Comme les quatre autres points d'entrée gardés de
+// lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui `url` ne serait contrainte
+// que par le typage TypeScript, effacé au runtime (même motif que reorderBeatsSchema ci-dessus).
+export const updateInsertSchema = z.object({
+  insertId: z.string().uuid(),
+  // `.url()` seul accepterait n'importe quel schéma (ftp:, javascript:…) — la contrainte http/https
+  // vient du refine, pas de `.url()`. `null` reste permis (retirer l'URL est un choix humain
+  // légitime) ; seule la clé elle-même n'est pas optionnelle, contrairement à updateBeatSchema où
+  // chaque champ est un no-op s'il est omis — ici c'est le SEUL champ, l'omettre n'aurait aucun sens.
+  url: z.string().url("URL invalide.").refine((u) => /^https?:\/\//i.test(u), "URL invalide (http/https uniquement).")
+    .max(2048).nullable(),
+});
+export type UpdateInsertInput = z.infer<typeof updateInsertSchema>;
+
+// Round de correction 2 (Task 9, I9) : prepareImport/applyImport/reorderBeats/revertJournalEntry
+// ne reposaient que sur du typage TypeScript — effacé au runtime, donc sans garde réelle sur un
+// point d'entrée réseau (`source` non contraint à l'enum, `variantUpdatedAt` supposé être une
+// `Date` alors qu'un JSON body en fait toujours une string, ids non contraints en UUID). Même motif
+// que createVideoProjectSchema/updateBeatSchema ci-dessus.
+export const journalSourceEnum = z.enum(["copier_coller", "mcp", "manuel"]);
+
+export const prepareImportSchema = z.object({
+  projectId: z.string().uuid(),
+  variantId: z.string().uuid(),
+  raw: z.string().min(1, "Le contenu collé ne peut pas être vide.").max(2_000_000),
+  source: journalSourceEnum,
+});
+export type PrepareImportInput = z.infer<typeof prepareImportSchema>;
+
+export const applyImportSchema = z.object({
+  journalId: z.string().uuid(),
+  variantId: z.string().uuid(),
+  accept: z.array(z.string().min(1)).max(1000),
+  // `coerce.date()` : le body JSON d'une server action transporte toujours une string, jamais une
+  // vraie Date — sans coercion, `.getTime()` sur la valeur reçue lèverait avant même d'atteindre le
+  // contrôle de péremption.
+  variantUpdatedAt: z.coerce.date(),
+});
+export type ApplyImportInput = z.infer<typeof applyImportSchema>;
+
+export const reorderBeatsSchema = z.object({
+  variantId: z.string().uuid(),
+  order: z.array(z.string().min(1)).min(1, "Ordre vide.").max(1000),
+});
+export type ReorderBeatsInput = z.infer<typeof reorderBeatsSchema>;
+
+export const revertJournalEntrySchema = z.object({
+  journalId: z.string().uuid(),
+});
+export type RevertJournalEntryInput = z.infer<typeof revertJournalEntrySchema>;
