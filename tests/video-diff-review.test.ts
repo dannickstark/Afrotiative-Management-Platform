@@ -59,6 +59,37 @@ describe("DiffReview", () => {
     expect(container.textContent).toContain("Suppression proposée");
     unmount();
   });
+
+  // Round de correction 1, C1 — verrouille le chemin exact d'ImportPanel : coller, échouer, corriger,
+  // ré-analyser AVEC SUCCÈS. `prepared` (donc `diff`) est remplacé sans démonter DiffReview — même
+  // composant, même position, React conserve `accepted` entre les deux rendus. `rerender` (pas un
+  // second `mount`) reproduit exactement ça : un même `externalId` coché parce qu'il était un AJOUT
+  // dans le premier diff ne doit PLUS être coché s'il devient une SUPPRESSION dans le second.
+  it("ne garde pas une case cochée d'un diff précédent quand le même externalId change de nature", async () => {
+    const diffA: Diff = {
+      added: [{ externalId: "b-01", kind: "ajout", fields: ["spokenText"], next: snap, position: 0 }],
+      modified: [], conflicts: [], removed: [], order: ["b-01"],
+    };
+    const diffB: Diff = {
+      added: [], modified: [], conflicts: [],
+      removed: [{ externalId: "b-01" }],
+      order: [],
+    };
+    let accepted: string[] | null = null;
+    const { container, rerender, unmount } = await mount(
+      React.createElement(DiffReview, { diff: diffA, onApply: (a: string[]) => { accepted = a; } }),
+    );
+    // b-01 est bien coché dans le premier diff (ajout, cochée par défaut).
+    expect((container.querySelector("[data-testid=accept-b-01]") as HTMLElement).getAttribute("aria-checked")).toBe("true");
+
+    await rerender(React.createElement(DiffReview, { diff: diffB, onApply: (a: string[]) => { accepted = a; } }));
+
+    expect((container.querySelector("[data-testid=accept-b-01]") as HTMLElement).getAttribute("aria-checked")).toBe("false");
+    click(container.querySelector("[data-testid=apply]") as HTMLElement);
+    await flush();
+    expect(accepted!).toEqual([]);
+    unmount();
+  });
 });
 
 describe("IssueList", () => {

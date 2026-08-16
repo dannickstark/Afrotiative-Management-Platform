@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -127,15 +127,28 @@ function RemovedRow({
   );
 }
 
+function defaultAccepted(diff: Diff): Set<string> {
+  return new Set([...diff.added, ...diff.modified].map((c) => c.externalId));
+}
+
 // Task 13 — revue du diff calculé par computeMerge (lib/video/import.ts). Règle produit imposée
 // (spec §5.3) : ajouts et modifications cochés par défaut (un modèle qui abrège sa réponse ne doit
 // pas pouvoir effacer un beat par omission), suppressions et conflits décochés par défaut (un
 // conflit ne se tranche jamais tout seul). `onApply` reçoit la liste des externalId retenus —
 // l'appelant (ImportPanel) construit la requête `applyImport` à partir de cette sélection.
 export function DiffReview({ diff, onApply }: { diff: Diff; onApply: (accept: string[]) => void }) {
-  const [accepted, setAccepted] = useState<Set<string>>(
-    () => new Set([...diff.added, ...diff.modified].map((c) => c.externalId)),
-  );
+  const [accepted, setAccepted] = useState<Set<string>>(() => defaultAccepted(diff));
+
+  // Round de correction 1 (C1) : ImportPanel remplace `prepared` (donc `diff`) sans démonter
+  // DiffReview — même composant, même position, React CONSERVE `accepted` entre deux analyses
+  // réussies (coller, échouer, corriger, ré-analyser passe par ce chemin exact). Sans cet effet, un
+  // externalId coché parce qu'il était un AJOUT dans le premier diff resterait coché s'il devient
+  // une SUPPRESSION ou un CONFLIT dans le second — exactement ce que la règle produit interdit.
+  // Se déclenche aussi au premier rendu (même valeur que l'initialisation paresseuse ci-dessus,
+  // sans effet observable) plutôt que de dépendre d'un montage/démontage que l'appelant ne fait pas.
+  useEffect(() => {
+    setAccepted(defaultAccepted(diff));
+  }, [diff]);
 
   function toggle(id: string) {
     setAccepted((prev) => {

@@ -149,6 +149,12 @@ export function installDom(): () => void {
 export type Mounted = {
   container: HTMLElement;
   unmount: () => void;
+  // Round de correction 1 (Task 13, C1) : re-rend un NOUVEL élément sur le MÊME `root` — même type,
+  // même position, donc React CONSERVE l'état interne des composants plutôt que de les remonter à
+  // neuf. C'est exactement ce que fait ImportPanel quand une seconde analyse réussit (`prepared` est
+  // remplacé, DiffReview n'est jamais démonté) — sans cette fonction, un test ne peut reproduire ce
+  // chemin qu'en simulant un remontage complet, qui ne teste pas le bon comportement de React.
+  rerender: (element: React.ReactElement) => Promise<void>;
 };
 
 // Task 13 (première tâche à écrire un test qui n'attend PAS chaque `click()` — le brief observe
@@ -191,10 +197,33 @@ export async function mount(element: React.ReactElement): Promise<Mounted> {
 
   return {
     container,
-    unmount: () => {
-      void serialize(() => act(() => {
-        root.unmount();
+    rerender: async (next: React.ReactElement) => {
+      await serialize(() => act(async () => {
+        root.render(next);
       }));
+    },
+    // Round de correction 1 (Task 13, I1) : SYNCHRONE, volontairement PAS passé par `serialize()`.
+    // Des tests existants dépendent de l'ordre d'exécution réel, pas seulement du typage —
+    // `tests/studio-color-picker.test.ts` (`probe.unmount()` puis fermeture synchrone de la fenêtre
+    // jsdom juste après) et `tests/studio-editor-shell.test.ts` (`unmount(); container.remove();`)
+    // exigent que le démontage React ait déjà eu lieu avant l'instruction suivante. Le mettre en
+    // file (comme la version précédente le faisait) rendait `unmount()` asynchrone EN SILENCE : la
+    // signature `() => void` n'a jamais changé, mais la sémantique si — exactement le genre d'écart
+    // qu'un type ne peut pas attraper.
+    //
+    // Ceci reste sûr vis-à-vis du bug d'origine (act() global corrompu par un `click()` non attendu,
+    // cf. le commentaire de `serialize()` ci-dessus) : toute fonction qui PEUT laisser du travail en
+    // suspens (`click`, `pressKey`, `releaseKey`, `pointer`, `wheel`, `contextMenu`) passe par
+    // `serialize()`, et chaque appelant de ce harnais attend explicitement (`await click(...)` puis
+    // `await flush()`, ou l'équivalent) avant d'appeler `unmount()` — y compris
+    // `tests/video-diff-review.test.ts`, dont les deux tests avec interactions font
+    // `click(...); … ; await flush();` avant leur `unmount()`. Au moment où `unmount()` s'exécute,
+    // la file partagée (`actChain`) est donc déjà entièrement réglée, et cet appel direct à `act()`
+    // ne chevauche plus rien.
+    unmount: () => {
+      act(() => {
+        root.unmount();
+      });
     },
   };
 }
