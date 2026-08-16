@@ -88,6 +88,13 @@ export function QueueTable({
         </Button>
       )}
       <ImagePickWizard
+        // key sur le CONTENU du lot, pas juste monté une fois : pickRegeneratedImage fait
+        // revalidatePath("/queue"), qui rétrécit `pendingPicks` sous l'assistant ouvert et décale
+        // tous les index (le composant possède index/done, rien ne les remet à zéro). Un lot changé
+        // — un pick qui aboutit, ou une session ultérieure avec un nouveau lot en attente — doit
+        // donc démonter/remonter l'assistant plutôt que de faire vivre son état à travers un
+        // tableau `picks` qui a bougé sous lui.
+        key={pendingPicks.map((p) => p.articleId).join("|")}
         picks={pendingPicks} open={wizardOpen} onOpenChange={setWizardOpen}
         onAllDone={() => router.refresh()}
       />

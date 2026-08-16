@@ -63,14 +63,34 @@ export function BulkActionBar({ rows, onDone, defaultImageMode }:
   // revalidation en cours de route ne peut plus effacer la sélection à mi-parcours.
   async function runRegenerate(fields: RegenerateFieldsInput, imageMode: "auto" | "manual") {
     setFailures([]);
-    const res = await startRegenJob({ articleIds: rows.map((r) => r.id), fields, imageMode });
-    if (!res.ok) { toast.error(res.message); return; }
-    setJobId(res.jobId);
+    // startRegenJob JETTE sur un refus RBAC et rejette sur tout aléa DB/transport. BulkRegenerateDialog
+    // appelle cette fonction sans l'attendre (onConfirm est synchrone côté enfant) : sans ce
+    // try/catch, un rejet ici deviendrait une unhandled rejection ET l'éditeur ne verrait aucun toast.
+    try {
+      const res = await startRegenJob({ articleIds: rows.map((r) => r.id), fields, imageMode });
+      if (!res.ok) { toast.error(res.message); return; }
+      setJobId(res.jobId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Renvoi à l'IA impossible.");
+    }
   }
 
   function handleJobFinished(job: RegenJobView) {
     setJobId(null);
     const { ok, failed, awaitingImage } = summarizeRegenJob(job);
+    // finalizeRegenJob balaie les items non traités d'une annulation avec status "failed" (voir
+    // lib/pipeline/regen-store.ts) — un artefact de fermeture, pas un échec réel. Le statut du JOB
+    // porte le bon verdict : un job annulé se rapporte comme tel, jamais comme un lot d'échecs, et
+    // ses items balayés ne polluent pas la liste des échecs affichée sous la barre.
+    if (job.status === "cancelled") {
+      setFailures([]);
+      toast.warning(ok > 0
+        ? `Renvoi à l'IA annulé — ${ok} article${ok > 1 ? "s" : ""} déjà traité${ok > 1 ? "s" : ""}.`
+        : "Renvoi à l'IA annulé.");
+      onDone();
+      router.refresh();
+      return;
+    }
     setFailures(job.items.filter((i) => i.status === "failed").map((i) => ({ id: i.articleId, title: i.title, message: i.message ?? "Échec." })));
     if (failed === 0) {
       const extra = awaitingImage > 0 ? ` — ${awaitingImage} image${awaitingImage > 1 ? "s" : ""} à choisir` : "";

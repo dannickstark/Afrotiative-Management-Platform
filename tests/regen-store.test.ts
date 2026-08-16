@@ -4,7 +4,7 @@ import { eq, inArray } from "drizzle-orm";
 import { faker } from "@faker-js/faker";
 import {
   openRegenJob, listJobItems, setItemStage, finishItem, isCancelRequested,
-  finalizeRegenJob, readRegenJob,
+  finalizeRegenJob, readRegenJob, reclaimStaleRegenJobs,
 } from "@/lib/pipeline/regen-store";
 
 const ALL = { title: true, body: true, excerpt: true, category: true, tags: true, image: true };
@@ -129,5 +129,76 @@ describe("avancement et clôture", () => {
     const second = await openRegenJob({ actorId: null, articles: [a, b], fields: ALL, imageMode: "auto" });
     expect(second.ok).toBe(true);
     if (second.ok) createdJobIds.push(second.jobId);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stale-job reaper (I1) : un hard kill du processus (redéploiement, OOM, SIGKILL) saute le
+// `finally` de runRegenJob, laissant un job "running" avec des items `finished_at is null` pour
+// toujours — reclaimStaleRegenJobs (appelé au sommet d'openRegenJob) doit le réclamer avant que
+// l'index unique partiel ne bloque tout nouveau job sur les mêmes articles. Miroir de
+// « hasRunningRun reclaims stale running rows » / « ... does not reclaim a stale-by-age row with
+// recent activity » dans tests/pipeline-run.test.ts. Timestamps posés explicitement — pas de sleep.
+describe("reclaimStaleRegenJobs", () => {
+  it("réclame un job mort (items vieux et non terminés) et libère son article", async () => {
+    const a = await seedArticle();
+    const [job] = await db.insert(regenJobs).values({
+      actorId: null, fields: ALL, imageMode: "auto", total: 1,
+      status: "running", startedAt: new Date(Date.now() - 30 * 60_000), // 30 min — passé le seuil par défaut (15)
+    }).returning({ id: regenJobs.id });
+    createdJobIds.push(job.id);
+    await db.insert(regenJobItems).values({
+      jobId: job.id, articleId: a.id, title: a.title,
+      // Ni started_at ni finished_at : item jamais atteint par le runner mort — aucune activité
+      // récente à faire valoir.
+    });
+
+    await reclaimStaleRegenJobs();
+
+    const after = await readRegenJob(job.id);
+    expect(after?.status).toBe("failed");
+    expect(after?.items[0]?.status).toBe("failed");
+    expect(after?.items[0]?.message).toBe("Interrompu : le processus s'est arrêté.");
+
+    // L'article redevient éligible : plus aucun item ouvert (finished_at is null) ne le verrouille.
+    const reopened = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
+    expect(reopened.ok).toBe(true);
+    if (reopened.ok) createdJobIds.push(reopened.jobId);
+  });
+
+  it("ne réclame PAS un job frais, même avec un item sans activité (job encore dans sa fenêtre)", async () => {
+    const a = await seedArticle();
+    const r = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
+    if (!r.ok) throw new Error("setup");
+    createdJobIds.push(r.jobId);
+
+    await reclaimStaleRegenJobs();
+
+    const after = await readRegenJob(r.jobId);
+    expect(after?.status).toBe("running");
+    expect(after?.items[0]?.status).toBe("pending");
+
+    // Toujours verrouillé : un second job sur le même article est refusé.
+    const second = await openRegenJob({ actorId: null, articles: [a], fields: ALL, imageMode: "auto" });
+    expect(second.ok).toBe(false);
+  });
+
+  it("ne réclame PAS un job vieux par l'âge mais dont un item montre une activité récente", async () => {
+    const a = await seedArticle();
+    const [job] = await db.insert(regenJobs).values({
+      actorId: null, fields: ALL, imageMode: "auto", total: 1,
+      status: "running", startedAt: new Date(Date.now() - 30 * 60_000),
+    }).returning({ id: regenJobs.id });
+    createdJobIds.push(job.id);
+    await db.insert(regenJobItems).values({
+      jobId: job.id, articleId: a.id, title: a.title,
+      startedAt: new Date(), // preuve de vie malgré le startedAt du job très ancien
+    });
+
+    await reclaimStaleRegenJobs();
+
+    const after = await readRegenJob(job.id);
+    expect(after?.status).toBe("running");
+    expect(after?.items[0]?.status).toBe("pending");
   });
 });

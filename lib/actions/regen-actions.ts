@@ -54,6 +54,14 @@ export async function getRegenJobAction(jobId: string): Promise<RegenJobView | n
  * articles. L'article en cours va jusqu'au bout — on n'interrompt jamais une écriture à mi-chemin.
  * Gardé par `finished_at IS NULL` : annuler un job déjà clos est un no-op silencieux, jamais une
  * réouverture d'un statut terminal.
+ *
+ * PAS de revalidatePath ici volontairement : une revalidation à cet instant redonnerait à
+ * QueueTable un `rows` neuf, dont l'effet `[rows]` vide `rowSelection` — ce qui démonte
+ * BulkActionBar (garde `rows.length === 0`) et avec elle RegenProgress, le SEUL observateur du
+ * job. handleJobFinished ne serait alors jamais appelé : le job continue de s'annuler et de se
+ * clore côté serveur, mais l'éditeur voit juste la barre disparaître sans confirmation. Le
+ * rafraîchissement de la liste, lui, arrive déjà via router.refresh() dans handleJobFinished une
+ * fois le job effectivement clos.
  */
 export async function cancelRegenJob(jobId: string): Promise<void> {
   const user = await requireUser();
@@ -62,7 +70,6 @@ export async function cancelRegenJob(jobId: string): Promise<void> {
   const { eq, isNull, and } = await import("drizzle-orm");
   await db.update(regenJobs).set({ cancelRequested: true })
     .where(and(eq(regenJobs.id, jobId), isNull(regenJobs.finishedAt)));
-  revalidatePath("/queue");
 }
 
 /** Choix d'image manuel depuis le bac / l'assistant du /queue. */

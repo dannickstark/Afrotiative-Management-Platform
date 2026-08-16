@@ -59,16 +59,28 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled, default
   function handleConfirm() {
     if (noneChecked) return;
     startTransition(async () => {
-      const r = await startRegenJob({ articleIds: [articleId], fields, imageMode });
-      if (!r.ok) { toast.error(r.message); return; }
-      setJobId(r.jobId);
+      // startRegenJob JETTE sur un refus RBAC (requirePermission) et rejette sur tout aléa
+      // DB/transport — sans ce try/catch, l'éditeur ne voit RIEN : ni toast, ni fenêtre qui se
+      // referme, juste un bouton qui redevient inerte.
+      try {
+        const r = await startRegenJob({ articleIds: [articleId], fields, imageMode });
+        if (!r.ok) { toast.error(r.message); return; }
+        setJobId(r.jobId);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Renvoi à l'IA impossible.");
+      }
     });
   }
 
   function handleJobFinished(job: RegenJobView) {
     setJobId(null);
     const item = job.items[0];
-    if (item?.status === "failed") toast.error(item.message ?? "Échec du renvoi à l'IA.");
+    // finalizeRegenJob balaie un item non terminé d'une annulation avec status "failed" (voir
+    // lib/pipeline/regen-store.ts) — c'est un artefact de fermeture, pas un échec réel. Le job porte
+    // le bon verdict dans son propre statut : on le prend en priorité pour ne pas afficher un toast
+    // d'erreur là où l'éditeur a lui-même demandé l'annulation.
+    if (job.status === "cancelled") toast.warning("Renvoi à l'IA annulé.");
+    else if (item?.status === "failed") toast.error(item.message ?? "Échec du renvoi à l'IA.");
     else if (item?.status === "awaiting_image") toast.success("Sources extraites — image à choisir.");
     else toast.success("Article régénéré — déposé en revue.");
     setOpen(false);

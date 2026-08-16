@@ -1,5 +1,6 @@
 import { db, regenJobs, regenJobItems, articles, articleRevisions } from "@/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, notExists, sql } from "drizzle-orm";
+import { getPipelineConfig } from "@/lib/config/pipeline-config";
 import type { RegenerateFieldsInput } from "@/lib/validation";
 import type { RegenStage, RegenItemStatus, RegenJobView } from "@/lib/pipeline/regen-live";
 
@@ -8,9 +9,57 @@ import type { RegenStage, RegenItemStatus, RegenJobView } from "@/lib/pipeline/r
 // écritures d'état. Même découpe que openRun/executeRun côté pipeline.
 
 /**
- * Ouvre un job et ses items dans UNE transaction. L'index unique partiel
- * regen_job_items_one_inflight_per_article rejette l'insert si l'un des articles est déjà dans un
- * item non terminé — on traduit cette violation en message métier plutôt que de la laisser remonter.
+ * Récupération des jobs de renvoi à l'IA orphelins — MÊME défaillance et MÊME remède que
+ * reclaimStaleRuns (lib/pipeline/overlap.ts, à lire d'abord) : runRegenJob tourne DÉTACHÉ
+ * (startRegenJob dans lib/actions/regen-actions.ts ne l'attend pas), donc un hard kill du
+ * processus (redéploiement Railway, OOM, SIGKILL) saute son `finally` et laisse le job « running »
+ * avec des items `finished_at is null` pour toujours. L'index unique partiel
+ * regen_job_items_one_inflight_per_article verrouillerait alors ces articles hors de TOUT renvoi
+ * futur, sans aucun moyen de le lever depuis l'UI — exactement le scénario que overlap.ts documente
+ * pour pipeline_runs_one_running.
+ *
+ * Même fenêtre de tolérance que le rescapeur du pipeline (runStaleMinutes) : pas un second réglage
+ * pour un mécanisme identique. Le signal de vivacité est ici l'activité des items
+ * (started_at / finished_at), l'équivalent de pipeline_steps.at côté pipeline — un job dont le plus
+ * récent item n'a montré aucune activité depuis la coupure, ET dont le job lui-même a démarré avant
+ * la coupure, est présumé mort.
+ *
+ * Statut retenu pour un job réclamé : `failed`, jamais `cancelled` — un job réclamé n'a PAS été
+ * annulé par un éditeur, et finalizeRegenJob() choisirait `cancelled` par défaut s'il consultait
+ * `cancelRequested` (faux ici). On force donc explicitement `failed` (même verdict que
+ * reclaimStaleRuns pour un run mort), et les items balayés portent un message dédié qui ne prétend
+ * jamais qu'un éditeur a cliqué Annuler.
+ */
+export async function reclaimStaleRegenJobs(): Promise<void> {
+  const cfg = getPipelineConfig();
+  const staleBefore = new Date(Date.now() - cfg.runStaleMinutes * 60_000);
+
+  const staleJobs = await db.select({ id: regenJobs.id }).from(regenJobs).where(and(
+    eq(regenJobs.status, "running"),
+    isNull(regenJobs.finishedAt),
+    lt(regenJobs.startedAt, staleBefore),
+    notExists(
+      db.select({ one: sql`1` }).from(regenJobItems).where(and(
+        eq(regenJobItems.jobId, regenJobs.id),
+        sql`coalesce(${regenJobItems.finishedAt}, ${regenJobItems.startedAt}) >= ${staleBefore}`,
+      )),
+    ),
+  ));
+
+  for (const job of staleJobs) {
+    await finalizeRegenJob(job.id, {
+      sweepMessage: "Interrompu : le processus s'est arrêté.",
+      forceStatus: "failed",
+    });
+  }
+}
+
+/**
+ * Ouvre un job et ses items dans UNE transaction. Réclame d'abord les jobs orphelins
+ * (reclaimStaleRegenJobs, voir plus haut) : sinon un job mort bloquerait pour toujours l'insert
+ * qui suit via l'index unique partiel regen_job_items_one_inflight_per_article. L'index rejette
+ * ensuite l'insert si l'un des articles est déjà dans un item non terminé (job réellement en vol)
+ * — on traduit cette violation en message métier plutôt que de la laisser remonter.
  */
 export async function openRegenJob(input: {
   actorId: string | null;
@@ -19,6 +68,7 @@ export async function openRegenJob(input: {
   imageMode: "auto" | "manual";
 }): Promise<{ ok: true; jobId: string } | { ok: false; message: string }> {
   if (input.articles.length === 0) return { ok: false, message: "Aucun article sélectionné." };
+  await reclaimStaleRegenJobs();
   try {
     const jobId = await db.transaction(async (tx) => {
       const [job] = await tx.insert(regenJobs).values({
@@ -37,7 +87,7 @@ export async function openRegenJob(input: {
     // la requête SQL). On regarde les deux pour rester robuste au habillage exact de l'erreur.
     const cause = (e as { cause?: { constraint?: string; message?: string } }).cause;
     const marker = "regen_job_items_one_inflight_per_article";
-    if (cause?.constraint === marker || cause?.message?.includes(marker) || (e as Error).message.includes(marker)) {
+    if (cause?.constraint === marker || cause?.message?.includes(marker) || (e as Error).message?.includes(marker)) {
       return { ok: false, message: "Un renvoi à l'IA est déjà en cours sur l'un de ces articles." };
     }
     throw e;
@@ -89,13 +139,18 @@ export async function isCancelRequested(jobId: string): Promise<boolean> {
  * rapport d'échecs partiels porté par les items (même convention que les lots existants). Un job
  * dont l'annulation a été demandée se termine en `cancelled`.
  *
- * INVARIANT D'APPEL : finalizeRegenJob n'est appelé qu'une fois la boucle du runner terminée, donc
- * jamais en concurrence d'un finishItem de ce job (runRegenJob est strictement sériel et l'appelle
- * depuis son `finally`). C'est ce qui permet à ces quatre requêtes de ne pas être dans une
- * transaction. Un appelant qui romprait cet invariant verrait un finishItem tardif écraser une
- * ligne balayée et désynchroniser `done` du statut terminal du job.
+ * INVARIANT D'APPEL : hors reclaimStaleRegenJobs (voir plus haut), finalizeRegenJob n'est appelé
+ * qu'une fois la boucle du runner terminée, donc jamais en concurrence d'un finishItem de ce job
+ * (runRegenJob est strictement sériel et l'appelle depuis son `finally`). C'est ce qui permet à ces
+ * quatre requêtes de ne pas être dans une transaction. Un appelant qui romprait cet invariant
+ * verrait un finishItem tardif écraser une ligne balayée et désynchroniser `done` du statut
+ * terminal du job. reclaimStaleRegenJobs ne l'enfreint pas : il ne cible que des jobs présumés
+ * morts, sans runner vivant pour leur écrire dessus en même temps.
  */
-export async function finalizeRegenJob(jobId: string): Promise<void> {
+export async function finalizeRegenJob(
+  jobId: string,
+  opts?: { sweepMessage?: string; forceStatus?: "failed" },
+): Promise<void> {
   // Tout item encore NON TERMINÉ à la clôture — job annulé avant de l'atteindre, ou processus mort
   // en cours de route — doit être fermé ICI. L'index unique partiel
   // regen_job_items_one_inflight_per_article ne regarde que `finished_at is null` : un item laissé
@@ -103,14 +158,18 @@ export async function finalizeRegenJob(jobId: string): Promise<void> {
   // On n'incrémente PAS `done` au passage : le compteur doit refléter le travail réellement
   // effectué, pour qu'un job annulé à 3/10 s'affiche bien à 30 % (voir lib/pipeline/regen-live.ts).
   await db.update(regenJobItems)
-    .set({ status: "failed", message: "Annulé avant traitement.", finishedAt: new Date() })
+    .set({ status: "failed", message: opts?.sweepMessage ?? "Annulé avant traitement.", finishedAt: new Date() })
     .where(and(eq(regenJobItems.jobId, jobId), isNull(regenJobItems.finishedAt)));
 
   const items = await db.select({ status: regenJobItems.status })
     .from(regenJobItems).where(eq(regenJobItems.jobId, jobId));
   const cancelled = await isCancelRequested(jobId);
   const allFailed = items.length > 0 && items.every((i) => i.status === "failed");
-  const status = cancelled ? "cancelled" : allFailed ? "failed" : "done";
+  // opts.forceStatus outrepasse la déduction cancelRequested/allFailed : c'est le cas
+  // reclaimStaleRegenJobs, où cancelRequested est faux (personne n'a annulé) mais où le job doit
+  // quand même se clore en échec, pas en « done » même si une partie des items a réussi avant la mort
+  // du processus — un travail interrompu par un crash n'est pas un succès.
+  const status = opts?.forceStatus ?? (cancelled ? "cancelled" : allFailed ? "failed" : "done");
   await db.update(regenJobs).set({ status, finishedAt: new Date() }).where(eq(regenJobs.id, jobId));
 }
 
