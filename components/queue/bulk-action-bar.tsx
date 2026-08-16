@@ -30,6 +30,10 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
   // article) : plafonné à 10. C'est une garde d'UI côté client — startRegenJob la répète côté
   // serveur (validation). Approuver/Rejeter NE sont PAS concernés.
   const tooMany = n > 10;
+  // Un job en vol verrouille TOUTE la barre, pas seulement le bouton qui l'a lancé : approuver ou
+  // rejeter les lignes en cours de réécriture serait une course, et « Effacer la sélection »
+  // démonterait la barre (garde rows.length === 0) en emportant le seul observateur du job.
+  const busy = pending || jobId !== null;
 
   function report(res: BulkResult, verb: string) {
     setFailures(res.failed);
@@ -90,7 +94,7 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
 
         <RoleGate allow={["admin", "editor"]}>
           <ConfirmDialog
-            trigger={<Button size="sm" disabled={pending}>Approuver et publier</Button>}
+            trigger={<Button size="sm" disabled={busy}>Approuver et publier</Button>}
             title={`Publier ${n} article${n > 1 ? "s" : ""} ?`}
             /* La phrase dit explicitement ce que fait l'action : approuver PUBLIE
                immédiatement sur WordPress — c'est déjà la sémantique de l'action unitaire. */
@@ -101,7 +105,7 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
 
           <ConfirmDialog
             trigger={
-              <Button size="sm" variant="ghost" disabled={pending}
+              <Button size="sm" variant="ghost" disabled={busy}
                 className="text-destructive hover:bg-destructive/10 hover:text-destructive">
                 Rejeter
               </Button>
@@ -116,13 +120,13 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
 
           <BulkRegenerateDialog
             count={n}
-            disabled={jobId !== null || pending || tooMany}
+            disabled={busy || tooMany}
             onConfirm={(fields) => runRegenerate(fields, "auto")}
           />
           {tooMany && <span className="text-xs text-muted-foreground">Maximum 10 par lot</span>}
         </RoleGate>
 
-        <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setFailures([]); onDone(); }}>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setFailures([]); onDone(); }}>
           Effacer la sélection
         </Button>
       </div>

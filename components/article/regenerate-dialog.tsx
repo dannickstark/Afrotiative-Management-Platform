@@ -35,6 +35,10 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
   const [jobId, setJobId] = useState<string | null>(null);
 
   function handleOpenChange(next: boolean) {
+    // Tant qu'un job tourne, la fenêtre refuse de se fermer : RegenProgress est le SEUL observateur
+    // du job côté client, et le démonter ferait perdre le toast de fin et le rafraîchissement. La
+    // sortie, c'est le bouton « Annuler » de la barre de progression, pas la croix.
+    if (!next && jobId !== null) return;
     setOpen(next);
     // Reset on any close: an in-flight regenerate() already captured its `fields`,
     // so resetting the UI state is safe even mid-submit.
