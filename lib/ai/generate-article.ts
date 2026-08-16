@@ -6,6 +6,12 @@ import { getPipelineConfig } from "@/lib/config/pipeline-config";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import { runWithOpenRouterPool } from "./with-token-pool";
 import { plainTextLen } from "./plain-text";
+import type { AiFailureReason } from "./failure-message";
+
+// Longueur max du message d'exception mémorisé pour la branche non-openrouter (buildModel/
+// generateObject) — même limite que Task 1 applique côté pool (with-token-pool.ts), pour ne
+// jamais faire fuir un message d'erreur disproportionné dans failureDetail.
+const DETAIL_MAX_LENGTH = 200;
 
 export type GenerateInput = { sources: { mediaName: string; url: string; text: string }[]; candidateImages: string[]; categories: string[] };
 
@@ -54,15 +60,25 @@ export function articleIsFlaky(bodyHtml: string, minChars: number): boolean {
   return plainTextLen(bodyHtml) < minChars;
 }
 
-export async function generateArticle(input: GenerateInput): Promise<{ draft: ArticleDraft; via: string }> {
+export async function generateArticle(
+  input: GenerateInput,
+): Promise<{ draft: ArticleDraft; via: string; failure?: AiFailureReason; failureDetail?: string }> {
   const cfg = getPipelineConfig();
   const schema = buildArticleSchema(input.categories);
+
+  // Dernière raison d'échec rencontrée en parcourant llmOrder — n'enregistre que les fournisseurs
+  // RÉELLEMENT tentés (jamais "openrouter non configuré" ni "provider sans modèle") ; la boucle
+  // étant courte et ordonnée par préférence, la DERNIÈRE raison mémorisée l'emporte (pas besoin
+  // d'agrégation de priorité côté appelant, contrairement à with-token-pool.ts).
+  let failure: AiFailureReason | undefined;
+  let failureDetail: string | undefined;
 
   for (const name of cfg.llmOrder) {
     if (name === "openrouter") {
       // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
       // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
-      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
+      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured). Ce n'est
+      // pas un échec (aucun jeton essayé) : on ne mémorise rien ici, on passe au fournisseur suivant.
       if (!cfg.openrouter) continue;
 
       const settings = await getPipelineSettings();
@@ -86,11 +102,14 @@ export async function generateArticle(input: GenerateInput): Promise<{ draft: Ar
       if (r.ok) return { draft: sanitizeDraft(r.value, input.candidateImages), via: "openrouter" };
       // Pool exhausted (every token failed/flaky) — do NOT retry openrouter again, move to the next
       // configured provider in llmOrder, same as the non-openrouter branch falling through below.
+      failure = r.reason;
+      failureDetail = r.detail;
       continue;
     }
 
     const model = buildModel(name, cfg);
     if (!model) continue;
+    let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { object } = await generateObject({
@@ -104,9 +123,25 @@ export async function generateArticle(input: GenerateInput): Promise<{ draft: Ar
         return { draft: sanitizeDraft(object as ArticleDraft, input.candidateImages), via: name };
       } catch (e) {
         console.warn(`[pipeline] LLM provider ${name} a échoué: ${(e as Error).message}`);
+        lastError = e;
         if (attempt === 1) break; // exhausted this provider's retries → next provider
       }
     }
+    // Les 2 tentatives ont jeté — mémorise "error" et le message de la dernière exception, tronqué
+    // à 200 caractères (même limite que Task 1 côté pool, jamais de fragment de jeton dedans).
+    failure = "error";
+    failureDetail = truncateDetail(lastError);
   }
-  return { draft: sanitizeDraft(mockGenerateArticle(input), input.candidateImages), via: "mock" };
+  return {
+    draft: sanitizeDraft(mockGenerateArticle(input), input.candidateImages),
+    via: "mock",
+    failure: failure ?? "unconfigured",
+    failureDetail,
+  };
+}
+
+function truncateDetail(e: unknown): string | undefined {
+  const msg = e instanceof Error ? e.message : typeof e === "string" ? e : undefined;
+  if (typeof msg !== "string" || msg.length === 0) return undefined;
+  return msg.length > DETAIL_MAX_LENGTH ? msg.slice(0, DETAIL_MAX_LENGTH) : msg;
 }

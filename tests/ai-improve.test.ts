@@ -35,12 +35,12 @@ let runWithOpenRouterPoolImpl: (
   op: (apiKey: string) => Promise<string>,
   isFlaky: (v: string) => boolean,
   deps?: unknown,
-) => Promise<{ ok: true; value: string } | { ok: false }> = async (op, isFlaky) => {
+) => Promise<{ ok: true; value: string } | { ok: false; reason: string; detail?: string }> = async (op, isFlaky) => {
   try {
     const value = await op("test-openrouter-api-key");
-    return isFlaky(value) ? { ok: false } : { ok: true, value };
+    return isFlaky(value) ? { ok: false, reason: "flaky" } : { ok: true, value };
   } catch {
-    return { ok: false };
+    return { ok: false, reason: "error" };
   }
 };
 
@@ -85,6 +85,8 @@ describe("improveArticleBody (no provider configured)", () => {
     const r = await improveArticleBody({ title: "T", bodyHtml: "<p>Inchangé.</p>" });
     expect(r.via).toBe("mock");
     expect(r.bodyHtml).toBe("<p>Inchangé.</p>");
+    // No provider was ever tried (llmOrder has nothing configured) — Task 2's "unconfigured" case.
+    expect(r.failure).toBe("unconfigured");
   });
 });
 
@@ -98,9 +100,9 @@ describe("improveArticleBody (configured provider, happy path)", () => {
     runWithOpenRouterPoolImpl = async (op, isFlaky) => {
       try {
         const value = await op("test-openrouter-api-key");
-        return isFlaky(value) ? { ok: false } : { ok: true, value };
+        return isFlaky(value) ? { ok: false, reason: "flaky" } : { ok: true, value };
       } catch {
-        return { ok: false };
+        return { ok: false, reason: "error" };
       }
     };
   });
@@ -157,11 +159,23 @@ describe("improveArticleBody (configured provider, happy path)", () => {
     buildModelImpl = (name: string) => ({ name }); // only reached for omniroute now
     // Real runWithOpenRouterPool would return {ok:false} once every pooled token's op() throws
     // (quota exceeded, etc.) — expressed here directly via the mocked pool runner.
-    runWithOpenRouterPoolImpl = async () => ({ ok: false });
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "auth_failed" });
     generateTextImpl = async () => ({ text: "<p>Corps produit par le second fournisseur.</p>" }); // only omniroute reaches this now
 
     const r = await improveArticleBody({ title: "T", bodyHtml: "<p>Ancien.</p>" });
     expect(r.via).toBe("omniroute");
     expect(r.bodyHtml).toBe("<p>Corps produit par le second fournisseur.</p>");
+    expect(r.failure).toBeUndefined(); // nominal path (omniroute succeeded) — no failure carried
+  });
+
+  it("returns via='mock' with failure='auth_failed' when the OpenRouter pool is the ONLY configured provider and is exhausted", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    process.env.LLM_ORDER = "openrouter";
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "auth_failed" });
+
+    const r = await improveArticleBody({ title: "T", bodyHtml: "<p>Ancien.</p>" });
+    expect(r.via).toBe("mock");
+    expect(r.bodyHtml).toBe("<p>Ancien.</p>"); // mock case: body UNCHANGED
+    expect(r.failure).toBe("auth_failed");
   });
 });

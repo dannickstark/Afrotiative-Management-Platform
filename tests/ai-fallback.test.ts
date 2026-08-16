@@ -52,11 +52,11 @@ let runWithOpenRouterPoolImpl: (
   op: (apiKey: string) => Promise<ArticleDraft>,
   isFlaky: (v: ArticleDraft) => boolean,
   deps?: unknown,
-) => Promise<{ ok: true; value: ArticleDraft } | { ok: false }> = async (op) => {
+) => Promise<{ ok: true; value: ArticleDraft } | { ok: false; reason: string; detail?: string }> = async (op) => {
   try {
     return { ok: true, value: await op("test-openrouter-api-key") };
   } catch {
-    return { ok: false };
+    return { ok: false, reason: "error" };
   }
 };
 
@@ -131,7 +131,7 @@ describe("generateArticle fallback chain", () => {
       try {
         return { ok: true, value: await op("test-openrouter-api-key") };
       } catch {
-        return { ok: false };
+        return { ok: false, reason: "error" };
       }
     };
     if (originalOrder === undefined) delete process.env.LLM_ORDER;
@@ -166,7 +166,7 @@ describe("generateArticle fallback chain", () => {
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = (name) => ({ name }); // only reached for omniroute now — openrouter no longer calls buildModel
     let poolCalled = false;
-    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false }; };
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "error" }; };
     const seen: string[] = [];
     generateObjectImpl = async (opts) => { seen.push((opts.model as { name: string }).name); return { object: goodDraft({ category: "Marchés" }) }; };
 
@@ -175,6 +175,7 @@ describe("generateArticle fallback chain", () => {
     expect(r.via).toBe("omniroute");
     expect(seen).toEqual(["omniroute"]); // generateObject never invoked for the skipped provider
     expect(r.draft.category).toBe("Marchés");
+    expect(r.failure).toBeUndefined(); // nominal path — no failure carried
   });
 
   it("falls through to the next provider when the OpenRouter pool is exhausted ({ok:false})", async () => {
@@ -184,19 +185,20 @@ describe("generateArticle fallback chain", () => {
     // Real runWithOpenRouterPool would return {ok:false} once every pooled token's op() throws
     // (quota exceeded, etc.) — expressed here directly via the mocked pool runner, matching the
     // NEW architecture rather than a per-name check inside generateObjectImpl.
-    runWithOpenRouterPoolImpl = async () => ({ ok: false });
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "rate_limited" });
     generateObjectImpl = async () => { return { object: goodDraft({ category: "Marchés" }) }; }; // only omniroute reaches this now
 
     const r = await generateArticle(baseInput);
     expect(r.via).toBe("omniroute");
     expect(r.draft.category).toBe("Marchés");
+    expect(r.failure).toBeUndefined(); // nominal path (omniroute succeeded) — no failure carried
   });
 
   it("returns the deterministic mock with via='mock' when every provider fails", async () => {
     process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = (name) => ({ name });
-    runWithOpenRouterPoolImpl = async () => ({ ok: false }); // openrouter pool exhausted
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "rate_limited" }); // openrouter pool exhausted
     generateObjectImpl = async () => { throw new Error("provider down"); }; // omniroute also fails
 
     const r = await generateArticle(baseInput);
@@ -204,6 +206,34 @@ describe("generateArticle fallback chain", () => {
     expect(r.draft.title.startsWith("[MOCK]")).toBe(true);
     expect(r.draft.category).toBe("Économie"); // mock uses categories[0]
     expect(r.draft.confidence.categoryUncertain).toBe(true); // mock is always low-confidence
+    // omniroute's own throw (both attempts) is the LAST failure recorded, overriding openrouter's
+    // rate_limited — matches the brief: "la dernière raison mémorisée gagne".
+    expect(r.failure).toBe("error");
+    expect(r.failureDetail).toBe("provider down");
+  });
+
+  it("returns via='mock' with failure='rate_limited' when the OpenRouter pool is the ONLY configured provider and is exhausted", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    setOrder(["openrouter"]);
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "rate_limited" });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("mock");
+    expect(r.failure).toBe("rate_limited");
+  });
+
+  it("returns via='mock' with failure='unconfigured' when llmOrder has no configured provider at all", async () => {
+    delete process.env.OPENROUTER_API_KEY; // openrouter branch's own gate skips it — never tried
+    setOrder(["openrouter", "omniroute"]);
+    buildModelImpl = () => null; // omniroute also has no model → never tried either
+    let poolCalled = false;
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "error" }; };
+
+    const r = await generateArticle(baseInput);
+    expect(poolCalled).toBe(false);
+    expect(r.via).toBe("mock");
+    expect(r.failure).toBe("unconfigured");
+    expect(r.failureDetail).toBeUndefined();
   });
 
   // The "Important" finding this test (and its assertions) directly answers: with the LEGACY
