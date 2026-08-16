@@ -6,12 +6,8 @@ import { getPipelineConfig } from "@/lib/config/pipeline-config";
 import { getPipelineSettings } from "@/lib/queries/settings";
 import { runWithOpenRouterPool } from "./with-token-pool";
 import { plainTextLen } from "./plain-text";
+import { truncateDetail } from "./detail";
 import type { AiFailureReason } from "./failure-message";
-
-// Longueur max du message d'exception mémorisé pour la branche non-openrouter (buildModel/
-// generateObject) — même limite que Task 1 applique côté pool (with-token-pool.ts), pour ne
-// jamais faire fuir un message d'erreur disproportionné dans failureDetail.
-const DETAIL_MAX_LENGTH = 200;
 
 export type GenerateInput = { sources: { mediaName: string; url: string; text: string }[]; candidateImages: string[]; categories: string[] };
 
@@ -75,12 +71,14 @@ export async function generateArticle(
 
   for (const name of cfg.llmOrder) {
     if (name === "openrouter") {
-      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
-      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
-      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured). Ce n'est
-      // pas un échec (aucun jeton essayé) : on ne mémorise rien ici, on passe au fournisseur suivant.
-      if (!cfg.openrouter) continue;
-
+      // La clé d'environnement n'est PLUS le critère d'entrée dans cette branche. Un opérateur peut
+      // n'avoir saisi que des jetons via Réglages → Jetons OpenRouter, sans jamais définir
+      // OPENROUTER_API_KEY : l'ancien garde-fou `if (!cfg.openrouter) continue` sautait alors tout
+      // OpenRouter et affichait « Aucun fournisseur IA configuré » alors que des jetons parfaitement
+      // valides dormaient en base — exactement le bug que cette branche corrige. On interroge donc
+      // TOUJOURS le pool (lib/ai/token-pool.ts), qui charge les jetons de la base et n'ajoute la clé
+      // d'environnement que comme membre de secours ; buildOpenRouterModel sait construire un modèle
+      // à partir d'un jeton du pool seul (lib/ai/providers.ts).
       const settings = await getPipelineSettings();
       const isFlaky = (draft: ArticleDraft) => articleIsFlaky(draft.bodyHtml, settings.openrouterMinContentChars);
       // Rotates across every pooled token (DB-managed + the env-configured key as a fallback member —
@@ -100,6 +98,13 @@ export async function generateArticle(
         return object as ArticleDraft;
       }, isFlaky);
       if (r.ok) return { draft: sanitizeDraft(r.value, input.candidateImages), via: "openrouter" };
+      // Pool VIDE alors qu'aucune clé d'environnement n'existe = installation réellement non
+      // configurée (aucun jeton en base, aucune clé) : aucun jeton n'a été essayé, ce n'est donc pas
+      // un échec à mémoriser. On ne touche pas à `failure`, si bien que le retour final reste
+      // "unconfigured" et l'utilisateur lit toujours « Aucun fournisseur IA configuré ». À l'inverse,
+      // si cfg.openrouter EST défini, un pool vide est une vraie anomalie (tous les jetons en
+      // récupération, clé d'environnement absente du pool) et se mémorise telle quelle.
+      if (r.reason === "empty_pool" && !cfg.openrouter) continue;
       // Pool exhausted (every token failed/flaky) — do NOT retry openrouter again, move to the next
       // configured provider in llmOrder, same as the non-openrouter branch falling through below.
       failure = r.reason;
@@ -127,8 +132,9 @@ export async function generateArticle(
         if (attempt === 1) break; // exhausted this provider's retries → next provider
       }
     }
-    // Les 2 tentatives ont jeté — mémorise "error" et le message de la dernière exception, tronqué
-    // à 200 caractères (même limite que Task 1 côté pool, jamais de fragment de jeton dedans).
+    // Les 2 tentatives ont jeté — mémorise "error" et le message de la dernière exception, normalisé
+    // par le helper partagé lib/ai/detail.ts (caviardage des clés puis troncature à 200 caractères,
+    // exactement comme côté pool : jamais de fragment de jeton dans failureDetail).
     failure = "error";
     failureDetail = truncateDetail(lastError);
   }
@@ -138,10 +144,4 @@ export async function generateArticle(
     failure: failure ?? "unconfigured",
     failureDetail,
   };
-}
-
-function truncateDetail(e: unknown): string | undefined {
-  const msg = e instanceof Error ? e.message : typeof e === "string" ? e : undefined;
-  if (typeof msg !== "string" || msg.length === 0) return undefined;
-  return msg.length > DETAIL_MAX_LENGTH ? msg.slice(0, DETAIL_MAX_LENGTH) : msg;
 }

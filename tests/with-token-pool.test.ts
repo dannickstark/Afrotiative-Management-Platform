@@ -179,6 +179,42 @@ describe("runWithOpenRouterPool", () => {
     }
   });
 
+  it("une sous-chaîne en forme de clé dans le message d'erreur est caviardée dans `detail`", async () => {
+    // Un fournisseur (ou un proxy en amont) peut recopier la clé refusée dans son message d'erreur ;
+    // `detail` finissant dans une phrase affichée à l'utilisateur, aucun fragment de jeton ne doit
+    // survivre — voir la rédaction appliquée par lib/ai/detail.ts.
+    const pool = [tok("t1", "sk-or-v1-abcdef0123456789")];
+    const { deps } = fakeDeps(pool);
+    const opSpy = mock(async () => {
+      throw new Error("401 Unauthorized: invalid key sk-or-v1-abcdef0123456789 rejected");
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.detail).toBeDefined();
+      expect(r.detail).not.toContain("abcdef0123456789");
+      expect(r.detail).toContain("sk-***");
+      expect(r.detail).toContain("401 Unauthorized");
+    }
+  });
+
+  it("un objet jeté non-`Error` porteur d'un .message alimente quand même `detail`", async () => {
+    // Sémantique tolérante retenue comme unique implémentation dans lib/ai/detail.ts : les SDK
+    // fournisseurs jettent volontiers des objets nus `{ statusCode, message }`.
+    const pool = [tok("t1", "key1")];
+    const { deps } = fakeDeps(pool);
+    const opSpy = mock(async () => {
+      throw { statusCode: 500, message: "upstream indisponible" };
+    });
+
+    const r = await runWithOpenRouterPool(opSpy, () => false, deps);
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.detail).toBe("upstream indisponible");
+  });
+
   it("ATTEMPTS_PER_TOKEN vaut 2", () => {
     expect(ATTEMPTS_PER_TOKEN).toBe(2);
   });

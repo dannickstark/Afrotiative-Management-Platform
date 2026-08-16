@@ -27,21 +27,21 @@ describe("aiFailureMessage", () => {
   });
 
   it("flaky", () => {
-    expect(aiFailureMessage("flaky", "régénération")).toBe("L'IA a renvoyé un contenu inexploitable sur tous les jetons — réessayez.");
+    expect(aiFailureMessage("flaky", "régénération")).toBe("L'IA a renvoyé un contenu inexploitable sur tous les fournisseurs essayés — réessayez.");
   });
 
   it("error sans detail", () => {
-    expect(aiFailureMessage("error", "régénération")).toBe("Appel à l'IA en échec sur tous les jetons.");
+    expect(aiFailureMessage("error", "régénération")).toBe("Appel à l'IA en échec sur tous les fournisseurs essayés.");
   });
 
   it("error avec detail (interpolé tel quel, non re-tronqué)", () => {
     expect(aiFailureMessage("error", "régénération", "429 Too Many Requests")).toBe(
-      "Appel à l'IA en échec sur tous les jetons. Dernière erreur : 429 Too Many Requests",
+      "Appel à l'IA en échec sur tous les fournisseurs essayés. Dernière erreur : 429 Too Many Requests",
     );
   });
 
   it("action = 'amélioration'", () => {
     expect(aiFailureMessage("unconfigured", "amélioration")).toBe("Aucun fournisseur IA configuré — amélioration impossible.");
-    expect(aiFailureMessage("error", "amélioration", "boom")).toBe("Appel à l'IA en échec sur tous les jetons. Dernière erreur : boom");
+    expect(aiFailureMessage("error", "amélioration", "boom")).toBe("Appel à l'IA en échec sur tous les fournisseurs essayés. Dernière erreur : boom");
   });
 });

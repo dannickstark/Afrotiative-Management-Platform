@@ -2,11 +2,8 @@ import { generateText } from "ai";
 import { buildModel, buildOpenRouterModel } from "./providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
 import { runWithOpenRouterPool } from "./with-token-pool";
+import { truncateDetail } from "./detail";
 import type { AiFailureReason } from "./failure-message";
-
-// Même limite que generate-article.ts / with-token-pool.ts — jamais un message d'erreur
-// disproportionné (ni un fragment de jeton) dans failureDetail.
-const DETAIL_MAX_LENGTH = 200;
 
 export type ImproveInput = { title: string; bodyHtml: string; instruction?: string };
 
@@ -43,18 +40,20 @@ export async function improveArticleBody(
 
   for (const name of cfg.llmOrder) {
     if (name === "openrouter") {
-      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
-      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
-      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured). Ce n'est
-      // pas un échec (aucun jeton essayé) : on ne mémorise rien ici, on passe au fournisseur suivant.
-      if (!cfg.openrouter) continue;
-
+      // Même raisonnement que generate-article.ts : la clé d'environnement n'est plus le critère
+      // d'entrée. Des jetons saisis dans Réglages → Jetons OpenRouter suffisent, donc on interroge
+      // TOUJOURS le pool (il charge la base et n'ajoute OPENROUTER_API_KEY qu'en secours) plutôt que
+      // de sauter OpenRouter dès que l'environnement est nu.
       const r = await runWithOpenRouterPool(async (apiKey) => {
         const model = buildOpenRouterModel(cfg, apiKey);
         const { text } = await generateText({ model, prompt: buildImprovePrompt(input) });
         return text.trim();
       }, isFlaky);
       if (r.ok) return { bodyHtml: r.value, via: "openrouter" };
+      // Pool vide ET aucune clé d'environnement = rien n'est configuré, aucun jeton n'a été essayé :
+      // on ne mémorise aucune raison pour que le message final reste « Aucun fournisseur IA
+      // configuré ». Avec cfg.openrouter défini, `empty_pool` est en revanche une vraie anomalie.
+      if (r.reason === "empty_pool" && !cfg.openrouter) continue;
       failure = r.reason;
       failureDetail = r.detail;
       continue;
@@ -78,7 +77,8 @@ export async function improveArticleBody(
       }
     }
     // Sortie vide → "flaky" (même sens que la prédicat isFlaky ci-dessus, côté pool) ; les 2
-    // tentatives qui jettent → "error" + message de la dernière exception tronqué à 200 caractères.
+    // tentatives qui jettent → "error" + message de la dernière exception normalisé par le helper
+    // partagé lib/ai/detail.ts (clés caviardées, troncature à 200 caractères).
     if (sawEmptyOutput) {
       failure = "flaky";
       failureDetail = undefined;
@@ -88,10 +88,4 @@ export async function improveArticleBody(
     }
   }
   return { bodyHtml: input.bodyHtml, via: "mock", failure: failure ?? "unconfigured", failureDetail };
-}
-
-function truncateDetail(e: unknown): string | undefined {
-  const msg = e instanceof Error ? e.message : typeof e === "string" ? e : undefined;
-  if (typeof msg !== "string" || msg.length === 0) return undefined;
-  return msg.length > DETAIL_MAX_LENGTH ? msg.slice(0, DETAIL_MAX_LENGTH) : msg;
 }

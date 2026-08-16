@@ -38,7 +38,7 @@ import { cpus } from "node:os";
 
 // Files proven to touch neither DB nor network — the parallel lane. See the regenerate command above.
 const PURE_FILES = new Set<string>([
-  "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
+  "ai-failure-message.test.ts", "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
   "article-preview-incomplete.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
   "completeness.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
@@ -65,7 +65,7 @@ const PURE_FILES = new Set<string>([
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
   "studio-snap.test.ts", "studio-texte-panel.test.ts", "studio-token-picker.test.ts",
   "studio-tokens.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
-  "wp-client.test.ts", "wp-config.test.ts",
+  "with-token-pool.test.ts", "wp-client.test.ts", "wp-config.test.ts",
 ]);
 
 const arg = process.argv[2];

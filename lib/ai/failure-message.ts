@@ -21,10 +21,15 @@ export function aiFailureMessage(reason: AiFailureReason, action: "régénérati
       return `Quota ou limite de débit atteint sur tous les jetons OpenRouter — réessayez plus tard.`;
     case "auth_failed":
       return `Jetons OpenRouter refusés par le fournisseur (clé invalide ou révoquée) — vérifiez les jetons dans Réglages.`;
+    // "flaky" et "error" sont les DEUX seules raisons qu'un fournisseur non-OpenRouter peut produire
+    // (generate-article.ts / improve-article.ts les mémorisent quand un modèle construit directement
+    // par buildModel échoue) : dans ce cas aucun pool de jetons n'entre en jeu, d'où une formulation
+    // qui parle de fournisseurs et non de jetons. Les autres raisons viennent exclusivement du pool
+    // OpenRouter et gardent donc leur vocabulaire « jetons ».
     case "flaky":
-      return `L'IA a renvoyé un contenu inexploitable sur tous les jetons — réessayez.`;
+      return `L'IA a renvoyé un contenu inexploitable sur tous les fournisseurs essayés — réessayez.`;
     case "error": {
-      const base = `Appel à l'IA en échec sur tous les jetons.`;
+      const base = `Appel à l'IA en échec sur tous les fournisseurs essayés.`;
       return detail ? `${base} Dernière erreur : ${detail}` : base;
     }
   }

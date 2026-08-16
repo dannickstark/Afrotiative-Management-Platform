@@ -161,17 +161,20 @@ describe("generateArticle fallback chain", () => {
     else process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
   });
 
-  it("skips openrouter when unconfigured (cfg.openrouter unset) and uses the next configured provider", async () => {
-    delete process.env.OPENROUTER_API_KEY; // cfg.openrouter undefined → the openrouter branch's own gate skips it
+  it("consulte quand même le pool sans OPENROUTER_API_KEY, puis passe au fournisseur suivant si le pool est vide", async () => {
+    // La clé d'environnement n'est plus le critère d'entrée dans la branche openrouter : des jetons
+    // saisis dans Réglages suffisent, donc le pool est TOUJOURS interrogé. Ici il est vide → on
+    // enchaîne sur omniroute exactement comme avant.
+    delete process.env.OPENROUTER_API_KEY; // cfg.openrouter undefined — le pool décide, plus l'env
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = (name) => ({ name }); // only reached for omniroute now — openrouter no longer calls buildModel
     let poolCalled = false;
-    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "error" }; };
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "empty_pool" }; };
     const seen: string[] = [];
     generateObjectImpl = async (opts) => { seen.push((opts.model as { name: string }).name); return { object: goodDraft({ category: "Marchés" }) }; };
 
     const r = await generateArticle(baseInput);
-    expect(poolCalled).toBe(false); // the pool runner is never invoked when openrouter is unconfigured
+    expect(poolCalled).toBe(true); // le pool est consulté même sans clé d'environnement
     expect(r.via).toBe("omniroute");
     expect(seen).toEqual(["omniroute"]); // generateObject never invoked for the skipped provider
     expect(r.draft.category).toBe("Marchés");
@@ -223,17 +226,45 @@ describe("generateArticle fallback chain", () => {
   });
 
   it("returns via='mock' with failure='unconfigured' when llmOrder has no configured provider at all", async () => {
-    delete process.env.OPENROUTER_API_KEY; // openrouter branch's own gate skips it — never tried
+    // Installation réellement vierge : aucune clé d'environnement ET aucun jeton en base (pool vide).
+    // Le pool EST interrogé (la clé d'env n'est plus le garde-fou) mais `empty_pool` sans
+    // cfg.openrouter ne se mémorise PAS — le message historique « Aucun fournisseur IA configuré »
+    // reste donc celui que lit l'utilisateur.
+    delete process.env.OPENROUTER_API_KEY;
     setOrder(["openrouter", "omniroute"]);
     buildModelImpl = () => null; // omniroute also has no model → never tried either
     let poolCalled = false;
-    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "error" }; };
+    runWithOpenRouterPoolImpl = async () => { poolCalled = true; return { ok: false, reason: "empty_pool" }; };
 
     const r = await generateArticle(baseInput);
-    expect(poolCalled).toBe(false);
+    expect(poolCalled).toBe(true);
     expect(r.via).toBe("mock");
     expect(r.failure).toBe("unconfigured");
     expect(r.failureDetail).toBeUndefined();
+  });
+
+  it("mémorise `empty_pool` tel quel quand OPENROUTER_API_KEY EST définie (anomalie, pas une absence de configuration)", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    setOrder(["openrouter"]);
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "empty_pool" });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("mock");
+    expect(r.failure).toBe("empty_pool");
+  });
+
+  // Le seul raccord jusqu'ici non testé : chaque étape (le pool produit `detail`, aiFailureMessage
+  // l'interpole) était couverte, mais rien ne prouvait que generateArticle transporte réellement le
+  // `detail` du pool jusqu'à `failureDetail`.
+  it("transporte le `detail` renvoyé par le pool jusqu'à failureDetail", async () => {
+    process.env.OPENROUTER_API_KEY = "test-openrouter-api-key";
+    setOrder(["openrouter"]);
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "error", detail: "502 Bad Gateway côté fournisseur" });
+
+    const r = await generateArticle(baseInput);
+    expect(r.via).toBe("mock");
+    expect(r.failure).toBe("error");
+    expect(r.failureDetail).toBe("502 Bad Gateway côté fournisseur");
   });
 
   // The "Important" finding this test (and its assertions) directly answers: with the LEGACY

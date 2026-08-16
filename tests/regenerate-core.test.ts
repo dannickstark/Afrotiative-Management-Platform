@@ -17,6 +17,17 @@ import { faker } from "@faker-js/faker";
 // mock.module() ici, exécuté avant tout appel à regenerateArticle(), est vu par ces `await
 // import(...)` internes exactement comme dans tests/ai-fallback.test.ts (voir son commentaire
 // d'en-tête pour la justification complète du pattern captureRéelle→mock.module→restore).
+//
+// Ce fichier applique désormais ce pattern EN ENTIER : les implémentations réelles sont capturées
+// ci-dessous AVANT les mock.module(), et afterAll repointe les indirections *Impl dessus. Sans cela,
+// les deux mocks (mock.module est global au processus `bun test`, et mock.restore() ne le défait pas
+// dans cette version de Bun) fuiraient vers tout fichier importé ensuite — inoffensif aujourd'hui
+// seulement par chance, à cause de l'ordre alphabétique des fichiers.
+// NB : on destructure les VALEURS (et non l'objet de namespace), car mock.module() mute l'objet
+// d'exports en place — garder le namespace rendrait la fonction MOCKÉE dans afterAll.
+const { extractExternal: realExtractExternal } = await import("@/lib/extract");
+const { generateArticle: realGenerateArticle } = await import("@/lib/ai/generate-article");
+
 let extractExternalImpl: (url: string) => Promise<{ title: string; text: string; images: string[]; via: string; attempts: unknown[] }> =
   async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
 mock.module("@/lib/extract", () => ({
@@ -63,6 +74,11 @@ async function seedArticleWithSource(overrides: Partial<typeof articles.$inferIn
 
 afterAll(async () => {
   if (createdArticleIds.length) await db.delete(articles).where(inArray(articles.id, createdArticleIds));
+  // Restauration réelle : les factories mock.module ci-dessus délèguent toujours à ces variables,
+  // donc les repointer sur les fonctions réelles rend leur comportement d'origine à tout fichier
+  // exécuté après celui-ci (mock.restore() ne défait pas mock.module dans cette version de Bun).
+  extractExternalImpl = realExtractExternal as unknown as typeof extractExternalImpl;
+  generateArticleImpl = realGenerateArticle as unknown as typeof generateArticleImpl;
 });
 
 describe("regenerateArticle (cœur unitaire)", () => {

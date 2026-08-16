@@ -79,13 +79,20 @@ describe("buildImprovePrompt", () => {
 describe("improveArticleBody (no provider configured)", () => {
   const keys = ["OPENROUTER_API_KEY", "OMNIROUTE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"];
   const snap: Record<string, string | undefined> = {};
-  beforeAll(() => { for (const k of keys) { snap[k] = process.env[k]; delete process.env[k]; } });
+  beforeAll(() => {
+    for (const k of keys) { snap[k] = process.env[k]; delete process.env[k]; }
+    // La branche openrouter interroge désormais le pool MÊME sans OPENROUTER_API_KEY (des jetons
+    // peuvent n'exister qu'en base) : on simule ici l'installation vierge, pool vide compris, sans
+    // laisser le runner par défaut tenter un vrai appel réseau.
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "empty_pool" });
+  });
   afterAll(() => { for (const k of keys) { if (snap[k] === undefined) delete process.env[k]; else process.env[k] = snap[k]; } });
   it("falls back to via:'mock' and returns the body unchanged (caller refuses on mock)", async () => {
     const r = await improveArticleBody({ title: "T", bodyHtml: "<p>Inchangé.</p>" });
     expect(r.via).toBe("mock");
     expect(r.bodyHtml).toBe("<p>Inchangé.</p>");
-    // No provider was ever tried (llmOrder has nothing configured) — Task 2's "unconfigured" case.
+    // Pool vide + aucune clé d'environnement = rien de configuré : `empty_pool` n'est PAS mémorisé,
+    // le message historique "unconfigured" est conservé (Task 2).
     expect(r.failure).toBe("unconfigured");
   });
 });

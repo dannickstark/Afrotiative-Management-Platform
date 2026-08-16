@@ -11,6 +11,7 @@
 // with zero DB or network access — see tests/with-token-pool.test.ts.
 import { getOpenRouterTokenPool, markTokenResult, type PooledToken } from "./token-pool";
 import { classifyOpenRouterError } from "./openrouter-errors";
+import { truncateDetail } from "./detail";
 
 const RATE_LIMIT_COOLDOWN_MS = (Number(process.env.OPENROUTER_RATE_COOLDOWN_MIN) || 60) * 60_000;
 const AUTH_COOLDOWN_MS = 24 * 60 * 60_000; // a bad key won't fix itself soon
@@ -28,9 +29,6 @@ export type PoolFailureReason = "empty_pool" | "rate_limited" | "auth_failed" | 
 
 const REASON_PRIORITY: PoolFailureReason[] = ["rate_limited", "auth_failed", "error", "flaky"];
 
-// Longueur max de `detail` — jamais de jeton dedans, seulement un message d'erreur tronqué.
-const DETAIL_MAX_LENGTH = 200;
-
 export type PoolResult<T> = { ok: true; value: T } | { ok: false; reason: PoolFailureReason; detail?: string };
 
 // deps injectable for tests
@@ -46,6 +44,12 @@ export async function runWithOpenRouterPool<T>(
 ): Promise<PoolResult<T>> {
   const pool = await deps.loadPool();
   if (pool.length === 0) {
+    // Cas désormais RÉELLEMENT atteignable en production : les générateurs appellent ce runner sans
+    // plus exiger OPENROUTER_API_KEY (voir generate-article.ts / improve-article.ts), donc on arrive
+    // ici dès qu'aucun jeton actif hors cooldown n'existe en base ET qu'aucune clé d'environnement ne
+    // vient compléter le pool. Deux situations très différentes derrière cette même raison : une
+    // installation vierge (rien de configuré du tout) ou un parc de jetons entièrement en période de
+    // récupération — c'est l'appelant qui tranche, lui seul sait si `cfg.openrouter` existe.
     console.warn("[openrouter] pool vide — aucun jeton actif hors cooldown et pas de clé d'environnement");
     return { ok: false, reason: "empty_pool" };
   }
@@ -109,12 +113,6 @@ function aggregateReason(reasons: Exclude<PoolFailureReason, "empty_pool">[]): P
     if (reasons.includes(candidate as Exclude<PoolFailureReason, "empty_pool">)) return candidate;
   }
   return "error"; // ne devrait pas arriver (au moins une raison est toujours poussée par jeton)
-}
-
-function truncateDetail(e: unknown): string | undefined {
-  const msg = e instanceof Error ? e.message : typeof e === "string" ? e : (e as any)?.message;
-  if (typeof msg !== "string" || msg.length === 0) return undefined;
-  return msg.length > DETAIL_MAX_LENGTH ? msg.slice(0, DETAIL_MAX_LENGTH) : msg;
 }
 
 export { RATE_LIMIT_COOLDOWN_MS, AUTH_COOLDOWN_MS };
