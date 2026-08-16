@@ -152,6 +152,10 @@ export const clusters = pgTable("clusters", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// Image candidate scrapée, avec sa provenance : le crédit et le lien source d'un choix MANUEL en
+// découlent directement, ce qui est plus fiable qu'un crédit deviné par le modèle.
+export type ImageCandidate = { url: string; sourceUrl: string; mediaName: string };
+
 // ---- articles ----
 export const articles = pgTable("articles", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -163,6 +167,10 @@ export const articles = pgTable("articles", {
   featuredImageUrl: text("featured_image_url"),
   imageCredit: text("image_credit"),
   imageSourceUrl: text("image_source_url"),
+  // Images candidates en attente d'un choix manuel (mode `manual` du renvoi à l'IA). NULL = rien à
+  // choisir. C'est cette seule colonne qui alimente le bac, le badge et le filtre du /queue — l'état
+  // vit sur l'article, pas sur le job, pour survivre à la purge de celui-ci.
+  pendingImageCandidates: jsonb("pending_image_candidates").$type<ImageCandidate[]>(),
   aiAuthor: boolean("ai_author").notNull().default(true),
   createdBy: text("created_by").references(() => user.id),
   clusterId: uuid("cluster_id").references(() => clusters.id),

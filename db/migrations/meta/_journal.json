@@ -169,6 +169,13 @@
       "when": 1786911091138,
       "tag": "0023_lonely_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786911429610,
+      "tag": "0024_quick_zombie",
+      "breakpoints": true
     }
   ]
 }

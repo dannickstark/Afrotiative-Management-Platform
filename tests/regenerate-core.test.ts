@@ -260,3 +260,22 @@ describe("regenerateArticle — image sans candidat", () => {
     expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg");
   });
 });
+
+describe("candidats d'image avec provenance", () => {
+  it("étiquette chaque image candidate avec sa source", async () => {
+    const { articleId } = await seedArticleWithSources(["https://media-a.test/1"]);
+    extractImpl = async () => ({
+      title: "t", text: "Contenu extrait de test, assez long.",
+      images: ["https://media-a.test/img1.jpg", "https://media-a.test/img2.jpg"],
+      via: "test", attempts: [],
+    });
+    let seenCandidates: string[] = [];
+    generateArticleImpl = async () => {
+      seenCandidates = (lastGenerateInput as { candidateImages: string[] } | null)?.candidateImages ?? [];
+      return { draft: { ...draftFixture, featuredImageUrl: "https://media-a.test/img1.jpg" }, via: "openrouter" };
+    };
+    const r = await regenerateArticle(articleId, { title: false, body: false, excerpt: false, category: false, tags: false, image: true }, null, { timeoutMs: 5000 });
+    expect(r.ok).toBe(true);
+    expect(seenCandidates).toEqual(["https://media-a.test/img1.jpg", "https://media-a.test/img2.jpg"]);
+  });
+});

@@ -1,4 +1,5 @@
 import { db, articles } from "@/db";
+import type { ImageCandidate } from "@/db";
 import { eq } from "drizzle-orm";
 import { regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/validation";
 import { aiFailureMessage } from "@/lib/ai/failure-message";
@@ -62,12 +63,19 @@ export async function regenerateArticle(
   }));
 
   const extracted: { mediaName: string; url: string; text: string }[] = [];
-  const candidateImages: string[] = [];
+  const candidates: ImageCandidate[] = [];
   for (const r of results) {
     if (r === null) continue;
     extracted.push({ mediaName: r.mediaName, url: r.url, text: r.text });
-    candidateImages.push(...r.images);
+    // Une même image peut être servie par deux sources — on déduplique sur l'URL, en gardant la
+    // PREMIÈRE provenance vue (l'ordre des sources est stable, celui de article_sources).
+    for (const img of r.images) {
+      if (!candidates.some((c) => c.url === img)) {
+        candidates.push({ url: img, sourceUrl: r.url, mediaName: r.mediaName });
+      }
+    }
   }
+  const candidateImages = candidates.map((c) => c.url);
   if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré).", title: article.title };
 
   // Le plan tranche AVANT de payer un appel LLM : une régénération « image seule » sans le moindre
