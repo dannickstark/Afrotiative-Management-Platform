@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { usePreview } from "@/hooks/use-preview";
-import { sceneForFormat } from "@/lib/studio/relayout";
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
 import { previewFileName } from "./export";
 import type { Scene } from "@/lib/studio/scene";
@@ -68,15 +67,13 @@ function ProofTile({
     return () => observer.disconnect();
   }, []);
 
-  // Mémoïsé : `relayoutToFormat` est un vrai calcul, et sans cela il serait refait pour les huit
-  // tuiles à chaque rendu du parent (une frappe ailleurs dans l'éditeur, par exemple).
-  const variant = useMemo(
-    () => sceneForFormat(scene, format, nativeFormat),
-    [scene, format, nativeFormat],
-  );
-
+  // Le relayout vers `format` (`sceneForFormat`, un vrai calcul) est fait PAR le hook lui-même —
+  // voir `previewKeyFor` (lib/studio/preview-cache.ts) — plutôt que recalculé ici puis passé comme
+  // scène déjà relayoutée : c'est ce qui garantit que la clé de cache hachée par `usePreview` et la
+  // scène effectivement envoyée au rendu proviennent du MÊME appel, jamais de deux calculs qui
+  // pourraient diverger (revue finale, Important 2).
   const { state } = usePreview({
-    templateId, scene: variant, format, articleId, enabled: visible && !disabled,
+    templateId, scene, format, nativeFormat, articleId, enabled: visible && !disabled,
   });
 
   const outcome: TileOutcome = state.status === "ready"

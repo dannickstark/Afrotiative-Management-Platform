@@ -1,6 +1,5 @@
 import { previewTemplate } from "@/lib/actions/studio-preview-actions";
-import { previewCache, previewCacheKey } from "@/lib/studio/preview-cache";
-import { sceneForFormat } from "@/lib/studio/relayout";
+import { previewCache, previewKeyFor } from "@/lib/studio/preview-cache";
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
 import type { Scene } from "@/lib/studio/scene";
 
@@ -58,8 +57,11 @@ function defaultDeps(
     // Réutilise le mémo : les formats déjà affichés sur la planche ne sont pas re-rendus, seuls les
     // manquants coûtent un aller-retour.
     render: async (format) => {
-      const variant = sceneForFormat(scene, format, nativeFormat);
-      const key = previewCacheKey(templateId, variant, format, articleId);
+      // Passe par le MÊME point de construction de clé que hooks/use-preview.ts (previewKeyFor,
+      // lib/studio/preview-cache.ts) — correctif de revue finale, Important 2 : avant, les deux
+      // chemins recalculaient `sceneForFormat` + la clé chacun de son côté, une concordance
+      // seulement observée, jamais garantie par construction.
+      const { key, scene: variant } = previewKeyFor(templateId, scene, format, nativeFormat, articleId);
       const hit = previewCache.get(key);
       if (hit) return hit.dataUri;
       const res = await previewTemplate({

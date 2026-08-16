@@ -12,6 +12,7 @@
 //
 // PUR : aucun accès à `window`/DOM, aucun import React — même discipline que lib/studio/editor-prefs.ts
 // et lib/studio/studio-mode.ts. C'est ce qui le rend testable dans la voie parallèle.
+import { sceneForFormat } from "./relayout";
 import type { Scene } from "./scene";
 import type { FormatKey } from "./formats";
 
@@ -55,6 +56,31 @@ export function previewCacheKey(
     serialized.length,
     fnv1a(serialized),
   ]);
+}
+
+// Correctif de revue finale (chantier « Rendu réel », Important 2) : `hooks/use-preview.ts` et
+// `components/studio/render/export.ts` construisaient chacun la clé de cache À LA MAIN — même
+// recette (`sceneForFormat` puis `previewCacheKey`) mais réécrite deux fois. La concordance tenait
+// donc à ce que les deux copies restent identiques par discipline, pas par construction : rien
+// n'aurait empêché l'une des deux de dériver (par exemple, un chemin qui se remettrait à hacher la
+// scène de BASE plutôt que sa variante relayoutée) sans qu'aucun test ne rougisse — « Tout
+// télécharger » aurait alors manqué les huit entrées du mémo en silence. Ce point de passage UNIQUE
+// rend la parité STRUCTURELLE : les deux appelants passent par lui, il n'y a plus deux endroits où
+// diverger. Renvoie aussi la scène relayoutée (`scene`) pour que l'appelant n'ait pas à rappeler
+// `sceneForFormat` une seconde fois pour l'envoyer au rendu lui-même.
+export function previewKeyFor(
+  templateId: string,
+  scene: Scene,
+  format: FormatKey | undefined,
+  nativeFormat: FormatKey | undefined,
+  articleId: string | null | undefined,
+): { key: string; scene: Scene } {
+  // `format`/`nativeFormat` absents (ex. : sonde de test qui n'exerce pas la relève par format) :
+  // rien à relayouter, la scène passe telle quelle — même comportement qu'avant ce correctif.
+  const variant = format !== undefined && nativeFormat !== undefined
+    ? sceneForFormat(scene, format, nativeFormat)
+    : scene;
+  return { key: previewCacheKey(templateId, variant, format, articleId), scene: variant };
 }
 
 // Estimation des octets réels derrière une data-URI base64 : 4 caractères encodent 3 octets.

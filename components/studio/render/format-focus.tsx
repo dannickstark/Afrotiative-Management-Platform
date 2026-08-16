@@ -1,12 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { ArrowLeft, Download, Maximize2, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { usePreview, type PreviewState } from "@/hooks/use-preview";
-import { sceneForFormat } from "@/lib/studio/relayout";
 import { formatNavAction, zoomStep, type PreservedView } from "@/lib/studio/studio-mode";
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
 import { previewFileName } from "./export";
@@ -46,11 +45,10 @@ export function FormatFocus({
   view, onViewChange, onExit, onFormatChange, outcomes, initialState,
 }: FormatFocusProps) {
   const preset = FORMAT_PRESETS[format];
-  const variant = useMemo(
-    () => sceneForFormat(scene, format, nativeFormat),
-    [scene, format, nativeFormat],
-  );
-  const live = usePreview({ templateId, scene: variant, format, articleId, enabled: !disabled });
+  // Le relayout vers `format` est fait par le hook lui-même (`previewKeyFor`,
+  // lib/studio/preview-cache.ts) — voir le même commentaire dans proof-sheet.tsx pour pourquoi
+  // (revue finale, Important 2 : parité structurelle avec `export.ts`).
+  const live = usePreview({ templateId, scene, format, nativeFormat, articleId, enabled: !disabled });
   const state = initialState ?? live.state;
 
   // ← / → / Échap. La DÉCISION vit dans lib/studio/studio-mode.ts (pure, testée sans DOM) ; ce

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { previewTemplate } from "@/lib/actions/studio-preview-actions";
-import { previewCache, previewCacheKey, type CachedPreview } from "@/lib/studio/preview-cache";
+import { previewCache, previewKeyFor, type CachedPreview } from "@/lib/studio/preview-cache";
 import type { Scene } from "@/lib/studio/scene";
 import type { FormatKey } from "@/lib/studio/formats";
 
@@ -42,6 +42,12 @@ export interface UsePreviewInput {
   scene: Scene;
   /** Fait calculer `overflowingLayerIds` côté serveur pour CE format (voir PreviewTemplateInput.format). */
   format?: FormatKey;
+  /** Format natif du gabarit — voir `previewKeyFor` (lib/studio/preview-cache.ts). `scene` est
+   *  relayoutée vers `format` avant d'être hachée ET avant d'être envoyée au rendu, exactement comme
+   *  le fait `components/studio/render/export.ts` pour « Tout télécharger » : un seul point de
+   *  passage pour les deux, la parité des clés est donc structurelle, pas seulement observée. Omis
+   *  (ou égal à `format`) : `scene` est utilisée telle quelle, sans relayout. */
+  nativeFormat?: FormatKey;
   /** `null`/`undefined` = valeurs d'exemple. Les deux produisent la même clé de cache. */
   articleId?: string | null;
   /** `false` : aucun appel réseau, aucune transition d'état. Porte à la fois la lecture seule
@@ -50,8 +56,16 @@ export interface UsePreviewInput {
 }
 
 export function usePreview(input: UsePreviewInput): { state: PreviewState; refresh: () => void } {
-  const { templateId, scene, format, articleId, enabled = true } = input;
-  const key = previewCacheKey(templateId, scene, format, articleId);
+  const { templateId, scene, format, nativeFormat, articleId, enabled = true } = input;
+  // Mémoïsé : `sceneForFormat` (appelé À L'INTÉRIEUR de `previewKeyFor`) est un vrai calcul de
+  // relayout — sans ce useMemo il serait refait à chaque rendu du parent, exactement le défaut que
+  // les deux anciens appelants (proof-sheet.tsx, format-focus.tsx) évitaient déjà chacun de son côté
+  // avec son propre `useMemo(() => sceneForFormat(...))`. Centraliser ici évite de le répéter une
+  // troisième fois pour chaque futur appelant.
+  const { key, scene: variant } = useMemo(
+    () => previewKeyFor(templateId, scene, format, nativeFormat, articleId),
+    [templateId, scene, format, nativeFormat, articleId],
+  );
 
   // Un succès de cache doit être visible DÈS LE PREMIER RENDU sous la nouvelle clé — sinon revenir
   // de l'inspection vers la planche, ou faire un aller-retour Montage⇄Rendu, ferait clignoter huit
@@ -114,7 +128,7 @@ export function usePreview(input: UsePreviewInput): { state: PreviewState; refre
       void (async () => {
         try {
           const res = await previewTemplate({
-            templateId, scene, format, articleId: articleId ?? undefined,
+            templateId, scene: variant, format, articleId: articleId ?? undefined,
           });
           // Garde anti-périmé : une requête plus récente est repartie entre-temps, sa réponse ne
           // doit pas être écrasée par celle-ci, arrivée en second à cause de la latence.
@@ -136,9 +150,10 @@ export function usePreview(input: UsePreviewInput): { state: PreviewState; refre
       })();
     }, immediate ? 0 : PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-    // `scene`/`templateId`/`format`/`articleId` sont TOUS déjà encodés dans `key` (par contenu, pas
+    // `variant`/`templateId`/`format`/`articleId` sont TOUS déjà encodés dans `key` (par contenu, pas
     // par identité d'objet) — les lister en plus ferait re-déclencher l'effet à chaque nouveau rendu
-    // du parent, puisque `sceneForFormat` renvoie un objet neuf à chaque appel.
+    // du parent, puisque `sceneForFormat` (dans `previewKeyFor`) renvoie un objet neuf à chaque appel
+    // où `format !== nativeFormat`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled, nonce]);
 

@@ -1,8 +1,9 @@
 import { describe, it, expect } from "bun:test";
 import {
-  previewCacheKey, createPreviewCache, PREVIEW_CACHE_MAX_BYTES, previewCache,
+  previewCacheKey, previewKeyFor, createPreviewCache, PREVIEW_CACHE_MAX_BYTES, previewCache,
   type CachedPreview,
 } from "@/lib/studio/preview-cache";
+import { sceneForFormat } from "@/lib/studio/relayout";
 import { parseScene, type Scene } from "@/lib/studio/scene";
 
 // tests/studio-preview-cache.test.ts — le mémo client de l'aperçu (refonte Rendu réel, §4 de la
@@ -69,6 +70,56 @@ describe("previewCacheKey", () => {
     const a = previewCacheKey("tpl", fixtureScene(), "ig_portrait", "story|x");
     const b = previewCacheKey("tpl|ig_portrait", fixtureScene(), "story", "x");
     expect(a).not.toBe(b);
+  });
+});
+
+// previewKeyFor — correctif de revue finale, Important 2 : hooks/use-preview.ts (le chemin de
+// PREVIEW, une tuile de la planche ou l'inspection d'un format) et
+// components/studio/render/export.ts (le chemin d'EXPORT, « Tout télécharger ») construisaient
+// chacun leur propre clé de cache — même recette (`sceneForFormat` puis `previewCacheKey`), mais
+// réécrite deux fois. Rien ne garantissait que les deux copies restent identiques : une divergence
+// future (par ex. un des deux chemins qui se remettrait à hacher la scène de BASE plutôt que sa
+// variante relayoutée) aurait fait manquer silencieusement les huit entrées du mémo à l'export, sans
+// qu'aucun test ne rougisse. Les deux chemins appellent maintenant CETTE fonction — les tests
+// ci-dessous pinnent son comportement, ce qui pinne la parité des deux chemins PAR CONSTRUCTION :
+// tant qu'ils lui passent les mêmes `templateId`/`scene`/`format`/`nativeFormat`/`articleId`, ils ne
+// peuvent PAS obtenir de clés différentes.
+describe("previewKeyFor (lib/studio/preview-cache.ts) — le point de passage UNIQUE des deux chemins (hook de preview ET export.ts)", () => {
+  it("applique RÉELLEMENT sceneForFormat avant de hacher — la clé égale previewCacheKey(templateId, sceneForFormat(scene, format, native), format, articleId)", () => {
+    const scene = fixtureScene();
+    const { key, scene: variant } = previewKeyFor(TPL, scene, "story", "ig_portrait", null);
+    const expectedVariant = sceneForFormat(scene, "story", "ig_portrait");
+    expect(variant).toEqual(expectedVariant);
+    expect(key).toBe(previewCacheKey(TPL, expectedVariant, "story", null));
+    // Un format DIFFÉRENT de l'accueil relayoute réellement — la variante n'est donc pas la scène
+    // de base inchangée (sans quoi ce test ne distinguerait pas « relayoute » de « passe telle quelle »).
+    expect(variant).not.toEqual(scene);
+  });
+
+  it("au format d'accueil (format === nativeFormat) : identité EXACTE, même référence de scène — aucun relayout inutile", () => {
+    const scene = fixtureScene();
+    const { key, scene: variant } = previewKeyFor(TPL, scene, "ig_portrait", "ig_portrait", null);
+    expect(variant).toBe(scene);
+    expect(key).toBe(previewCacheKey(TPL, scene, "ig_portrait", null));
+  });
+
+  it("deux appels indépendants — un pour le chemin PREVIEW (une tuile), un pour le chemin EXPORT (« Tout télécharger ») — avec les MÊMES entrées produisent la MÊME clé, même à partir de deux objets scène distincts", () => {
+    // Simule l'écart réel entre les deux appelants : le hook de preview reçoit la scène telle que
+    // gardée en état React (référence stable), l'export en reçoit une copie fraîchement passée en
+    // argument (JSON.parse(JSON.stringify(...))). previewCacheKey hache par CONTENU, jamais par
+    // identité d'objet (voir sa description) — ce test le vérifie au niveau de previewKeyFor.
+    const sceneFromHookState = fixtureScene();
+    const sceneFromExportCall: Scene = JSON.parse(JSON.stringify(sceneFromHookState));
+    const fromPreviewPath = previewKeyFor(TPL, sceneFromHookState, "story", "ig_portrait", "art-1");
+    const fromExportPath = previewKeyFor(TPL, sceneFromExportCall, "story", "ig_portrait", "art-1");
+    expect(fromExportPath.key).toBe(fromPreviewPath.key);
+  });
+
+  it("`format`/`nativeFormat` absents : la scène passe TELLE QUELLE, sans tenter de relayouter (sonde de test qui n'exerce pas la relève par format)", () => {
+    const scene = fixtureScene();
+    const { key, scene: variant } = previewKeyFor(TPL, scene, undefined, undefined, null);
+    expect(variant).toBe(scene);
+    expect(key).toBe(previewCacheKey(TPL, scene, undefined, null));
   });
 });
 
