@@ -26,7 +26,9 @@ export type CachedPreview = {
 // ici afficherait la mauvaise image, pas seulement un cache raté), donc la clé ne se réduit JAMAIS
 // au seul hachage : elle porte AUSSI la longueur de la sérialisation. Deux scènes distinctes
 // doivent alors collisionner sur le hachage ET faire exactement la même longueur d'octets pour se
-// confondre — un régime bien plus sûr, pour un coût nul.
+// confondre — un régime bien plus sûr, pour un coût nul. Les limites des champs sont sérialisées
+// en JSON, donc ni une collision du hachage, ni une longueur identique, ni même une assignation de
+// valeurs aux mauvais champs ne peut survenir.
 function fnv1a(input: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
@@ -46,13 +48,13 @@ export function previewCacheKey(
   // `articleId` : `undefined` et `null` désignent tous deux « valeurs d'exemple » côté
   // previewTemplate — ils DOIVENT donc produire la même clé, sans quoi le même rendu serait calculé
   // deux fois selon la façon dont l'appelant a exprimé « aucun article ».
-  return [
+  return JSON.stringify([
     templateId,
     format ?? "-",
     articleId ?? "-",
     serialized.length,
     fnv1a(serialized),
-  ].join("|");
+  ]);
 }
 
 // Estimation des octets réels derrière une data-URI base64 : 4 caractères encodent 3 octets.

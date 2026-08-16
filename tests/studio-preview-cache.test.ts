@@ -60,6 +60,16 @@ describe("previewCacheKey", () => {
     expect(previewCacheKey(TPL, fixtureScene(), undefined, null))
       .not.toBe(previewCacheKey(TPL, fixtureScene(), "ig_portrait", null));
   });
+
+  it("les champs séparés par des caractères de contrôle ne créent pas d'ambiguïté — e.g. `articleId` contenant `|` ne peut pas se confondre avec un réassignement aux mauvais champs", () => {
+    // Si la clé était naïvement `.join("|")`, ces deux appels produiraient la même clé :
+    //   ["tpl", "a|b", "c", ...].join("|")  →  "tpl|a|b|c|..."
+    //   ["tpl", "a", "b|c", ...].join("|")  →  "tpl|a|b|c|..."
+    // Avec JSON.stringify, les limites de champs sont explicites et immuables.
+    const a = previewCacheKey(TPL, fixtureScene(), "a|b" as any, "c");
+    const b = previewCacheKey(TPL, fixtureScene(), "a", "b|c");
+    expect(a).not.toBe(b);
+  });
 });
 
 describe("createPreviewCache — éviction bornée en OCTETS", () => {
