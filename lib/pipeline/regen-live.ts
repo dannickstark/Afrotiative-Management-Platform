@@ -30,8 +30,13 @@ export function deriveRegenHeader(job: RegenJobView): { label: string; done: num
   // il ne peut donc jamais y en avoir deux.
   const current = job.items.find((i) => i.status === "pending" && i.stage !== "queued");
   if (current === undefined) {
-    const label = job.status === "running" ? "Préparation…" : job.status === "cancelled" ? "Annulé" : "Terminé";
-    return { label, done: job.done, total: job.total, percent: job.status === "running" ? percent : 100 };
+    // Un job terminé garde son AVANCEMENT RÉEL : annulé à 3/10, il affiche 30 %, pas 100 %. Seul le
+    // libellé distingue les états terminaux — un `failed` ne doit surtout pas s'annoncer « Terminé ».
+    const label = job.status === "running" ? "Préparation…"
+      : job.status === "cancelled" ? "Annulé"
+        : job.status === "failed" ? "Échec"
+          : "Terminé";
+    return { label, done: job.done, total: job.total, percent };
   }
   return { label: `${STAGE_LABELS[current.stage]} — ${current.title}`, done: job.done, total: job.total, percent };
 }

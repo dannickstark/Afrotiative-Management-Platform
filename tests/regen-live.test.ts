@@ -31,6 +31,30 @@ describe("deriveRegenHeader", () => {
   it("arrondit le pourcentage", () => {
     expect(deriveRegenHeader(job({ total: 3, done: 1 })).percent).toBe(33);
   });
+
+  it("un job annulé garde son avancement réel, il n'affiche pas 100 %", () => {
+    const h = deriveRegenHeader(job({ status: "cancelled", total: 10, done: 3, items: [] }));
+    expect(h.label).toBe("Annulé");
+    expect(h.percent).toBe(30);
+  });
+
+  it("un job en échec s'annonce comme tel, pas « Terminé »", () => {
+    const h = deriveRegenHeader(job({ status: "failed", total: 10, done: 3, items: [] }));
+    expect(h.label).toBe("Échec");
+    expect(h.percent).toBe(30);
+  });
+
+  it("un job qui tourne sans article encore démarré annonce la préparation", () => {
+    const h = deriveRegenHeader(job({
+      status: "running", total: 2, done: 0,
+      items: [
+        { id: "i1", articleId: "a1", title: "Alpha", stage: "queued", status: "pending", message: null },
+        { id: "i2", articleId: "a2", title: "Bravo", stage: "queued", status: "pending", message: null },
+      ],
+    }));
+    expect(h.label).toBe("Préparation…");
+    expect(h.percent).toBe(0);
+  });
 });
 
 describe("summarizeRegenJob", () => {
