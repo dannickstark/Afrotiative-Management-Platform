@@ -2321,7 +2321,7 @@ Expected: PASS (5 tests)
 1. Copier le brief depuis l'onglet Brief.
 2. Coller `EXAMPLE_PAYLOAD` (ou une vraie réponse de chat) dans l'onglet Importer → diff en ajouts → appliquer → les beats apparaissent dans l'onglet Écriture.
 3. Modifier le texte d'un beat dans l'app.
-4. Ré-importer le **même** payload → le beat modifié localement apparaît en **conflit**, décoché.
+4. Ré-importer un payload où Claude a modifié **le même champ** que vous → le beat apparaît en **conflit**, décoché. (Ré-importer un payload *identique* ne produit rien, et c'est correct : sans changement côté Claude, il n'y a rien à proposer, donc rien à contester — voir `computeMerge`, sortie anticipée quand `theirChanged` est vide.)
 5. Retirer un beat du payload et ré-importer → suppression **proposée mais décochée**.
 6. Annuler la dernière entrée du journal → l'état précédent est restauré.
 
