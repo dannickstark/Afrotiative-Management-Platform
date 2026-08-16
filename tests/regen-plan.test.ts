@@ -10,7 +10,7 @@ const TITLE_ONLY: RegenerateFieldsInput = { ...NONE, title: true };
 
 describe("planRegeneration", () => {
   it("sans image cochée, génère et ignore l'image", () => {
-    const p = planRegeneration({ fields: TITLE_ONLY, candidateCount: 0 });
+    const p = planRegeneration({ fields: TITLE_ONLY, candidateCount: 0, imageMode: "auto" });
     expect(p.runGeneration).toBe(true);
     expect(p.imageAction).toBe("skip");
     expect(p.abort).toBeNull();
@@ -19,13 +19,13 @@ describe("planRegeneration", () => {
   });
 
   it("image seule sans candidat : abandonne sans rien écrire", () => {
-    const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 0 });
+    const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 0, imageMode: "auto" });
     expect(p.abort).toBe("Aucune image candidate trouvée — image inchangée.");
     expect(p.runGeneration).toBe(false);
   });
 
   it("image + autres champs sans candidat : applique les autres, épargne l'image, avertit", () => {
-    const p = planRegeneration({ fields: IMAGE_AND_TITLE, candidateCount: 0 });
+    const p = planRegeneration({ fields: IMAGE_AND_TITLE, candidateCount: 0, imageMode: "auto" });
     expect(p.abort).toBeNull();
     expect(p.runGeneration).toBe(true);
     expect(p.imageAction).toBe("skip");
@@ -35,11 +35,45 @@ describe("planRegeneration", () => {
   });
 
   it("image cochée avec des candidats : prend l'image du brouillon", () => {
-    const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 3 });
+    const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 3, imageMode: "auto" });
     expect(p.runGeneration).toBe(true);
     expect(p.imageAction).toBe("from-draft");
     expect(p.abort).toBeNull();
     expect(p.warning).toBeNull();
+  });
+});
+
+describe("planRegeneration — mode auto", () => {
+  it("image seule : génère (la génération partielle de main rend ça bon marché) et prend l'image du brouillon", () => {
+    const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 3, imageMode: "auto" });
+    expect(p.runGeneration).toBe(true);
+    expect(p.imageAction).toBe("from-draft");
+    expect(p.effectiveFields.image).toBe(true);
+  });
+  it("image + autres : génère et prend l'image du brouillon", () => {
+    const p = planRegeneration({ fields: IMAGE_AND_TITLE, candidateCount: 3, imageMode: "auto" });
+    expect(p.runGeneration).toBe(true);
+    expect(p.imageAction).toBe("from-draft");
+  });
+});
+
+describe("planRegeneration — mode manuel", () => {
+  it("image seule : AUCUN appel LLM, on gare les candidats", () => {
+    const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 3, imageMode: "manual" });
+    expect(p.runGeneration).toBe(false);
+    expect(p.imageAction).toBe("park");
+    expect(p.effectiveFields.image).toBe(false);
+  });
+  it("image + autres : génère les autres champs et gare les candidats", () => {
+    const p = planRegeneration({ fields: IMAGE_AND_TITLE, candidateCount: 3, imageMode: "manual" });
+    expect(p.runGeneration).toBe(true);
+    expect(p.imageAction).toBe("park");
+    expect(p.effectiveFields.image).toBe(false);
+    expect(p.effectiveFields.title).toBe(true);
+  });
+  it("zéro candidat reste prioritaire sur le mode", () => {
+    expect(planRegeneration({ fields: IMAGE_ONLY, candidateCount: 0, imageMode: "manual" }).abort)
+      .toBe("Aucune image candidate trouvée — image inchangée.");
   });
 });
 

@@ -5,7 +5,7 @@ import type { RegenerateFieldsInput } from "@/lib/validation";
 // pour être testable en table de fixtures (voie test:pure), comme lib/queries/queue-sort.ts et
 // lib/pipeline/live.ts. C'est le seul endroit où se décide « faut-il générer », « que fait-on de
 // l'image » et « faut-il abandonner » — regenerateArticle ne fait qu'exécuter le plan.
-export type ImageAction = "from-draft" | "skip";
+export type ImageAction = "from-draft" | "skip" | "park";
 
 export type RegenPlan = {
   /** Faut-il appeler generateArticle ? */
@@ -29,6 +29,7 @@ function hasOtherFields(fields: RegenerateFieldsInput): boolean {
 export function planRegeneration(input: {
   fields: RegenerateFieldsInput;
   candidateCount: number;
+  imageMode: "auto" | "manual";
 }): RegenPlan {
   const { fields, candidateCount } = input;
   const base: RegenPlan = {
@@ -45,5 +46,22 @@ export function planRegeneration(input: {
     return { ...base, effectiveFields: { ...fields, image: false }, warning: NO_CANDIDATE_MESSAGE };
   }
 
-  return { ...base, imageAction: "from-draft" };
+  // Des candidats existent. Le mode décide QUI tranche.
+  //
+  // En mode AUTO on laisse generateArticle choisir : depuis la génération partielle de main
+  // (lib/ai/generate-article.ts), la sélection pilote la forme du schéma demandé, donc une
+  // régénération « image seule » n'envoie même pas le corps et ne coûte qu'une fraction d'un
+  // article complet. Un appel dédié au choix d'image ferait doublon.
+  if (input.imageMode === "auto") return { ...base, imageAction: "from-draft" };
+
+  // En mode MANUEL, l'éditeur tranchera depuis le bac du /queue : aucun appel LLM pour l'image, et
+  // on retire `image` des champs appliqués (les colonnes ne bougeront qu'au moment du choix). On ne
+  // génère alors que s'il reste d'AUTRES champs cochés — une régénération « image seule » en manuel
+  // se réduit à l'extraction.
+  return {
+    ...base,
+    runGeneration: hasOtherFields(fields),
+    imageAction: "park",
+    effectiveFields: { ...fields, image: false },
+  };
 }

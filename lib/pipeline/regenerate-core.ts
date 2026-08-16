@@ -81,7 +81,11 @@ export async function regenerateArticle(
   // Le plan tranche AVANT de payer un appel LLM : une régénération « image seule » sans le moindre
   // candidat n'a plus d'objet, et une régénération mixte doit épargner l'image sans renoncer aux
   // autres champs. Voir lib/pipeline/regen-plan.ts.
-  const plan = planRegeneration({ fields: parsed.data, candidateCount: candidateImages.length });
+  const plan = planRegeneration({
+    fields: parsed.data,
+    candidateCount: candidateImages.length,
+    imageMode: opts.imageMode ?? "auto",
+  });
   if (plan.abort !== null) return { ok: false, message: plan.abort, title: article.title };
 
   await opts.onStage?.("generating");
