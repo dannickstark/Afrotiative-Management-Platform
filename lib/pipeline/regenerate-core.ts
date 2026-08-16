@@ -18,7 +18,8 @@ import { aiFailureMessage } from "@/lib/ai/failure-message";
 export async function regenerateArticle(
   articleId: string,
   fields: RegenerateFieldsInput,
-  actorId: string,
+  actorId: string | null,
+  opts: { timeoutMs?: number } = {},
 ): Promise<{ ok: boolean; message: string; title: string }> {
   // Revalidation défensive : l'appelant valide déjà, mais on ne fait jamais confiance à une entrée
   // non revalidée avant d'écrire.
@@ -31,16 +32,38 @@ export async function regenerateArticle(
   const sources = await db.select().from(articleSources).where(eq(articleSources.articleId, articleId));
   if (sources.length === 0) return { ok: false, message: "Aucune source à régénérer.", title: article.title };
 
-  const { extractExternal } = await import("@/lib/extract");
-  const extracted: { mediaName: string; url: string; text: string; images?: string[] }[] = [];
-  const candidateImages: string[] = [];
-  for (const s of sources) {
+  // extract() et NON extractExternal() : ce sont les URLs des sources de l'article, déjà crawlées
+  // telles quelles à l'ingestion par extract() (voir la justification à lib/pipeline/stages.ts:192).
+  // extractExternal coupait le backfill d'images par fetch direct (lib/extract/index.ts:173-178) et
+  // ne laissait que Crawl4AI : c'est ce qui rendait la liste de candidats vide et provoquait
+  // l'effacement de l'image en régénération « image seule ».
+  const { extract } = await import("@/lib/extract");
+  const { withTimeout } = await import("@/lib/pipeline/timeout");
+  const { getPipelineSettings } = await import("@/lib/queries/settings");
+  const timeoutMs = opts.timeoutMs ?? (await getPipelineSettings()).perOperationTimeoutMs;
+
+  // EN PARALLÈLE : les sources sont indépendantes, et la boucle séquentielle d'origine faisait
+  // payer la somme des latences réseau avant le moindre retour à l'éditeur. Chaque source est
+  // bornée par le même délai par opération que le chemin d'ingestion (lib/pipeline/run.ts:448) —
+  // une source pendue ne peut plus bloquer la régénération indéfiniment. Un échec (ou un
+  // dépassement) est best-effort : la source est ignorée, jamais fatale, tant qu'il en reste une.
+  const results = await Promise.all(sources.map(async (s) => {
     try {
-      const r = await extractExternal(s.url);
-      if (r.text.trim().length > 0) { extracted.push({ mediaName: s.mediaName, url: s.url, text: r.text }); candidateImages.push(...r.images); }
+      const r = await withTimeout(extract(s.url), timeoutMs, "Extraction du contenu");
+      if (r.text.trim().length === 0) return null;
+      return { mediaName: s.mediaName, url: s.url, text: r.text, images: r.images };
     } catch (e) {
       console.warn(`[regenerate] extraction échouée pour ${s.url}: ${(e as Error).message}`);
+      return null;
     }
+  }));
+
+  const extracted: { mediaName: string; url: string; text: string }[] = [];
+  const candidateImages: string[] = [];
+  for (const r of results) {
+    if (r === null) continue;
+    extracted.push({ mediaName: r.mediaName, url: r.url, text: r.text });
+    candidateImages.push(...r.images);
   }
   if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré).", title: article.title };
 

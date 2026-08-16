@@ -25,19 +25,23 @@ import { faker } from "@faker-js/faker";
 // seulement par chance, à cause de l'ordre alphabétique des fichiers.
 // NB : on destructure les VALEURS (et non l'objet de namespace), car mock.module() mute l'objet
 // d'exports en place — garder le namespace rendrait la fonction MOCKÉE dans afterAll.
-const { extractExternal: realExtractExternal } = await import("@/lib/extract");
+const { extractExternal: realExtractExternal, extract: realExtract } = await import("@/lib/extract");
 const { generateArticle: realGenerateArticle } = await import("@/lib/ai/generate-article");
 
-let extractExternalImpl: (url: string) => Promise<{ title: string; text: string; images: string[]; via: string; attempts: unknown[] }> =
+let extractCalls: string[] = [];
+let extractImpl: (url: string) => Promise<{ title: string; text: string; images: string[]; via: string; attempts: unknown[] }> =
   async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
+let extractExternalImpl = extractImpl;
 mock.module("@/lib/extract", () => ({
+  extract: (url: string) => { extractCalls.push(url); return extractImpl(url); },
   extractExternal: (url: string) => extractExternalImpl(url),
 }));
 
+let lastGenerateInput: { sources: { url: string }[] } | null = null;
 let generateArticleImpl: () => Promise<{ draft: ArticleDraft; via: string; failure?: AiFailureReason; failureDetail?: string }> =
   async () => { throw new Error("generateArticleImpl not set"); };
 mock.module("@/lib/ai/generate-article", () => ({
-  generateArticle: () => generateArticleImpl(),
+  generateArticle: (input: { sources: { url: string }[] }) => { lastGenerateInput = input; return generateArticleImpl(); },
 }));
 
 // regenerate-core.ts importe aussi dynamiquement @/lib/pipeline/regenerate (applyRegeneration) —
@@ -72,6 +76,22 @@ async function seedArticleWithSource(overrides: Partial<typeof articles.$inferIn
   return id;
 }
 
+// Variante à plusieurs sources, pour les tests d'extraction ci-dessous (parallélisme, timeout).
+// `seedArticle` alimente déjà `createdArticleIds`, donc le nettoyage dans `afterAll` couvre aussi
+// ces articles sans array de plus.
+async function seedArticleWithSources(urls: string[]): Promise<{ articleId: string }> {
+  const articleId = await seedArticle();
+  await db.insert(articleSources).values(urls.map((url) => ({ articleId, mediaName: "Test", url })));
+  return { articleId };
+}
+
+const draftFixture: ArticleDraft = {
+  title: "Titre régénéré", bodyHtml: "<p>Corps régénéré assez long pour passer.</p>",
+  excerpt: "Extrait", category: "Économie", tags: ["a"],
+  featuredImageUrl: null, imageCredit: null, imageSourceUrl: null,
+  confidence: { categoryUncertain: false, imageMissing: true, clusterUncertain: false },
+};
+
 afterAll(async () => {
   // Restauration réelle EN PREMIER : les factories mock.module ci-dessus délèguent toujours à ces
   // variables, donc les repointer sur les fonctions réelles rend leur comportement d'origine à tout
@@ -79,6 +99,7 @@ afterAll(async () => {
   // Bun). L'ordre compte : le nettoyage DB ci-dessous peut jeter (base indisponible, ligne
   // verrouillée) et abandonnerait alors les mocks en place pour tout le reste du processus `bun
   // test` — exactement la fuite que cette restauration existe pour empêcher.
+  extractImpl = realExtract as unknown as typeof extractImpl;
   extractExternalImpl = realExtractExternal as unknown as typeof extractExternalImpl;
   generateArticleImpl = realGenerateArticle as unknown as typeof generateArticleImpl;
   if (createdArticleIds.length) await db.delete(articles).where(inArray(articles.id, createdArticleIds));
@@ -128,4 +149,49 @@ describe("regenerateArticle (cœur unitaire)", () => {
     expect(r.message).toBe("Aucun fournisseur IA configuré — régénération impossible.");
     expect(r.title).toBe("Article sans raison");
   });
+});
+
+describe("regenerateArticle — extraction", () => {
+  it("utilise extract() (et non extractExternal) sur les sources de l'article", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    extractCalls = [];
+    generateArticleImpl = async () => ({ draft: draftFixture, via: "openrouter" });
+    await regenerateArticle(articleId, { ...ALL }, null);
+    expect(extractCalls).toEqual(["https://a.test/1"]);
+  });
+
+  it("extrait les sources EN PARALLÈLE", async () => {
+    const { articleId } = await seedArticleWithSources([
+      "https://a.test/1", "https://a.test/2", "https://a.test/3",
+    ]);
+    extractCalls = [];
+    extractImpl = async () => {
+      await new Promise((r) => setTimeout(r, 300));
+      return { title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] };
+    };
+    generateArticleImpl = async () => ({ draft: draftFixture, via: "openrouter" });
+    const t0 = Date.now();
+    await regenerateArticle(articleId, { ...ALL }, null);
+    const elapsed = Date.now() - t0;
+    // Séquentiel = ~900 ms ; parallèle = ~300 ms. La borne à 700 ms laisse de la marge au CI.
+    expect(elapsed).toBeLessThan(700);
+  });
+
+  it("une source qui dépasse le délai est ignorée, les autres passent", async () => {
+    const { articleId } = await seedArticleWithSources(["https://slow.test/1", "https://fast.test/2"]);
+    extractImpl = async (url) => {
+      // 6000 ms, strictement > timeoutMs (5000 ms) ci-dessous : un délai IDENTIQUE créerait une
+      // égalité de course entre le setTimeout interne de cette extraction (déjà armé quand elle est
+      // appelée, avant même que withTimeout() ne pose le sien) et celui de withTimeout — égalité que
+      // Promise.race tranche systématiquement en faveur du premier setTimeout arme, donc en faveur
+      // de l'extraction, jamais du timeout. Vérifié empiriquement sur ce runtime Bun.
+      if (url.includes("slow")) await new Promise((r) => setTimeout(r, 6000));
+      return { title: "t", text: `Contenu de ${url}, assez long pour compter.`, images: [], via: "test", attempts: [] };
+    };
+    let seenSources = 0;
+    generateArticleImpl = async () => { seenSources = lastGenerateInput?.sources.length ?? 0; return { draft: draftFixture, via: "openrouter" }; };
+    const r = await regenerateArticle(articleId, { ...ALL }, null, { timeoutMs: 5000 });
+    expect(r.ok).toBe(true);
+    expect(seenSources).toBe(1);
+  }, 15000);
 });
