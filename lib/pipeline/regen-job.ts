@@ -42,9 +42,17 @@ export async function runRegenJob(jobId: string): Promise<void> {
         await finishItem(item.id, status, r.ok && !r.awaitingImage ? null : r.message);
       } catch (e) {
         console.warn(`[regen-job] article ${item.articleId} en échec : ${(e as Error).message}`);
-        await finishItem(item.id, "failed", (e as Error).message);
+        // Un SECOND échec ici (la base est en train de tomber) ne doit pas s'échapper : le balayage
+        // de finalizeRegenJob fermera l'item, ce qui libère le verrou de l'article.
+        await finishItem(item.id, "failed", (e as Error).message).catch(() => {});
       }
     }
+  } catch (e) {
+    // Panne AUTOUR de la boucle — lecture du job, listJobItems, isCancelRequested. Le contrat
+    // « ne jette jamais » vaut aussi pour ces requêtes-là : un rejet qui s'échappe d'ici remonterait
+    // en unhandled rejection chez l'appelant détaché. On journalise (jamais en silence) et on laisse
+    // le `finally` clore le job.
+    console.warn(`[regen-job] job ${jobId} interrompu : ${(e as Error).message}`);
   } finally {
     await finalizeRegenJob(jobId).catch(() => {});
   }

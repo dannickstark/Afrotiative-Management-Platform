@@ -111,4 +111,13 @@ describe("runRegenJob", () => {
     const view = await readRegenJob(r.jobId);
     expect(view?.items[0].status).toBe("awaiting_image");
   });
+
+  it("une panne AUTOUR de la boucle ne fait pas throw runRegenJob", async () => {
+    // Un jobId qui n'est pas un UUID valide fait échouer la simple LECTURE du job (erreur de
+    // syntaxe SQL), avant même listJobItems ou isCancelRequested — donc AVANT la boucle par
+    // article. Ce chemin n'est protégé par aucun try/catch par item, seulement par le catch
+    // englobant ajouté autour de la boucle : c'est lui qu'on veut exercer ici, distinct du cas
+    // « une exception inattendue » ci-dessus qui, lui, passe par le catch PAR ARTICLE.
+    await expect(runRegenJob("not-a-uuid")).resolves.toBeUndefined();
+  });
 });
