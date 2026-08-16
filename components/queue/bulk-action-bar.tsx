@@ -14,7 +14,8 @@ import { summarizeRegenJob, type RegenJobView } from "@/lib/pipeline/regen-live"
 import type { RegenerateFieldsInput } from "@/lib/validation";
 import type { QueueRow } from "@/lib/queries/queue";
 
-export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () => void }) {
+export function BulkActionBar({ rows, onDone, defaultImageMode }:
+  { rows: QueueRow[]; onDone: () => void; defaultImageMode: "auto" | "manual" }) {
   const router = useRouter();
   // Un unique `pending` pilote les DEUX chemins (approuver/rejeter ET renvoi à l'IA). Le renvoi à
   // l'IA ne boucle plus côté client : il ouvre un job côté serveur et laisse RegenProgress sonder sa
@@ -121,7 +122,8 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
           <BulkRegenerateDialog
             count={n}
             disabled={busy || tooMany}
-            onConfirm={(fields) => runRegenerate(fields, "auto")}
+            defaultImageMode={defaultImageMode}
+            onConfirm={(fields, imageMode) => runRegenerate(fields, imageMode)}
           />
           {tooMany && <span className="text-xs text-muted-foreground">Maximum 10 par lot</span>}
         </RoleGate>

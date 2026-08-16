@@ -19,7 +19,7 @@ const HEARTBEAT_MS = 60_000;
 // (title, body, excerpt, category, tags, image fields) so that the SidePanel
 // in the right column can consume/mutate this same state.
 export function EditorShell({
-  article, lockedByOther, wpTagNames, diffusionChannels, canSendDiffusion, r2Configured,
+  article, lockedByOther, wpTagNames, diffusionChannels, canSendDiffusion, r2Configured, defaultImageMode,
 }: {
   article: ArticleDetail;
   role: Role; // accepted for prop-contract parity with the page; RoleGate reads the live session client-side instead
@@ -32,6 +32,9 @@ export function EditorShell({
   diffusionChannels: ChannelDiffusionState[];
   canSendDiffusion: boolean;
   r2Configured: boolean;
+  // Tâche 19 — défaut global du mode de choix d'image, lu côté serveur (page.tsx) et remontable
+  // par l'éditeur pour cette exécution via ActionBar → RegenerateDialog.
+  defaultImageMode: "auto" | "manual";
 }) {
   const isPublished = article.status === "published";
 
@@ -136,6 +139,7 @@ export function EditorShell({
         imageCredit={imageCredit}
         imageSourceUrl={imageSourceUrl}
         readOnly={readOnly}
+        defaultImageMode={defaultImageMode}
       />
     </div>
   );

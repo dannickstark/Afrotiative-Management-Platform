@@ -27,10 +27,12 @@ const ALL_CHECKED: RegenerateFieldsInput = { title: true, body: true, excerpt: t
 // Self-contained Dialog (owns its own trigger + open state), mirroring AddMemberDialog's pattern.
 // Lets the editor pick exactly which fields get overwritten by a fresh AI pass over the
 // article's existing sources — a full "regenerate everything" is just all six boxes checked.
-export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { articleId: string; disabled?: boolean }) {
+export function RegenerateDialog({ articleId, disabled: triggerDisabled, defaultImageMode }:
+  { articleId: string; disabled?: boolean; defaultImageMode: "auto" | "manual" }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<RegenerateFieldsInput>(ALL_CHECKED);
+  const [imageMode, setImageMode] = useState<"auto" | "manual">(defaultImageMode);
   const [isPending, startTransition] = useTransition();
   const [jobId, setJobId] = useState<string | null>(null);
 
@@ -42,7 +44,10 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
     setOpen(next);
     // Reset on any close: an in-flight regenerate() already captured its `fields`,
     // so resetting the UI state is safe even mid-submit.
-    if (!next) setFields(ALL_CHECKED);
+    if (!next) {
+      setFields(ALL_CHECKED);
+      setImageMode(defaultImageMode);
+    }
   }
 
   function toggle(key: FieldKey) {
@@ -54,9 +59,7 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
   function handleConfirm() {
     if (noneChecked) return;
     startTransition(async () => {
-      // imageMode n'est pas encore choisissable par l'utilisateur (Tâche 19) : on passe le
-      // littéral "auto" en attendant.
-      const r = await startRegenJob({ articleIds: [articleId], fields, imageMode: "auto" });
+      const r = await startRegenJob({ articleIds: [articleId], fields, imageMode });
       if (!r.ok) { toast.error(r.message); return; }
       setJobId(r.jobId);
     });
@@ -70,6 +73,7 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
     else toast.success("Article régénéré — déposé en revue.");
     setOpen(false);
     setFields(ALL_CHECKED);
+    setImageMode(defaultImageMode);
     router.refresh();
   }
 
@@ -98,6 +102,21 @@ export function RegenerateDialog({ articleId, disabled: triggerDisabled }: { art
             </Label>
           ))}
         </div>
+        {fields.image && (
+          <fieldset className="space-y-1 rounded border p-2">
+            <legend className="px-1 text-sm font-medium">Choix de l&apos;image</legend>
+            {([["auto", "L'IA choisit parmi les images trouvées"], ["manual", "Je choisis moi-même (depuis la file)"]] as const).map(([value, label]) => (
+              <Label key={value} htmlFor={`regen-mode-${value}`} className="flex cursor-pointer items-center gap-2 font-normal">
+                <input
+                  id={`regen-mode-${value}`} type="radio" name="regen-mode"
+                  checked={imageMode === value} disabled={isPending || jobId !== null}
+                  onChange={() => setImageMode(value)}
+                />
+                {label}
+              </Label>
+            ))}
+          </fieldset>
+        )}
         {jobId !== null && <RegenProgress key={jobId} jobId={jobId} onFinished={handleJobFinished} />}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)} disabled={isPending || jobId !== null}>Annuler</Button>

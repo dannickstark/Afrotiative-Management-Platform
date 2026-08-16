@@ -17,7 +17,7 @@ function ariaSort(state: false | "asc" | "desc"): "ascending" | "descending" | "
 }
 
 export function QueueTable({
-  rows, categories, sort,
+  rows, categories, sort, defaultImageMode,
 }: {
   rows: QueueRow[];
   categories: { id: string; name: string }[];
@@ -25,6 +25,7 @@ export function QueueTable({
   // sans `?sort` dans l'URL (repli sur le tri par défaut). Reflété tel quel dans l'indicateur
   // d'en-tête : l'ordre affiché dans la colonne « Généré » au premier chargement EST le tri réel.
   sort: { column: QueueSortCol; direction: "asc" | "desc" };
+  defaultImageMode: "auto" | "manual";
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -127,7 +128,7 @@ export function QueueTable({
           </TableBody>
         </Table>
       </div>
-      <BulkActionBar rows={selectedRows} onDone={() => setRowSelection({})} />
+      <BulkActionBar rows={selectedRows} onDone={() => setRowSelection({})} defaultImageMode={defaultImageMode} />
     </>
   );
 }
