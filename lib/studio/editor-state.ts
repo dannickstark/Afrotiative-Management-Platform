@@ -198,7 +198,7 @@ export function setFrameOverride(format: FormatKey, layerId: string, frame: Fram
 // SEAM CONNU, documenté honnêtement plutôt que masqué (même posture que la Tâche 3 pour sa note) :
 // aucune surface d'édition non-accueil n'existe ENCORE dans l'interface. Le mode Montage n'édite
 // toujours QUE le format d'accueil (`layer.frame`, via resizeLayer/setFrames) ; le mode Rendu
-// (render-mode.tsx) n'affiche les autres formats qu'en APERÇU lecture seule — `sceneForFormat` y
+// (render-mode.tsx) n'affiche les autres formats qu'en APERÇU lecture seule — lib/studio/relayout.ts#sceneForFormat y
 // substitue juste les dimensions de canevas pour le rendu, sans jamais déclencher la moindre action
 // du réducteur (voir son commentaire d'en-tête : « aucune affordance adapter/réagencer n'apparaît
 // nulle part »). Câbler CE routeur sur un geste réel de canevas exigerait donc d'inventer une surface

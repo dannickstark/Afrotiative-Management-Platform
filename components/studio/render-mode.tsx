@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { PreviewPane, ARTICLE_SELECTABLE_CONTEXTS } from "./preview-pane";
 import { previewTemplate } from "@/lib/actions/studio-preview-actions";
 import { FORMAT_PRESETS, FORMAT_KEYS, type FormatKey } from "@/lib/studio/formats";
-import { relayoutToFormat } from "@/lib/studio/relayout";
+import { sceneForFormat } from "@/lib/studio/relayout";
 import type { Scene } from "@/lib/studio/scene";
 import type { TemplateContext } from "@/lib/studio/tokens";
 import type { PreviewArticleOption } from "@/lib/queries/studio";
@@ -89,24 +89,7 @@ export interface RenderModeProps {
   initialOverflowFormats?: readonly FormatKey[];
 }
 
-// Chantier D, Tâche 6 — LE gabarit RÉAGENCÉ pour `key`, pas seulement redimensionné : `key === native`
-// reste une identité EXACTE (raccourci, mais `relayoutToFormat` serait de toute façon une identité
-// mathématique dans ce cas précis — chantier D, Tâche 2, « identité au format d'accueil ») ; sinon,
-// chaque calque prend le cadre que ses contraintes par calque (chantier D, Tâche 1 — ou sa surcharge
-// par format, Tâche 5) prescrivent pour `key`. EXPORTÉE pour que tests/studio-render-mode.test.ts
-// puisse l'épingler directement contre `relayoutToFormat` (le §0 : cette fonction ET
-// lib/studio/index.ts#renderForArticle — le chemin de GÉNÉRATION — appellent toutes deux CETTE MÊME
-// fonction pure, jamais deux implémentations parallèles qui pourraient diverger).
-//
-// `previewTemplate` (appelé par FilmstripThumb ci-dessous avec CETTE scène déjà relayoutée) reste
-// structurellement incapable d'écrire quoi que ce soit — voir toujours tests/studio-preview.test.ts
-// (« une scène cliente qui ne diffère que par les dimensions du canevas »#Critique 1) : aucune ligne
-// `renders`/objet R2 n'est jamais écrite, quel que soit le format demandé (previewTemplate ->
-// previewTemplateCore -> renderScene, jamais renderForArticle/saveRender).
-export function sceneForFormat(scene: Scene, key: FormatKey, native: FormatKey): Scene {
-  if (key === native) return scene;
-  return relayoutToFormat(scene, key);
-}
+export { sceneForFormat } from "@/lib/studio/relayout";
 
 type ThumbState =
   | { status: "idle" }

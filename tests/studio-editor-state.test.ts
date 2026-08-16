@@ -754,7 +754,7 @@ describe("setFrameOverride — l'échappatoire manuelle pour un format non-accue
 });
 
 // `frameEditAction` — le routeur home-vs-surcharge (chantier D, tâche 5). Aucune surface d'édition
-// non-accueil n'existe encore dans l'interface (render-mode.tsx#sceneForFormat n'est qu'un APERÇU
+// non-accueil n'existe encore dans l'interface (lib/studio/relayout.ts#sceneForFormat n'est qu'un APERÇU
 // lecture seule — voir son commentaire d'en-tête) : cette fonction est donc, pour l'instant, la
 // SEULE consommation de l'invariant « éditer au format d'accueil édite toujours layer.frame », ici
 // exercée directement par le test plutôt que par un composant qui n'a pas encore de raison d'exister.

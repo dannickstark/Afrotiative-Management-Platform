@@ -85,7 +85,7 @@ export interface PreviewTemplateInput {
   /** Chantier D, Tâche 6 (handoff H1) — le format pour lequel signaler un débordement `maxLines`
    * (voir `PreviewResult.overflowingLayerIds`). N'INFLUENCE PAS le rendu lui-même : `input.scene`,
    * quand fourni, est déjà la scène que l'appelant veut peindre TELLE QUELLE (le filmstrip envoie sa
-   * propre scène déjà relayoutée — components/studio/render-mode.tsx#sceneForFormat) ; ce champ ne
+   * propre scène déjà relayoutée — lib/studio/relayout.ts#sceneForFormat) ; ce champ ne
    * sert QU'À mesurer le débordement, indépendamment de ce que `scene` porte déjà. Absent, aucun
    * calcul n'a lieu — `overflowingLayerIds` vaut toujours `[]`, comportement inchangé pour tout
    * appelant antérieur à cette tâche (ex. PreviewPane, components/studio/preview-pane.tsx). */

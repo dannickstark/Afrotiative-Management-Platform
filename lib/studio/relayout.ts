@@ -139,3 +139,17 @@ export function relayoutToFormat(scene: Scene, format: FormatKey): Scene {
   const preset = FORMAT_PRESETS[format];
   return relayout(scene, { w: preset.width, h: preset.height }, format);
 }
+
+// LE gabarit RÉAGENCÉ pour `key`, pas seulement redimensionné. `key === native` est une identité
+// EXACTE (raccourci : `relayoutToFormat` serait de toute façon une identité mathématique dans ce
+// cas précis — « identité au format d'accueil »).
+//
+// Vivait dans components/studio/render-mode.tsx jusqu'à la refonte de la planche. Déplacée ici
+// parce que ses DEUX appelants sont désormais des enfants de render-mode.tsx (proof-sheet.tsx et
+// format-focus.tsx) : l'y laisser aurait fait importer le parent par ses propres enfants, une
+// dépendance circulaire. Sa place naturelle est de toute façon à côté de `relayoutToFormat`, dont
+// elle n'est qu'un raccourci.
+export function sceneForFormat(scene: Scene, key: FormatKey, native: FormatKey): Scene {
+  if (key === native) return scene;
+  return relayoutToFormat(scene, key);
+}

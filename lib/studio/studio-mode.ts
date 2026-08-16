@@ -1,3 +1,5 @@
+import { FORMAT_KEYS, type FormatKey } from "./formats";
+
 // lib/studio/studio-mode.ts — Tâche 5 (U1, spec §5) : les DEUX modes de l'éditeur — « Montage » (le
 // rail + panneau accosté + canevas + colonne propriétés des Tâches 1-4) et « Rendu réel » (le rendu
 // prend tout l'espace, voir components/studio/render-mode.tsx). PUR : aucun accès à `window`/DOM ni
@@ -27,10 +29,13 @@ export function toggleMode(m: StudioMode): StudioMode {
 //     toujours mis à l'échelle automatiquement, Tâche 9 ; la sélection de calque vit dans le
 //     réducteur de l'éditeur, lib/studio/editor-state.ts, et survit DÉJÀ au changement de mode par
 //     construction — ce n'est PAS ce que ce type porte) ;
-//   - en Rendu réel (components/studio/render-mode.tsx), `selectedId` porte le FORMAT actuellement
-//     promu dans la grande case (un FormatKey, ou `null` pour « le format natif du gabarit »),
-//     `zoom`/`scrollX`/`scrollY` portent le niveau de zoom (« fit » ou une fraction jusqu'à 1 = 100 %,
-//     spec §5 : « zoomable à 100 % ») et le défilement de la case large.
+//   - en Rendu réel (components/studio/render-mode.tsx), `selectedId` porte le format FOCALISÉ :
+//     `null` = aucun, c'est-à-dire la PLANCHE (components/studio/render/proof-sheet.tsx) ; une
+//     FormatKey = ce format est ouvert en inspection (components/studio/render/format-focus.tsx).
+//     `zoom` ("fit" ou une fraction de ZOOM_STEPS jusqu'à 1 = 100 %) et `scrollX`/`scrollY` ne
+//     servent QU'À la vue d'inspection — la planche ne zoome ni ne conserve son défilement.
+//     Ce champ ne doit JAMAIS être indexé directement dans FORMAT_PRESETS : passer par
+//     `focusedFormat` ci-dessous, qui garde le composant d'une valeur qui n'en serait pas une.
 //
 // `preserveView` est l'IDENTITÉ, par contrat (voir l'interface de la Tâche : « identity by contract —
 // the test below is what makes it load-bearing »). Ce n'est PAS un oubli : il n'y a rien à
@@ -99,4 +104,63 @@ export function isModeToggleShortcut(e: ModeShortcutEvent): boolean {
   if (TYPING_TAGS.has(tagName)) return false;
   if (e.target?.isContentEditable) return false;
   return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Le SEUL lecteur autorisé de `PreservedView.selectedId` côté Rendu réel. `selectedId` est un
+// `string | null` générique partagé avec le mode Montage : rien dans le type ne garantit qu'il
+// porte une clé de format, et un futur appelant qui y rangerait autre chose (un id de calque, par
+// exemple) ne doit pas faire planter un indexage de FORMAT_PRESETS.
+export function focusedFormat(view: PreservedView): FormatKey | null {
+  if (view.selectedId === null) return null;
+  return (FORMAT_KEYS as readonly string[]).includes(view.selectedId)
+    ? (view.selectedId as FormatKey)
+    : null;
+}
+
+// Navigation clavier DANS la vue d'inspection — même discipline que isModeToggleShortcut ci-dessus,
+// et pour les mêmes raisons : prédicat PUR sur des primitifs (testable sans jsdom), inerte sous
+// modificateur (← / → avec Cmd sont des raccourcis navigateur d'historique) et inerte quand le
+// focus est dans un champ de saisie.
+export type FormatNavAction = "prev" | "next" | "exit" | null;
+
+export function formatNavAction(e: ModeShortcutEvent): FormatNavAction {
+  if (e.metaKey || e.ctrlKey || e.altKey) return null;
+  const tagName = e.target?.tagName?.toUpperCase() ?? "";
+  if (TYPING_TAGS.has(tagName)) return null;
+  if (e.target?.isContentEditable) return null;
+  if (e.key === "ArrowLeft") return "prev";
+  if (e.key === "ArrowRight") return "next";
+  if (e.key === "Escape") return "exit";
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Échelle de zoom DISCRÈTE de la vue d'inspection. Discrète et non continue : « fit » est réalisé
+// en CSS pur (`object-contain`), donc son échelle numérique n'est jamais connue du JS — un zoom
+// continu partant de « fit » n'aurait aucun point de départ. Une échelle fixe est prévisible pour
+// l'utilisateur et testable ici, sans DOM.
+//
+// Plafonnée à 1 : au-delà des pixels natifs du format, on inspecte un agrandissement, pas une
+// typographie. C'est la même borne que l'ancien MAX_RENDER_ZOOM, conservée volontairement.
+export const ZOOM_STEPS: readonly number[] = [0.1, 0.25, 0.5, 0.75, 1];
+
+export function zoomStep(current: number | "fit", direction: 1 | -1): number {
+  // Depuis « fit », on entre par le milieu de l'échelle : un utilisateur qui clique « + » depuis
+  // l'ajustement veut agrandir de façon perceptible, pas atterrir sur 10 %.
+  if (current === "fit") {
+    const middle = ZOOM_STEPS[Math.floor(ZOOM_STEPS.length / 2)]!;
+    return direction === 1 ? middle : ZOOM_STEPS[0]!;
+  }
+  const exact = ZOOM_STEPS.indexOf(current as (typeof ZOOM_STEPS)[number]);
+  if (exact !== -1) {
+    const next = Math.min(Math.max(exact + direction, 0), ZOOM_STEPS.length - 1);
+    return ZOOM_STEPS[next]!;
+  }
+  // Valeur hors échelle (une vue restaurée d'un état plus ancien, par exemple) : on rejoint le cran
+  // adjacent dans la direction demandée, jamais la valeur brute.
+  const above = ZOOM_STEPS.find((s) => s > current);
+  const below = [...ZOOM_STEPS].reverse().find((s) => s < current);
+  if (direction === 1) return above ?? ZOOM_STEPS[ZOOM_STEPS.length - 1]!;
+  return below ?? ZOOM_STEPS[0]!;
 }
