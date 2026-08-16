@@ -1,11 +1,13 @@
 import { db } from "@/db";
 import {
   feeds, articles, articleSources, articleTags, articleRevisions,
-  wpCategories, wpTags, clusters, pipelineRuns, pipelineSteps, distributions, user,
+  wpCategories, wpTags, clusters, pipelineRuns, pipelineSteps, distributions, user, videoSettings,
 } from "@/db/schema";
 import { createCredentialUser } from "@/lib/create-user";
 import { inArray } from "drizzle-orm";
 import { DEFAULT_CATEGORY_COLORS } from "./default-category-colors";
+import { DEFAULT_BRIEF_TEMPLATE } from "@/lib/video/brief";
+import { DEFAULT_WPM } from "@/lib/video/duration";
 
 // db:seed WIPES every application table before re-seeding demo data. With separate Neon
 // branches (dev / production), that is a loaded gun: run it against the wrong DATABASE_URL
@@ -132,6 +134,13 @@ async function main() {
     { triggeredBy: "scheduled", status: "success", feedsRead: 6, newItems: 8, published: 3, finishedAt: new Date(Date.now() - 9e6) },
     { triggeredBy: "manual", status: "partial", feedsRead: 6, newItems: 5, published: 2, finishedAt: new Date(Date.now() - 18e6) },
   ]);
+
+  // video_settings n'est PAS wipé plus haut (ligne unique, hors du cycle de démo) — on ne sème
+  // que si la table est vide, pour ne jamais écraser un modèle déjà personnalisé par une équipe.
+  const existingVideoSettings = await db.select({ id: videoSettings.id }).from(videoSettings).limit(1);
+  if (!existingVideoSettings[0]) {
+    await db.insert(videoSettings).values({ briefTemplate: DEFAULT_BRIEF_TEMPLATE, wordsPerMinute: DEFAULT_WPM });
+  }
 
   console.log(`Seed OK: ${inserted.length} articles, ${seedUsers.length} users.`);
   process.exit(0);

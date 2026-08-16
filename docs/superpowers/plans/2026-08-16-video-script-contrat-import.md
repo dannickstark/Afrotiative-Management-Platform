@@ -18,7 +18,7 @@
 - **Aucun import partiel** : payload entièrement valide, ou rien n'est écrit. L'application sélective du diff est un choix humain postérieur, distinct.
 - **Aucune logique de contrat hors de `lib/video/`.** Le handler MCP du SP1 bis appellera `parseIncoming`, `computeMerge`, `applyMerge`, `payloadSchema`, `SCHEMA_VERSION` — ces signatures sont publiques et stables.
 - **Aucun appel réseau, aucune IA, dans ce sous-projet.** Pas de vérification de vivacité des URLs (SP3).
-- Les modules `lib/video/*.ts` **n'importent jamais `@/db`** : ils doivent rester exécutables dans la lane pure.
+- Les modules `lib/video/*.ts` **n'importent jamais `@/db`**, à **une seule exception nommée** : `lib/video/persist.ts` (Task 9), qui est le cœur de persistance et n'a donc pas vocation à tourner dans la lane pure. Tous les autres — `schema.ts`, `import.ts`, `duration.ts`, `brief.ts` — doivent rester purs.
 - Cadence de lecture par défaut : **155 mots/minute**.
 - Chaque nouveau fichier de test sans base ni réseau est ajouté à `PURE_FILES` dans `scripts/test-fast.ts`.
 - Les server actions suivent le motif de `lib/actions/taxonomy-actions.ts` : `"use server"`, un `guard()` local (`requireUser` + `requirePermission`), imports dynamiques de `@/db`.
@@ -2321,7 +2321,7 @@ Expected: PASS (5 tests)
 1. Copier le brief depuis l'onglet Brief.
 2. Coller `EXAMPLE_PAYLOAD` (ou une vraie réponse de chat) dans l'onglet Importer → diff en ajouts → appliquer → les beats apparaissent dans l'onglet Écriture.
 3. Modifier le texte d'un beat dans l'app.
-4. Ré-importer le **même** payload → le beat modifié localement apparaît en **conflit**, décoché.
+4. Ré-importer un payload où Claude a modifié **le même champ** que vous → le beat apparaît en **conflit**, décoché. (Ré-importer un payload *identique* ne produit rien, et c'est correct : sans changement côté Claude, il n'y a rien à proposer, donc rien à contester — voir `computeMerge`, sortie anticipée quand `theirChanged` est vide.)
 5. Retirer un beat du payload et ré-importer → suppression **proposée mais décochée**.
 6. Annuler la dernière entrée du journal → l'état précédent est restauré.
 

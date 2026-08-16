@@ -51,6 +51,29 @@ describe("getOpenRouterTokenPool", () => {
     }
   });
 
+  // Répartition réelle de la charge : sans cet ordre, le pool repartait de sortOrder à CHAQUE appel,
+  // donc le premier jeton absorbait 100 % du trafic et les suivants n'étaient contactés qu'en cas
+  // d'échec — d'où des clés OpenRouter affichant zéro consommation. Le moins récemment utilisé passe
+  // désormais en tête ; sortOrder ne sert plus qu'à départager (jetons jamais utilisés compris).
+  it("classe le jeton le moins récemment utilisé en tête (lastUsedAt croissant, jamais utilisé d'abord)", async () => {
+    const now = Date.now();
+    const [recent, older, never] = await db.insert(openrouterTokens).values([
+      { label: "lru-recent", tokenCiphertext: encryptSecret("token-lru-recent"), sortOrder: 0, lastUsedAt: new Date(now - 60_000) },
+      { label: "lru-older", tokenCiphertext: encryptSecret("token-lru-older"), sortOrder: 1, lastUsedAt: new Date(now - 600_000) },
+      { label: "lru-never", tokenCiphertext: encryptSecret("token-lru-never"), sortOrder: 2 },
+    ]).returning();
+
+    try {
+      const pool = await getOpenRouterTokenPool(emptyCfg);
+      const labels = pool.filter((t) => t.label.startsWith("lru-")).map((t) => t.label);
+      // jamais utilisé < utilisé il y a 10 min < utilisé il y a 1 min — l'inverse exact de sortOrder,
+      // ce qui prouve que c'est bien lastUsedAt qui commande.
+      expect(labels).toEqual(["lru-never", "lru-older", "lru-recent"]);
+    } finally {
+      for (const r of [recent, older, never]) await db.delete(openrouterTokens).where(eq(openrouterTokens.id, r.id));
+    }
+  });
+
   it("excludes a token whose cooldownUntil is in the future, includes one whose cooldownUntil is in the past", async () => {
     const future = new Date(Date.now() + 60_000);
     const past = new Date(Date.now() - 60_000);

@@ -1,0 +1,1 @@
+ALTER TYPE "public"."script_journal_outcome" ADD VALUE 'en_attente' BEFORE 'applique';

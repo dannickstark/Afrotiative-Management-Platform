@@ -3,7 +3,11 @@ import type { Role } from "@/lib/auth";
 type Matrix = Record<Role, Record<string, string[]>>;
 
 const MATRIX: Matrix = {
-  journalist: { article: ["create", "edit"], feed: ["read"], taxonomy: ["read"], llmTokens: [] },
+  journalist: {
+    article: ["create", "edit"], feed: ["read"], taxonomy: ["read"], llmTokens: [],
+    // Task 7 (module vidéo) : c'est le journaliste qui écrit les scripts vidéo.
+    video: ["read", "manage"],
+  },
   editor: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
     feed: ["read", "manage"], taxonomy: ["read", "manage"], pipeline: ["read"],
@@ -14,6 +18,10 @@ const MATRIX: Matrix = {
     // Task 6 (OpenRouter token pool) — editor+admin manage the token pool from
     // /settings/integrations (add/delete/toggle/test); journalist gets nothing (no entry below).
     llmTokens: ["manage"],
+    // "configure" (round de correction 1, Task 8) gates /settings/video (SETTINGS_CHILDREN
+    // restricts that entry to admin/editor) — kept distinct from "manage", which the journalist
+    // also holds for editing video projects/beats in later tasks.
+    video: ["read", "manage", "configure"],
   },
   admin: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
@@ -22,6 +30,7 @@ const MATRIX: Matrix = {
     template: ["read", "manage", "publish"],
     social: ["read", "manage", "send"],
     llmTokens: ["manage"],
+    video: ["read", "manage", "configure"],
   },
 };
 
