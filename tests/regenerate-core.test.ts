@@ -338,4 +338,20 @@ describe("regenerateArticle — modes d'image", () => {
     expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg"); // intacte jusqu'au choix
     expect(row.pendingImageCandidates).toHaveLength(1);
   });
+
+  it("auto : un renvoi qui choisit une image efface une liste de candidats garée précédemment", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    // Simule un renvoi MANUEL antérieur ayant garé des candidats.
+    await db.update(articles)
+      .set({ pendingImageCandidates: [{ url: "https://vieux/x.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" }] })
+      .where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
+    generateArticleImpl = async () => ({ draft: { ...draftFixture, featuredImageUrl: "https://a.test/i.jpg" }, via: "openrouter" });
+
+    await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "auto", timeoutMs: 5000 });
+
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://a.test/i.jpg");
+    expect(row.pendingImageCandidates).toBeNull();
+  });
 });

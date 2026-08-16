@@ -124,6 +124,15 @@ export async function regenerateArticle(
     draft, fields: plan.effectiveFields, sourceCount: extracted.length, categoryNames, actorId,
   });
 
+  // Une image FRAÎCHE vient d'être choisie par le modèle : une liste de candidats garée par un
+  // renvoi MANUEL antérieur n'a plus d'objet, sinon l'article resterait indéfiniment dans le bac
+  // « images à choisir » du /queue alors qu'il a déjà son image. On ne nettoie que si le brouillon
+  // a réellement produit une image — sans quoi l'image en place n'a pas bougé (invariant de
+  // selectRegenerationColumns) et le choix en attente reste légitime.
+  if (plan.imageAction === "from-draft" && draft.featuredImageUrl) {
+    await db.update(articles).set({ pendingImageCandidates: null }).where(eq(articles.id, articleId));
+  }
+
   const awaitingImage = plan.imageAction === "park";
   const message = awaitingImage
     ? "Article régénéré — déposé en revue. Image à choisir."
