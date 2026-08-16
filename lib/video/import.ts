@@ -1,4 +1,4 @@
-import { payloadSchema, SCHEMA_VERSION, TC_RE, type Payload } from "@/lib/video/schema";
+import { payloadSchema, SCHEMA_VERSION, TC_RE, type BeatPayload, type Payload } from "@/lib/video/schema";
 
 // Module PUR, sans accès base : c'est la contrainte de conception principale de ce fichier. Le
 // handler MCP du SP1 bis appelle exactement ces fonctions et renvoie `issues` à l'agent pour qu'il
@@ -116,4 +116,136 @@ export function parseIncoming(raw: string | unknown): ParseResult {
   if (semantic.length > 0) return { ok: false, issues: semantic };
 
   return { ok: true, payload: parsed.data };
+}
+
+// La forme normalisée d'un beat : identique qu'elle vienne de la base ou du payload. C'est ce qui
+// rend la comparaison à trois voies possible sans conversion à chaque appel.
+export type BeatSnapshot = {
+  kind: BeatPayload["type"];
+  spokenText: string;
+  directionNote: string | null;
+  screenText: string | null;
+  transitionIn: string | null;
+  transitionOut: string | null;
+  sources: string[];
+  inserts: NonNullable<BeatPayload["inserts"]>;
+};
+
+export const MERGE_FIELDS = [
+  "kind", "spokenText", "directionNote", "screenText",
+  "transitionIn", "transitionOut", "sources", "inserts",
+] as const;
+
+export function toSnapshot(beat: BeatPayload): BeatSnapshot {
+  return {
+    kind: beat.type,
+    spokenText: beat.texte ?? "",
+    directionNote: beat.note_realisation ?? null,
+    screenText: beat.texte_ecran ?? null,
+    transitionIn: beat.transition_entree ?? null,
+    transitionOut: beat.transition_sortie ?? null,
+    sources: beat.sources ?? [],
+    inserts: beat.inserts ?? [],
+  };
+}
+
+export type BeatRow = {
+  externalId: string;
+  position: number;
+  snapshot: BeatSnapshot;              // l'état actuel en base (base + éditions humaines)
+  importedSnapshot: BeatSnapshot | null; // ce que le dernier import avait posé ; null = jamais importé
+};
+
+export type BeatChange = {
+  externalId: string; kind: "ajout" | "modification"; fields: string[];
+  next: BeatSnapshot; position: number;
+};
+export type BeatConflict = {
+  externalId: string; fields: string[];
+  base: BeatSnapshot | null; ours: BeatSnapshot; theirs: BeatSnapshot; position: number;
+};
+export type Diff = {
+  added: BeatChange[]; modified: BeatChange[]; conflicts: BeatConflict[];
+  removed: { externalId: string }[]; order: string[];
+};
+export type Selection = { accept: string[] };
+export type Mutations = {
+  create: BeatRow[];
+  update: { externalId: string; snapshot: BeatSnapshot }[];
+  remove: string[];
+  order: string[];
+};
+
+function differs(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+/**
+ * Fusion à trois voies, beat par beat, clé = externalId :
+ *   base   = importedSnapshot (ce que le dernier import avait posé)
+ *   nôtre  = snapshot (base + éditions humaines)
+ *   leur   = le fragment du nouveau payload
+ * Champs disjoints → fusionnés. Même champ touché des deux côtés → CONFLIT, jamais tranché ici.
+ */
+export function computeMerge(current: BeatRow[], next: BeatPayload[]): Diff {
+  const byId = new Map(current.map((r) => [r.externalId, r]));
+  const diff: Diff = { added: [], modified: [], conflicts: [], removed: [], order: next.map((b) => b.id) };
+
+  next.forEach((payloadBeat, index) => {
+    const theirs = toSnapshot(payloadBeat);
+    const row = byId.get(payloadBeat.id);
+
+    if (!row) {
+      diff.added.push({ externalId: payloadBeat.id, kind: "ajout", fields: [...MERGE_FIELDS], next: theirs, position: index });
+      return;
+    }
+
+    const base = row.importedSnapshot;
+    const ours = row.snapshot;
+    const theirChanged = MERGE_FIELDS.filter((f) => !base || differs(theirs[f], base[f]));
+    const ourChanged = MERGE_FIELDS.filter((f) => !base || differs(ours[f], base[f]));
+    if (theirChanged.length === 0) return; // inchangé côté Claude
+
+    const contested = theirChanged.filter((f) => ourChanged.includes(f) && differs(theirs[f], ours[f]));
+    if (contested.length > 0) {
+      diff.conflicts.push({ externalId: payloadBeat.id, fields: contested, base, ours, theirs, position: index });
+      return;
+    }
+
+    // Champs disjoints : on part de NOTRE version et on n'y pose que ce que Claude a changé.
+    const merged = { ...ours } as BeatSnapshot;
+    for (const f of theirChanged) (merged as Record<string, unknown>)[f] = theirs[f];
+    diff.modified.push({ externalId: payloadBeat.id, kind: "modification", fields: theirChanged, next: merged, position: index });
+  });
+
+  const incoming = new Set(next.map((b) => b.id));
+  for (const row of current) {
+    if (!incoming.has(row.externalId)) diff.removed.push({ externalId: row.externalId });
+  }
+  return diff;
+}
+
+/**
+ * Traduit le diff et la SÉLECTION HUMAINE en mutations. Une suppression non retenue n'efface rien,
+ * et un beat conservé malgré une suppression proposée est repoussé en fin d'ordre plutôt que perdu.
+ */
+export function applyMerge(diff: Diff, selection: Selection): Mutations {
+  const accepted = new Set(selection.accept);
+  const create: BeatRow[] = diff.added
+    .filter((a) => accepted.has(a.externalId))
+    .map((a) => ({ externalId: a.externalId, position: a.position, snapshot: a.next, importedSnapshot: a.next }));
+
+  const update = [
+    ...diff.modified.filter((m) => accepted.has(m.externalId)).map((m) => ({ externalId: m.externalId, snapshot: m.next })),
+    ...diff.conflicts.filter((c) => accepted.has(c.externalId)).map((c) => ({ externalId: c.externalId, snapshot: c.theirs })),
+  ];
+
+  const remove = diff.removed.filter((r) => accepted.has(r.externalId)).map((r) => r.externalId);
+
+  // L'ordre du payload d'abord, puis les rescapés d'une suppression refusée, dans leur ordre actuel.
+  const removedButKept = diff.removed.filter((r) => !accepted.has(r.externalId)).map((r) => r.externalId);
+  const droppedAdds = new Set(diff.added.filter((a) => !accepted.has(a.externalId)).map((a) => a.externalId));
+  const order = [...diff.order.filter((id) => !droppedAdds.has(id)), ...removedButKept];
+
+  return { create, update, remove, order };
 }
