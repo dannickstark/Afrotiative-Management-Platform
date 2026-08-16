@@ -6,8 +6,10 @@ import {
   type SortingState, type OnChangeFn,
 } from "@tanstack/react-table";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { buildColumns } from "./columns";
 import { BulkActionBar } from "./bulk-action-bar";
+import { ImagePickWizard, type PendingPick } from "./image-pick-wizard";
 import type { QueueRow, QueueSortCol } from "@/lib/queries/queue";
 
 function ariaSort(state: false | "asc" | "desc"): "ascending" | "descending" | "none" {
@@ -28,7 +30,14 @@ export function QueueTable({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [wizardOpen, setWizardOpen] = useState(false);
   const cols = buildColumns(categories);
+
+  // Articles dont une régénération en mode manuel a garé des candidats : la source de vérité
+  // reste articles.pending_image_candidates, ces lignes n'en sont qu'une projection pour l'assistant.
+  const pendingPicks: PendingPick[] = rows
+    .filter((r) => r.pendingImageCandidates.length > 0)
+    .map((r) => ({ articleId: r.id, title: r.title, currentImageUrl: r.imageUrl, candidates: r.pendingImageCandidates }));
 
   const sorting: SortingState = [{ id: sort.column, desc: sort.direction === "desc" }];
 
@@ -72,6 +81,15 @@ export function QueueTable({
 
   return (
     <>
+      {pendingPicks.length > 0 && (
+        <Button type="button" variant="secondary" size="sm" className="mb-2" onClick={() => setWizardOpen(true)}>
+          Choisir les images ({pendingPicks.length})
+        </Button>
+      )}
+      <ImagePickWizard
+        picks={pendingPicks} open={wizardOpen} onOpenChange={setWizardOpen}
+        onAllDone={() => router.refresh()}
+      />
       <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
