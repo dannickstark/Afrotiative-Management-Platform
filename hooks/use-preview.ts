@@ -75,18 +75,40 @@ export function usePreview(input: UsePreviewInput): { state: PreviewState; refre
   // de scène ne peut pas voir — une image source modifiée à distance, dont l'URL n'a pas changé.
   const keyRef = useRef(key);
   keyRef.current = key;
+  // Correctif revue Tâche 3 (Important) : avant l'extraction, le bouton « Actualiser » appelait
+  // runPreview() directement — la requête partait IMMÉDIATEMENT. `refresh()` ne fait ici que purger
+  // le cache et faire basculer `nonce`, l'appel réel repassant alors par le MÊME `setTimeout` que le
+  // chemin ordinaire (scène/article qui changent) : sans ce drapeau, un clic manuel imposerait un
+  // différé de 800 ms supplémentaire que l'utilisateur — qui vient justement de décider d'attendre —
+  // n'avait jamais eu avant. Posé par `refresh`, lu (et aussitôt réinitialisé) par l'effet ci-dessous :
+  // seul le déclenchement issu de `refresh` saute le différé, jamais le chemin ordinaire.
+  const immediateRef = useRef(false);
   const refresh = useCallback(() => {
     previewCache.delete(keyRef.current);
+    immediateRef.current = true;
     setNonce((n) => n + 1);
   }, []);
 
   useEffect(() => {
     if (!enabled) return;
     const hit = previewCache.get(key);
-    if (hit) { setState(readyFrom(hit)); return; }
+    if (hit) {
+      // Correctif revue Tâche 3 (Critique) : une entrée de cache pour CETTE clé est une réponse
+      // NEUVE pour une clé NEUVE — toute requête encore en vol pour la clé PRÉCÉDENTE doit être
+      // invalidée ici, sinon sa réponse (arrivée en second, après ce hit de cache synchrone) passerait
+      // la garde anti-périmé ci-dessous et écraserait cet état avec l'image d'un AUTRE format/scène.
+      // Sans ce bump, le `clearTimeout` du nettoyage d'effet ne protège que le cas où le timer n'a pas
+      // encore déclenché — une requête déjà en vol au moment du changement de clé n'est, elle, jamais
+      // annulée par ce nettoyage.
+      requestIdRef.current++;
+      setState(readyFrom(hit));
+      return;
+    }
 
     const id = ++requestIdRef.current;
     setState({ status: "loading" });
+    const immediate = immediateRef.current;
+    immediateRef.current = false;
     const timer = setTimeout(() => {
       void (async () => {
         try {
@@ -111,7 +133,7 @@ export function usePreview(input: UsePreviewInput): { state: PreviewState; refre
           setState({ status: "error", message: e instanceof Error ? e.message : "Aperçu impossible." });
         }
       })();
-    }, PREVIEW_DEBOUNCE_MS);
+    }, immediate ? 0 : PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // `scene`/`templateId`/`format`/`articleId` sont TOUS déjà encodés dans `key` (par contenu, pas
     // par identité d'objet) — les lister en plus ferait re-déclencher l'effet à chaque nouveau rendu
