@@ -58,7 +58,9 @@ function storedSeconds(beat: Pick<BeatView, "durationOverrideSec" | "estimatedDu
 // Libellés français des `beat_kind` (db/schema.ts) — même motif que PLATFORM_LABEL
 // (components/video/project-list.tsx) : une table de correspondance plutôt qu'un `replace` cosmétique,
 // parce que ces valeurs ne sont pas de simples mots français à espaces près (ex. "broll", "reponse").
-const KIND_LABEL: Record<string, string> = {
+// Exportée (Task 13) : la revue de diff (diff-review.tsx) affiche le type de chaque beat proposé
+// avec le même libellé que la vue Écriture — une seconde table divergerait silencieusement.
+export const KIND_LABEL: Record<string, string> = {
   narration: "Narration",
   question: "Question",
   reponse: "Réponse",

@@ -13,11 +13,13 @@ import { PageHeader } from "@/components/shell/page-header";
 import { PLATFORM_LABEL } from "@/components/video/project-list";
 import { BriefPanel } from "@/components/video/brief-panel";
 import { BeatList, type BeatView } from "@/components/video/beat-list";
+import { ImportPanel } from "@/components/video/import-panel";
+import { JournalHistory, type JournalEntryView } from "@/components/video/journal-history";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { Issue } from "@/lib/video/import";
 
-// Task 11 (Brief) + Task 12 (Écriture) — les deux premiers onglets de la page projet. La Task 13
-// ajoute Importer dans ces mêmes <Tabs>.
+// Task 11 (Brief) + Task 12 (Écriture) + Task 13 (Importer) — les trois onglets de la page projet.
 export default async function VideoProjectPage({
   params, searchParams,
 }: {
@@ -106,13 +108,29 @@ export default async function VideoProjectPage({
 
   const brief = buildBrief(settings.briefTemplate, vars);
 
+  // Onglet Importer (Task 13) : l'historique du journal (le plus récent en premier, déjà trié par
+  // getVideoProject) et l'état de la variante active au moment où la page a été rendue —
+  // `variantUpdatedAt` part avec ImportPanel jusqu'à applyImport, pour que le garde de péremption
+  // serveur (lib/video/persist.ts#applyImportCore) puisse détecter une édition survenue entre la
+  // préparation du diff et son application.
+  const journalEntries: JournalEntryView[] = project.journal.map((j) => ({
+    id: j.id,
+    createdAt: j.createdAt.toISOString(),
+    source: j.source,
+    outcome: j.outcome,
+    errorReport: (j.errorReport ?? []) as Issue[],
+    rawPayload: j.rawPayload,
+    revertedAt: j.revertedAt ? j.revertedAt.toISOString() : null,
+  }));
+
   return (
     <div className="space-y-6">
       <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue={sp.tab === "ecriture" ? "ecriture" : "brief"}>
+      <Tabs defaultValue={sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
           <TabsTrigger value="ecriture">Écriture</TabsTrigger>
+          <TabsTrigger value="importer">Importer</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
           <BriefPanel brief={brief.text} unknownVars={brief.unknown} />
@@ -135,6 +153,23 @@ export default async function VideoProjectPage({
             ) : (
               <p className="text-sm text-muted-foreground">Aucune variante pour ce projet.</p>
             )}
+          </div>
+        </TabsContent>
+        <TabsContent value="importer">
+          <div className="space-y-8">
+            {activeVariant ? (
+              <ImportPanel
+                projectId={id}
+                variantId={activeVariant.id}
+                variantUpdatedAt={activeVariant.updatedAt.toISOString()}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">Aucune variante pour ce projet.</p>
+            )}
+            <div className="space-y-2">
+              <h2 className="text-sm font-medium">Historique des imports</h2>
+              <JournalHistory entries={journalEntries} />
+            </div>
           </div>
         </TabsContent>
       </Tabs>

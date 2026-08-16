@@ -151,6 +151,29 @@ export type Mounted = {
   unmount: () => void;
 };
 
+// Task 13 (première tâche à écrire un test qui n'attend PAS chaque `click()` — le brief observe
+// l'état après un `flush()` global plutôt qu'après chaque interaction, cf. tests/video-diff-review.test.ts)
+// a mis au jour une lacune du harnais : un `act(async () => …)` démarré sans être attendu, puis un
+// SECOND `act()` lancé par un `mount()` D'UN AUTRE TEST (une autre racine `createRoot`) avant que le
+// premier n'ait fini, corrompt l'état interne PARTAGÉ que React maintient pour `act()` (une file
+// globale, pas une par racine — confirmé par un React averti « overlapping act() calls » puis un
+// second montage dont le conteneur reste vide, sans aucune erreur). Reproduit avec un composant
+// trivial (bouton + case à cocher natifs, sans aucun composant applicatif) : c'est un défaut de
+// séquencement du harnais, pas du composant testé.
+//
+// Correctif : une chaîne de promesses partagée par TOUTE fonction de ce fichier qui appelle `act()`.
+// Un appel non attendu (comme le `click()` du brief) est simplement mis en file ; le prochain appel —
+// attendu ou non, dans CE test ou le suivant — attend son tour avant de démarrer son propre `act()`,
+// ce qui élimine le chevauchement à la racine plutôt que de le masquer. Aucune signature exportée ne
+// change : les appelants qui attendaient déjà chaque appel (l'immense majorité de la suite existante)
+// ne gagnent qu'une micro-tâche supplémentaire, invisible derrière leur propre `await`.
+let actChain: Promise<unknown> = Promise.resolve();
+function serialize<T>(run: () => Promise<T> | T): Promise<T> {
+  const result = actChain.then(run, run);
+  actChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 /**
  * Monte un élément React dans un conteneur DÉTACHÉ (jamais inséré dans `document.body` — §2 du
  * plan) et attend que le rendu initial ET ses effets aient tourné avant de résoudre. Un conteneur
@@ -162,16 +185,16 @@ export async function mount(element: React.ReactElement): Promise<Mounted> {
   const container = document.createElement("div");
   const root: Root = createRoot(container);
 
-  await act(async () => {
+  await serialize(() => act(async () => {
     root.render(element);
-  });
+  }));
 
   return {
     container,
     unmount: () => {
-      act(() => {
+      void serialize(() => act(() => {
         root.unmount();
-      });
+      }));
     },
   };
 }
@@ -187,10 +210,10 @@ export async function mount(element: React.ReactElement): Promise<Mounted> {
  * `{ shiftKey: true }` pour le geste « Maj-clic applique le réglage à toute la sélection » du widget
  * de contraintes — même besoin que `pointer()` un peu plus bas, qui accepte déjà un `MouseEventInit`. */
 export async function click(el: Element, init: MouseEventInit = {}): Promise<void> {
-  await act(async () => {
+  await serialize(() => act(async () => {
     const event = new MouseEvent("click", { bubbles: true, cancelable: true, view: window, ...init });
     el.dispatchEvent(event);
-  });
+  }));
 }
 
 /** Dispatche un VRAI KeyboardEvent "keydown" sur `document` par défaut — les raccourcis clavier de
@@ -212,9 +235,9 @@ export async function click(el: Element, init: MouseEventInit = {}): Promise<voi
  * distingue « le raccourci a été intercepté » de « la touche a été laissée au navigateur » (Cmd+R). */
 export async function pressKey(init: KeyboardEventInit, target: EventTarget = document): Promise<KeyboardEvent> {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  await act(async () => {
+  await serialize(() => act(async () => {
     target.dispatchEvent(event);
-  });
+  }));
   return event;
 }
 
@@ -225,9 +248,9 @@ export async function pressKey(init: KeyboardEventInit, target: EventTarget = do
  * lui-même comme VRAI événement DOM, pas d'un appel direct au `setState` qui l'observerait. */
 export async function releaseKey(init: KeyboardEventInit, target: EventTarget = document): Promise<KeyboardEvent> {
   const event = new KeyboardEvent("keyup", { bubbles: true, cancelable: true, ...init });
-  await act(async () => {
+  await serialize(() => act(async () => {
     target.dispatchEvent(event);
-  });
+  }));
   return event;
 }
 
@@ -246,10 +269,10 @@ export async function pointer(
   type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
   init: MouseEventInit = {},
 ): Promise<void> {
-  await act(async () => {
+  await serialize(() => act(async () => {
     const event = new MouseEvent(type, { bubbles: true, cancelable: true, view: window, ...init });
     el.dispatchEvent(event);
-  });
+  }));
 }
 
 /** Dispatche un VRAI `WheelEvent` "wheel" qui bubble depuis `el`, enveloppé dans `act` (Chantier B,
@@ -258,9 +281,9 @@ export async function pointer(
  * `clientX`/`clientY` y sont tous portés) — inutile de synthétiser via un nom de type détourné. */
 export async function wheel(el: Element, init: WheelEventInit = {}): Promise<WheelEvent> {
   const event = new window.WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
-  await act(async () => {
+  await serialize(() => act(async () => {
     el.dispatchEvent(event);
-  });
+  }));
   return event;
 }
 
@@ -272,15 +295,15 @@ export async function wheel(el: Element, init: WheelEventInit = {}): Promise<Whe
  * `MouseEventInit`) sont ce que canvas.tsx lit pour ancrer le menu (voir
  * `CanvasContextMenuPayload`). */
 export async function contextMenu(el: Element, init: MouseEventInit = {}): Promise<void> {
-  await act(async () => {
+  await serialize(() => act(async () => {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, view: window, ...init });
     el.dispatchEvent(event);
-  });
+  }));
 }
 
 /** Laisse les effets/mises à jour d'état en attente se stabiliser sans dispatcher d'événement —
  * utile après une mise à jour déclenchée par une promesse résolue dans un effet plutôt que par une
  * interaction utilisateur directe. */
 export async function flush(): Promise<void> {
-  await act(async () => {});
+  await serialize(() => act(async () => {}));
 }
