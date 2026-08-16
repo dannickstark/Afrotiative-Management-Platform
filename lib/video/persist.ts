@@ -1,7 +1,7 @@
 import {
   db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, scriptJournalSource,
 } from "@/db";
-import { and, asc, eq, gt, inArray, ne } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, ne } from "drizzle-orm";
 import {
   applyMerge, computeMerge, normalizeInserts, parseIncoming, stripEnvelope, type BeatRow,
   type BeatSnapshot, type Diff, type Issue, type Mutations,
@@ -903,4 +903,38 @@ export async function revertJournalEntryCore(
     if (e instanceof RefusalError) return { ok: false as const, message: e.message };
     throw e;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Marqueur « non relue » (Task 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// L'utilisateur a accepté qu'un agent applique un import sans passer par la revue de diff humaine
+// — le mécanisme central qui empêche un modèle d'effacer un beat par omission. Ce marqueur en est
+// un des garde-fous compensatoires (spec Task 8) : toute écriture d'agent (`source: "mcp"`) naît
+// avec `reviewedAt` à `null` et le reste jusqu'à ce qu'un humain ouvre le projet.
+//
+// UN SEUL `UPDATE` sur `script_journal`, hors de toute transaction et de l'ordre de verrouillage
+// video_projects < script_variants < script_journal < script_beats < beat_inserts documenté plus
+// haut dans ce fichier : le marquage ne touche QUE le journal, jamais une ligne de beat, donc il
+// n'a besoin d'aucun verrou de rang supérieur et ne peut pas rouvrir les interblocages ABBA que
+// quatre rounds de correction ont mis quatre passes à éliminer sur updateBeatCore/
+// updateBeatInsertCore/applyImportCore/revertJournalEntryCore. Rester en dehors de cette chaîne est
+// une propriété à préserver, pas un détail d'implémentation — ne jamais l'appeler depuis l'intérieur
+// d'une des transactions ci-dessus.
+//
+// `userId` fait partie de la signature (brief Task 8) mais n'est aujourd'hui PAS écrit :
+// `script_journal.reviewedAt` (db/schema.ts) n'a pas de colonne `reviewedBy` compagne — seul le
+// MOMENT où un humain a ouvert le projet compte pour ce garde-fou, pas encore QUI. Le paramètre
+// reste dans la signature plutôt que d'être retiré : l'appelant naturel (la page projet) connaît
+// déjà `requireUser()`, et une future colonne `reviewedBy` n'aurait pas à changer cet appel.
+export async function markProjectReviewedCore(projectId: string, userId: string | null): Promise<void> {
+  void userId;
+  await db.update(scriptJournal)
+    .set({ reviewedAt: new Date() })
+    .where(and(
+      eq(scriptJournal.projectId, projectId),
+      eq(scriptJournal.source, "mcp"),
+      isNull(scriptJournal.reviewedAt),
+    ));
 }

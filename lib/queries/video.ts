@@ -1,5 +1,5 @@
 import { db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, articles, distributions } from "@/db";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { getWpConfig } from "@/lib/wp/config";
 import { wpPostUrl } from "@/lib/wp/post-url";
@@ -58,6 +58,9 @@ export type VideoProjectListRow = {
   estimatedSec: number;
   articleTitle: string | null;
   updatedAt: Date;
+  // Task 8 — nombre d'écritures d'agent (source "mcp") de ce projet dont `reviewedAt` est encore
+  // `null`. Le marqueur « non relue » : voir lib/video/persist.ts#markProjectReviewedCore.
+  unreviewedCount: number;
 };
 
 // Liste des projets avec la durée cumulée (toutes variantes confondues) — consommée par l'écran
@@ -103,14 +106,43 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
     variantsByProject.set(v.projectId, list);
   }
 
+  // Compteur « non relue » par projet, en UNE requête groupée plutôt qu'un `unreviewedAgentWrites`
+  // par ligne (même motif que `durationByVariant` ci-dessus) : un N+1 sur une liste de projets
+  // ferait autant d'aller-retours DB que de projets affichés.
+  const unreviewedRows = await db.select({ projectId: scriptJournal.projectId }).from(scriptJournal)
+    .where(and(
+      inArray(scriptJournal.projectId, projectIds),
+      eq(scriptJournal.source, "mcp"),
+      isNull(scriptJournal.reviewedAt),
+    ));
+  const unreviewedByProject = new Map<string, number>();
+  for (const r of unreviewedRows) {
+    unreviewedByProject.set(r.projectId, (unreviewedByProject.get(r.projectId) ?? 0) + 1);
+  }
+
   return projects.map((p) => {
     const vs = variantsByProject.get(p.id) ?? [];
     const estimatedSec = vs.reduce((sum, v) => sum + (durationByVariant.get(v.id) ?? 0), 0);
     return {
       id: p.id, title: p.title, status: p.status, platforms: vs.map((v) => v.platform),
       estimatedSec, articleTitle: p.articleTitle, updatedAt: p.updatedAt,
+      unreviewedCount: unreviewedByProject.get(p.id) ?? 0,
     };
   });
+}
+
+// Version à UN SEUL projet du compteur ci-dessus — consommée par les tests (tests/mcp-review-marker.
+// test.ts) et par tout futur appelant qui n'a besoin que d'un projet à la fois plutôt que de la
+// liste entière. `listVideoProjects` ne l'appelle PAS en boucle : elle calcule le même total en lot
+// pour éviter le N+1 documenté au-dessus.
+export async function unreviewedAgentWrites(projectId: string): Promise<number> {
+  const rows = await db.select({ id: scriptJournal.id }).from(scriptJournal)
+    .where(and(
+      eq(scriptJournal.projectId, projectId),
+      eq(scriptJournal.source, "mcp"),
+      isNull(scriptJournal.reviewedAt),
+    ));
+  return rows.length;
 }
 
 // Beats + inserts d'une variante, dans l'ordre de montage — consommée par l'écran d'écriture

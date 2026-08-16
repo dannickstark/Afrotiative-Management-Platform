@@ -41,6 +41,11 @@ export type JournalEntryView = {
   errorReport: Issue[];
   rawPayload: unknown;
   revertedAt: string | null;
+  // Task 8 — `null` tant qu'aucun humain n'a ouvert le projet depuis cette écriture d'agent. Seules
+  // les entrées `source: "mcp"` en portent une signification : le marquage
+  // (lib/video/persist.ts#markProjectReviewedCore) ne touche jamais les entrées "copier_coller" ou
+  // "manuel", posées par un humain qui n'a rien à relire.
+  reviewedAt: string | null;
 };
 
 function JournalRow({ entry }: { entry: JournalEntryView }) {
@@ -77,6 +82,13 @@ function JournalRow({ entry }: { entry: JournalEntryView }) {
           <span className="text-muted-foreground">{new Date(entry.createdAt).toLocaleString("fr-FR")}</span>
           <Badge variant="outline">{SOURCE_LABEL[entry.source] ?? entry.source}</Badge>
           <Badge variant={OUTCOME_VARIANT[entry.outcome] ?? "outline"}>{OUTCOME_LABEL[entry.outcome] ?? entry.outcome}</Badge>
+          {/* Même vocabulaire/aspect que components/settings/mcp/agent-activity.tsx (Task 7) —
+              une seule façon de dire « non relue » dans toute l'app, pas une seconde inventée ici. */}
+          {entry.source === "mcp" && entry.reviewedAt === null && (
+            <Badge variant="outline" className="bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30">
+              Non relue
+            </Badge>
+          )}
         </div>
         {canRevert && (
           <Button type="button" variant="outline" size="sm" onClick={handleRevert} disabled={isPending}>

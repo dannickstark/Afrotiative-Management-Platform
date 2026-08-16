@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Film } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shell/empty-state";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
 
@@ -14,6 +15,8 @@ export type ProjectRow = {
   estimatedSec: number;
   articleTitle: string | null;
   updatedAt: Date;
+  // Task 8 — nombre d'écritures d'agent non relues (lib/video/persist.ts#markProjectReviewedCore).
+  unreviewedCount: number;
 };
 
 // Le statut est déjà un mot français en base (enum video_project_status) — seul le tiret bas est
@@ -53,7 +56,19 @@ export function ProjectList({ projects }: { projects: ProjectRow[] }) {
         {projects.map((p) => (
           <TableRow key={p.id}>
             <TableCell className="font-medium">
-              <Link href={`/video/${p.id}`} className="hover:underline">{p.title}</Link>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link href={`/video/${p.id}`} className="hover:underline">{p.title}</Link>
+                {/* Compteur « non relue » (brief Task 8) : difficile à rater — juste à côté du
+                    titre, dans la colonne que l'œil balaie en premier — plutôt qu'une colonne à
+                    part que la table pourrait tronquer sur petit écran. Même vocabulaire/aspect
+                    que components/settings/mcp/agent-activity.tsx (Task 7), pas une seconde façon
+                    de dire la même chose. */}
+                {p.unreviewedCount > 0 && (
+                  <Badge variant="outline" className="bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30">
+                    {p.unreviewedCount} non relue{p.unreviewedCount > 1 ? "s" : ""}
+                  </Badge>
+                )}
+              </div>
             </TableCell>
             <TableCell className="capitalize">{statusLabel(p.status)}</TableCell>
             <TableCell>{p.platforms.map((pl) => PLATFORM_LABEL[pl] ?? pl).join(", ")}</TableCell>

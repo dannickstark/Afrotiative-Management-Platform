@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import { briefVarsFor, getVideoProject } from "@/lib/queries/video";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
+import { markProjectReviewedCore } from "@/lib/video/persist";
 import { PageHeader } from "@/components/shell/page-header";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { BriefPanel } from "@/components/video/brief-panel";
@@ -32,6 +33,18 @@ export default async function VideoProjectPage({
 
   const project = await getVideoProject(id);
   if (!project) notFound();
+
+  // Task 8 : ouvrir ce projet marque « relues » toutes les écritures d'agent (source "mcp")
+  // encore non relues. Volontairement APRÈS le chargement de `project` ci-dessus (le brief
+  // l'exige) : `journalEntries` plus bas est construit à partir de CET instantané, donc les
+  // badges « Non relue » rendus pendant CETTE visite reflètent encore fidèlement l'état
+  // d'avant-marquage — c'est précisément la visite où l'humain doit les voir. La promesse n'est
+  // PAS awaited : un marquage lent ou en échec ne doit ni retarder ni faire échouer le rendu de
+  // la page (comportement imposé, brief Task 8) ; une écriture d'agent qui arrive après ce point
+  // reste "non relue" pour la prochaine ouverture, comme voulu.
+  markProjectReviewedCore(id, user.id).catch((e) => {
+    console.error("Marquage « relue » du projet a échoué :", e);
+  });
 
   const settings = await getVideoSettings();
 
@@ -92,6 +105,7 @@ export default async function VideoProjectPage({
     errorReport: (j.errorReport ?? []) as Issue[],
     rawPayload: j.rawPayload,
     revertedAt: j.revertedAt ? j.revertedAt.toISOString() : null,
+    reviewedAt: j.reviewedAt ? j.reviewedAt.toISOString() : null,
   }));
 
   return (
