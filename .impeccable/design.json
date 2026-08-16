@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-15T00:00:00Z",
+  "title": "Design System: Afrotiative Media — Console éditoriale",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Terracotta", "canonical": "oklch(0.555 0.163 48.998)", "dark": "oklch(0.473 0.137 46.201)", "tonalRamp": ["oklch(0.22 0.06 49)", "oklch(0.31 0.09 49)", "oklch(0.40 0.12 49)", "oklch(0.48 0.15 49)", "oklch(0.555 0.163 49)", "oklch(0.66 0.15 49)", "oklch(0.78 0.11 49)", "oklch(0.92 0.05 49)"] },
+      "accent-brand": { "role": "primary", "displayName": "Brand Ember", "canonical": "oklch(0.62 0.15 47)", "dark": "oklch(0.68 0.15 47)", "tonalRamp": ["oklch(0.24 0.06 47)", "oklch(0.33 0.09 47)", "oklch(0.43 0.12 47)", "oklch(0.53 0.14 47)", "oklch(0.62 0.15 47)", "oklch(0.72 0.13 47)", "oklch(0.83 0.09 47)", "oklch(0.94 0.04 47)"] },
+      "foreground": { "role": "neutral", "displayName": "Warm Ink", "canonical": "oklch(0.153 0.006 107.1)", "dark": "oklch(0.988 0.003 106.5)", "tonalRamp": ["oklch(0.15 0.006 107)", "oklch(0.24 0.008 107)", "oklch(0.36 0.01 107)", "oklch(0.48 0.02 107)", "oklch(0.58 0.03 107)", "oklch(0.72 0.02 107)", "oklch(0.87 0.01 107)", "oklch(0.97 0.005 107)"] },
+      "muted": { "role": "neutral", "displayName": "Warm Muted", "canonical": "oklch(0.966 0.005 106.5)", "dark": "oklch(0.286 0.016 107.4)", "tonalRamp": ["oklch(0.20 0.008 107)", "oklch(0.29 0.016 107)", "oklch(0.42 0.012 107)", "oklch(0.58 0.03 107)", "oklch(0.74 0.012 107)", "oklch(0.88 0.008 107)", "oklch(0.94 0.006 107)", "oklch(0.97 0.005 107)"] },
+      "border": { "role": "neutral", "displayName": "Hairline", "canonical": "oklch(0.93 0.007 106.5)", "dark": "oklch(1 0 0 / 10%)", "tonalRamp": ["oklch(0.30 0.008 107)", "oklch(0.45 0.008 107)", "oklch(0.60 0.008 107)", "oklch(0.72 0.008 107)", "oklch(0.82 0.007 107)", "oklch(0.90 0.007 107)", "oklch(0.93 0.007 107)", "oklch(0.97 0.004 107)"] },
+      "canvas-backdrop": { "role": "neutral", "displayName": "Atelier Canvas", "canonical": "oklch(0.965 0.008 75)", "dark": "oklch(0.205 0.006 75)", "tonalRamp": ["oklch(0.20 0.006 75)", "oklch(0.31 0.01 75)", "oklch(0.45 0.012 75)", "oklch(0.60 0.012 75)", "oklch(0.75 0.01 75)", "oklch(0.88 0.009 75)", "oklch(0.965 0.008 75)", "oklch(0.99 0.004 75)"] },
+      "status-pending": { "role": "tertiary", "displayName": "Pending Amber", "canonical": "oklch(0.42 0.15 75)", "dark": "oklch(0.76 0.15 75)", "tonalRamp": [] },
+      "status-in-review": { "role": "tertiary", "displayName": "In-Review Indigo", "canonical": "oklch(0.42 0.16 265)", "dark": "oklch(0.76 0.16 265)", "tonalRamp": [] },
+      "status-approved": { "role": "tertiary", "displayName": "Approved Green", "canonical": "oklch(0.4 0.16 150)", "dark": "oklch(0.74 0.16 150)", "tonalRamp": [] },
+      "status-rejected": { "role": "tertiary", "displayName": "Rejected Red", "canonical": "oklch(0.44 0.2 25)", "dark": "oklch(0.78 0.2 25)", "tonalRamp": [] },
+      "status-draft": { "role": "tertiary", "displayName": "Draft Slate", "canonical": "oklch(0.42 0.02 260)", "dark": "oklch(0.76 0.02 260)", "tonalRamp": [] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page heroes and dashboard headline (Lora)." },
+      "headline": { "displayName": "Headline", "purpose": "Page titles (Lora)." },
+      "title": { "displayName": "Title", "purpose": "Section headings (Lora)." },
+      "body": { "displayName": "Body", "purpose": "Default UI text — lists, tables, forms (Inter, 0.875rem)." },
+      "label": { "displayName": "Label", "purpose": "Captions, metadata, table meta (Inter, 0.75rem)." }
+    },
+    "shadows": [
+      { "name": "hairline-ring", "value": "0 0 0 1px oklch(0.153 0.006 107.1 / 0.10)", "purpose": "Card/panel separation — a ring, not a lift. The default resting depth." },
+      { "name": "overlay-float", "value": "0 8px 28px oklch(0.153 0.006 107.1 / 0.16)", "purpose": "Transient floating surfaces only — Studio floating toolbar, context menus, sheets." }
+    ],
+    "motion": [
+      { "name": "motion-fast", "value": "120ms", "purpose": "Quick state transitions (outline color, opacity)." },
+      { "name": "motion-base", "value": "200ms", "purpose": "Default duration for pops and slides." },
+      { "name": "ease-spring", "value": "cubic-bezier(0.34, 1.56, 0.64, 1)", "purpose": "Slight overshoot (~1.56) for Studio chrome pop/slide — the chosen 'rich' feel over a flat ease-out." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" },
+      { "name": "xl", "value": "1280px" },
+      { "name": "2xl", "value": "1536px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The default action — solid terracotta, compact 32px height.",
+      "html": "<button class=\"ds-btn-primary\">Approuver</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; color: var(--primary-foreground, oklch(0.987 0.022 95.277)); background: var(--primary, oklch(0.555 0.163 48.998)); border: 1px solid transparent; border-radius: 0.625rem; cursor: pointer; transition: background 0.15s, transform 0.05s; } .ds-btn-primary:hover { background: color-mix(in oklch, var(--primary, oklch(0.555 0.163 48.998)), transparent 20%); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring, oklch(0.737 0.021 106.9)), transparent 50%); } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Default secondary action — hairline border, fills to muted on hover.",
+      "html": "<button class=\"ds-btn-outline\">Renvoyer à l'IA</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; color: var(--foreground, oklch(0.153 0.006 107.1)); background: var(--background, oklch(1 0 0)); border: 1px solid var(--border, oklch(0.93 0.007 106.5)); border-radius: 0.625rem; cursor: pointer; transition: background 0.15s, transform 0.05s; } .ds-btn-outline:hover { background: var(--muted, oklch(0.966 0.005 106.5)); } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring, oklch(0.737 0.021 106.9)), transparent 50%); } .ds-btn-outline:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Serious but not shouting — tinted 10% destructive fill, never solid red.",
+      "html": "<button class=\"ds-btn-destructive\">Rejeter</button>",
+      "css": ".ds-btn-destructive { display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 10px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; font-weight: 500; color: var(--destructive, oklch(0.577 0.245 27.325)); background: color-mix(in oklch, var(--destructive, oklch(0.577 0.245 27.325)), transparent 90%); border: 1px solid transparent; border-radius: 0.625rem; cursor: pointer; transition: background 0.15s, transform 0.05s; } .ds-btn-destructive:hover { background: color-mix(in oklch, var(--destructive, oklch(0.577 0.245 27.325)), transparent 80%); } .ds-btn-destructive:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "32px field, hairline border, ring glow on focus.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Rechercher un article…\" />",
+      "css": ".ds-input { height: 32px; width: 100%; padding: 4px 10px; font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; color: var(--foreground, oklch(0.153 0.006 107.1)); background: transparent; border: 1px solid var(--border, oklch(0.93 0.007 106.5)); border-radius: 0.625rem; outline: none; transition: border-color 0.15s, box-shadow 0.15s; } .ds-input::placeholder { color: var(--muted-foreground, oklch(0.58 0.031 107.3)); } .ds-input:focus-visible { border-color: var(--ring, oklch(0.737 0.021 106.9)); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring, oklch(0.737 0.021 106.9)), transparent 50%); }"
+    },
+    {
+      "name": "Card Surface",
+      "kind": "card",
+      "refersTo": "card-surface",
+      "description": "Paper surface separated by a hairline ring — no shadow.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Articles en attente</div><div class=\"ds-card-body\">12 brouillons attendent une revue humaine.</div></div>",
+      "css": ".ds-card { display: flex; flex-direction: column; gap: 4px; padding: 16px; background: var(--card, oklch(1 0 0)); color: var(--card-foreground, oklch(0.153 0.006 107.1)); border-radius: 0.875rem; box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground, oklch(0.153 0.006 107.1)), transparent 90%); } .ds-card-title { font-family: Lora, Georgia, serif; font-size: 1.125rem; font-weight: 600; } .ds-card-body { font-family: Inter, system-ui, sans-serif; font-size: 0.875rem; color: var(--muted-foreground, oklch(0.58 0.031 107.3)); }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "chip",
+      "refersTo": "badge-status",
+      "description": "Signature workflow badge — status text at 100% over its own /15 fill.",
+      "html": "<span class=\"ds-status ds-status-in-review\">En revue</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; height: 20px; padding: 2px 8px; font-family: Inter, system-ui, sans-serif; font-size: 0.75rem; font-weight: 500; border-radius: 9999px; } .ds-status-in-review { color: oklch(0.42 0.16 265); background: color-mix(in oklch, oklch(0.42 0.16 265), transparent 85%); }"
+    },
+    {
+      "name": "Brand Mark",
+      "kind": "custom",
+      "refersTo": "accent-brand",
+      "description": "The identity lockup — serif 'A' monogram on a terracotta chip plus wordmark.",
+      "html": "<span class=\"ds-brand\"><span class=\"ds-brand-chip\">A</span><span class=\"ds-brand-words\"><span class=\"ds-brand-name\">Afrotiative</span><span class=\"ds-brand-tag\">Console éditoriale</span></span></span>",
+      "css": ".ds-brand { display: inline-flex; align-items: center; gap: 0.5rem; } .ds-brand-chip { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 0.5rem; background: var(--accent-brand, oklch(0.62 0.15 47)); color: var(--accent-brand-foreground, oklch(0.98 0 0)); font-family: Lora, Georgia, serif; font-size: 1.125rem; font-weight: 600; line-height: 1; } .ds-brand-words { display: grid; line-height: 1.2; } .ds-brand-name { font-family: Lora, Georgia, serif; font-size: 1rem; font-weight: 600; letter-spacing: -0.01em; } .ds-brand-tag { font-family: Inter, system-ui, sans-serif; font-size: 0.75rem; color: var(--muted-foreground, oklch(0.58 0.031 107.3)); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Editorial Atelier",
+    "overview": "A craftsman's workshop for a small newsroom, not a marketing dashboard. The system turns a flood of raw feed items into finished, human-approved French business & finance articles, and makes the human's control over that flow feel fast, traceable, and confident. Surfaces carry a warm-neutral cast (hue ~107 for chrome, ~75 for the Studio canvas) rather than cold blue-grey, so the tool reads as a place where editorial craft happens. Density is medium-to-high because this is a tool used all day. The product truth 'l'IA propose, l'humain dispose' is a visual mandate: AI content must always look traceable to its sources and never dressed up as verified. The one warm terracotta accent is reserved for primary actions and the brand mark; its scarcity gives a decision weight. The anti-reference is the marketing dashboard.",
+    "keyCharacteristics": [
+      "Warm-neutral surfaces (never cold blue-grey), flat and hairline-defined.",
+      "One scarce terracotta accent, actions-only — never a page background.",
+      "Editorial serif (Lora) for headings and article body; Inter for dense UI.",
+      "Compact, confident controls (32px default height) built for daily repetition.",
+      "A dedicated, WCAG-verified editorial status palette that reads at a glance."
+    ],
+    "rules": [
+      { "name": "The Actions-Only Rule", "body": "The terracotta accent appears only on primary actions and attention elements — never as a page or section background. Its rarity is the signal.", "section": "colors" },
+      { "name": "The Never-Pre-Verified Rule", "body": "AI-generated content is never styled to look already-approved. Status color, source links, and confidence signals must stay visible on generated drafts.", "section": "colors" },
+      { "name": "The Serif-for-Editorial Rule", "body": "Lora is reserved for headings and rendered article body. UI chrome stays in Inter. Don't set control labels in the serif.", "section": "typography" },
+      { "name": "The Hairline-Not-Shadow Rule", "body": "Separation between surfaces comes from a 1px border/ring and a tonal shift, not a drop shadow. Shadows are reserved for transient floating surfaces.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the terracotta accent to primary actions and attention only — never a page/section background (The Actions-Only Rule).",
+      "Do use hairline borders/rings and tonal shifts for separation; reserve shadows for transient floating surfaces only.",
+      "Do set headings and rendered article body in Lora; keep all UI chrome in Inter.",
+      "Do render workflow status as the /15-fill pill with 100%-opacity status text, in both themes.",
+      "Do default controls to the compact 32px height and keep table density medium-to-high.",
+      "Do keep AI-generated drafts visibly traceable to sources and status — never style them as pre-verified."
+    ],
+    "donts": [
+      "Don't add resting drop shadows to cards or panels (The Hairline-Not-Shadow Rule).",
+      "Don't introduce cold blue-grey neutrals; the neutral cast is warm (hue ~107, canvas ~75).",
+      "Don't build oversized decorative charts or gradient hero cards — the anti-reference is the marketing dashboard.",
+      "Don't invent a second accent color or spread terracotta across a screen; it has one voice.",
+      "Don't rely on national-flag colors or decorative 'African' motifs for identity — the warmth carries it."
+    ]
+  }
+}

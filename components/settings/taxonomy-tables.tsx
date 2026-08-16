@@ -111,10 +111,14 @@ function TaxonomyCard<R extends Row>({
   );
 }
 
-// One editable cell per category row: a swatch previewing the colour actually used at render time
-// (the stored colour, or DEFAULT_CATEGORY_COLOR — same fallback lib/studio/bindings.ts applies),
-// plus a text input for the strict #RRGGBB value. Saves on blur — no separate "save" button, since
-// this is a single-field edit per row, not a multi-field form like FixPopover.
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+// One editable cell per category row: a native colour picker whose swatch previews the colour
+// actually used at render time (the stored colour, or DEFAULT_CATEGORY_COLOR — same fallback
+// lib/studio/bindings.ts applies), plus a text input for the strict #RRGGBB value. The two edit the
+// same state: picking from the swatch fills the text field and vice-versa. Saves on blur — no
+// separate "save" button, since this is a single-field edit per row, not a multi-field form like
+// FixPopover.
 function CategoryColorCell({ id, color }: { id: CategoryRow["id"]; color: CategoryRow["color"] }) {
   const initial = color ?? "";
   const [value, setValue] = useState(initial);
@@ -148,12 +152,25 @@ function CategoryColorCell({ id, color }: { id: CategoryRow["id"]; color: Catego
     });
   }
 
+  // `input[type=color]` n'accepte QUE du #rrggbb : une saisie partielle ("#1B7") ou vide le ferait
+  // retomber silencieusement sur #000000 et afficherait un swatch noir trompeur pendant la frappe.
+  // On lui donne donc la couleur de rendu effective tant que la saisie n'est pas un hex complet.
+  const pickerValue = HEX_COLOR_RE.test(value.trim()) ? value.trim() : DEFAULT_CATEGORY_COLOR;
+
   return (
     <div className="flex items-center gap-2">
-      <span
-        aria-hidden
-        className="size-5 shrink-0 rounded border"
-        style={{ backgroundColor: value || DEFAULT_CATEGORY_COLOR }}
+      <input
+        type="color"
+        value={pickerValue}
+        onChange={(e) => setValue(e.target.value)}
+        // commit() lit `value`, PAS e.target.value : sur une catégorie sans couleur le picker
+        // affiche DEFAULT_CATEGORY_COLOR sans que rien ne soit stocké, et un simple passage au
+        // clavier persisterait cette valeur par défaut comme si l'utilisateur l'avait choisie.
+        onBlur={commit}
+        disabled={isSaving}
+        title="Choisir la couleur de la catégorie"
+        aria-label="Sélecteur de couleur de la catégorie"
+        className="size-8 shrink-0 cursor-pointer rounded-md border bg-transparent p-0.5 disabled:cursor-not-allowed disabled:opacity-50 [&::-moz-color-swatch]:rounded [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded [&::-webkit-color-swatch]:border-0"
       />
       <Input
         value={value}

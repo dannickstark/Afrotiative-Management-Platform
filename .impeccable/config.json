@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "tests/studio-render-clippath.test.ts"
+        ],
+        "createdAt": "2026-08-16T06:12:23.482Z",
+        "reason": "Fixture de style satori (bordure 20px sur LES QUATRE cotes) prouvant que satori peint la bordure hors du clip-path — moteur de rendu, pas une carte d'UI. Lignes preexistantes, non introduites par ce chantier."
+      }
+    ]
+  }
+}
