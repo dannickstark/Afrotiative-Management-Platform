@@ -337,6 +337,30 @@ export const updateBeatSchema = z.object({
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 
+// `HH:MM:SS` ou `HH:MM:SS.mmm` — le format des timecodes portés par beat_inserts.tc_in/tc_out
+// (db/schema.ts, colonnes texte libres) et par insertPayloadSchema (lib/video/schema.ts) côté
+// import.
+const timecodeSchema = z.string().regex(/^\d{2}:\d{2}:\d{2}(\.\d{1,3})?$/, "Timecode invalide (HH:MM:SS ou HH:MM:SS.mmm).");
+
+// Complément Task 12 (revue) — édition d'une URL d'insert depuis l'inspecteur de beat : les URLs
+// d'images/extraits viennent d'un modèle de langage, fréquemment mortes ou fausses, et l'humain
+// doit pouvoir les corriger à la main. Comme les quatre autres points d'entrée gardés de
+// lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui `url` ne serait contrainte
+// que par le typage TypeScript, effacé au runtime (même motif que reorderBeatsSchema ci-dessus).
+export const updateInsertSchema = z.object({
+  insertId: z.string().uuid(),
+  // `.url()` seul accepterait n'importe quel schéma (ftp:, javascript:…) — la contrainte http/https
+  // vient du refine, pas de `.url()`.
+  url: z.string().url("URL invalide.").refine((u) => /^https?:\/\//i.test(u), "URL invalide (http/https uniquement).")
+    .max(2048).nullable().optional(),
+  tcIn: timecodeSchema.nullable().optional(),
+  tcOut: timecodeSchema.nullable().optional(),
+  displayDurationSec: z.number().int().min(0).nullable().optional(),
+  credit: z.string().max(300).nullable().optional(),
+  rightsNote: z.string().max(1000).nullable().optional(),
+});
+export type UpdateInsertInput = z.infer<typeof updateInsertSchema>;
+
 // Round de correction 2 (Task 9, I9) : prepareImport/applyImport/reorderBeats/revertJournalEntry
 // ne reposaient que sur du typage TypeScript — effacé au runtime, donc sans garde réelle sur un
 // point d'entrée réseau (`source` non contraint à l'enum, `variantUpdatedAt` supposé être une

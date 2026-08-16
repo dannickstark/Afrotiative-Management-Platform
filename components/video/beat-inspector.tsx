@@ -10,9 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { RichEditor } from "@/components/article/rich-editor";
-import { updateBeat } from "@/lib/actions/video-actions";
+import { updateBeat, updateInsert } from "@/lib/actions/video-actions";
 import { isBreathRisk } from "@/lib/video/duration";
-import type { BeatView } from "./beat-list";
+import type { BeatView, InsertView } from "./beat-list";
 
 const LINK_STATUS_LABEL: Record<string, string> = {
   non_verifie: "Non vérifié",
@@ -43,11 +43,82 @@ function toForm(beat: BeatView): FormState {
   };
 }
 
+// Complément Task 12 (revue) — un insert dont seule l'URL est éditée n'a pas besoin de rejouer le
+// bouton « Enregistrer » du beat : `InsertRow` porte sa propre mutation locale et son propre appel
+// à `updateInsert`, indépendant du formulaire du beat. `disabled` reflète l'enregistrement en cours
+// du BEAT (form.spokenText etc.) : les deux enregistrements ne se recouvrent pas fonctionnellement,
+// mais désactiver toute la fiche pendant l'un évite une incohérence visuelle si les deux
+// s'enchaînent vite.
+function InsertRow({
+  insert, disabled, onSaved,
+}: {
+  insert: InsertView;
+  disabled: boolean;
+  onSaved: (patch: Partial<InsertView> & { id: string }) => void;
+}) {
+  const [url, setUrl] = useState(insert.url ?? "");
+  const [isPending, startTransition] = useTransition();
+
+  // Resynchronise si l'insert change de source (autre onglet, autre session) — même motif que
+  // BeatInspector#toForm.
+  useEffect(() => { setUrl(insert.url ?? ""); }, [insert.id, insert.url]);
+
+  const changed = url.trim() !== (insert.url ?? "");
+
+  function handleSave() {
+    const next = url.trim() === "" ? null : url.trim();
+    startTransition(async () => {
+      const res = await updateInsert({ insertId: insert.id, url: next });
+      if (!res.ok) {
+        toast.error(res.message);
+        return;
+      }
+      toast.success("URL de l'insert enregistrée.");
+      // Une URL corrigée à la main n'a jamais été vérifiée — même remise à zéro que
+      // updateBeatInsertCore (lib/video/persist.ts) côté serveur, reflétée ici sans aller
+      // recharger la ligne.
+      onSaved({ id: insert.id, url: next, linkStatus: "non_verifie" });
+    });
+  }
+
+  return (
+    <li className="space-y-1.5 rounded-md border p-2 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <Badge variant="outline">{insert.kind}</Badge>
+        <Badge variant="secondary">{LINK_STATUS_LABEL[insert.linkStatus] ?? insert.linkStatus}</Badge>
+      </div>
+      <div className="flex gap-2">
+        <Input
+          value={url} disabled={disabled || isPending}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://…"
+          aria-label="URL de l'insert"
+          className="font-mono text-xs"
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
+        />
+        <Button type="button" variant="outline" size="sm" disabled={disabled || isPending || !changed} onClick={handleSave}>
+          {isPending && <Loader2 className="animate-spin" aria-hidden />}
+          Enregistrer
+        </Button>
+      </div>
+      {/* Le reste de l'insert reste en lecture : aucune action serveur ne couvre encore
+          l'écriture des timecodes/durée d'affichage/crédit — seule l'URL en a une
+          (updateInsert), au motif exact du spec §6. */}
+      <div className="flex flex-wrap gap-x-3 text-muted-foreground">
+        {insert.tcIn && <span>Entrée : {insert.tcIn}</span>}
+        {insert.tcOut && <span>Sortie : {insert.tcOut}</span>}
+        {insert.displayDurationSec !== null && <span>Durée d&apos;affichage : {insert.displayDurationSec} s</span>}
+        {insert.credit && <span>Crédit : {insert.credit}</span>}
+      </div>
+    </li>
+  );
+}
+
 // Task 12 — panneau latéral d'édition d'un beat. Enregistre via `updateBeat`
-// (lib/actions/video-actions.ts), gardée sur video:"manage". Les inserts (beat.inserts) sont
-// affichés mais pas éditables ici : aucune action serveur ne couvre encore leur écriture
-// (`updateBeat` ne porte que les champs du beat lui-même) — les rendre éditables sans point de
-// persistance produirait un formulaire qui ment sur ce qu'il enregistre.
+// (lib/actions/video-actions.ts), gardée sur video:"manage". Les inserts (beat.inserts) sont édités
+// URL par URL via `updateInsert` (InsertRow ci-dessus, complément de revue) — les autres champs
+// d'un insert (timecodes, durée d'affichage, crédit) restent en lecture, aucune action serveur ne
+// couvrant encore leur écriture.
 export function BeatInspector({
   beat, open, onOpenChange, onSaved,
 }: {
@@ -57,6 +128,7 @@ export function BeatInspector({
   onSaved: (patch: Partial<BeatView> & { id: string }) => void;
 }) {
   const [form, setForm] = useState<FormState | null>(null);
+  const [inserts, setInserts] = useState<InsertView[]>([]);
   const [newSource, setNewSource] = useState("");
   const [isPending, startTransition] = useTransition();
 
@@ -64,11 +136,23 @@ export function BeatInspector({
   // components/settings/feed-sheet.tsx : la sélection change (BeatList#selectedId), pas seulement
   // l'ouverture, donc la dépendance porte sur beat?.id plutôt que sur `open` seul.
   useEffect(() => {
-    if (beat) setForm(toForm(beat));
+    if (beat) {
+      setForm(toForm(beat));
+      setInserts(beat.inserts);
+    }
   }, [beat?.id]);
 
   if (!beat || !form) {
     return <Sheet open={open} onOpenChange={onOpenChange} />;
+  }
+
+  function handleInsertSaved(patch: Partial<InsertView> & { id: string }) {
+    const next = inserts.map((ins) => (ins.id === patch.id ? { ...ins, ...patch } : ins));
+    setInserts(next);
+    // Remonte aussi au parent (BeatList#items) : sans ça, fermer puis rouvrir l'inspecteur sur ce
+    // même beat sans changement de variante réafficherait l'ancienne URL, `onSaved` du beat étant
+    // le seul canal qui met à jour la liste.
+    if (beat) onSaved({ id: beat.id, inserts: next });
   }
 
   const breathRisk = isBreathRisk(form.spokenText);
@@ -217,27 +301,12 @@ export function BeatInspector({
             </div>
           </div>
 
-          {beat.inserts.length > 0 && (
+          {inserts.length > 0 && (
             <div className="space-y-1.5">
               <Label>Inserts</Label>
-              {/* Lecture seule : aucune action serveur ne persiste encore un insert (voir le
-                  commentaire en tête de fichier) — cette liste sera rendue éditable quand une telle
-                  action existera plutôt que de simuler une sauvegarde qui n'a lieu nulle part. */}
               <ul className="space-y-2">
-                {beat.inserts.map((insert) => (
-                  <li key={insert.id} className="space-y-1 rounded-md border p-2 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <Badge variant="outline">{insert.kind}</Badge>
-                      <Badge variant="secondary">{LINK_STATUS_LABEL[insert.linkStatus] ?? insert.linkStatus}</Badge>
-                    </div>
-                    {insert.url && <p className="truncate font-mono text-muted-foreground">{insert.url}</p>}
-                    <div className="flex flex-wrap gap-x-3 text-muted-foreground">
-                      {insert.tcIn && <span>Entrée : {insert.tcIn}</span>}
-                      {insert.tcOut && <span>Sortie : {insert.tcOut}</span>}
-                      {insert.displayDurationSec !== null && <span>Durée d&apos;affichage : {insert.displayDurationSec} s</span>}
-                      {insert.credit && <span>Crédit : {insert.credit}</span>}
-                    </div>
-                  </li>
+                {inserts.map((insert) => (
+                  <InsertRow key={insert.id} insert={insert} disabled={isPending} onSaved={handleInsertSaved} />
                 ))}
               </ul>
             </div>

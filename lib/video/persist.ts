@@ -163,6 +163,77 @@ export async function updateBeatCore(input: {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Édition d'un insert (Task 12, complément de revue)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function updateBeatInsertCore(input: {
+  insertId: string;
+  url?: string | null;
+  tcIn?: string | null;
+  tcOut?: string | null;
+  displayDurationSec?: number | null;
+  credit?: string | null;
+  rightsNote?: string | null;
+}): Promise<void> {
+  await db.transaction(async (tx) => {
+    // Ordre de verrouillage (round de correction 4, inventaire task-9-report.md) : `script_variants`
+    // D'ABORD, `script_beats` ENSUITE, `beat_inserts` EN DERNIER — le même ordre global que
+    // applyImportCore/revertJournalEntryCore (les deux seules autres fonctions qui écrivent
+    // beat_inserts). Ne pas rouvrir le cycle ABBA que quatre rounds de correction ont mis quatre
+    // passes à éliminer sur ce fichier.
+    //
+    // Deux lectures nues en tête, sans verrou : `insertId` ne porte que `beatId`, `beatId` ne porte
+    // que `variantId` — il faut les deux pour savoir QUELLE variante verrouiller. Un `select` nu ne
+    // pose aucun verrou de ligne, il ne peut donc pas participer au cycle ; l'état faisant autorité
+    // est relu plus bas, une fois la variante verrouillée.
+    const [locatedInsert] = await tx.select({ beatId: beatInserts.beatId }).from(beatInserts)
+      .where(eq(beatInserts.id, input.insertId));
+    if (!locatedInsert) throw new RefusalError("Insert introuvable.");
+
+    const [locatedBeat] = await tx.select({ variantId: scriptBeats.variantId }).from(scriptBeats)
+      .where(eq(scriptBeats.id, locatedInsert.beatId));
+    if (!locatedBeat) throw new RefusalError("Beat introuvable pour cet insert.");
+
+    const [variant] = await tx.select({ id: scriptVariants.id }).from(scriptVariants)
+      .where(eq(scriptVariants.id, locatedBeat.variantId)).for("update");
+    if (!variant) throw new RefusalError("Variante introuvable pour cet insert.");
+
+    const [current] = await tx.select().from(beatInserts).where(eq(beatInserts.id, input.insertId));
+    if (!current) throw new RefusalError("Insert introuvable.");
+
+    // Une URL corrigée à la main n'a jamais été vérifiée : `linkStatus`/`linkCheckedAt` (posés par
+    // un futur vérificateur de liens, hors périmètre ici) mentiraient sur l'URL qui vient de
+    // changer si on les laissait tels quels.
+    const urlChanged = input.url !== undefined && input.url !== current.url;
+
+    // script_beats AVANT beat_inserts (ordre ci-dessus) : cette édition d'insert est aussi une
+    // édition humaine du beat parent, au même titre qu'updateBeatCore — computeMerge doit savoir
+    // au prochain ré-import que ce beat s'est écarté de son dernier import.
+    await tx.update(scriptBeats).set({
+      locallyEditedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(scriptBeats.id, locatedInsert.beatId));
+
+    // `r2Key` n'est jamais touché ici : c'est la clé de l'asset rapatrié par le SP2 (upload/miroir
+    // R2), sans rapport avec l'URL source que l'humain corrige à la main.
+    await tx.update(beatInserts).set({
+      url: input.url !== undefined ? input.url : current.url,
+      tcIn: input.tcIn !== undefined ? input.tcIn : current.tcIn,
+      tcOut: input.tcOut !== undefined ? input.tcOut : current.tcOut,
+      displayDurationSec: input.displayDurationSec !== undefined ? input.displayDurationSec : current.displayDurationSec,
+      credit: input.credit !== undefined ? input.credit : current.credit,
+      rightsNote: input.rightsNote !== undefined ? input.rightsNote : current.rightsNote,
+      linkStatus: urlChanged ? "non_verifie" : current.linkStatus,
+      linkCheckedAt: urlChanged ? null : current.linkCheckedAt,
+      updatedAt: new Date(),
+    }).where(eq(beatInserts.id, input.insertId));
+
+    // (même motif que updateBeatCore/reorderBeatsCore) : rend l'aperçu d'import périmé.
+    await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, locatedBeat.variantId));
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Réordonnancement
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, videoProjects, scriptVariants, scriptBeats, scriptJournal } from "@/db";
+import { db, videoProjects, scriptVariants, scriptBeats, scriptJournal, beatInserts } from "@/db";
 import { and, asc, eq } from "drizzle-orm";
 import { EXAMPLE_PAYLOAD, type Payload } from "@/lib/video/schema";
 import {
   createVideoProjectCore, prepareImportCore, applyImportCore, revertJournalEntryCore, updateBeatCore,
+  updateBeatInsertCore,
 } from "@/lib/video/persist";
 
 // Construit un payload à une seule variante ("youtube_long", la variante par défaut du projet de
@@ -500,4 +501,51 @@ describe("annulation d'une entrée de journal", () => {
       await db.delete(videoProjects).where(eq(videoProjects.id, projectId2));
     }
   }, 20000);
+});
+
+// Complément Task 12 (revue) — l'humain corrige à la main l'URL d'un insert (spec §6 : « liste des
+// inserts avec URL éditable »). updateBeatInsertCore doit persister le changement, remettre
+// linkStatus à "non_verifie" (une URL corrigée n'a jamais été vérifiée), bumper
+// scriptVariants.updatedAt (même contrôle de péremption que les autres écritures humaines) et poser
+// locallyEditedAt sur le beat parent.
+describe("édition d'un insert", () => {
+  let projectId: string;
+  let variantId: string;
+
+  beforeAll(async () => { ({ projectId, variantId } = await newProject("Test — Babadampulu (édition d'insert)")); });
+  afterAll(async () => { await db.delete(videoProjects).where(eq(videoProjects.id, projectId)); });
+
+  it("modifier l'URL d'un insert la persiste, remet le lien à vérifier et bumpe la variante", async () => {
+    const [beforeVariant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+
+    const [beat] = await db.insert(scriptBeats).values({
+      variantId, externalId: "b-99-insert-test", position: 0, kind: "insert", spokenText: "",
+    }).returning();
+    expect(beat.locallyEditedAt).toBeNull();
+
+    const [insert] = await db.insert(beatInserts).values({
+      beatId: beat.id, kind: "image", url: "https://exemple.com/ancienne.jpg",
+      linkStatus: "ok", linkCheckedAt: new Date(), position: 0,
+    }).returning();
+
+    // Le paquet de sommeil garantit un `updatedAt` strictement postérieur — Postgres `timestamp`
+    // a une résolution microseconde, mais deux écritures synchrones dans le même test peuvent
+    // sinon retomber sur la même valeur horloge.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const result = await updateBeatInsertCore({ insertId: insert.id, url: "https://exemple.com/nouvelle.jpg" });
+    expect(result).toBeUndefined(); // pas de refus (RefusalError aurait levé)
+
+    const [updatedInsert] = await db.select().from(beatInserts).where(eq(beatInserts.id, insert.id));
+    expect(updatedInsert.url).toBe("https://exemple.com/nouvelle.jpg");
+    // Une URL corrigée à la main n'a jamais été vérifiée.
+    expect(updatedInsert.linkStatus).toBe("non_verifie");
+    expect(updatedInsert.linkCheckedAt).toBeNull();
+
+    const [updatedBeat] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, beat.id));
+    expect(updatedBeat.locallyEditedAt).not.toBeNull();
+
+    const [afterVariant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+    expect(afterVariant.updatedAt.getTime()).toBeGreaterThan(beforeVariant.updatedAt.getTime());
+  });
 });

@@ -3,11 +3,11 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import {
-  createVideoProjectSchema, updateBeatSchema, prepareImportSchema, applyImportSchema,
+  createVideoProjectSchema, updateBeatSchema, updateInsertSchema, prepareImportSchema, applyImportSchema,
   reorderBeatsSchema, revertJournalEntrySchema,
 } from "@/lib/validation";
 import {
-  createVideoProjectCore, updateBeatCore, reorderBeatsCore,
+  createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
   prepareImportCore, applyImportCore, revertJournalEntryCore,
 } from "@/lib/video/persist";
 import type { Diff, Issue } from "@/lib/video/import";
@@ -47,6 +47,21 @@ export async function updateBeat(
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
   await updateBeatCore(parsed.data);
+  return { ok: true };
+}
+
+// Complément Task 12 (revue) — l'humain corrige à la main l'URL d'un insert (spec §6 : « liste des
+// inserts avec URL éditable »). Même garde que le reste de ce fichier ; le cœur DB vit dans
+// updateBeatInsertCore (lib/video/persist.ts), pas ici.
+export async function updateInsert(
+  input: unknown,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+
+  const parsed = updateInsertSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+
+  await updateBeatInsertCore(parsed.data);
   return { ok: true };
 }
 
