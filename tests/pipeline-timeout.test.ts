@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, spyOn } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, spyOn, mock } from "bun:test";
 import { withTimeout } from "@/lib/pipeline/timeout";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,6 +66,29 @@ describe("withTimeout", () => {
 // embeddings provider.
 import { stageSources } from "@/lib/pipeline/stages";
 
+// generateArticle() (lib/ai/generate-article.ts) no longer short-circuits on a missing
+// OPENROUTER_API_KEY: it now ALWAYS consults the OpenRouter token pool (lib/ai/with-token-pool.ts),
+// which in production reads the `openrouter_tokens` table — that's the fix for operators who only
+// configured tokens via Réglages. In THIS test no token exists anywhere (env or DB), so the real
+// pool would still correctly resolve to "unconfigured" and fall through to the fast in-process
+// mock — but only after a real round-trip to the remote Neon database, which blows well past the
+// tiny timeoutMs this test uses. Faking runWithOpenRouterPool below skips that round-trip while
+// keeping the SAME "unconfigured" answer the real pool would give here, so "Génération IA" stays
+// fast for the right reason rather than by a loosened threshold. Same capture→mock.module()→
+// afterAll-restore pattern as tests/ai-fallback.test.ts / tests/ai-improve.test.ts — mock.module()
+// mutates the module's exports object in place and is NOT undone by mock.restore(), so without an
+// explicit afterAll restore this patch would leak into every test file that runs afterwards in the
+// same `bun test` process.
+const { runWithOpenRouterPool: realRunWithOpenRouterPool } = await import("@/lib/ai/with-token-pool");
+let runWithOpenRouterPoolImpl: typeof realRunWithOpenRouterPool = realRunWithOpenRouterPool;
+mock.module("@/lib/ai/with-token-pool", () => ({
+  runWithOpenRouterPool: (
+    op: Parameters<typeof realRunWithOpenRouterPool>[0],
+    isFlaky: Parameters<typeof realRunWithOpenRouterPool>[1],
+    deps?: Parameters<typeof realRunWithOpenRouterPool>[2],
+  ) => runWithOpenRouterPoolImpl(op, isFlaky, deps),
+}));
+
 describe("stageSources — a synthesis stage that runs long past its timeout fails that stage and aborts the story (SP5 Task 2)", () => {
   const PROVIDER_KEYS = [
     "JINA_API_KEY", "FIRECRAWL_API_KEY", "OPENROUTER_API_KEY",
@@ -78,6 +101,11 @@ describe("stageSources — a synthesis stage that runs long past its timeout fai
   beforeAll(() => {
     for (const k of [...PROVIDER_KEYS, ...EMBED_ENV_KEYS]) envSnap[k] = process.env[k];
     for (const k of PROVIDER_KEYS) delete process.env[k]; // génération IA falls to its fast mock
+
+    // Fait renvoyer "unconfigured" instantanément, sans toucher la base — exactement la réponse que
+    // le pool réel donnerait ici (aucun jeton en base, aucune clé d'environnement), mais sans le
+    // aller-retour réseau. Voir le commentaire au-dessus de ce describe pour le contexte complet.
+    runWithOpenRouterPoolImpl = async () => ({ ok: false, reason: "unconfigured" });
 
     // Stands in for a stuck embeddings provider: always takes far longer to respond than the
     // tiny timeoutMs used below, but still short enough to keep this test fast (no real network).
@@ -99,6 +127,7 @@ describe("stageSources — a synthesis stage that runs long past its timeout fai
     for (const [k, v] of Object.entries(envSnap)) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
+    runWithOpenRouterPoolImpl = realRunWithOpenRouterPool; // ne pas laisser fuiter vers les fichiers suivants
   });
 
   it("records 'Calcul de l'embedding' failed with the timeout message, leaves 'Génération IA' successful, and aborts (articleId null) before later stages run", async () => {
@@ -114,7 +143,9 @@ describe("stageSources — a synthesis stage that runs long past its timeout fai
 
     expect(res.articleId).toBeNull(); // story aborts — human-review barrier: nothing gets written
     const byName = new Map(res.steps.map((s) => [s.name, s]));
-    expect(byName.get("Génération IA")?.status).toBe("success"); // ran fine — pure-JS mock, fast
+    // Rapide car runWithOpenRouterPool est neutralisé plus haut (répond "unconfigured" sans DB) : la
+    // génération retombe aussitôt sur mockGenerateArticle, un mock JS pur, sans réseau.
+    expect(byName.get("Génération IA")?.status).toBe("success");
 
     const embStep = byName.get("Calcul de l'embedding");
     expect(embStep?.status).toBe("failed");
