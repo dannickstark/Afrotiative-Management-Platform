@@ -8,9 +8,37 @@ import {
 } from "@/lib/validation";
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
-  prepareImportCore, applyImportCore, revertJournalEntryCore,
+  prepareImportCore, applyImportCore, revertJournalEntryCore, RefusalError,
 } from "@/lib/video/persist";
 import type { Diff, Issue } from "@/lib/video/import";
+
+// Round de correction final : toute écriture revalide AUSSI `/video/[id]`, la page où l'édition a
+// effectivement lieu — jusqu'ici seule la liste `/video` l'était. Conséquence concrète de l'oubli :
+// `variantUpdatedAt`, lu au rendu de la page projet et renvoyé jusqu'à `applyImport` pour le
+// contrôle de péremption (lib/video/persist.ts#applyImportCore), restait périmé après toute
+// édition, ce qui bloquait l'application de tout import jusqu'à un rechargement manuel.
+// `"page"` est OBLIGATOIRE dès que le chemin porte un segment dynamique : la forme littérale
+// `/video/<uuid>` demanderait de connaître le projectId, que `updateBeat`/`updateInsert`/
+// `reorderBeats` ne reçoivent pas (ils ne portent qu'un beatId / insertId / variantId).
+function revalidateVideo(): void {
+  revalidatePath("/video");
+  revalidatePath("/video/[id]", "page");
+}
+
+// `updateBeatCore`/`updateBeatInsertCore` LÈVENT leurs refus métier (« Beat introuvable »,
+// « Variante introuvable ») au lieu de les retourner : leur valeur de retour porte déjà l'état
+// stocké. Sans cette conversion, un refus routinier — le beat a été supprimé par un import concurrent
+// pendant que l'inspecteur était ouvert — remontait en erreur serveur brute côté client, là où
+// `applyImport`/`revertJournalEntry` renvoient depuis toujours un `{ ok: false, message }` français.
+// Une vraie panne DB n'est PAS avalée : seules les `RefusalError` sont converties, le reste relance.
+async function refusable<T>(run: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; message: string }> {
+  try {
+    return { ok: true, value: await run() };
+  } catch (e) {
+    if (e instanceof RefusalError) return { ok: false, message: e.message };
+    throw e;
+  }
+}
 
 // Le cœur DB brut (lib/video/persist.ts) est un module SANS "use server" : tout export d'un module
 // "use server" est un point d'entrée réseau sans authentification propre (motif de
@@ -34,7 +62,7 @@ export async function createVideoProject(
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
   const id = await createVideoProjectCore({ ...parsed.data, userId: u.id });
-  revalidatePath("/video");
+  revalidateVideo();
   return { ok: true, id };
 }
 
@@ -54,9 +82,10 @@ export async function updateBeat(
   const parsed = updateBeatSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
-  const beat = await updateBeatCore(parsed.data);
-  revalidatePath("/video");
-  return { ok: true, ...beat };
+  const beat = await refusable(() => updateBeatCore(parsed.data));
+  if (!beat.ok) return beat;
+  revalidateVideo();
+  return { ok: true, ...beat.value };
 }
 
 // Complément Task 12 (revue) — l'humain corrige à la main l'URL d'un insert (spec §6 : « liste des
@@ -71,8 +100,9 @@ export async function updateInsert(
   const parsed = updateInsertSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
-  await updateBeatInsertCore(parsed.data);
-  revalidatePath("/video");
+  const result = await refusable(() => updateBeatInsertCore(parsed.data));
+  if (!result.ok) return result;
+  revalidateVideo();
   return { ok: true };
 }
 
@@ -85,6 +115,11 @@ export async function reorderBeats(
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
   await reorderBeatsCore(parsed.data);
+  // Un réordonnancement bumpe lui aussi `scriptVariants.updatedAt` (lib/video/persist.ts) : sans
+  // revalidation, le `variantUpdatedAt` embarqué dans la page reste périmé et bloque l'application
+  // de l'import suivant. Le glisser-déposer garde son rendu optimiste — la revalidation ne fait que
+  // réaligner l'état serveur derrière lui, sur un ordre déjà identique.
+  revalidateVideo();
   return { ok: true };
 }
 
@@ -113,7 +148,7 @@ export async function applyImport(
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
   const result = await applyImportCore(parsed.data);
-  if (result.ok) revalidatePath("/video");
+  if (result.ok) revalidateVideo();
   return result;
 }
 
@@ -126,6 +161,6 @@ export async function revertJournalEntry(
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
   const result = await revertJournalEntryCore(parsed.data.journalId);
-  if (result.ok) revalidatePath("/video");
+  if (result.ok) revalidateVideo();
   return result;
 }
