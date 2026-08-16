@@ -279,3 +279,63 @@ describe("candidats d'image avec provenance", () => {
     expect(seenCandidates).toEqual(["https://media-a.test/img1.jpg", "https://media-a.test/img2.jpg"]);
   });
 });
+
+describe("regenerateArticle — modes d'image", () => {
+  const IMAGE_ONLY = { title: false, body: false, excerpt: false, category: false, tags: false, image: true };
+
+  it("auto, image seule : passe par generateArticle (génération partielle) et écrit son image", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
+    let seenFields: { image: boolean; body: boolean } | undefined;
+    generateArticleImpl = async (input) => {
+      seenFields = (input as { fields: { image: boolean; body: boolean } }).fields;
+      return { draft: { ...draftFixture, featuredImageUrl: "https://a.test/i.jpg", imageCredit: "Test" }, via: "openrouter" };
+    };
+
+    const r = await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "auto", timeoutMs: 5000 });
+
+    expect(r.ok).toBe(true);
+    expect(r.awaitingImage).toBeFalsy();
+    // La sélection est transmise telle quelle : le corps n'est PAS demandé au modèle.
+    expect(seenFields?.image).toBe(true);
+    expect(seenFields?.body).toBe(false);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://a.test/i.jpg");
+    expect(row.pendingImageCandidates).toBeNull();
+  });
+
+  it("manuel, image seule : aucun LLM, gare les candidats, awaitingImage", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg", "https://a.test/j.jpg"], via: "test", attempts: [] });
+    let generated = false;
+    generateArticleImpl = async () => { generated = true; return { draft: draftFixture, via: "openrouter" }; };
+
+    const r = await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "manual", timeoutMs: 5000 });
+
+    expect(r.ok).toBe(true);
+    expect(r.awaitingImage).toBe(true);
+    expect(generated).toBe(false);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg"); // intacte jusqu'au choix
+    expect(row.pendingImageCandidates).toEqual([
+      { url: "https://a.test/i.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" },
+      { url: "https://a.test/j.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" },
+    ]);
+  });
+
+  it("manuel, image + titre : applique le titre ET gare les candidats", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
+    generateArticleImpl = async () => ({ draft: { ...draftFixture, title: "Titre neuf", featuredImageUrl: "https://a.test/i.jpg" }, via: "openrouter" });
+
+    const r = await regenerateArticle(articleId, { ...IMAGE_ONLY, title: true }, null, { imageMode: "manual", timeoutMs: 5000 });
+
+    expect(r.awaitingImage).toBe(true);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.title).toBe("Titre neuf");
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg"); // intacte jusqu'au choix
+    expect(row.pendingImageCandidates).toHaveLength(1);
+  });
+});

@@ -88,6 +88,18 @@ export async function regenerateArticle(
   });
   if (plan.abort !== null) return { ok: false, message: plan.abort, title: article.title };
 
+  // Chemin « choix manuel » : aucun appel LLM pour l'image. On gare les candidats sur l'article —
+  // c'est cette colonne, et elle seule, qui alimente le bac du /queue — et on laisse les colonnes
+  // d'image intactes jusqu'au choix de l'éditeur.
+  if (plan.imageAction === "park") {
+    await db.update(articles).set({ pendingImageCandidates: candidates }).where(eq(articles.id, articleId));
+  }
+
+  // Manuel + image seule : l'extraction a suffi, les candidats sont garés, il n'y a rien à générer.
+  if (!plan.runGeneration) {
+    return { ok: true, message: "Sources extraites — image à choisir.", title: article.title, awaitingImage: true };
+  }
+
   await opts.onStage?.("generating");
   const { generateArticle } = await import("@/lib/ai/generate-article");
   const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
@@ -112,8 +124,11 @@ export async function regenerateArticle(
     draft, fields: plan.effectiveFields, sourceCount: extracted.length, categoryNames, actorId,
   });
 
-  const message = plan.warning !== null
-    ? `Article régénéré — déposé en revue. ${plan.warning}`
-    : "Article régénéré — déposé en revue.";
-  return { ok: true, message, title: article.title };
+  const awaitingImage = plan.imageAction === "park";
+  const message = awaitingImage
+    ? "Article régénéré — déposé en revue. Image à choisir."
+    : plan.warning !== null
+      ? `Article régénéré — déposé en revue. ${plan.warning}`
+      : "Article régénéré — déposé en revue.";
+  return { ok: true, message, title: article.title, awaitingImage };
 }
