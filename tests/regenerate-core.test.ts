@@ -164,17 +164,25 @@ describe("regenerateArticle — extraction", () => {
     const { articleId } = await seedArticleWithSources([
       "https://a.test/1", "https://a.test/2", "https://a.test/3",
     ]);
-    extractCalls = [];
+    // On mesure la CONCURRENCE, pas le temps écoulé : regenerateArticle enchaîne plusieurs
+    // allers-retours vers la base distante partagée avant et après l'extraction, si bien qu'aucune
+    // borne d'horloge ne peut isoler la phase d'extraction de façon fiable. Compter les extractions
+    // simultanées teste directement la propriété voulue, sans dépendre de la latence réseau.
+    let inFlight = 0;
+    let maxInFlight = 0;
     extractImpl = async () => {
-      await new Promise((r) => setTimeout(r, 300));
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 100));
+      inFlight -= 1;
       return { title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] };
     };
     generateArticleImpl = async () => ({ draft: draftFixture, via: "openrouter" });
-    const t0 = Date.now();
-    await regenerateArticle(articleId, { ...ALL }, null);
-    const elapsed = Date.now() - t0;
-    // Séquentiel = ~900 ms ; parallèle = ~300 ms. La borne à 700 ms laisse de la marge au CI.
-    expect(elapsed).toBeLessThan(700);
+
+    await regenerateArticle(articleId, { ...ALL }, null, { timeoutMs: 5000 });
+
+    // Séquentiel donnerait maxInFlight === 1.
+    expect(maxInFlight).toBe(3);
   });
 
   it("une source qui dépasse le délai est ignorée, les autres passent", async () => {
