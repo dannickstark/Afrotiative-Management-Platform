@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { db, openrouterTokens } from "@/db";
 import { eq } from "drizzle-orm";
 import { encryptSecret } from "@/lib/diffusion/crypto";
-import { getOpenRouterTokenPool, markTokenResult } from "@/lib/ai/token-pool";
+import { getOpenRouterTokenPool, loadOpenRouterPoolState, markTokenResult } from "@/lib/ai/token-pool";
 import type { PipelineConfig } from "@/lib/config/pipeline-config";
 
 // This suite exercises real encrypt/decrypt round trips (seeds openrouter_tokens rows via
@@ -135,6 +135,55 @@ describe("getOpenRouterTokenPool", () => {
     // Can't assert pool.length === 0 in a shared dev DB (other rows may legitimately exist), but we
     // can assert it never throws and is always an array.
     expect(Array.isArray(pool)).toBe(true);
+  });
+});
+
+describe("loadOpenRouterPoolState", () => {
+  // La distinction que ce module porte désormais : « aucun jeton utilisable MAINTENANT » n'est pas
+  // « rien n'est configuré ». Un exploitant dont tout le parc est désactivé ou en récupération, sans
+  // OPENROUTER_API_KEY, doit produire { tokens: [], configured: true } — c'est ce que le runner
+  // (lib/ai/with-token-pool.ts) traduit en `empty_pool` plutôt qu'en `unconfigured`.
+  it("marque configured:true alors qu'aucun jeton n'est utilisable (toutes les lignes désactivées ou en récupération)", async () => {
+    const [inactive, cooling] = await db.insert(openrouterTokens).values([
+      { label: "etat-desactive", tokenCiphertext: encryptSecret("token-off"), active: false },
+      { label: "etat-cooldown", tokenCiphertext: encryptSecret("token-cool"), cooldownUntil: new Date(Date.now() + 60_000) },
+    ]).returning();
+
+    try {
+      const state = await loadOpenRouterPoolState(emptyCfg);
+      expect(state.configured).toBe(true); // les lignes existent, même inutilisables
+      const labels = state.tokens.map((t) => t.label);
+      expect(labels).not.toContain("etat-desactive");
+      expect(labels).not.toContain("etat-cooldown");
+    } finally {
+      await db.delete(openrouterTokens).where(eq(openrouterTokens.id, inactive.id));
+      await db.delete(openrouterTokens).where(eq(openrouterTokens.id, cooling.id));
+    }
+  });
+
+  // La base de dev est partagée : impossible d'y garantir zéro ligne openrouter_tokens, donc le cas
+  // « aucune ligne ET aucune clé → configured:false » est couvert au niveau du runner, où l'état du
+  // pool est injecté (tests/with-token-pool.test.ts). Ici on vérifie l'autre moitié de la règle : la
+  // clé d'environnement suffit à elle seule à rendre l'installation « configurée ».
+  it("marque configured:true dès qu'une clé d'environnement existe", async () => {
+    const state = await loadOpenRouterPoolState(envCfg("env-secret-key"));
+    expect(state.configured).toBe(true);
+    expect(state.tokens.some((t) => t.id === null && t.token === "env-secret-key")).toBe(true);
+  });
+
+  it("getOpenRouterTokenPool renvoie exactement les jetons utilisables de l'état (vue historique)", async () => {
+    const [row] = await db.insert(openrouterTokens).values([
+      { label: "vue-historique", tokenCiphertext: encryptSecret("token-vue") },
+    ]).returning();
+
+    try {
+      const state = await loadOpenRouterPoolState(emptyCfg);
+      const pool = await getOpenRouterTokenPool(emptyCfg);
+      expect(pool).toEqual(state.tokens);
+      expect(pool.map((t) => t.label)).toContain("vue-historique");
+    } finally {
+      await db.delete(openrouterTokens).where(eq(openrouterTokens.id, row.id));
+    }
   });
 });
 

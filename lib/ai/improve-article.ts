@@ -2,6 +2,8 @@ import { generateText } from "ai";
 import { buildModel, buildOpenRouterModel } from "./providers";
 import { getPipelineConfig } from "@/lib/config/pipeline-config";
 import { runWithOpenRouterPool } from "./with-token-pool";
+import { truncateDetail } from "./detail";
+import type { AiFailureReason } from "./failure-message";
 
 export type ImproveInput = { title: string; bodyHtml: string; instruction?: string };
 
@@ -25,37 +27,66 @@ export function buildImprovePrompt(input: ImproveInput): string {
 // than being accepted as-is.
 const isFlaky = (text: string): boolean => text.trim().length === 0;
 
-export async function improveArticleBody(input: ImproveInput): Promise<{ bodyHtml: string; via: string }> {
+export async function improveArticleBody(
+  input: ImproveInput,
+): Promise<{ bodyHtml: string; via: string; failure?: AiFailureReason; failureDetail?: string }> {
   const cfg = getPipelineConfig();
+
+  // Même logique de mémorisation que generateArticle (lib/ai/generate-article.ts) : seuls les
+  // fournisseurs RÉELLEMENT tentés (pool interrogé, ou modèle construit) mettent à jour ces
+  // variables ; la dernière raison rencontrée l'emporte.
+  let failure: AiFailureReason | undefined;
+  let failureDetail: string | undefined;
+
   for (const name of cfg.llmOrder) {
     if (name === "openrouter") {
-      // Unconfigured — no baseUrl/model/apiKey to build a per-token model with, and the token
-      // pool has no env key to fall back to either. Same gate the pre-pool code effectively had
-      // (buildModel("openrouter", cfg) was non-null iff cfg.openrouter was configured).
-      if (!cfg.openrouter) continue;
-
+      // Même raisonnement que generate-article.ts : la clé d'environnement n'est plus le critère
+      // d'entrée. Des jetons saisis dans Réglages → Jetons OpenRouter suffisent, donc on interroge
+      // TOUJOURS le pool (il charge la base et n'ajoute OPENROUTER_API_KEY qu'en secours) plutôt que
+      // de sauter OpenRouter dès que l'environnement est nu.
       const r = await runWithOpenRouterPool(async (apiKey) => {
         const model = buildOpenRouterModel(cfg, apiKey);
         const { text } = await generateText({ model, prompt: buildImprovePrompt(input) });
         return text.trim();
       }, isFlaky);
       if (r.ok) return { bodyHtml: r.value, via: "openrouter" };
+      // Même règle que generate-article.ts : `unconfigured` (décidé par le pool, pas déduit de
+      // cfg.openrouter) signifie qu'aucun jeton n'a été essayé faute de configuration — rien à
+      // mémoriser, le message final reste « Aucun fournisseur IA configuré ». `empty_pool` signifie
+      // au contraire que des jetons existent mais sont tous indisponibles : on le mémorise.
+      if (r.reason === "unconfigured") continue;
+      failure = r.reason;
+      failureDetail = r.detail;
       continue;
     }
 
     const model = buildModel(name, cfg);
     if (!model) continue;
+    let lastError: unknown;
+    let sawEmptyOutput = false;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { text } = await generateText({ model, prompt: buildImprovePrompt(input) });
         const body = text.trim();
         if (body.length > 0) return { bodyHtml: body, via: name };
+        sawEmptyOutput = true;
         break; // empty output → next provider
       } catch (e) {
         console.warn(`[improve] fournisseur ${name} a échoué: ${(e as Error).message}`);
+        lastError = e;
         if (attempt === 1) break;
       }
     }
+    // Sortie vide → "flaky" (même sens que la prédicat isFlaky ci-dessus, côté pool) ; les 2
+    // tentatives qui jettent → "error" + message de la dernière exception normalisé par le helper
+    // partagé lib/ai/detail.ts (clés caviardées, troncature à 200 caractères).
+    if (sawEmptyOutput) {
+      failure = "flaky";
+      failureDetail = undefined;
+    } else {
+      failure = "error";
+      failureDetail = truncateDetail(lastError);
+    }
   }
-  return { bodyHtml: input.bodyHtml, via: "mock" };
+  return { bodyHtml: input.bodyHtml, via: "mock", failure: failure ?? "unconfigured", failureDetail };
 }

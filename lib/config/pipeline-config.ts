@@ -1,6 +1,13 @@
 export type ProviderCreds = { apiKey: string; model: string; baseUrl?: string };
 export type PipelineConfig = ReturnType<typeof parsePipelineConfig>;
 
+// Constantes OpenRouter partagées. Exportées (et non plus écrites en dur ici seulement) parce que
+// lib/ai/providers.ts doit pouvoir construire un modèle OpenRouter à partir d'un jeton du pool SEUL,
+// donc sans `cfg.openrouter` (aucune OPENROUTER_API_KEY d'environnement) — il lui faut alors les
+// MÊMES valeurs par défaut que celles appliquées ci-dessous, pas un second exemplaire du littéral.
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini";
+
 function list(v: string | undefined, fallback: string[]): string[] {
   return v ? v.split(",").map((s) => s.trim()).filter(Boolean) : fallback;
 }
@@ -11,7 +18,7 @@ export function parsePipelineConfig(env: Record<string, string | undefined>) {
     llmOrder: list(env.LLM_ORDER, ["openrouter", "omniroute"]),
     extractOrder: list(env.EXTRACT_ORDER, ["jina", "firecrawl", "crawl4ai", "readability"]),
     searchOrder: list(env.SEARCH_ORDER, ["brave", "exa"]),
-    openrouter: env.OPENROUTER_API_KEY ? { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL || "openai/gpt-4o-mini", baseUrl: "https://openrouter.ai/api/v1" } : undefined,
+    openrouter: env.OPENROUTER_API_KEY ? { apiKey: env.OPENROUTER_API_KEY, model: env.OPENROUTER_MODEL || OPENROUTER_DEFAULT_MODEL, baseUrl: OPENROUTER_BASE_URL } : undefined,
     omniroute: env.OMNIROUTE_API_KEY && env.OMNIROUTE_BASE_URL ? { apiKey: env.OMNIROUTE_API_KEY, model: env.OMNIROUTE_MODEL || "auto/chat", baseUrl: env.OMNIROUTE_BASE_URL } : undefined,
     anthropic: env.ANTHROPIC_API_KEY ? { apiKey: env.ANTHROPIC_API_KEY, model: env.ANTHROPIC_MODEL || "claude-3-5-haiku-latest" } : undefined,
     openai: env.OPENAI_API_KEY ? { apiKey: env.OPENAI_API_KEY, model: env.OPENAI_MODEL || "gpt-4o-mini" } : undefined,
