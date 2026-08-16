@@ -5,7 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { KIND_LABEL } from "./beat-list";
-import type { BeatChange, BeatConflict, Diff } from "@/lib/video/import";
+import type { BeatChange, BeatConflict, BeatSnapshot, Diff } from "@/lib/video/import";
 
 // Task 13 — libellés français des champs fusionnés (lib/video/import.ts#MERGE_FIELDS), affichés
 // pour dire QUOI a changé sans obliger l'utilisateur à connaître les noms internes.
@@ -33,6 +33,78 @@ function SpokenTextPreview({ html, lines = 3 }: { html: string; lines?: number }
       className={lines === 3 ? "line-clamp-3 text-sm [&_p]:inline" : "line-clamp-4 text-sm [&_p]:inline"}
       dangerouslySetInnerHTML={{ __html: html }}
     />
+  );
+}
+
+// Rendu lisible d'un insert : un modèle en produit rarement tous les champs, donc seuls ceux
+// réellement posés s'affichent — une ligne de sept « — » n'apprendrait rien à qui doit trancher.
+function insertLine(ins: BeatSnapshot["inserts"][number]): string {
+  const parts: string[] = [ins.type];
+  if (ins.url) parts.push(ins.url);
+  if (ins.tc_in || ins.tc_out) parts.push(`${ins.tc_in ?? "…"} → ${ins.tc_out ?? "…"}`);
+  if (ins.duree_affichage_sec != null) parts.push(`${ins.duree_affichage_sec} s`);
+  if (ins.credit) parts.push(`crédit : ${ins.credit}`);
+  if (ins.droits) parts.push(`droits : ${ins.droits}`);
+  return parts.join(" · ");
+}
+
+/**
+ * Round de correction final (C1, aggravant) : la valeur d'UN champ contesté, sous une forme lisible.
+ * Le côte-à-côte n'affichait que `spokenText` — un conflit sur `inserts`, `sources`, `screenText`,
+ * `kind` ou une transition se présentait donc avec deux panneaux IDENTIQUES sous l'étiquette
+ * « Champs en conflit : Inserts », et l'humain devait trancher sans voir ce qu'il tranchait.
+ */
+function FieldValue({ field, snapshot }: { field: string; snapshot: BeatSnapshot }) {
+  if (field === "spokenText") return <SpokenTextPreview html={snapshot.spokenText} lines={4} />;
+
+  if (field === "kind") {
+    return <p className="text-sm">{KIND_LABEL[snapshot.kind] ?? snapshot.kind}</p>;
+  }
+
+  if (field === "sources") {
+    if (snapshot.sources.length === 0) return <p className="text-sm text-muted-foreground">Aucune source</p>;
+    return (
+      <ul className="space-y-0.5">
+        {snapshot.sources.map((s, i) => (
+          <li key={`${s}-${i}`} className="truncate text-xs" title={s}>{s}</li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (field === "inserts") {
+    if (snapshot.inserts.length === 0) return <p className="text-sm text-muted-foreground">Aucun insert</p>;
+    return (
+      <ul className="space-y-0.5">
+        {snapshot.inserts.map((ins, i) => {
+          const line = insertLine(ins);
+          return <li key={`${ins.type}-${i}`} className="truncate text-xs" title={line}>{line}</li>;
+        })}
+      </ul>
+    );
+  }
+
+  const value = (snapshot as unknown as Record<string, unknown>)[field];
+  if (value == null || value === "") return <p className="text-sm text-muted-foreground">Vide</p>;
+  return <p className="text-sm break-words">{String(value)}</p>;
+}
+
+// « Votre version » contre « Version de Claude », pour UN champ contesté.
+function FieldComparison({ field, conflict }: { field: string; conflict: BeatConflict }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium">{FIELD_LABEL[field] ?? field}</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-md border bg-muted/30 p-2" data-testid={`conflit-${conflict.externalId}-${field}-notre`}>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">Votre version</p>
+          <FieldValue field={field} snapshot={conflict.ours} />
+        </div>
+        <div className="rounded-md border bg-muted/30 p-2" data-testid={`conflit-${conflict.externalId}-${field}-claude`}>
+          <p className="mb-1 text-xs font-medium text-muted-foreground">Version de Claude</p>
+          <FieldValue field={field} snapshot={conflict.theirs} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -90,16 +162,13 @@ function ConflictRow({
             <span className="font-mono text-xs text-muted-foreground">{conflict.externalId}</span>
             <span className="text-xs text-muted-foreground">Champs en conflit : {fieldsText(conflict.fields)}</span>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div className="rounded-md border bg-muted/30 p-2">
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Votre version</p>
-              <SpokenTextPreview html={conflict.ours.spokenText} lines={4} />
-            </div>
-            <div className="rounded-md border bg-muted/30 p-2">
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Version de Claude</p>
-              <SpokenTextPreview html={conflict.theirs.spokenText} lines={4} />
-            </div>
-          </div>
+          {/* Un côte-à-côte par champ CONTESTÉ, et seulement pour eux : `conflict.fields` est aussi
+              la liste exacte de ce qu'accepter le conflit appliquera (lib/video/import.ts#applyMerge,
+              round de correction final C1). Ce que l'humain voit est donc précisément ce qu'il
+              tranche — ni plus, ni moins. */}
+          {conflict.fields.map((f) => (
+            <FieldComparison key={f} field={f} conflict={conflict} />
+          ))}
         </div>
       </div>
     </li>

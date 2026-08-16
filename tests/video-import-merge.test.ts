@@ -114,6 +114,88 @@ describe("applyMerge", () => {
     expect(m.update[0].snapshot.spokenText).toBe("sa version");
   });
 
+  // Round de correction final, C1 — le défaut le plus grave de la branche. `c.fields` ne liste que
+  // les champs CONTESTÉS ; l'ancienne version appliquait `c.theirs`, l'instantané COMPLET de Claude,
+  // ce qui ramenait à leur valeur de base tous les champs que Claude n'avait jamais touchés — y
+  // compris ceux que seul l'humain avait édités. Scénario exact du constat de revue.
+  it("accepter un conflit n'applique QUE les champs contestés, jamais l'instantané complet", () => {
+    const r = row("b-01", 0);
+    // L'humain édite screenText ET sources.
+    r.snapshot = { ...r.snapshot, screenText: "posé à la main", sources: ["https://exemple.com/a-moi"] };
+    // Claude change spokenText ET screenText — seul screenText est contesté.
+    const d = computeMerge([r], [beat("b-01", { texte: "sa version", texte_ecran: "son texte à l'écran" })]);
+    expect(d.conflicts).toHaveLength(1);
+    expect(d.conflicts[0].fields).toEqual(["screenText"]);
+
+    const m = applyMerge(d, { accept: ["b-01"] });
+    // Le champ contesté est tranché en faveur de Claude…
+    expect(m.update[0].snapshot.screenText).toBe("son texte à l'écran");
+    // …et `sources`, que Claude n'a jamais touché, reste l'édition humaine — pas la valeur de base.
+    expect(m.update[0].snapshot.sources).toEqual(["https://exemple.com/a-moi"]);
+  });
+
+  it("un conflit refusé n'écrit rien du tout", () => {
+    const r = row("b-01", 0);
+    r.snapshot = { ...r.snapshot, spokenText: "ma version" };
+    const d = computeMerge([r], [beat("b-01", { texte: "sa version" })]);
+    expect(applyMerge(d, { accept: [] }).update).toEqual([]);
+  });
+});
+
+// Round de correction final, I1 — la forme des inserts doit être identique quelle que soit sa
+// source. `toSnapshot` est le producteur commun ; c'est lui qui pose les sept clés, dans l'ordre du
+// schéma, les absentes valant `null`.
+describe("forme des inserts (I1)", () => {
+  const CLES = ["type", "url", "tc_in", "tc_out", "duree_affichage_sec", "credit", "droits"];
+
+  it("un insert aux clés optionnelles omises porte les sept clés, dans l'ordre du schéma", () => {
+    const partiel = beat("b-01", {
+      inserts: [{ type: "image", url: "https://exemple.com/a.jpg" }] as never,
+    });
+    const snap = toSnapshot(partiel);
+    expect(Object.keys(snap.inserts[0])).toEqual(CLES);
+    expect(snap.inserts[0].credit).toBeNull();
+    expect(snap.inserts[0].tc_in).toBeNull();
+  });
+
+  it("un insert complet et le même insert aux clés nulles omises se sérialisent à l'identique", () => {
+    const omis = toSnapshot(beat("b-01", {
+      inserts: [{ type: "image", url: "https://exemple.com/a.jpg" }] as never,
+    }));
+    const explicites = toSnapshot(beat("b-01", {
+      inserts: [{
+        type: "image", url: "https://exemple.com/a.jpg", tc_in: null, tc_out: null,
+        duree_affichage_sec: null, credit: null, droits: null,
+      }] as never,
+    }));
+    expect(JSON.stringify(omis.inserts)).toBe(JSON.stringify(explicites.inserts));
+  });
+
+  // Le vrai dommage de l'I1 : `differs(ours.inserts, base.inserts)` restant vrai à jamais, tout
+  // changement d'insert venu de Claude arrivait en CONFLIT au lieu d'une modification
+  // auto-fusionnable — et c'est précisément le conflit que l'UI n'affichait pas (C1).
+  it("un changement d'insert venu de Claude est une modification, pas un conflit, même sur un beat dont l'instantané d'origine omettait les clés nulles", () => {
+    // `base` tel que le posait un payload aux clés optionnelles omises…
+    const base = toSnapshot(beat("b-01", {
+      inserts: [{ type: "image", url: "https://exemple.com/a.jpg" }] as never,
+    }));
+    // …et `ours` tel que le reconstruisent les colonnes de beat_inserts (les sept clés, toujours).
+    const ours = toSnapshot(beat("b-01", {
+      inserts: [{
+        type: "image", url: "https://exemple.com/a.jpg", tc_in: null, tc_out: null,
+        duree_affichage_sec: null, credit: null, droits: null,
+      }] as never,
+    }));
+    const r: BeatRow = { externalId: "b-01", position: 0, snapshot: ours, importedSnapshot: base };
+
+    const d = computeMerge([r], [beat("b-01", {
+      inserts: [{ type: "image", url: "https://exemple.com/b.jpg", credit: "AFP" }] as never,
+    })]);
+    expect(d.conflicts).toEqual([]);
+    expect(d.modified.map((m) => m.externalId)).toEqual(["b-01"]);
+    expect(d.modified[0].next.inserts[0].url).toBe("https://exemple.com/b.jpg");
+  });
+
   it("l'ordre final ne contient que les beats qui survivent", () => {
     const d = computeMerge([row("b-01", 0), row("b-02", 1)], [beat("b-02"), beat("b-03")]);
     const m = applyMerge(d, { accept: ["b-03", "b-02"] }); // b-01 supprimé mais NON retenu

@@ -1,4 +1,6 @@
-import { payloadSchema, SCHEMA_VERSION, TC_RE, type BeatPayload, type Payload } from "@/lib/video/schema";
+import {
+  payloadSchema, SCHEMA_VERSION, TC_RE, type BeatPayload, type InsertPayload, type Payload,
+} from "@/lib/video/schema";
 
 // Module PUR, sans accès base : c'est la contrainte de conception principale de ce fichier. Le
 // handler MCP du SP1 bis appelle exactement ces fonctions et renvoie `issues` à l'agent pour qu'il
@@ -136,6 +138,31 @@ export const MERGE_FIELDS = [
   "transitionIn", "transitionOut", "sources", "inserts",
 ] as const;
 
+/**
+ * LE producteur commun de la forme des inserts (round de correction final, I1). Toutes les sources
+ * d'un `BeatSnapshot` passent par ici : le payload (toSnapshot ci-dessous), les colonnes de
+ * `beat_inserts`, et le jsonb `importedSnapshot` relu (lib/video/persist.ts). Sans ça, les trois
+ * formes divergeaient : Zod 4 n'ajoute PAS à sa sortie une clé optionnelle absente de l'entrée, donc
+ * un payload omettant `credit` produisait un insert à 5 clés, là où les colonnes en produisent
+ * toujours 7 (`credit: null`). computeMerge comparant par `JSON.stringify`, `differs(ours.inserts,
+ * base.inserts)` était vrai À JAMAIS : tout beat à insert était réputé édité à la main, donc tout
+ * changement d'insert venu de Claude arrivait en conflit au lieu d'une fusion automatique.
+ *
+ * Mêmes clés, MÊME ORDRE que insertPayloadSchema (lib/video/schema.ts), les absentes valant `null` :
+ * l'accord se fait par construction, plus par discipline de chaque appelant.
+ */
+export function normalizeInserts(raw: readonly Partial<InsertPayload>[] | null | undefined): InsertPayload[] {
+  return (raw ?? []).map((ins) => ({
+    type: ins.type as InsertPayload["type"],
+    url: ins.url ?? null,
+    tc_in: ins.tc_in ?? null,
+    tc_out: ins.tc_out ?? null,
+    duree_affichage_sec: ins.duree_affichage_sec ?? null,
+    credit: ins.credit ?? null,
+    droits: ins.droits ?? null,
+  }));
+}
+
 export function toSnapshot(beat: BeatPayload): BeatSnapshot {
   return {
     kind: beat.type,
@@ -145,7 +172,7 @@ export function toSnapshot(beat: BeatPayload): BeatSnapshot {
     transitionIn: beat.transition_entree ?? null,
     transitionOut: beat.transition_sortie ?? null,
     sources: beat.sources ?? [],
-    inserts: beat.inserts ?? [],
+    inserts: normalizeInserts(beat.inserts),
   };
 }
 
@@ -248,7 +275,20 @@ export function applyMerge(diff: Diff, selection: Selection): Mutations {
 
   const update = [
     ...diff.modified.filter((m) => accepted.has(m.externalId)).map((m) => ({ externalId: m.externalId, snapshot: m.next })),
-    ...diff.conflicts.filter((c) => accepted.has(c.externalId)).map((c) => ({ externalId: c.externalId, snapshot: c.theirs })),
+    // Round de correction final, C1 : accepter un conflit n'applique QUE les champs CONTESTÉS
+    // (`c.fields`) de la version de Claude, jamais son instantané complet (`c.theirs`). `c.fields`
+    // ne liste que les champs touchés des deux côtés ; poser `theirs` en entier ramenait à leur
+    // valeur de base tous les autres champs — y compris ceux que SEUL l'humain avait édités et que
+    // Claude n'a jamais touchés. C'est exactement la perte d'édition humaine que ce module existe
+    // pour empêcher. Même traitement que les modifications à champs disjoints ci-dessus : on part de
+    // NOTRE version et on n'y pose que ce qui est tranché.
+    ...diff.conflicts.filter((c) => accepted.has(c.externalId)).map((c) => {
+      const merged = { ...c.ours } as BeatSnapshot;
+      for (const f of c.fields) {
+        (merged as Record<string, unknown>)[f] = (c.theirs as unknown as Record<string, unknown>)[f];
+      }
+      return { externalId: c.externalId, snapshot: merged };
+    }),
   ];
 
   const remove = diff.removed.filter((r) => accepted.has(r.externalId)).map((r) => r.externalId);
