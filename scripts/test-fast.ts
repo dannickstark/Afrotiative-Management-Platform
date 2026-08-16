@@ -61,7 +61,7 @@ const PURE_FILES = new Set<string>([
   "studio-marque-panel.test.ts", "studio-mode-switch.test.ts", "studio-mode.test.ts", "studio-no-r2.test.ts",
   "studio-preview-cache.test.ts", "studio-proof-sheet.test.ts", "studio-property-panel.test.ts", "studio-public-api.test.ts", "studio-rail.test.ts",
   "studio-relayout.test.ts", "studio-constraints.test.ts",
-  "studio-render-clippath.test.ts", "studio-render-mode.test.ts", "studio-render.test.ts",
+  "studio-render-clippath.test.ts", "studio-render-export.test.ts", "studio-render-mode.test.ts", "studio-render.test.ts",
   "studio-save-indicator.test.ts", "studio-scene.test.ts", "studio-server-import.test.ts",
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
   "studio-snap.test.ts", "studio-texte-panel.test.ts", "studio-token-picker.test.ts",

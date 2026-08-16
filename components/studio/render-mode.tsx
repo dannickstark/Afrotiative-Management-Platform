@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { toast } from "sonner";
 import { RefreshCw, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -117,6 +118,13 @@ export function RenderMode({
         templateId, scene, nativeFormat: format, articleId,
         onProgress: (done, total) => setExporting({ done, total }),
       });
+    } catch (e) {
+      // downloadAllFormats ne rejette que sur une panne du RENDU lui-même (previewTemplate qui
+      // lève, jamais un simple `ok: false` — celui-là est déjà avalé en un format SAUTÉ). Le bouton
+      // est déclenché en fire-and-forget (`void exportAll()`), donc sans ce catch la panne devenait
+      // un rejet de promesse non géré, invisible pour l'utilisateur. Même mécanisme de report que
+      // les échecs de publication (editor-shell.tsx).
+      toast.error(`Téléchargement interrompu : ${e instanceof Error ? e.message : "erreur inconnue"}.`);
     } finally {
       setExporting(null);
     }
