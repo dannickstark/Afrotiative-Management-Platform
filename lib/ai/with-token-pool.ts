@@ -28,12 +28,21 @@ export const ATTEMPTS_PER_TOKEN = 2;
 // tous indisponibles de l'autre. Les autres valeurs sont agrégées sur tous les jetons essayés, par
 // ordre de priorité décroissante — c'est l'ordre de ce que l'utilisateur peut faire : attendre,
 // corriger une clé, regarder les logs, ou juste relancer.
-export type PoolFailureReason = "unconfigured" | "empty_pool" | "rate_limited" | "auth_failed" | "flaky" | "error";
+// `no_object` est à part parmi les échecs : il interrompt la rotation au lieu de la poursuivre (voir
+// la boucle), et se renvoie donc toujours seul, sans passer par l'agrégation de fin.
+export type PoolFailureReason =
+  | "unconfigured"
+  | "empty_pool"
+  | "rate_limited"
+  | "auth_failed"
+  | "flaky"
+  | "no_object"
+  | "error";
 
 // Raisons issues d'un jeton RÉELLEMENT essayé (les deux cas « pool inutilisable » en sont exclus).
 type TriedTokenReason = Exclude<PoolFailureReason, "empty_pool" | "unconfigured">;
 
-const REASON_PRIORITY: TriedTokenReason[] = ["rate_limited", "auth_failed", "error", "flaky"];
+const REASON_PRIORITY: TriedTokenReason[] = ["rate_limited", "auth_failed", "no_object", "error", "flaky"];
 
 export type PoolResult<T> = { ok: true; value: T } | { ok: false; reason: PoolFailureReason; detail?: string };
 
@@ -94,6 +103,24 @@ export async function runWithOpenRouterPool<T>(
         const kind = classifyOpenRouterError(e);
         const detail = truncateDetail(e);
         console.warn(`[openrouter] jeton « ${t.label} » — ${kind} (tentative ${attempt}/${ATTEMPTS_PER_TOKEN})${detail ? ` : ${detail}` : ""}`);
+
+        // Échec côté MODÈLE, pas côté jeton : le fournisseur a répondu (la clé a donc fonctionné),
+        // mais le modèle n'a pas produit de JSON exploitable. La requête est identique d'un jeton à
+        // l'autre, donc changer de clé ne peut que rejouer le même échec — en brûlant tout le parc,
+        // en polluant `lastStatus` de jetons parfaitement sains, et en donnant l'illusion, dans les
+        // logs, d'un problème de rotation. On accorde un second essai sur le MÊME jeton (un modèle
+        // est non déterministe, un 2e tirage peut passer), puis on rend la main IMMÉDIATEMENT :
+        // l'appelant enchaîne sur le fournisseur suivant de llmOrder, là où le problème peut
+        // réellement se résoudre. Aucun cooldown : le jeton n'a rien à se reprocher.
+        if (kind === "no_object") {
+          if (attempt < ATTEMPTS_PER_TOKEN) continue;
+          await deps.mark(t.id, "no_object");
+          console.warn(
+            `[openrouter] réponse non structurée après ${ATTEMPTS_PER_TOKEN} essais sur « ${t.label} » — ` +
+              `échec côté modèle, rotation interrompue (les ${pool.length - pool.indexOf(t) - 1} jeton(s) restant(s) ne sont pas sollicités)`,
+          );
+          return detail !== undefined ? { ok: false, reason: "no_object", detail } : { ok: false, reason: "no_object" };
+        }
 
         if (kind === "rate_limited" || kind === "auth_failed") {
           // Échec de transport définitif sur ce jeton — aucun réessai, inutile.

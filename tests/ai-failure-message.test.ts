@@ -30,6 +30,21 @@ describe("aiFailureMessage", () => {
     expect(aiFailureMessage("flaky", "régénération")).toBe("L'IA a renvoyé un contenu inexploitable sur tous les fournisseurs essayés — réessayez.");
   });
 
+  // Message DISTINCT de "error" : ici les jetons ne sont pas en cause (le fournisseur a répondu),
+  // c'est le modèle qui n'a pas rendu de structure exploitable — l'utilisateur ne doit surtout pas
+  // partir vérifier ses clés dans Réglages.
+  it("no_object sans detail", () => {
+    expect(aiFailureMessage("no_object", "régénération")).toBe(
+      "Le modèle IA n'a pas renvoyé de réponse structurée exploitable — réessayez, ou changez de modèle si cela persiste.",
+    );
+  });
+
+  it("no_object avec detail", () => {
+    expect(aiFailureMessage("no_object", "amélioration", "response did not match schema")).toBe(
+      "Le modèle IA n'a pas renvoyé de réponse structurée exploitable — réessayez, ou changez de modèle si cela persiste. Détail : response did not match schema",
+    );
+  });
+
   it("error sans detail", () => {
     expect(aiFailureMessage("error", "régénération")).toBe("Appel à l'IA en échec sur tous les fournisseurs essayés.");
   });
