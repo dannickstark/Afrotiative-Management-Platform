@@ -64,7 +64,7 @@ export interface PreviewTemplateInput {
    * en base : c'est ce qui permet à l'aperçu de refléter l'édition en cours plutôt que de courir
    * contre l'autosauvegarde (800 ms de différé côté aperçu, 1500 ms côté autosave — sans ce champ,
    * l'aperçu pouvait se déclencher AVANT que l'édition n'atteigne la base et afficher la scène
-   * PRÉ-édition, en retard d'un cran, voir components/studio/preview-pane.tsx). Non typée `Scene` :
+   * PRÉ-édition, en retard d'un cran, voir hooks/use-preview.ts). Non typée `Scene` :
    * c'est une donnée cliente non fiable comme n'importe quelle autre (voir parseScene ci-dessous),
    * revalidée avant tout usage — jamais de confiance aveugle sur une valeur envoyée par le client. */
   scene?: unknown;
@@ -88,7 +88,7 @@ export interface PreviewTemplateInput {
    * propre scène déjà relayoutée — lib/studio/relayout.ts#sceneForFormat) ; ce champ ne
    * sert QU'À mesurer le débordement, indépendamment de ce que `scene` porte déjà. Absent, aucun
    * calcul n'a lieu — `overflowingLayerIds` vaut toujours `[]`, comportement inchangé pour tout
-   * appelant antérieur à cette tâche (ex. PreviewPane, components/studio/preview-pane.tsx). */
+   * appelant antérieur à cette tâche (ex. hooks/use-preview.ts, avant qu'il ne transmette ce champ). */
   format?: FormatKey;
 }
 

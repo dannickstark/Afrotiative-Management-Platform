@@ -291,8 +291,9 @@ describe("previewTemplateCore — garantie structurelle : store.ts (R2/saveRende
   });
 
   // Refonte « Rendu réel » : le cœur réseau de l'aperçu vit désormais dans hooks/use-preview.ts, que
-  // preview-pane.tsx ET la planche consomment tous les deux. La garantie « l'aperçu n'écrit rien »
-  // doit donc partir AUSSI de ce fichier, sinon l'extraction l'aurait silencieusement contournée.
+  // la planche (render/proof-sheet.tsx) ET l'inspection d'un format (render/format-focus.tsx)
+  // consomment tous les deux. La garantie « l'aperçu n'écrit rien » doit donc partir AUSSI de ce
+  // fichier, sinon l'extraction l'aurait silencieusement contournée.
   //
   // Subtilité : on ne peut PAS simplement fermer transitivement depuis use-preview.ts. Il importe
   // une Server Action ("use server"), dont le graphe atteint légitimement @/db — c'est le rôle

@@ -1012,7 +1012,7 @@ describe("PropertyPanel — le sélecteur de forme", () => {
   it("le sélecteur affiche la forme courante sous son libellé FRANÇAIS, jamais sa clé technique", () => {
     // Mutation qui rougit : retirer le mappeur `<SelectValue>{(v) => …}</SelectValue>` de SelectField —
     // Base UI afficherait alors la valeur brute (« star »), le piège déjà corrigé une fois dans ce
-    // panneau et une fois dans preview-pane.tsx.
+    // panneau et une fois dans render-mode.tsx (sélecteur d'article).
     //
     // CE TEST ÉTAIT VACANT POUR SIX DES HUIT FORMES (revue de la Tâche 3, Medium 3). Sa seule preuve
     // du libellé était `html.includes(shapeLabel(kind))`, sur TOUT le panneau — or les notes
