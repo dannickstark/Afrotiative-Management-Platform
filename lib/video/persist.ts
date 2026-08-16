@@ -1,7 +1,7 @@
 import {
   db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, scriptJournalSource,
 } from "@/db";
-import { and, asc, eq, gt, inArray } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, ne } from "drizzle-orm";
 import {
   applyMerge, computeMerge, parseIncoming, stripEnvelope, type BeatRow, type BeatSnapshot,
   type Diff, type Issue, type Mutations,
@@ -9,14 +9,35 @@ import {
 import { beatSeconds } from "@/lib/video/duration";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { getVideoSettings } from "@/lib/queries/video-settings";
-import type { InsertPayload } from "@/lib/video/schema";
+import type { InsertPayload, VariantPayload } from "@/lib/video/schema";
 
 // Cœur DB brut du module vidéo — délibérément SANS "use server" (voir lib/actions/video-actions.ts
 // pour le motif). C'est aussi la SEULE exception à « lib/video/* n'importe jamais @/db » : le
 // mapping payload français → colonnes anglaises vit ici, et nulle part ailleurs.
 
 type JournalSource = (typeof scriptJournalSource.enumValues)[number];
-type JournalOutcome = "rejete" | "applique" | "annule";
+// "en_attente" (round de correction 1) : un diff préparé mais pas encore appliqué. Distinct
+// d'"annule", qui signifie « revenu en arrière », pas « jamais appliqué ».
+type JournalOutcome = "rejete" | "en_attente" | "applique" | "annule";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DbLike = typeof db | Tx;
+
+// L'état d'un beat capturé AVANT une mutation — c'est l'unique matière première d'une annulation
+// fidèle. `applied` (colonne jsonb, aucune migration requise) porte ces instantanés en plus des
+// `Mutations` déjà journalisées (round de correction 1, ruling 2) : sans eux, "annuler" une
+// modification ou une suppression n'est pas dérivable de `Mutations`, qui ne décrit que l'état
+// D'ARRIVÉE.
+type BeforeBeat = {
+  externalId: string;
+  snapshot: BeatSnapshot;
+  importedSnapshot: BeatSnapshot | null;
+  position: number;
+  locallyEditedAt: string | null; // ISO — jsonb ne sérialise pas les Date nativement
+  durationOverrideSec: number | null;
+  estimatedDurationSec: number;
+};
+type AppliedRecord = Mutations & { before: BeforeBeat[] };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Création de projet
@@ -152,14 +173,18 @@ function rawPayloadForJournal(raw: string): unknown {
   }
 }
 
-async function loadBeatRows(variantId: string): Promise<BeatRow[]> {
-  const beats = await db.select().from(scriptBeats)
+// Charge l'état complet (colonnes brutes incluses : id, durationOverrideSec, estimatedDurationSec,
+// locallyEditedAt) — dbLike accepte aussi bien `db` que `tx` : capturer l'état "avant" dans
+// applyImportCore doit se faire DANS la transaction, sur la même connexion que les écritures qui
+// suivent.
+async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
+  const beats = await dbLike.select().from(scriptBeats)
     .where(eq(scriptBeats.variantId, variantId))
     .orderBy(asc(scriptBeats.position));
   if (beats.length === 0) return [];
 
   const beatIds = beats.map((b) => b.id);
-  const inserts = await db.select().from(beatInserts)
+  const inserts = await dbLike.select().from(beatInserts)
     .where(inArray(beatInserts.beatId, beatIds))
     .orderBy(asc(beatInserts.position));
 
@@ -182,8 +207,12 @@ async function loadBeatRows(variantId: string): Promise<BeatRow[]> {
   }
 
   return beats.map((b) => ({
+    id: b.id,
     externalId: b.externalId,
     position: b.position,
+    locallyEditedAt: b.locallyEditedAt,
+    durationOverrideSec: b.durationOverrideSec,
+    estimatedDurationSec: b.estimatedDurationSec,
     snapshot: {
       kind: b.kind,
       spokenText: b.spokenText,
@@ -193,8 +222,15 @@ async function loadBeatRows(variantId: string): Promise<BeatRow[]> {
       transitionOut: b.transitionOut,
       sources: b.sources,
       inserts: insertsByBeat.get(b.id) ?? [],
-    },
+    } as BeatSnapshot,
     importedSnapshot: (b.importedSnapshot as unknown as BeatSnapshot | null) ?? null,
+  }));
+}
+
+async function loadBeatRows(variantId: string): Promise<BeatRow[]> {
+  const full = await loadFullBeatRows(db, variantId);
+  return full.map((r) => ({
+    externalId: r.externalId, position: r.position, snapshot: r.snapshot, importedSnapshot: r.importedSnapshot,
   }));
 }
 
@@ -229,35 +265,49 @@ export async function prepareImportCore(args: {
 
   // Variante absente (spec §8) : une plateforme du payload qui n'a pas encore de variante dans le
   // projet en obtient une, à condition que plateforme/durée cible/ratio soient tous les trois
-  // présents — sinon on réclame les trois champs plutôt que de deviner.
-  let variants = existingVariants;
-  const issues: Issue[] = [];
+  // présents — sinon on réclame les trois champs plutôt que de deviner. « Aucun import partiel »
+  // (round de correction 1, ruling 3) : on calcule la TOTALITÉ des issues d'abord, sans rien
+  // écrire — une variante ne doit jamais être créée si une AUTRE variante du même payload,
+  // rencontrée plus tard dans le tableau, s'avère invalide.
+  const missingVariantIssues: Issue[] = [];
+  const variantsToCreate: {
+    plateforme: VariantPayload["plateforme"]; dureeCibleSec: number; ratio: string;
+  }[] = [];
+  const knownPlatforms = new Set(existingVariants.map((v) => v.platform));
   for (const [vi, variante] of parsed.payload.variantes.entries()) {
-    if (variants.some((v) => v.platform === variante.plateforme)) continue;
+    if (knownPlatforms.has(variante.plateforme)) continue;
     if (variante.duree_cible_sec != null && variante.ratio != null) {
-      const nextPosition = variants.reduce((max, v) => Math.max(max, v.position), -1) + 1;
-      const [created] = await db.insert(scriptVariants).values({
-        projectId: args.projectId,
-        platform: variante.plateforme,
-        targetDurationSec: variante.duree_cible_sec,
-        aspectRatio: variante.ratio,
-        position: nextPosition,
-      }).returning();
-      variants = [...variants, created];
+      variantsToCreate.push({
+        plateforme: variante.plateforme, dureeCibleSec: variante.duree_cible_sec, ratio: variante.ratio,
+      });
+      knownPlatforms.add(variante.plateforme); // le payload répète parfois la même plateforme absente
     } else {
-      issues.push({
+      missingVariantIssues.push({
         path: `variantes[${vi}]`,
         message: "plateforme, duree_cible_sec et ratio sont requis pour créer une nouvelle variante.",
       });
     }
   }
-  if (issues.length > 0) {
+  if (missingVariantIssues.length > 0) {
     await writeJournal({
       projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
-      errorReport: issues, diff: {}, outcome: "rejete",
+      errorReport: missingVariantIssues, diff: {}, outcome: "rejete",
     });
-    return { ok: false, issues };
+    return { ok: false, issues: missingVariantIssues };
+  }
+
+  let variants = existingVariants;
+  for (const v of variantsToCreate) {
+    const nextPosition = variants.reduce((max, existing) => Math.max(max, existing.position), -1) + 1;
+    const [created] = await db.insert(scriptVariants).values({
+      projectId: args.projectId,
+      platform: v.plateforme,
+      targetDurationSec: v.dureeCibleSec,
+      aspectRatio: v.ratio,
+      position: nextPosition,
+    }).returning();
+    variants = [...variants, created];
   }
 
   const refreshedTarget = variants.find((v) => v.id === args.variantId) ?? targetVariant;
@@ -278,15 +328,14 @@ export async function prepareImportCore(args: {
   const currentBeats = await loadBeatRows(refreshedTarget.id);
   const diff = computeMerge(currentBeats, matchingVariante.beats);
 
-  // Journalisée mais PAS encore appliquée : outcome "annule" fait office d'état « en attente de
-  // décision » — le seul état neutre disponible dans script_journal_outcome (rejete/applique/
-  // annule), qui n'a jamais prévu d'état intermédiaire. Si l'utilisateur n'applique jamais ce
-  // diff, l'entrée reste "annule" et décrit correctement un import qui n'a rien changé.
-  // applyImportCore la fait passer à "applique" au moment décisif.
+  // Journalisée mais PAS encore appliquée : outcome "en_attente" (round de correction 1). Distinct
+  // d'"annule" (qui signifie « revenu en arrière ») — une requête sur les imports annulés ne doit
+  // pas remonter les diffs simplement en attente de décision. applyImportCore la fait passer à
+  // "applique" au moment décisif, et refuse d'agir si l'entrée n'est plus "en_attente".
   const journalId = await writeJournal({
     projectId: args.projectId, variantId: refreshedTarget.id, source: args.source, userId: args.userId,
     schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
-    errorReport: [], diff: diff as unknown as Record<string, unknown>, outcome: "annule",
+    errorReport: [], diff: diff as unknown as Record<string, unknown>, outcome: "en_attente",
   });
 
   return { ok: true, journalId, diff };
@@ -364,11 +413,40 @@ export async function applyImportCore(args: {
 
   const [entry] = await db.select().from(scriptJournal).where(eq(scriptJournal.id, args.journalId));
   if (!entry) return { ok: false as const, message: "Entrée de journal introuvable." };
+  // Refuse une entrée déjà appliquée ou déjà annulée : appliquer deux fois la même entrée, ou
+  // appliquer une entrée annulée, écrirait une seconde fois des mutations déjà (dés)actées.
+  if (entry.outcome !== "en_attente") {
+    return {
+      ok: false as const,
+      message: "Cette entrée n'est plus en attente d'application (déjà appliquée ou annulée).",
+    };
+  }
 
   const { wordsPerMinute } = await getVideoSettings();
   const mutations = applyMerge(entry.diff as unknown as Diff, { accept: args.accept });
 
   await db.transaction(async (tx) => {
+    // Capture l'état ANTÉRIEUR de tous les beats que la mutation va toucher — updates, removes, et
+    // ceux dont seule la position change — AVANT toute écriture. C'est la seule matière première
+    // d'une annulation fidèle (round de correction 1, ruling 2) : `Mutations` seule ne décrit que
+    // l'état d'arrivée.
+    const currentRows = await loadFullBeatRows(tx, args.variantId);
+    const updateIds = new Set(mutations.update.map((u) => u.externalId));
+    const removeIds = new Set(mutations.remove);
+    const orderIndex = new Map(mutations.order.map((id, i) => [id, i]));
+    const before: BeforeBeat[] = currentRows
+      .filter((row) => updateIds.has(row.externalId) || removeIds.has(row.externalId)
+        || orderIndex.get(row.externalId) !== undefined && orderIndex.get(row.externalId) !== row.position)
+      .map((row) => ({
+        externalId: row.externalId,
+        snapshot: row.snapshot,
+        importedSnapshot: row.importedSnapshot,
+        position: row.position,
+        locallyEditedAt: row.locallyEditedAt ? row.locallyEditedAt.toISOString() : null,
+        durationOverrideSec: row.durationOverrideSec,
+        estimatedDurationSec: row.estimatedDurationSec,
+      }));
+
     for (const row of mutations.create) {
       const snapshot = sanitizeSnapshot(row.snapshot);
       await tx.insert(scriptBeats).values({
@@ -413,8 +491,9 @@ export async function applyImportCore(args: {
     }
 
     await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, args.variantId));
+    const appliedRecord: AppliedRecord = { ...mutations, before };
     await tx.update(scriptJournal)
-      .set({ outcome: "applique", applied: mutations as unknown as Record<string, unknown> })
+      .set({ outcome: "applique", applied: appliedRecord as unknown as Record<string, unknown> })
       .where(eq(scriptJournal.id, args.journalId));
   });
 
@@ -425,12 +504,11 @@ export async function applyImportCore(args: {
 // Annulation d'une entrée de journal
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Limite assumée : `applied` (Mutations) ne conserve que l'état POSÉ par l'import, jamais l'état
-// d'AVANT (script_journal ne stocke pas de « before » pour update/remove — décision déjà prise au
-// schéma, migration déjà appliquée, non révisable ici). Une création est donc réversible à coup
-// sûr (on supprime ce qui a été posé) ; une modification ou une suppression ne le sont pas sans
-// fabriquer une donnée qu'on n'a jamais eue. Plutôt que de deviner, on refuse ces cas — jamais de
-// corruption silencieuse.
+// Restaure depuis `applied` (round de correction 1, ruling 2) : `applied.before` (capturé dans
+// applyImportCore, DANS la même transaction que les écritures, avant qu'elles n'aient lieu) porte
+// l'état antérieur de chaque beat modifié/supprimé/déplacé par cette entrée — c'est ce qui rend
+// l'annulation d'une modification ou d'une suppression réellement fidèle, pas seulement celle
+// d'une création.
 export async function revertJournalEntryCore(
   journalId: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -440,27 +518,29 @@ export async function revertJournalEntryCore(
   if (entry.revertedAt) return { ok: false, message: "Cette entrée a déjà été annulée." };
   if (!entry.variantId) return { ok: false, message: "Variante introuvable pour cette entrée." };
 
-  const applied = entry.applied as unknown as Mutations;
-  if (applied.update.length > 0 || applied.remove.length > 0) {
-    return {
-      ok: false,
-      message: "Cet import a modifié ou supprimé des beats existants — l'annulation automatique "
-        + "n'est pas prise en charge pour ce type d'import.",
-    };
-  }
-
-  const touchedIds = new Set(applied.create.map((r) => r.externalId));
+  const applied = entry.applied as unknown as AppliedRecord;
+  const touchedIds = new Set([
+    ...applied.create.map((r) => r.externalId),
+    ...applied.update.map((u) => u.externalId),
+    ...applied.remove,
+  ]);
 
   // Refuse si un import postérieur non annulé a retouché l'un des mêmes externalId : l'annuler
   // effacerait un changement qu'on n'a jamais montré à l'utilisateur comme « à annuler ».
+  // `ne(id, journalId)` en plus de `gt(createdAt, ...)`, et pas seulement ce dernier : `createdAt`
+  // (JS Date, précision milliseconde) perd la précision microseconde de la colonne timestamp au
+  // retour de lecture, si bien qu'un aller-retour de CETTE entrée à travers `gt` peut se
+  // retrouver strictement supérieur à sa propre valeur arrondie — elle se bloquerait elle-même
+  // sans cette exclusion explicite.
   const laterEntries = await db.select().from(scriptJournal).where(and(
     eq(scriptJournal.variantId, entry.variantId),
     eq(scriptJournal.outcome, "applique"),
+    ne(scriptJournal.id, entry.id),
     gt(scriptJournal.createdAt, entry.createdAt),
   ));
   for (const later of laterEntries) {
     if (later.revertedAt) continue; // déjà annulée elle-même : ne bloque pas
-    const laterApplied = later.applied as unknown as Mutations;
+    const laterApplied = later.applied as unknown as AppliedRecord;
     const laterIds = [
       ...laterApplied.create.map((r) => r.externalId),
       ...laterApplied.update.map((u) => u.externalId),
@@ -471,12 +551,59 @@ export async function revertJournalEntryCore(
     }
   }
 
+  const beforeByExternalId = new Map(applied.before.map((b) => [b.externalId, b]));
+
   await db.transaction(async (tx) => {
+    const variantId = entry.variantId as string;
+
+    // 1. Retire ce que cette entrée a créé.
     for (const row of applied.create) {
       await tx.delete(scriptBeats).where(and(
-        eq(scriptBeats.variantId, entry.variantId as string), eq(scriptBeats.externalId, row.externalId),
+        eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, row.externalId),
       ));
     }
+
+    // 2. Recrée, à l'identique, les beats que cette entrée avait supprimés.
+    for (const externalId of applied.remove) {
+      const b = beforeByExternalId.get(externalId);
+      if (!b) continue; // ne devrait pas arriver : applyImportCore capture systématiquement `before` pour `remove`
+      await tx.insert(scriptBeats).values({
+        variantId, externalId,
+        position: b.position,
+        kind: b.snapshot.kind, spokenText: b.snapshot.spokenText,
+        directionNote: b.snapshot.directionNote, screenText: b.snapshot.screenText,
+        transitionIn: b.snapshot.transitionIn, transitionOut: b.snapshot.transitionOut,
+        sources: b.snapshot.sources,
+        durationOverrideSec: b.durationOverrideSec, estimatedDurationSec: b.estimatedDurationSec,
+        importedSnapshot: b.importedSnapshot, locallyEditedAt: b.locallyEditedAt ? new Date(b.locallyEditedAt) : null,
+      });
+      await replaceBeatInserts(tx, externalId, variantId, b.snapshot.inserts);
+    }
+
+    // 3. Restaure le contenu des beats que cette entrée avait modifiés.
+    for (const patch of applied.update) {
+      const b = beforeByExternalId.get(patch.externalId);
+      if (!b) continue; // idem : capturé systématiquement pour `update`
+      await tx.update(scriptBeats).set({
+        kind: b.snapshot.kind, spokenText: b.snapshot.spokenText,
+        directionNote: b.snapshot.directionNote, screenText: b.snapshot.screenText,
+        transitionIn: b.snapshot.transitionIn, transitionOut: b.snapshot.transitionOut,
+        sources: b.snapshot.sources,
+        durationOverrideSec: b.durationOverrideSec, estimatedDurationSec: b.estimatedDurationSec,
+        importedSnapshot: b.importedSnapshot, locallyEditedAt: b.locallyEditedAt ? new Date(b.locallyEditedAt) : null,
+        updatedAt: new Date(),
+      }).where(and(eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, patch.externalId)));
+      await replaceBeatInserts(tx, patch.externalId, variantId, b.snapshot.inserts);
+    }
+
+    // 4. Restaure les positions de TOUS les beats capturés dans `before` — y compris ceux dont
+    // seule la position avait bougé lors de l'application, sans modification de contenu.
+    for (const b of applied.before) {
+      await tx.update(scriptBeats).set({ position: b.position }).where(and(
+        eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, b.externalId),
+      ));
+    }
+
     await tx.update(scriptJournal).set({ outcome: "annule", revertedAt: new Date() }).where(eq(scriptJournal.id, journalId));
   });
 
