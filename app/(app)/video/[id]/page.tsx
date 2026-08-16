@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, eq } from "drizzle-orm";
 import { db, articles, distributions } from "@/db";
@@ -11,13 +12,23 @@ import { wpPostUrl } from "@/lib/wp/post-url";
 import { PageHeader } from "@/components/shell/page-header";
 import { PLATFORM_LABEL } from "@/components/video/project-list";
 import { BriefPanel } from "@/components/video/brief-panel";
+import { BeatList, type BeatView } from "@/components/video/beat-list";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-// Task 11 — page projet, premier onglet (Brief). Les Tasks 12/13 ajoutent les onglets Script et
-// Importer dans ces mêmes <Tabs> ; ce fichier ne fait rien pour anticiper leur contenu, il se
-// contente de laisser la place.
-export default async function VideoProjectPage({ params }: { params: Promise<{ id: string }> }) {
+// Task 11 (Brief) + Task 12 (Écriture) — les deux premiers onglets de la page projet. La Task 13
+// ajoute Importer dans ces mêmes <Tabs>.
+export default async function VideoProjectPage({
+  params, searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  // `tab`/`variant` en recherche plutôt qu'en état client : la page reste un Server Component pur
+  // (comme Task 11 le voulait déjà) et le sélecteur de variante devient de simples liens plutôt
+  // qu'un composant client dédié à cette seule fin.
+  searchParams: Promise<{ tab?: string; variant?: string }>;
+}) {
   const { id } = await params;
+  const sp = await searchParams;
   const user = await requireUser();
   requirePermission(user.role, "video", "read");
 
@@ -30,6 +41,38 @@ export default async function VideoProjectPage({ params }: { params: Promise<{ i
   // cible et le cadrage montrés au modèle — un projet naît avec une seule variante (Task 9), les
   // suivantes (dérivées, SP6) ne changent rien à cette lecture.
   const variant = project.variants[0] ?? null;
+
+  // Onglet Écriture : la variante choisie par le sélecteur (`?variant=`), sinon la première.
+  // `project.variants` ne compte aujourd'hui qu'un seul élément par projet (les variantes dérivées
+  // arrivent au SP6) — le sélecteur n'a donc pas encore d'effet visible, mais la lecture est déjà
+  // prête pour ce jour-là plutôt que de figer un seul `project.variants[0]`.
+  const activeVariant = project.variants.find((v) => v.id === sp.variant) ?? project.variants[0] ?? null;
+  const beats: BeatView[] = (activeVariant?.beats ?? []).map((b) => ({
+    id: b.id,
+    externalId: b.externalId,
+    position: b.position,
+    kind: b.kind,
+    spokenText: b.spokenText,
+    directionNote: b.directionNote,
+    screenText: b.screenText,
+    transitionIn: b.transitionIn,
+    transitionOut: b.transitionOut,
+    estimatedDurationSec: b.estimatedDurationSec,
+    durationOverrideSec: b.durationOverrideSec,
+    // `locallyEditedAt` non nul = modifié à la main depuis le dernier import (brief Task 12).
+    locallyEdited: b.locallyEditedAt !== null,
+    inserts: b.inserts.map((ins) => ({
+      id: ins.id,
+      kind: ins.kind,
+      url: ins.url,
+      tcIn: ins.tcIn,
+      tcOut: ins.tcOut,
+      displayDurationSec: ins.displayDurationSec,
+      credit: ins.credit,
+      linkStatus: ins.linkStatus,
+    })),
+    sources: b.sources,
+  }));
 
   // Champs article : vides quand aucun article n'est lié (Task 11 brief) — même motif d'absence
   // « gracieuse » que lib/studio/bindings.ts#articleTokenValues pour {{article.url}} : l'URL
@@ -66,12 +109,33 @@ export default async function VideoProjectPage({ params }: { params: Promise<{ i
   return (
     <div className="space-y-6">
       <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue="brief">
+      <Tabs defaultValue={sp.tab === "ecriture" ? "ecriture" : "brief"}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
+          <TabsTrigger value="ecriture">Écriture</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
           <BriefPanel brief={brief.text} unknownVars={brief.unknown} />
+        </TabsContent>
+        <TabsContent value="ecriture">
+          <div className="space-y-4">
+            {project.variants.length > 1 && (
+              <div className="flex flex-wrap gap-2">
+                {project.variants.map((v) => (
+                  <Link key={v.id} href={`/video/${id}?tab=ecriture&variant=${v.id}`}>
+                    <Badge variant={v.id === activeVariant?.id ? "default" : "outline"}>
+                      {PLATFORM_LABEL[v.platform] ?? v.platform}
+                    </Badge>
+                  </Link>
+                ))}
+              </div>
+            )}
+            {activeVariant ? (
+              <BeatList beats={beats} targetDurationSec={activeVariant.targetDurationSec} variantId={activeVariant.id} />
+            ) : (
+              <p className="text-sm text-muted-foreground">Aucune variante pour ce projet.</p>
+            )}
+          </div>
         </TabsContent>
       </Tabs>
     </div>
