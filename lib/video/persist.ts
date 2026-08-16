@@ -96,6 +96,16 @@ export async function updateBeatCore(input: {
   durationOverrideSec?: number | null;
   sources?: string[];
 }): Promise<void> {
+  // (round de correction 3, N2) : `getVideoSettings()` passe par le `db` global, donc une
+  // CONNEXION SÉPARÉE de celle de la transaction ci-dessous (laquelle emprunte SA propre connexion
+  // au pool dès `db.transaction(...)`). Appelée depuis L'INTÉRIEUR de la transaction, elle
+  // emprunterait une seconde connexion — et peut même y committer un `INSERT` (la ligne de réglages
+  // par défaut, si elle n'existe pas encore) hors de la transaction du beat. Un lot d'`updateBeat`
+  // concurrents épuiserait alors le pool (chacun retient une connexion en attendant la seconde) et
+  // bloquerait jusqu'au timeout. Hissée ici, avant `db.transaction`, comme applyImportCore le fait
+  // déjà correctement.
+  const { wordsPerMinute } = await getVideoSettings();
+
   await db.transaction(async (tx) => {
     const [current] = await tx.select().from(scriptBeats).where(eq(scriptBeats.id, input.beatId));
     if (!current) throw new RefusalError("Beat introuvable.");
@@ -107,7 +117,6 @@ export async function updateBeatCore(input: {
       ? input.durationOverrideSec
       : current.durationOverrideSec;
 
-    const { wordsPerMinute } = await getVideoSettings();
     const estimatedDurationSec = beatSeconds({ spokenText, durationOverrideSec }, wordsPerMinute);
 
     await tx.update(scriptBeats).set({
@@ -473,6 +482,20 @@ export async function applyImportCore(args: {
 
   try {
     const applied = await db.transaction(async (tx) => {
+      // Ordre de verrouillage (round de correction 3, N1) : `script_variants` D'ABORD, puis
+      // `script_journal` — dans CET ORDRE PARTOUT (revertJournalEntryCore verrouille désormais
+      // dans le même ordre). L'ancienne version verrouillait le journal en tête ici, mais
+      // revertJournalEntryCore écrivait la variante avant le journal : deux transactions
+      // concurrentes (un applyImport et un revertJournalEntry sur la même variante) pouvaient donc
+      // s'attendre mutuellement en sens inverse — un ABBA classique que Postgres résout par un
+      // `deadlock detected` (une exception non gérée, pas un refus métier). Verrouiller la variante
+      // ici ferme aussi le dernier check-then-act sur la péremption : un `updateBeatCore` concurrent
+      // qui tente de bumper CETTE MÊME ligne `scriptVariants.updatedAt` bloque désormais jusqu'à la
+      // fin de cette transaction, il ne peut plus committer entre notre vérification et nos
+      // écritures.
+      const [variant] = await tx.select().from(scriptVariants).where(eq(scriptVariants.id, args.variantId)).for("update");
+      if (!variant) throw new RefusalError("Variante introuvable.");
+
       // `for("update")` (round de correction 2, I4) : verrouille la ligne de journal pour la durée
       // de la transaction. Deux applyImportCore concurrents sur le MÊME journalId sérialisent ici —
       // le second ne lit l'entrée qu'après le commit (ou rollback) du premier, et voit alors son
@@ -488,9 +511,6 @@ export async function applyImportCore(args: {
       if (entry.outcome !== "en_attente") {
         throw new RefusalError("Cette entrée n'est plus en attente d'application (déjà appliquée ou annulée).");
       }
-
-      const [variant] = await tx.select().from(scriptVariants).where(eq(scriptVariants.id, args.variantId));
-      if (!variant) throw new RefusalError("Variante introuvable.");
       // Cohérence projet ⇄ variante ⇄ entrée : la variante ciblée doit appartenir au même projet
       // que celui journalisé par prepareImportCore.
       if (entry.projectId !== variant.projectId) {
@@ -601,137 +621,156 @@ export async function applyImportCore(args: {
 // l'état antérieur de chaque beat modifié/supprimé/déplacé par cette entrée — c'est ce qui rend
 // l'annulation d'une modification ou d'une suppression réellement fidèle, pas seulement celle
 // d'une création.
+//
+// Round de correction 3 (N1) : toute la fonction tourne désormais dans UNE seule transaction, avec
+// le MÊME ordre de verrouillage qu'applyImportCore — `script_variants` d'abord, `script_journal`
+// ensuite. Avant ce correctif, les lectures/contrôles se faisaient hors transaction puis la
+// transaction finale écrivait `script_variants` avant `script_journal`, pendant qu'applyImportCore
+// verrouillait `script_journal` en tête puis écrivait `script_variants` : un `applyImport` et un
+// `revertJournalEntry` concurrents sur la même variante pouvaient s'attendre mutuellement en sens
+// inverse (ABBA), et Postgres résolvait ça par un `deadlock detected` — une exception non gérée,
+// pas un refus métier.
 export async function revertJournalEntryCore(
   journalId: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  const [entry] = await db.select().from(scriptJournal).where(eq(scriptJournal.id, journalId));
-  if (!entry) return { ok: false, message: "Entrée de journal introuvable." };
-  if (entry.outcome !== "applique") return { ok: false, message: "Cette entrée n'a rien appliqué à annuler." };
-  if (entry.revertedAt) return { ok: false, message: "Cette entrée a déjà été annulée." };
-  if (!entry.variantId) return { ok: false, message: "Variante introuvable pour cette entrée." };
+  try {
+    await db.transaction(async (tx) => {
+      // Lecture préalable SANS verrou, uniquement pour savoir QUELLE variante verrouiller en
+      // premier — `entry.variantId` n'est connu qu'après une première lecture du journal. Le
+      // verrou proprement dit n'est posé qu'ensuite, dans l'ordre variante puis journal.
+      const [preliminary] = await tx.select({ variantId: scriptJournal.variantId }).from(scriptJournal)
+        .where(eq(scriptJournal.id, journalId));
+      if (!preliminary) throw new RefusalError("Entrée de journal introuvable.");
+      if (!preliminary.variantId) throw new RefusalError("Variante introuvable pour cette entrée.");
 
-  const applied = entry.applied as unknown as AppliedRecord;
-  // (round de correction 2, I10) : les entrées "applique" écrites avant l'introduction de
-  // `applied.before` n'en portent pas — refus explicite plutôt qu'un TypeError sur `undefined`.
-  if (!applied.before) {
-    return {
-      ok: false,
-      message: "Cette entrée est antérieure à l'enregistrement de l'état d'avant, elle n'est pas annulable.",
-    };
-  }
-  const before = applied.before;
+      const [variant] = await tx.select().from(scriptVariants).where(eq(scriptVariants.id, preliminary.variantId)).for("update");
+      if (!variant) throw new RefusalError("Variante introuvable pour cette entrée.");
 
-  const touchedIds = new Set([
-    ...applied.create.map((r) => r.externalId),
-    ...applied.update.map((u) => u.externalId),
-    ...applied.remove,
-  ]);
+      const [entry] = await tx.select().from(scriptJournal).where(eq(scriptJournal.id, journalId)).for("update");
+      if (!entry) throw new RefusalError("Entrée de journal introuvable.");
+      if (entry.outcome !== "applique") throw new RefusalError("Cette entrée n'a rien appliqué à annuler.");
+      if (entry.revertedAt) throw new RefusalError("Cette entrée a déjà été annulée.");
+      if (!entry.variantId) throw new RefusalError("Variante introuvable pour cette entrée.");
 
-  // Refuse si un import postérieur non annulé a retouché l'un des mêmes externalId : l'annuler
-  // effacerait un changement qu'on n'a jamais montré à l'utilisateur comme « à annuler ».
-  // `ne(id, journalId)` en plus de `gt(createdAt, ...)`, et pas seulement ce dernier : `createdAt`
-  // (JS Date, précision milliseconde) perd la précision microseconde de la colonne timestamp au
-  // retour de lecture, si bien qu'un aller-retour de CETTE entrée à travers `gt` peut se
-  // retrouver strictement supérieur à sa propre valeur arrondie — elle se bloquerait elle-même
-  // sans cette exclusion explicite.
-  const laterEntries = await db.select().from(scriptJournal).where(and(
-    eq(scriptJournal.variantId, entry.variantId),
-    eq(scriptJournal.outcome, "applique"),
-    ne(scriptJournal.id, entry.id),
-    gt(scriptJournal.createdAt, entry.createdAt),
-  ));
-  for (const later of laterEntries) {
-    if (later.revertedAt) continue; // déjà annulée elle-même : ne bloque pas
-    const laterApplied = later.applied as unknown as AppliedRecord;
-    const laterIds = [
-      ...laterApplied.create.map((r) => r.externalId),
-      ...laterApplied.update.map((u) => u.externalId),
-      ...laterApplied.remove,
-    ];
-    if (laterIds.some((id) => touchedIds.has(id))) {
-      return { ok: false, message: "Un import plus récent a modifié un des mêmes beats — annulation impossible." };
-    }
-  }
+      const applied = entry.applied as unknown as AppliedRecord;
+      // (round de correction 2, I10) : les entrées "applique" écrites avant l'introduction de
+      // `applied.before` n'en portent pas — refus explicite plutôt qu'un TypeError sur `undefined`.
+      if (!applied.before) {
+        throw new RefusalError("Cette entrée est antérieure à l'enregistrement de l'état d'avant, elle n'est pas annulable.");
+      }
+      const before = applied.before;
 
-  // (round de correction 2, I6) : même classe de perte de travail que C1, côté annulation cette
-  // fois. Un `updateBeat` humain posté APRÈS cet import (donc après `entry.createdAt`) sur l'un des
-  // beats que cette entrée a créés/modifiés serait écrasé en silence par la restauration de
-  // `applied.before`. Seuls create/update ont une ligne vivante à vérifier — un beat supprimé par
-  // cette entrée n'a plus de ligne en base.
-  const liveTouchedIds = [...applied.create.map((r) => r.externalId), ...applied.update.map((u) => u.externalId)];
-  if (liveTouchedIds.length > 0) {
-    const liveBeats = await db.select().from(scriptBeats).where(and(
-      eq(scriptBeats.variantId, entry.variantId), inArray(scriptBeats.externalId, liveTouchedIds),
-    ));
-    const editedSince = liveBeats.filter((b) => b.locallyEditedAt && b.locallyEditedAt.getTime() > entry.createdAt.getTime());
-    if (editedSince.length > 0) {
-      return {
-        ok: false,
-        message: `Une édition manuelle postérieure à cet import existe sur : ${editedSince.map((b) => b.externalId).join(", ")} — annulation impossible.`,
-      };
-    }
-  }
+      const touchedIds = new Set([
+        ...applied.create.map((r) => r.externalId),
+        ...applied.update.map((u) => u.externalId),
+        ...applied.remove,
+      ]);
 
-  const beforeByExternalId = new Map(before.map((b) => [b.externalId, b]));
-
-  await db.transaction(async (tx) => {
-    const variantId = entry.variantId as string;
-
-    // 1. Retire ce que cette entrée a créé.
-    for (const row of applied.create) {
-      await tx.delete(scriptBeats).where(and(
-        eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, row.externalId),
+      // Refuse si un import postérieur non annulé a retouché l'un des mêmes externalId : l'annuler
+      // effacerait un changement qu'on n'a jamais montré à l'utilisateur comme « à annuler ».
+      // `ne(id, journalId)` en plus de `gt(createdAt, ...)`, et pas seulement ce dernier :
+      // `createdAt` (JS Date, précision milliseconde) perd la précision microseconde de la colonne
+      // timestamp au retour de lecture, si bien qu'un aller-retour de CETTE entrée à travers `gt`
+      // peut se retrouver strictement supérieur à sa propre valeur arrondie — elle se bloquerait
+      // elle-même sans cette exclusion explicite.
+      const laterEntries = await tx.select().from(scriptJournal).where(and(
+        eq(scriptJournal.variantId, entry.variantId),
+        eq(scriptJournal.outcome, "applique"),
+        ne(scriptJournal.id, entry.id),
+        gt(scriptJournal.createdAt, entry.createdAt),
       ));
-    }
+      for (const later of laterEntries) {
+        if (later.revertedAt) continue; // déjà annulée elle-même : ne bloque pas
+        const laterApplied = later.applied as unknown as AppliedRecord;
+        const laterIds = [
+          ...laterApplied.create.map((r) => r.externalId),
+          ...laterApplied.update.map((u) => u.externalId),
+          ...laterApplied.remove,
+        ];
+        if (laterIds.some((id) => touchedIds.has(id))) {
+          throw new RefusalError("Un import plus récent a modifié un des mêmes beats — annulation impossible.");
+        }
+      }
 
-    // 2. Recrée, à l'identique, les beats que cette entrée avait supprimés.
-    for (const externalId of applied.remove) {
-      const b = beforeByExternalId.get(externalId);
-      if (!b) continue; // ne devrait pas arriver : applyImportCore capture systématiquement `before` pour `remove`
-      await tx.insert(scriptBeats).values({
-        variantId, externalId,
-        position: b.position,
-        kind: b.snapshot.kind, spokenText: b.snapshot.spokenText,
-        directionNote: b.snapshot.directionNote, screenText: b.snapshot.screenText,
-        transitionIn: b.snapshot.transitionIn, transitionOut: b.snapshot.transitionOut,
-        sources: b.snapshot.sources,
-        durationOverrideSec: b.durationOverrideSec, estimatedDurationSec: b.estimatedDurationSec,
-        importedSnapshot: b.importedSnapshot, locallyEditedAt: b.locallyEditedAt ? new Date(b.locallyEditedAt) : null,
-      });
-      await replaceBeatInserts(tx, externalId, variantId, b.snapshot.inserts);
-    }
+      // (round de correction 2, I6) : même classe de perte de travail que C1, côté annulation
+      // cette fois. Un `updateBeat` humain posté APRÈS cet import (donc après `entry.createdAt`)
+      // sur l'un des beats que cette entrée a créés/modifiés serait écrasé en silence par la
+      // restauration de `applied.before`. Seuls create/update ont une ligne vivante à vérifier —
+      // un beat supprimé par cette entrée n'a plus de ligne en base.
+      const liveTouchedIds = [...applied.create.map((r) => r.externalId), ...applied.update.map((u) => u.externalId)];
+      if (liveTouchedIds.length > 0) {
+        const liveBeats = await tx.select().from(scriptBeats).where(and(
+          eq(scriptBeats.variantId, entry.variantId), inArray(scriptBeats.externalId, liveTouchedIds),
+        ));
+        const editedSince = liveBeats.filter((b) => b.locallyEditedAt && b.locallyEditedAt.getTime() > entry.createdAt.getTime());
+        if (editedSince.length > 0) {
+          throw new RefusalError(`Une édition manuelle postérieure à cet import existe sur : ${editedSince.map((b) => b.externalId).join(", ")} — annulation impossible.`);
+        }
+      }
 
-    // 3. Restaure le contenu des beats que cette entrée avait modifiés.
-    for (const patch of applied.update) {
-      const b = beforeByExternalId.get(patch.externalId);
-      if (!b) continue; // idem : capturé systématiquement pour `update`
-      await tx.update(scriptBeats).set({
-        kind: b.snapshot.kind, spokenText: b.snapshot.spokenText,
-        directionNote: b.snapshot.directionNote, screenText: b.snapshot.screenText,
-        transitionIn: b.snapshot.transitionIn, transitionOut: b.snapshot.transitionOut,
-        sources: b.snapshot.sources,
-        durationOverrideSec: b.durationOverrideSec, estimatedDurationSec: b.estimatedDurationSec,
-        importedSnapshot: b.importedSnapshot, locallyEditedAt: b.locallyEditedAt ? new Date(b.locallyEditedAt) : null,
-        updatedAt: new Date(),
-      }).where(and(eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, patch.externalId)));
-      await replaceBeatInserts(tx, patch.externalId, variantId, b.snapshot.inserts);
-    }
+      const beforeByExternalId = new Map(before.map((b) => [b.externalId, b]));
+      const variantId = entry.variantId;
 
-    // 4. Restaure les positions de TOUS les beats capturés dans `before` — y compris ceux dont
-    // seule la position avait bougé lors de l'application, sans modification de contenu.
-    for (const b of before) {
-      await tx.update(scriptBeats).set({ position: b.position }).where(and(
-        eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, b.externalId),
-      ));
-    }
+      // 1. Retire ce que cette entrée a créé.
+      for (const row of applied.create) {
+        await tx.delete(scriptBeats).where(and(
+          eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, row.externalId),
+        ));
+      }
 
-    // (round de correction 2, I5) : une entrée "en_attente" préparée avant cette annulation reste
-    // applicable après elle sans ce bump, alors que son diff porte sur un état que l'annulation
-    // vient de défaire.
-    await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, variantId));
+      // 2. Recrée, à l'identique, les beats que cette entrée avait supprimés.
+      for (const externalId of applied.remove) {
+        const b = beforeByExternalId.get(externalId);
+        if (!b) continue; // ne devrait pas arriver : applyImportCore capture systématiquement `before` pour `remove`
+        await tx.insert(scriptBeats).values({
+          variantId, externalId,
+          position: b.position,
+          kind: b.snapshot.kind, spokenText: b.snapshot.spokenText,
+          directionNote: b.snapshot.directionNote, screenText: b.snapshot.screenText,
+          transitionIn: b.snapshot.transitionIn, transitionOut: b.snapshot.transitionOut,
+          sources: b.snapshot.sources,
+          durationOverrideSec: b.durationOverrideSec, estimatedDurationSec: b.estimatedDurationSec,
+          importedSnapshot: b.importedSnapshot, locallyEditedAt: b.locallyEditedAt ? new Date(b.locallyEditedAt) : null,
+        });
+        await replaceBeatInserts(tx, externalId, variantId, b.snapshot.inserts);
+      }
 
-    await tx.update(scriptJournal).set({ outcome: "annule", revertedAt: new Date() }).where(eq(scriptJournal.id, journalId));
-  });
+      // 3. Restaure le contenu des beats que cette entrée avait modifiés.
+      for (const patch of applied.update) {
+        const b = beforeByExternalId.get(patch.externalId);
+        if (!b) continue; // idem : capturé systématiquement pour `update`
+        await tx.update(scriptBeats).set({
+          kind: b.snapshot.kind, spokenText: b.snapshot.spokenText,
+          directionNote: b.snapshot.directionNote, screenText: b.snapshot.screenText,
+          transitionIn: b.snapshot.transitionIn, transitionOut: b.snapshot.transitionOut,
+          sources: b.snapshot.sources,
+          durationOverrideSec: b.durationOverrideSec, estimatedDurationSec: b.estimatedDurationSec,
+          importedSnapshot: b.importedSnapshot, locallyEditedAt: b.locallyEditedAt ? new Date(b.locallyEditedAt) : null,
+          updatedAt: new Date(),
+        }).where(and(eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, patch.externalId)));
+        await replaceBeatInserts(tx, patch.externalId, variantId, b.snapshot.inserts);
+      }
 
-  return { ok: true };
+      // 4. Restaure les positions de TOUS les beats capturés dans `before` — y compris ceux dont
+      // seule la position avait bougé lors de l'application, sans modification de contenu.
+      for (const b of before) {
+        await tx.update(scriptBeats).set({ position: b.position }).where(and(
+          eq(scriptBeats.variantId, variantId), eq(scriptBeats.externalId, b.externalId),
+        ));
+      }
+
+      // (round de correction 2, I5) : une entrée "en_attente" préparée avant cette annulation reste
+      // applicable après elle sans ce bump, alors que son diff porte sur un état que l'annulation
+      // vient de défaire. Écrite AVANT le journal (round de correction 3, N1) — même ordre que la
+      // séquence de verrouillage ci-dessus.
+      await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, variantId));
+
+      await tx.update(scriptJournal).set({ outcome: "annule", revertedAt: new Date() }).where(eq(scriptJournal.id, journalId));
+    });
+
+    return { ok: true as const };
+  } catch (e) {
+    if (e instanceof RefusalError) return { ok: false as const, message: e.message };
+    throw e;
+  }
 }

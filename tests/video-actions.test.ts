@@ -163,24 +163,30 @@ describe("variante manquante — aucun import partiel", () => {
     expect(tiktokVariants).toHaveLength(0);
   });
 
+  // Round de correction 3, T1 : la version précédente de ce test envoyait un "tiktok" SANS
+  // duree_cible_sec/ratio — l'ancien code (buggé, d'AVANT le round 2) empilait déjà une issue
+  // « champs manquants » pour cette raison-là et retournait avant même d'atteindre la boucle de
+  // création : le test empruntait le chemin déjà corrigé au round 1 et passait à l'identique sur du
+  // code buggé, sans jamais toucher le bug réel du C3 (des variantes créées avant le contrôle
+  // « aucune variante ne correspond à la cible »). Ce payload-ci a délibérément TOUS les champs
+  // requis pour "tiktok" (duree_cible_sec: 60, ratio: "9:16") — la SEULE raison de rejet est
+  // l'absence de variante "youtube_long" (la cible) dans le payload. Sur l'ancien code, la boucle de
+  // création aurait créé la variante "tiktok" (valide) AVANT que le contrôle de correspondance à la
+  // cible ne fasse rejeter l'import : `variantsAfter` vaudrait 2, pas 1.
   it("un payload sans variante correspondant à la variante ciblée ne crée aucune ligne script_variants (C3)", async () => {
-    // Cible la variante par défaut ("youtube_long"), mais le payload ne parle que de "tiktok" —
-    // sans duree_cible_sec/ratio, donc "tiktok" est aussi en échec. AVANT le round de correction 2,
-    // les variantes candidates valides étaient créées avant que ce second contrôle (absence de
-    // variante correspondant à la cible) ne fasse rejeter l'import.
     const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId)))[0];
     const beat0 = structuredClone(EXAMPLE_PAYLOAD.variantes[0].beats[0]);
     const payload: Payload = {
       schema_version: EXAMPLE_PAYLOAD.schema_version,
       projet: EXAMPLE_PAYLOAD.projet,
-      variantes: [{ plateforme: "tiktok", duree_cible_sec: null, ratio: null, beats: [beat0] }],
+      variantes: [{ plateforme: "tiktok", duree_cible_sec: 60, ratio: "9:16", beats: [beat0] }],
     };
 
     const r = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(payload), userId: null, source: "copier_coller" });
     expect(r.ok).toBe(false);
 
     const variantsAfter = await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId));
-    expect(variantsAfter).toHaveLength(1); // toujours seulement la variante par défaut
+    expect(variantsAfter).toHaveLength(1); // toujours seulement la variante par défaut — pas de "tiktok" créé puis abandonné
   });
 });
 
@@ -200,18 +206,69 @@ describe("cohérence variante ⇄ journal", () => {
   });
   afterAll(async () => { await db.delete(videoProjects).where(eq(videoProjects.id, projectId)); });
 
+  // Round de correction 3, T3 : la version précédente utilisait `accept: []` — sans aucune
+  // mutation à appliquer de toute façon, l'assertion « aucun beat écrit sur B » passait déjà
+  // trivialement, qu'elle qu'ait pu être le comportement du contrôle de cohérence. Sélection NON
+  // VIDE ici : si le contrôle `entry.variantId !== args.variantId` ne bloquait pas, les deux beats
+  // d'EXAMPLE_PAYLOAD seraient réellement écrits sur la variante B.
   it("applyImportCore refuse un journalId qui ne correspond pas à la variante ciblée", async () => {
     const prepared = await prepareImportCore({ projectId, variantId: variantAId, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
     if (!prepared.ok) throw new Error("diff attendu");
 
     const [variantB] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantBId));
-    const r = await applyImportCore({ journalId: prepared.journalId, variantId: variantBId, accept: [], variantUpdatedAt: variantB.updatedAt });
+    const r = await applyImportCore({
+      journalId: prepared.journalId, variantId: variantBId,
+      accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variantB.updatedAt,
+    });
     expect(r.ok).toBe(false);
 
-    // La variante B n'a reçu aucun beat — le diff calculé sur A n'a jamais dû s'y appliquer.
+    // La variante B n'a reçu aucun beat — le diff calculé sur A n'a jamais dû s'y appliquer, même
+    // avec une sélection qui aurait réellement créé des lignes si le contrôle avait laissé passer.
     const beatsB = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variantBId));
     expect(beatsB).toHaveLength(0);
   });
+});
+
+// Round de correction 3, T2 : le test séquentiel de double application (ci-dessus, dans "import de
+// bout en bout") passe à l'identique sur le code d'AVANT le round 2 — le garde `outcome !==
+// "en_attente"` existait déjà bien avant, seulement hors transaction. Deux appels l'un après
+// l'autre ne testent JAMAIS la concurrence réelle : le second lit toujours un état déjà "applique"
+// puisque le premier a fini avant qu'il ne commence. Ce test-ci lance deux applyImportCore
+// EFFECTIVEMENT en parallèle (Promise.all) sur le MÊME journalId, avec une sélection non vide —
+// sans le verrou `for("update")` + la mise à jour conditionnelle de l'outcome (round de correction
+// 2, I4), les deux liraient "en_attente" avant que l'un ou l'autre n'ait écrit quoi que ce soit, et
+// écriraient chacun leur propre INSERT sur script_beats : soit une violation de
+// script_beats_variant_external_uq (les deux insèrent le même externalId), soit — pire — un
+// doublon silencieux si l'unicité ne portait pas sur les bonnes colonnes. On vérifie ici qu'EXACTEMENT
+// un des deux appels réussit et que le nombre de beats en base correspond à une seule application,
+// pas au compte des statuts de retour seuls.
+describe("concurrence sur applyImportCore (I4)", () => {
+  let projectId: string;
+
+  beforeAll(async () => { ({ projectId } = await newProject("Test — Babadampulu (concurrence I4)")); });
+  afterAll(async () => { await db.delete(videoProjects).where(eq(videoProjects.id, projectId)); });
+
+  it("deux applyImportCore concurrents sur le même journalId : un seul réussit, aucune écriture en double", async () => {
+    const variant = (await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId)))[0];
+    const prepared = await prepareImportCore({ projectId, variantId: variant.id, raw: JSON.stringify(EXAMPLE_PAYLOAD), userId: null, source: "copier_coller" });
+    if (!prepared.ok) throw new Error("diff attendu");
+
+    const call = () => applyImportCore({
+      journalId: prepared.journalId, variantId: variant.id,
+      accept: ["b-01-accroche", "b-02-contexte"], variantUpdatedAt: variant.updatedAt,
+    });
+    const [r1, r2] = await Promise.all([call(), call()]);
+
+    const results = [r1, r2];
+    expect(results.filter((r) => r.ok).length).toBe(1);
+    expect(results.filter((r) => !r.ok).length).toBe(1);
+
+    // Pas de doublon : deux applications concurrentes n'ont écrit QUE les deux beats attendus,
+    // pas quatre (une paire par tentative) — la preuve porte sur l'état de la base, pas seulement
+    // sur les statuts de retour.
+    const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, variant.id));
+    expect(beats).toHaveLength(2);
+  }, 20000);
 });
 
 // Round de correction 1, ruling 2 : `applyImportCore` capture l'état antérieur de chaque beat
