@@ -304,3 +304,99 @@ describe("ModeSwitch — le comportement que `role=\"group\"` oblige, prouvé pa
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tâche 8 — `montageDisabled` : additive, et ne touche JAMAIS le côté Rendu réel. C'est ce qui
+// garde la planche atteignable sous 768px une fois que editor-shell.tsx ne monte plus `TooSmallState`
+// pour ce mode-là (voir tests/studio-editor-shell.test.ts pour la preuve DOM correspondante).
+describe("ModeSwitch — Montage indisponible sous 768px", () => {
+  it("désactive le côté Montage et dit pourquoi", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModeSwitch, { mode: "rendu" as const, onChange: () => {}, montageDisabled: true }),
+    );
+    const montage = html.match(/<button[^>]*data-action="mode-montage"[^>]*>/)![0];
+    expect(montage).toContain("disabled");
+    expect(montage).toMatch(/écran plus large/);
+    // Correctif revue Tâche 8 (Important 2) : un `title` seul ne se déclenche jamais au toucher — sur
+    // le public visé (sous 768px, très majoritairement tactile), l'attribut `disabled` doit donc
+    // s'accompagner d'une affordance VISUELLE, pas seulement d'une infobulle invisible sur ce public.
+    expect(montage).toContain("disabled:opacity-50");
+  });
+
+  it("laisse le côté Montage actif par défaut — la prop est additive", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModeSwitch, { mode: "montage" as const, onChange: () => {} }),
+    );
+    const montage = html.match(/<button[^>]*data-action="mode-montage"[^>]*>/)![0];
+    // `not.toContain("disabled")` seul ne suffit plus (correctif Tâche 8, Important 2) : la classe
+    // Tailwind `disabled:opacity-50` contient elle-même la sous-chaîne « disabled », présente QUE le
+    // bouton soit réellement désactivé ou non. `\bdisabled\b(?!:)` exclut ce préfixe de variante et ne
+    // matche que l'attribut HTML `disabled` lui-même.
+    expect(montage).not.toMatch(/\bdisabled\b(?!:)/);
+  });
+
+  it("le côté « Rendu réel » n'est JAMAIS désactivé — c'est précisément lui qui doit rester atteignable", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(ModeSwitch, { mode: "montage" as const, onChange: () => {}, montageDisabled: true }),
+    );
+    const rendu = html.match(/<button[^>]*data-action="mode-rendu"[^>]*>/)![0];
+    expect(rendu).not.toContain("disabled");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Correctif revue Tâche 8 (Important 1) : le bouton Montage refuse le clic via `disabled`, mais le
+// raccourci « R » passait par `onChange(toggleMode(mode))` SANS jamais consulter `montageDisabled` —
+// un clavier externe/Bluetooth, une fenêtre desktop rétrécie ou un iPad en Split View pouvaient encore
+// basculer VERS Montage sous 768px et retomber dans `TooSmallState` (editor-shell.tsx), exactement le
+// cul-de-sac que la Tâche 8 existe à rendre évitable. Ces tests dispatchent un VRAI `keydown` (comme
+// le bloc « comportement clavier » plus haut dans ce fichier), pas une simple lecture de balisage —
+// c'est précisément la voie que Important 1 empruntait pour contourner l'attribut `disabled`.
+describe("ModeSwitch — le raccourci « R » respecte montageDisabled (Tâche 8, Important 1)", () => {
+  let teardownDom: () => void;
+
+  beforeAll(() => {
+    teardownDom = installDom();
+  });
+  afterAll(() => {
+    teardownDom();
+  });
+
+  it('montageDisabled + mode="rendu" : « R » ne fait RIEN — basculer vers Montage retomberait dans TooSmallState', async () => {
+    const calls: StudioMode[] = [];
+    const mounted = await mount(
+      React.createElement(ModeSwitch, {
+        mode: "rendu" as const,
+        onChange: (next: StudioMode) => calls.push(next),
+        montageDisabled: true,
+      }),
+    );
+    document.body.appendChild(mounted.container);
+    try {
+      await pressKey({ key: "r" });
+      expect(calls).toEqual([]);
+    } finally {
+      mounted.unmount();
+      mounted.container.remove();
+    }
+  });
+
+  it('montageDisabled + mode="montage" : « R » fonctionne TOUJOURS — c\'est le seul chemin hors de TooSmallState', async () => {
+    const calls: StudioMode[] = [];
+    const mounted = await mount(
+      React.createElement(ModeSwitch, {
+        mode: "montage" as const,
+        onChange: (next: StudioMode) => calls.push(next),
+        montageDisabled: true,
+      }),
+    );
+    document.body.appendChild(mounted.container);
+    try {
+      await pressKey({ key: "r" });
+      expect(calls).toEqual(["rendu"]);
+    } finally {
+      mounted.unmount();
+      mounted.container.remove();
+    }
+  });
+});

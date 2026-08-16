@@ -60,7 +60,7 @@ export async function renderForArticle(
     // dédié), partagé par tous les canaux qui n'ont pas leur propre ligne. AVANT cette option,
     // `renderScene` recevait `template.scene` tel quel : chaque canal produisait donc une image aux
     // dimensions du gabarit d'ORIGINE, jamais adaptée à son propre format — exactement le défaut que
-    // ce chantier corrige (voir components/studio/render-mode.tsx#sceneForFormat, le même correctif
+    // ce chantier corrige (voir lib/studio/relayout.ts#sceneForFormat, le même correctif
     // côté aperçu). Optionnel, et volontairement SANS repli implicite (ex. déduire un format depuis
     // `o.channel`) : ce module ne doit PAS connaître `lib/diffusion/channels.ts` (qui importe déjà
     // CE barrel — un import inverse créerait un cycle), donc c'est à l'APPELANT de fournir le format

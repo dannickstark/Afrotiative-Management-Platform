@@ -289,6 +289,51 @@ describe("previewTemplateCore — garantie structurelle : store.ts (R2/saveRende
     expect(graph.has(storeModule)).toBe(false);
     expect(graph.has(dbModule)).toBe(false);
   });
+
+  // Refonte « Rendu réel » : le cœur réseau de l'aperçu vit désormais dans hooks/use-preview.ts, que
+  // la planche (render/proof-sheet.tsx) ET l'inspection d'un format (render/format-focus.tsx)
+  // consomment tous les deux. La garantie « l'aperçu n'écrit rien » doit donc partir AUSSI de ce
+  // fichier, sinon l'extraction l'aurait silencieusement contournée.
+  //
+  // Subtilité : on ne peut PAS simplement fermer transitivement depuis use-preview.ts. Il importe
+  // une Server Action ("use server"), dont le graphe atteint légitimement @/db — c'est le rôle
+  // MÊME de ce module frontière (requireUser/requirePermission). Le graphe client s'arrête donc aux
+  // modules "use server" : ce qui est vérifié, c'est que le CLIENT ne peut atteindre le moteur que
+  // PAR cette frontière-là, et par aucune autre. La propreté de ce qu'il y a derrière la frontière
+  // reste couverte par les deux tests ci-dessus, qui partent de preview-core.ts.
+  function isServerModule(file: string): boolean {
+    const head = readFileSync(file, "utf8").slice(0, 200);
+    return /^\s*["']use server["']/m.test(head);
+  }
+
+  function clientClosure(entry: string): { files: Set<string>; serverEntrypoints: Set<string> } {
+    const files = new Set<string>();
+    const serverEntrypoints = new Set<string>();
+    const stack = [entry];
+    while (stack.length) {
+      const file = stack.pop()!;
+      if (files.has(file)) continue;
+      files.add(file);
+      for (const spec of importsOf(file)) {
+        const resolved = resolveModule(spec, file);
+        if (!resolved || files.has(resolved)) continue;
+        if (isServerModule(resolved)) { serverEntrypoints.add(resolved); continue; }
+        stack.push(resolved);
+      }
+    }
+    return { files, serverEntrypoints };
+  }
+
+  it("hooks/use-preview.ts n'atteint le moteur QUE par la Server Action gardée previewTemplate", () => {
+    const { files, serverEntrypoints } = clientClosure(path.join(REPO_ROOT, "hooks/use-preview.ts"));
+    // Une seule frontière serveur, et c'est la bonne.
+    expect([...serverEntrypoints]).toEqual([path.join(REPO_ROOT, "lib/actions/studio-preview-actions.ts")]);
+    // Et côté client, aucun chemin vers l'écriture ni vers le moteur en direct.
+    expect(files.has(storeModule)).toBe(false);
+    expect(files.has(renderForArticleModule)).toBe(false);
+    expect(files.has(dbModule)).toBe(false);
+    expect(files.has(path.join(REPO_ROOT, "lib/studio/render.ts"))).toBe(false);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -8,6 +8,12 @@
 //     shard them across the cores and run the shards in parallel. Spawned with TEST_LANE=pure, which
 //     makes test-setup.ts skip loading DATABASE_URL and skip the stray-run reap (see the comment
 //     there): the lane opens ZERO DB connections, so concurrent shards cannot contend.
+//     It also runs `bun test --isolate`: one fresh `globalThis` per file, so a file that installs
+//     jsdom/DOM globals (or leaves one half-torn-down) cannot poison a neighbour sharing its process.
+//     Without this, lane results depended on shard COMPOSITION — which files the round-robin below
+//     happened to co-locate — rather than on the code under test; adding or removing an unrelated
+//     PURE_FILES entry could flip an unrelated file red. See tests/studio-interactions.test.ts for the
+//     full account of the pollution this guards against.
 //   • DB lane — everything else. These hit the shared Neon dev DB, where a single-running interlock on
 //     `pipeline_runs` plus cross-row contention forces them to run SERIALLY (test-setup.ts documents
 //     this). So the DB lane stays one serial `bun test`; it just runs alongside the pure lane, so the
@@ -55,16 +61,18 @@ const PURE_FILES = new Set<string>([
   "studio-drag.test.ts", "studio-dynamic-text.test.ts",
   "studio-editor-prefs.test.ts", "studio-editor-shell.test.ts", "studio-editor-state.test.ts",
   "studio-element.test.ts", "studio-elements-panel.test.ts", "studio-field-scrub.test.ts", "studio-fonts.test.ts",
+  "studio-format-focus.test.ts",
   "studio-geometry-strip.test.ts", "studio-images.test.ts",
   "studio-interactions.test.ts", "studio-layer-geometry.test.ts", "studio-layer-panel.test.ts",
   "studio-marque-panel.test.ts", "studio-mode-switch.test.ts", "studio-mode.test.ts", "studio-no-r2.test.ts",
-  "studio-property-panel.test.ts", "studio-public-api.test.ts", "studio-rail.test.ts",
+  "studio-preview-cache.test.ts", "studio-proof-sheet.test.ts", "studio-property-panel.test.ts", "studio-public-api.test.ts", "studio-rail.test.ts",
   "studio-relayout.test.ts", "studio-constraints.test.ts",
-  "studio-render-clippath.test.ts", "studio-render-mode.test.ts", "studio-render.test.ts",
+  "studio-render-clippath.test.ts", "studio-render-export.test.ts", "studio-render-mode.test.ts",
+  "studio-render-mode-refresh.test.ts", "studio-render.test.ts",
   "studio-save-indicator.test.ts", "studio-scene.test.ts", "studio-server-import.test.ts",
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
   "studio-snap.test.ts", "studio-texte-panel.test.ts", "studio-token-picker.test.ts",
-  "studio-tokens.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
+  "studio-tokens.test.ts", "studio-use-preview.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
   "with-token-pool.test.ts", "wp-client.test.ts", "wp-config.test.ts",
 ]);
 
@@ -87,7 +95,7 @@ function runBun(files: string[], label: string, pureLane: boolean): Promise<Lane
       delete env.DATABASE_URL; // belt-and-suspenders: the lane must open no DB connection
       delete env.DIRECT_URL;
     }
-    const child = spawn("bun", ["test", ...files], { env });
+    const child = spawn("bun", ["test", ...(pureLane ? ["--isolate"] : []), ...files], { env });
     let output = "";
     child.stdout.on("data", (d) => (output += d));
     child.stderr.on("data", (d) => (output += d));

@@ -402,7 +402,7 @@ export function SelectField({
               dans un navigateur : sans ce mappeur explicite, chaque sélecteur qui l'utilise
               (alignement, graisse de police, ajustement d'image, contraintes H/V…) affichait sa
               valeur technique brute ("left", "700"…) au lieu de son libellé français — même piège
-              déjà corrigé dans components/studio/preview-pane.tsx, voir sa note. */}
+              déjà corrigé dans components/studio/render-mode.tsx (sélecteur d'article), voir sa note. */}
           <SelectValue placeholder={placeholder ?? "Choisir…"}>
             {(v: string | null) => options.find((o) => o.value === v)?.label ?? placeholder ?? "Choisir…"}
           </SelectValue>

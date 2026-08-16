@@ -99,3 +99,81 @@ describe("isModeToggleShortcut", () => {
     expect(isModeToggleShortcut({ key: "e", target: { tagName: "BODY" } })).toBe(false);
   });
 });
+
+import { focusedFormat, formatNavAction, zoomStep, ZOOM_STEPS } from "@/lib/studio/studio-mode";
+
+// Refonte « Rendu réel » : `PreservedView.selectedId` CHANGE DE SENS. Avant, `null` voulait dire
+// « le format natif est promu dans la grande case » ; désormais il veut dire « aucun format
+// focalisé — on est sur la planche ». `focusedFormat` est le seul lecteur autorisé de ce champ côté
+// Rendu réel : il garde le composant d'une valeur qui ne serait pas une vraie clé de format.
+describe("focusedFormat", () => {
+  const base = { zoom: "fit" as const, scrollX: 0, scrollY: 0 };
+
+  it("`null` signifie la planche, pas un format", () => {
+    expect(focusedFormat({ ...base, selectedId: null })).toBeNull();
+  });
+
+  it("une clé de format réelle est renvoyée telle quelle", () => {
+    expect(focusedFormat({ ...base, selectedId: "story" })).toBe("story");
+  });
+
+  it("une valeur qui n'est PAS une clé de format retombe sur la planche plutôt que de faire planter un indexage", () => {
+    expect(focusedFormat({ ...base, selectedId: "layer-42" })).toBeNull();
+    expect(focusedFormat({ ...base, selectedId: "" })).toBeNull();
+  });
+});
+
+describe("formatNavAction", () => {
+  const div = { tagName: "DIV" };
+
+  it("flèches et Échap pilotent la navigation entre formats", () => {
+    expect(formatNavAction({ key: "ArrowLeft", target: div })).toBe("prev");
+    expect(formatNavAction({ key: "ArrowRight", target: div })).toBe("next");
+    expect(formatNavAction({ key: "Escape", target: div })).toBe("exit");
+  });
+
+  it("ignore toute autre touche", () => {
+    expect(formatNavAction({ key: "a", target: div })).toBeNull();
+    expect(formatNavAction({ key: "ArrowUp", target: div })).toBeNull();
+  });
+
+  it("ne détourne JAMAIS une combinaison portant un modificateur", () => {
+    expect(formatNavAction({ key: "ArrowLeft", metaKey: true, target: div })).toBeNull();
+    expect(formatNavAction({ key: "ArrowRight", ctrlKey: true, target: div })).toBeNull();
+    expect(formatNavAction({ key: "ArrowLeft", altKey: true, target: div })).toBeNull();
+  });
+
+  it("est inerte quand le focus est dans un champ de saisie — même discipline qu'isModeToggleShortcut", () => {
+    expect(formatNavAction({ key: "ArrowLeft", target: { tagName: "INPUT" } })).toBeNull();
+    expect(formatNavAction({ key: "ArrowRight", target: { tagName: "TEXTAREA" } })).toBeNull();
+    expect(formatNavAction({ key: "Escape", target: { tagName: "DIV", isContentEditable: true } })).toBeNull();
+  });
+});
+
+describe("zoomStep", () => {
+  it("l'échelle est bornée à 100 % — au-delà on inspecterait un agrandissement, pas une typographie", () => {
+    expect(ZOOM_STEPS[ZOOM_STEPS.length - 1]).toBe(1);
+    expect(zoomStep(1, 1)).toBe(1);
+  });
+
+  it("ne descend jamais sous le premier cran", () => {
+    expect(zoomStep(ZOOM_STEPS[0]!, -1)).toBe(ZOOM_STEPS[0]);
+  });
+
+  it("monte et descend d'un cran à la fois", () => {
+    expect(zoomStep(0.25, 1)).toBe(0.5);
+    expect(zoomStep(0.5, -1)).toBe(0.25);
+  });
+
+  it("depuis « fit », zoomer entre par le milieu de l'échelle plutôt que par un bord arbitraire", () => {
+    const entry = zoomStep("fit", 1);
+    expect(ZOOM_STEPS).toContain(entry);
+    expect(entry).toBeGreaterThan(ZOOM_STEPS[0]!);
+    expect(entry).toBeLessThanOrEqual(1);
+  });
+
+  it("une valeur hors échelle est ramenée au cran adjacent le plus proche, jamais renvoyée telle quelle", () => {
+    expect(ZOOM_STEPS).toContain(zoomStep(0.42, 1));
+    expect(ZOOM_STEPS).toContain(zoomStep(0.42, -1));
+  });
+});

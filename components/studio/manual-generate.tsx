@@ -25,7 +25,7 @@ import type { CategoryOption } from "@/lib/queries/studio";
 // génération ponctuelle pour les trois contextes à saisie manuelle. C'est ce qui rend enfin utiles
 // les jetons quote.* / edition.* / recap.* déclarés en V1 sans le moindre fournisseur de valeurs.
 //
-// Contraste avec l'aperçu de l'éditeur (components/studio/preview-pane.tsx) : ce formulaire appelle
+// Contraste avec l'aperçu de l'éditeur (hooks/use-preview.ts) : ce formulaire appelle
 // renderManual — gardé, et qui ÉCRIT (R2 + une ligne `renders`, subjectType "manual") — jamais
 // previewTemplate. Il n'y a d'ailleurs ni brouillon ni scène ici à prévisualiser : le formulaire
 // choisit une PORTÉE (contexte / canal / catégorie) exactement comme render_templates lui-même, et
