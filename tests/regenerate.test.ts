@@ -43,6 +43,20 @@ describe("selectRegenerationColumns", () => {
     expect(s.categoryName).toBeNull();
     expect(s.tags).toBeNull();
   });
+  it("image cochée mais brouillon sans image : n'émet AUCUNE colonne image (ne détruit pas l'existant)", () => {
+    const noImageDraft: ArticleDraft = { ...draft, featuredImageUrl: null, imageCredit: null, imageSourceUrl: null };
+    const s = selectRegenerationColumns(noImageDraft, { title: false, body: false, excerpt: false, category: false, tags: false, image: true });
+    expect(s.columns).toEqual({});
+    expect("featuredImageUrl" in s.columns).toBe(false);
+    expect("imageCredit" in s.columns).toBe(false);
+    expect("imageSourceUrl" in s.columns).toBe(false);
+  });
+
+  it("image cochée avec d'autres champs, brouillon sans image : les autres colonnes passent, l'image est épargnée", () => {
+    const noImageDraft: ArticleDraft = { ...draft, featuredImageUrl: null, imageCredit: null, imageSourceUrl: null };
+    const s = selectRegenerationColumns(noImageDraft, { title: true, body: false, excerpt: false, category: false, tags: false, image: true });
+    expect(s.columns).toEqual({ title: "Nouveau titre" });
+  });
 });
 
 describe("applyRegeneration (real DB, synthetic draft)", () => {
