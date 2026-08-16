@@ -121,12 +121,12 @@ Le plafond de 10 articles côté UI est conservé, mais devient une garde de con
 
 | Champs cochés | Mode | Ce qui s'exécute |
 |---|---|---|
-| image seule | auto | extraction + appel **`pickFeaturedImage` bon marché** — aucune génération d'article |
+| image seule | auto | extraction + `generateArticle` en **génération partielle** — seuls les champs image sont demandés, le corps n'est pas envoyé |
 | image seule | manuel | extraction seule, **aucun LLM** ; candidats garés, item → `awaiting_image` |
 | image + autres | auto | un `generateArticle` comme aujourd'hui ; son `featuredImageUrl` est déjà contraint à la liste de candidats, donc pas de second appel |
 | image + autres | manuel | `generateArticle` pour les autres champs, son choix d'image écarté, candidats garés |
 
-`lib/ai/pick-image.ts` est un petit appel structuré (titre + corps + candidats → `{ url, credit }`) à travers le même pool de jetons, avec la même garde que `sanitizeDraft` (`lib/ai/generate-article.ts:42`) : une URL absente de la liste de candidats est rejetée.
+**Amendement (fusion de `origin/main`, commit c02319d).** Cette conception prévoyait un module dédié `lib/ai/pick-image.ts` pour le chemin « image seule, mode auto », parce qu'une telle régénération payait alors une génération d'article COMPLÈTE dont on ne gardait que trois colonnes. `main` a depuis résolu ce problème à la racine : `buildArticleSchema(categoryNames, fields?)` produit une forme dynamique, `buildArticlePrompt` bifurque quand « Corps » est décoché, et sur une sélection « image seule » le corps n'est même pas envoyé au modèle. Le module dédié ferait doublon avec cette machinerie déjà livrée et testée (`tests/regenerate-partial-ai.test.ts`) : **il est retiré de la conception**. Le mode auto passe par `generateArticle`, dont `sanitizeDraft` (`lib/ai/generate-article.ts`) contraint déjà `featuredImageUrl` à la liste de candidats — la garde que `pick-image` devait apporter existe donc déjà. Le mode manuel, lui, n'appelle aucun LLM pour l'image.
 
 **Zéro candidat — ne jamais détruire.**
 
@@ -155,7 +155,6 @@ L'assistant (`components/queue/image-pick-wizard.tsx`, réutilisant la grille de
 - `lib/pipeline/regen-job.ts` — le runner (`runRegenJob`)
 - `lib/actions/regen-actions.ts` — `startRegenJob`, `getRegenJobAction`, `cancelRegenJob`, `pickRegeneratedImage`
 - `lib/queries/regen-jobs.ts` — lectures
-- `lib/ai/pick-image.ts` — l'appel de choix d'image
 - `components/queue/image-pick-wizard.tsx` — l'assistant
 - `components/queue/regen-progress.tsx` — la bande de progression sondée
 
@@ -179,7 +178,6 @@ Voie pure (`test:pure`) :
 - `regen-plan.ts` — le tableau des quatre cas et les règles de candidat vide, en table de fixtures
 - `regen-live.ts` — dérivation de la progression
 - `selectRegenerationColumns` — invariant « ne jamais effacer », en extension des tests existants
-- la garde de liste de candidats de `pickFeaturedImage`, sans invoquer le LLM (même forme que `tests/ai-prompt.test.ts`)
 
 Voie DB : transitions d'état du runner, index unique « un job en vol par article », et `pickRegeneratedImage`.
 
@@ -191,7 +189,7 @@ Un plan, trois phases livrables indépendamment :
 
 1. **Correctifs et vitesse** — `extract` au lieu de `extractExternal`, invariant « ne jamais effacer », extraction parallèle avec timeouts. Corrige le problème 2 et réduit déjà la durée, sans nouvelle table.
 2. **Job asynchrone et progression** — tables, runner, actions, sondage, bandes de progression en unitaire et en lot. Répond au problème 1.
-3. **Modes d'image, bac et assistant** — réglage, radio, `pickFeaturedImage`, colonne d'attente, filtre, badge, assistant de choix.
+3. **Modes d'image, bac et assistant** — réglage, radio, colonne d'attente, filtre, badge, assistant de choix.
 
 ## Hors périmètre
 

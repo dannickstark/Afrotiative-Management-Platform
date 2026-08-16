@@ -1345,7 +1345,7 @@ Create `lib/actions/regen-actions.ts`:
 ```ts
 "use server";
 import { requireUser } from "@/lib/session";
-import { requirePermission } from "@/lib/permissions";
+import { requirePermission } from "@/lib/rbac";
 import { revalidatePath } from "next/cache";
 import { startRegenJobSchema, type StartRegenJobInput } from "@/lib/validation";
 import type { RegenJobView } from "@/lib/pipeline/regen-live";
@@ -1965,43 +1965,52 @@ git commit -m "feat(regenerate): candidats d'image porteurs de leur provenance +
 
 ---
 
-### Task 14: `planRegeneration` connaît les modes, `pickFeaturedImage` choisit
+### Task 14: `planRegeneration` connaît les modes
+
+> **Amendé après la fusion de `origin/main` (commit c02319d).** Ce plan prévoyait à l'origine un module `lib/ai/pick-image.ts` — un appel LLM dédié et bon marché pour le chemin « image seule, mode auto » — parce qu'à l'époque une régénération « image seule » payait une génération d'article COMPLÈTE dont on ne gardait que trois colonnes. `main` a résolu ce problème autrement et mieux : `buildArticleSchema(categoryNames, fields?)` construit désormais une forme dynamique, `buildArticlePrompt` bifurque quand « Corps » est décoché, et sur une sélection « image seule » le corps n'est même pas envoyé au modèle. Un module de choix d'image séparé ferait donc doublon avec une machinerie déjà en place et déjà testée (`tests/regenerate-partial-ai.test.ts`). **`lib/ai/pick-image.ts` est supprimé du plan** ; le chemin auto passe simplement par `generateArticle` avec `fields.image = true`, dont `sanitizeDraft` contraint déjà `featuredImageUrl` à la liste de candidats. Il ne reste donc à cette tâche que l'élargissement du plan aux deux modes.
 
 **Files:**
 - Modify: `lib/pipeline/regen-plan.ts`, `tests/regen-plan.test.ts`
-- Create: `lib/ai/pick-image.ts`, `tests/pick-image.test.ts`
-- Modify: `scripts/test-fast.ts` (`PURE_FILES`)
+- Modify: `lib/pipeline/regenerate-core.ts` (le site d'appel, qui gagne `imageMode`)
 
 **Interfaces:**
+- Consumes: `opts.imageMode` sur `regenerateArticle`, déclaré en Task 8.
 - Produces:
   ```ts
-  // regen-plan.ts — widened
-  export type ImageAction = "from-draft" | "skip" | "pick" | "park";
+  export type ImageAction = "from-draft" | "skip" | "park";
   export function planRegeneration(input: {
     fields: RegenerateFieldsInput;
     candidateCount: number;
     imageMode: "auto" | "manual";
   }): RegenPlan;
-
-  // pick-image.ts
-  export function sanitizeImagePick(pick: { url: string; credit?: string | null }, candidates: ImageCandidate[]): ImageCandidate & { credit: string | null } | null;
-  export async function pickFeaturedImage(input: {
-    title: string; bodyHtml: string; candidates: ImageCandidate[];
-  }): Promise<{ picked: (ImageCandidate & { credit: string | null }) | null; via: string }>;
   ```
+  `"pick"` n'existe pas : en mode auto c'est `generateArticle` lui-même qui choisit, dans la liste de candidats, et le coût est déjà borné par la génération partielle de `main`.
 
-- [ ] **Step 1: Write the failing plan tests**
+La table de décision complète, une fois `imageMode` pris en compte :
 
-Replace the `planRegeneration` describe block in `tests/regen-plan.test.ts` with one that passes `imageMode`, and add the two new cases:
+| Champs cochés | Mode | `runGeneration` | `imageAction` |
+|---|---|---|---|
+| image absente | — | `true` | `skip` |
+| image seule, 0 candidat | — | `false` (abandon) | — |
+| image + autres, 0 candidat | — | `true` | `skip` + avertissement |
+| image seule | auto | `true` (partielle, bon marché) | `from-draft` |
+| image + autres | auto | `true` | `from-draft` |
+| image seule | manuel | **`false`** — aucun LLM | `park` |
+| image + autres | manuel | `true` (pour les autres champs) | `park` |
+
+- [ ] **Step 1: Write the failing tests**
+
+Add `imageMode: "auto"` to every existing `planRegeneration` call in `tests/regen-plan.test.ts` (the zero-candidate rules are mode-independent and must keep passing unchanged), then add:
 
 ```ts
 describe("planRegeneration — mode auto", () => {
-  it("image seule avec candidats : PAS de génération, on choisit l'image", () => {
+  it("image seule : génère (la génération partielle de main rend ça bon marché) et prend l'image du brouillon", () => {
     const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 3, imageMode: "auto" });
-    expect(p.runGeneration).toBe(false);
-    expect(p.imageAction).toBe("pick");
+    expect(p.runGeneration).toBe(true);
+    expect(p.imageAction).toBe("from-draft");
+    expect(p.effectiveFields.image).toBe(true);
   });
-  it("image + autres avec candidats : génération, image issue du brouillon", () => {
+  it("image + autres : génère et prend l'image du brouillon", () => {
     const p = planRegeneration({ fields: IMAGE_AND_TITLE, candidateCount: 3, imageMode: "auto" });
     expect(p.runGeneration).toBe(true);
     expect(p.imageAction).toBe("from-draft");
@@ -2009,7 +2018,7 @@ describe("planRegeneration — mode auto", () => {
 });
 
 describe("planRegeneration — mode manuel", () => {
-  it("image seule avec candidats : aucun LLM, on gare les candidats", () => {
+  it("image seule : AUCUN appel LLM, on gare les candidats", () => {
     const p = planRegeneration({ fields: IMAGE_ONLY, candidateCount: 3, imageMode: "manual" });
     expect(p.runGeneration).toBe(false);
     expect(p.imageAction).toBe("park");
@@ -2029,223 +2038,123 @@ describe("planRegeneration — mode manuel", () => {
 });
 ```
 
-Add `imageMode: "auto"` to every pre-existing call in the file.
-
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `bun test tests/regen-plan.test.ts`
-Expected: FAIL — `imageAction` is `"from-draft"` where `"pick"` / `"park"` is expected.
+Expected: FAIL — `planRegeneration` does not accept `imageMode`, and `"park"` is not a possible `imageAction`.
 
 - [ ] **Step 3: Widen the plan**
 
-In `lib/pipeline/regen-plan.ts`, change `ImageAction` to `"from-draft" | "skip" | "pick" | "park"`, add `imageMode: "auto" | "manual"` to the input type, and replace the final `return`:
+In `lib/pipeline/regen-plan.ts`, change `ImageAction` to `"from-draft" | "skip" | "park"`, add `imageMode: "auto" | "manual"` to the input type, and replace the final `return` (the `candidateCount > 0` path) with:
 
 ```ts
-  // Des candidats existent. Le mode décide qui tranche, et le fait qu'il y ait ou non d'AUTRES
-  // champs cochés décide si une génération complète se justifie. Une régénération « image seule »
-  // ne doit jamais payer une génération d'article entière pour n'en garder que trois colonnes.
-  if (input.imageMode === "manual") {
-    // L'éditeur tranchera depuis le bac : on n'appelle aucun LLM pour l'image, et on retire `image`
-    // des champs appliqués (les colonnes ne bougent qu'au moment du choix).
-    return {
-      ...base,
-      runGeneration: hasOtherFields(fields),
-      imageAction: "park",
-      effectiveFields: { ...fields, image: false },
-    };
-  }
-  if (!hasOtherFields(fields)) return { ...base, runGeneration: false, imageAction: "pick" };
-  return { ...base, imageAction: "from-draft" };
+  // Des candidats existent. Le mode décide QUI tranche.
+  //
+  // En mode AUTO on laisse generateArticle choisir : depuis la génération partielle de main
+  // (lib/ai/generate-article.ts), la sélection pilote la forme du schéma demandé, donc une
+  // régénération « image seule » n'envoie même pas le corps et ne coûte qu'une fraction d'un
+  // article complet. Un appel dédié au choix d'image ferait doublon.
+  if (input.imageMode === "auto") return { ...base, imageAction: "from-draft" };
+
+  // En mode MANUEL, l'éditeur tranchera depuis le bac du /queue : aucun appel LLM pour l'image, et
+  // on retire `image` des champs appliqués (les colonnes ne bougeront qu'au moment du choix). On ne
+  // génère alors que s'il reste d'AUTRES champs cochés — une régénération « image seule » en manuel
+  // se réduit à l'extraction.
+  return {
+    ...base,
+    runGeneration: hasOtherFields(fields),
+    imageAction: "park",
+    effectiveFields: { ...fields, image: false },
+  };
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bun test tests/regen-plan.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing pick-image test**
+- [ ] **Step 5: Update the call site**
 
-Create `tests/pick-image.test.ts`:
-
-```ts
-import { describe, it, expect } from "bun:test";
-import { sanitizeImagePick } from "@/lib/ai/pick-image";
-import type { ImageCandidate } from "@/db";
-
-const candidates: ImageCandidate[] = [
-  { url: "https://a.test/1.jpg", sourceUrl: "https://a.test/article", mediaName: "Média A" },
-  { url: "https://b.test/2.jpg", sourceUrl: "https://b.test/article", mediaName: "Média B" },
-];
-
-describe("sanitizeImagePick", () => {
-  it("accepte une URL de la liste et hérite de la provenance", () => {
-    const p = sanitizeImagePick({ url: "https://b.test/2.jpg" }, candidates);
-    expect(p).toEqual({ url: "https://b.test/2.jpg", sourceUrl: "https://b.test/article", mediaName: "Média B", credit: "Média B" });
-  });
-  it("le crédit du modèle l'emporte s'il est fourni", () => {
-    expect(sanitizeImagePick({ url: "https://a.test/1.jpg", credit: "Photo X / Média A" }, candidates)?.credit)
-      .toBe("Photo X / Média A");
-  });
-  it("rejette une URL hors liste (le modèle a inventé)", () => {
-    expect(sanitizeImagePick({ url: "https://ailleurs.test/z.jpg" }, candidates)).toBeNull();
-  });
-  it("rejette sur une liste vide", () => {
-    expect(sanitizeImagePick({ url: "https://a.test/1.jpg" }, [])).toBeNull();
-  });
-});
-```
-
-- [ ] **Step 6: Run to verify it fails**
-
-Run: `bun test tests/pick-image.test.ts`
-Expected: FAIL — `Cannot find module '@/lib/ai/pick-image'`.
-
-- [ ] **Step 7: Write pick-image**
-
-Create `lib/ai/pick-image.ts`:
+`lib/pipeline/regenerate-core.ts` calls `planRegeneration({ fields, candidateCount })`. Give it the mode:
 
 ```ts
-import { z } from "zod";
-import { generateObject } from "ai";
-import { buildOpenRouterModel } from "./providers";
-import { getPipelineConfig } from "@/lib/config/pipeline-config";
-import { runWithOpenRouterPool } from "./with-token-pool";
-import type { ImageCandidate } from "@/db";
-
-// Appel dédié, BEAUCOUP plus court qu'une génération d'article : on ne régénère pas six champs pour
-// n'en garder qu'un. Utilisé sur le seul chemin « image seule, mode auto » — quand d'autres champs
-// sont cochés, generateArticle a déjà choisi une image contrainte à la même liste de candidats et un
-// second appel serait du gaspillage (voir lib/pipeline/regen-plan.ts).
-const pickSchema = z.object({
-  url: z.string(),
-  credit: z.string().nullish(),
-});
-
-export type PickedImage = ImageCandidate & { credit: string | null };
-
-/**
- * PUR — garde de sortie : une URL choisie DOIT appartenir à la liste de candidats (même règle que
- * sanitizeDraft dans generate-article.ts — un modèle invente régulièrement une URL plausible). La
- * provenance vient toujours du candidat, jamais du modèle ; seul le crédit peut être enrichi par lui.
- */
-export function sanitizeImagePick(
-  pick: { url: string; credit?: string | null },
-  candidates: ImageCandidate[],
-): PickedImage | null {
-  const match = candidates.find((c) => c.url === pick.url);
-  if (match === undefined) return null;
-  return { ...match, credit: pick.credit?.trim() ? pick.credit.trim() : match.mediaName };
-}
-
-export async function pickFeaturedImage(input: {
-  title: string; bodyHtml: string; candidates: ImageCandidate[];
-}): Promise<{ picked: PickedImage | null; via: string }> {
-  if (input.candidates.length === 0) return { picked: null, via: "none" };
-  const cfg = getPipelineConfig();
-  const list = input.candidates.map((c, i) => `${i + 1}. ${c.url} (source : ${c.mediaName})`).join("\n");
-  const prompt = [
-    "Tu choisis l'image à la une d'un article de presse économique panafricaine.",
-    `Titre : ${input.title}`,
-    `Extrait du corps : ${input.bodyHtml.replace(/<[^>]+>/g, " ").slice(0, 1200)}`,
-    "Choisis l'image la plus pertinente et la plus illustrative STRICTEMENT parmi cette liste, en recopiant son URL exacte.",
-    "Évite les logos, bandeaux publicitaires, avatars et icônes.",
-    list,
-  ].join("\n");
-
-  const r = await runWithOpenRouterPool(
-    async (apiKey) => {
-      const { object } = await generateObject({
-        model: buildOpenRouterModel(cfg, apiKey),
-        schema: pickSchema,
-        prompt,
-        providerOptions: { openaiCompatible: { strictJsonSchema: false } },
-      });
-      return object;
-    },
-    // « Flaky » ici = une URL hors liste : le jeton suivant a une vraie chance de mieux faire.
-    (object) => sanitizeImagePick(object, input.candidates) === null,
-  );
-
-  if (!r.ok) return { picked: null, via: "mock" };
-  return { picked: sanitizeImagePick(r.value, input.candidates), via: "openrouter" };
-}
+  const plan = planRegeneration({
+    fields: parsed.data,
+    candidateCount: candidateImages.length,
+    imageMode: opts.imageMode ?? "auto",
+  });
 ```
 
-- [ ] **Step 8: Run to verify it passes**
+Run: `bunx tsc --noEmit`
+Expected: no errors. (The typecheck is required in this task, not deferred to Task 15: without it, this task would gate green on a tree that does not compile.)
 
-Run: `bun test tests/pick-image.test.ts`
-Expected: PASS (4 tests).
+Run: `bun test tests/regenerate-core.test.ts`
+Expected: PASS, unchanged — every existing test omits `imageMode`, so they all take the `"auto"` default and behave exactly as before.
 
-- [ ] **Step 9: Add to the pure lane**
-
-Add `"pick-image.test.ts",` to `PURE_FILES`.
-
-Run: `bun run test:pure`
-Expected: PASS.
-
-- [ ] **Step 10: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add lib/pipeline/regen-plan.ts lib/ai/pick-image.ts tests/regen-plan.test.ts tests/pick-image.test.ts scripts/test-fast.ts
-git commit -m "feat(regenerate): modes auto/manuel du plan et choix d'image dédié"
+git add lib/pipeline/regen-plan.ts lib/pipeline/regenerate-core.ts tests/regen-plan.test.ts
+git commit -m "feat(regenerate): modes auto/manuel du choix d'image dans le plan"
 ```
 
 ---
 
-### Task 15: exécuter les quatre cas dans `regenerateArticle`
+### Task 15: exécuter les modes d'image dans `regenerateArticle`
+
+> **Amendé après la fusion de `origin/main`.** Le chemin « pick » a disparu avec `lib/ai/pick-image.ts` (voir l'encadré de la Task 14) : en mode auto, c'est `generateArticle` — déjà conscient de la sélection depuis `main` — qui choisit l'image dans la liste de candidats. Il ne reste donc que deux comportements à ajouter ici : **garer** les candidats en mode manuel, et remonter `awaitingImage`.
 
 **Files:**
 - Modify: `lib/pipeline/regenerate-core.ts`
 - Test: `tests/regenerate-core.test.ts`
 
 **Interfaces:**
-- Consumes: `planRegeneration` with `imageMode` (Task 14), `pickFeaturedImage` (Task 14), `ImageCandidate` (Task 13).
-- Produces: `regenerateArticle` returns `awaitingImage: true` on the `park` path; writes `articles.pendingImageCandidates` there; writes the picked image columns directly on the `pick` path.
+- Consumes: `planRegeneration` with `imageMode` (Task 14), `ImageCandidate` (Task 13).
+- Produces: `regenerateArticle` writes `articles.pendingImageCandidates` and returns `awaitingImage: true` on the `park` path. The `awaitingImage` field was declared on the return type back in Task 8; this is the task that finally produces it, and `runRegenJob` already maps it to the `awaiting_image` item status.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/regenerate-core.test.ts` (mock `@/lib/ai/pick-image` the same way the file already mocks `generate-article`):
+Add to `tests/regenerate-core.test.ts`. No new module needs mocking — `generateArticle` and `extract` are already mocked in that file:
 
 ```ts
-const { pickFeaturedImage: realPickFeaturedImage } = await import("@/lib/ai/pick-image");
-let pickImpl: () => Promise<{ picked: { url: string; sourceUrl: string; mediaName: string; credit: string | null } | null; via: string }> =
-  async () => ({ picked: null, via: "none" });
-mock.module("@/lib/ai/pick-image", () => ({ pickFeaturedImage: () => pickImpl() }));
-
 describe("regenerateArticle — modes d'image", () => {
   const IMAGE_ONLY = { title: false, body: false, excerpt: false, category: false, tags: false, image: true };
 
-  it("auto, image seule : n'appelle PAS generateArticle et écrit l'image choisie", async () => {
+  it("auto, image seule : passe par generateArticle (génération partielle) et écrit son image", async () => {
     const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
     extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
-    let generated = false;
-    generateArticleImpl = async () => { generated = true; return { draft: draftFixture, via: "openrouter" }; };
-    pickImpl = async () => ({ picked: { url: "https://a.test/i.jpg", sourceUrl: "https://a.test/1", mediaName: "Test", credit: "Test" }, via: "openrouter" });
+    let seenFields: { image: boolean; body: boolean } | undefined;
+    generateArticleImpl = async (input) => {
+      seenFields = (input as { fields: { image: boolean; body: boolean } }).fields;
+      return { draft: { ...draftFixture, featuredImageUrl: "https://a.test/i.jpg", imageCredit: "Test" }, via: "openrouter" };
+    };
 
     const r = await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "auto", timeoutMs: 5000 });
 
     expect(r.ok).toBe(true);
-    expect(generated).toBe(false);
+    expect(r.awaitingImage).toBeFalsy();
+    // La sélection est transmise telle quelle : le corps n'est PAS demandé au modèle.
+    expect(seenFields?.image).toBe(true);
+    expect(seenFields?.body).toBe(false);
     const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
     expect(row.featuredImageUrl).toBe("https://a.test/i.jpg");
-    expect(row.imageCredit).toBe("Test");
-    expect(row.imageSourceUrl).toBe("https://a.test/1");
+    expect(row.pendingImageCandidates).toBeNull();
   });
 
   it("manuel, image seule : aucun LLM, gare les candidats, awaitingImage", async () => {
     const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
     extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg", "https://a.test/j.jpg"], via: "test", attempts: [] });
-    let generated = false, picked = false;
+    let generated = false;
     generateArticleImpl = async () => { generated = true; return { draft: draftFixture, via: "openrouter" }; };
-    pickImpl = async () => { picked = true; return { picked: null, via: "none" }; };
 
     const r = await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "manual", timeoutMs: 5000 });
 
     expect(r.ok).toBe(true);
     expect(r.awaitingImage).toBe(true);
     expect(generated).toBe(false);
-    expect(picked).toBe(false);
     const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg"); // intacte jusqu'au choix
     expect(row.pendingImageCandidates).toEqual([
       { url: "https://a.test/i.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" },
       { url: "https://a.test/j.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" },
@@ -2269,25 +2178,16 @@ describe("regenerateArticle — modes d'image", () => {
 });
 ```
 
-Restore `pickImpl` in the file's `afterAll`: `pickImpl = realPickFeaturedImage as unknown as typeof pickImpl;`
-
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `bun test tests/regenerate-core.test.ts`
-Expected: FAIL — `generated` is `true` and `awaitingImage` is undefined.
+Expected: FAIL — `awaitingImage` is undefined and `pendingImageCandidates` stays null; in the manual image-only case `generated` is `true` because nothing short-circuits the generation yet.
 
-- [ ] **Step 3: Implement the four paths**
+- [ ] **Step 3: Implement the park path**
 
-In `lib/pipeline/regenerate-core.ts`, replace everything from the `planRegeneration` call to the final `return` with:
+In `lib/pipeline/regenerate-core.ts`, right after the `plan.abort` guard, add the parking write and the no-generation short-circuit:
 
 ```ts
-  const plan = planRegeneration({
-    fields: parsed.data,
-    candidateCount: candidates.length,
-    imageMode: opts.imageMode ?? "auto",
-  });
-  if (plan.abort !== null) return { ok: false, message: plan.abort, title: article.title };
-
   // Chemin « choix manuel » : aucun appel LLM pour l'image. On gare les candidats sur l'article —
   // c'est cette colonne, et elle seule, qui alimente le bac du /queue — et on laisse les colonnes
   // d'image intactes jusqu'au choix de l'éditeur.
@@ -2295,45 +2195,15 @@ In `lib/pipeline/regenerate-core.ts`, replace everything from the `planRegenerat
     await db.update(articles).set({ pendingImageCandidates: candidates }).where(eq(articles.id, articleId));
   }
 
-  // Chemin « image seule, mode auto » : un appel dédié bon marché, pas une génération d'article
-  // complète dont on ne garderait que trois colonnes.
-  if (plan.imageAction === "pick") {
-    await opts.onStage?.("generating");
-    const { pickFeaturedImage } = await import("@/lib/ai/pick-image");
-    const { picked } = await pickFeaturedImage({ title: article.title, bodyHtml: article.bodyHtml, candidates });
-    if (picked === null) {
-      return { ok: false, message: "L'IA n'a retenu aucune image parmi les candidates — image inchangée.", title: article.title };
-    }
-    await opts.onStage?.("writing");
-    await db.update(articles).set({
-      featuredImageUrl: picked.url, imageCredit: picked.credit, imageSourceUrl: picked.sourceUrl,
-      pendingImageCandidates: null, updatedAt: new Date(),
-    }).where(eq(articles.id, articleId));
-    await db.insert(articleRevisions).values({
-      articleId, actorId, action: "image régénérée par IA",
-      detail: `Image retenue : ${picked.url}\n— Image précédente : ${article.featuredImageUrl ?? "(aucune)"}`,
-    });
-    return { ok: true, message: "Image à la une régénérée.", title: article.title };
-  }
-
+  // Manuel + image seule : l'extraction a suffi, les candidats sont garés, il n'y a rien à générer.
   if (!plan.runGeneration) {
-    // Manuel + image seule : l'extraction a suffi, les candidats sont garés, rien d'autre à écrire.
     return { ok: true, message: "Sources extraites — image à choisir.", title: article.title, awaitingImage: true };
   }
+```
 
-  await opts.onStage?.("generating");
-  const { generateArticle } = await import("@/lib/ai/generate-article");
-  const categoryNames = (await db.select({ name: wpCategories.name }).from(wpCategories)).map((c) => c.name);
-  const { draft, via, failure, failureDetail } = await generateArticle({ sources: extracted, candidateImages, categories: categoryNames });
-  if (via === "mock") return { ok: false, message: aiFailureMessage(failure ?? "unconfigured", "régénération", failureDetail), title: article.title };
+Then, at the end of the function, carry `awaitingImage` into the success return:
 
-  await opts.onStage?.("writing");
-  const { applyRegeneration } = await import("@/lib/pipeline/regenerate");
-  await applyRegeneration({
-    articleId, prior: { title: article.title, bodyHtml: article.bodyHtml, featuredImageUrl: article.featuredImageUrl, confidenceFlags: article.confidenceFlags },
-    draft, fields: plan.effectiveFields, sourceCount: extracted.length, categoryNames, actorId,
-  });
-
+```ts
   const awaitingImage = plan.imageAction === "park";
   const message = awaitingImage
     ? "Article régénéré — déposé en revue. Image à choisir."
@@ -2343,18 +2213,16 @@ In `lib/pipeline/regenerate-core.ts`, replace everything from the `planRegenerat
   return { ok: true, message, title: article.title, awaitingImage };
 ```
 
-Add `articleRevisions` to the `@/db` import at the top of the file.
-
-- [ ] **Step 4: Run the tests**
+- [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `bun test tests/regenerate-core.test.ts tests/regen-job.test.ts`
-Expected: PASS.
+Expected: PASS. `regen-job` matters here because it is the consumer that maps `awaitingImage` onto the `awaiting_image` item status.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add lib/pipeline/regenerate-core.ts tests/regenerate-core.test.ts
-git commit -m "feat(regenerate): exécute les quatre cas de choix d'image"
+git commit -m "feat(regenerate): mode manuel — garer les candidats au lieu de choisir"
 ```
 
 ---
