@@ -9,6 +9,8 @@ import { hasBeforeState, markProjectReviewedCore } from "@/lib/video/persist";
 import { PageHeader } from "@/components/shell/page-header";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { BriefPanel } from "@/components/video/brief-panel";
+import { ProjectCategorySelect } from "@/components/video/project-category-select";
+import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-categories";
 import { BeatList, type BeatView } from "@/components/video/beat-list";
 import { ImportPanel } from "@/components/video/import-panel";
 import { JournalHistory, type JournalEntryView } from "@/components/video/journal-history";
@@ -90,7 +92,14 @@ export default async function VideoProjectPage({
   // ligne, elles auraient divergé de celles remises à l'agent dès la première retouche.
   const vars: BriefVars = await briefVarsFor(project, variant ?? null);
 
-  const brief = buildBrief(settings.briefTemplate, vars);
+  // La catégorie du projet — mêmes instructions que celles remises à l'agent MCP, parce que les deux
+  // chemins passent par getBriefCategory + buildBrief.
+  const [briefCategory, categoryOptions] = await Promise.all([
+    getBriefCategory(project.categoryId),
+    listVideoCategoryOptions(),
+  ]);
+
+  const brief = buildBrief(settings.briefTemplate, vars, briefCategory);
 
   // Onglet Importer (Task 13) : l'historique du journal (le plus récent en premier, déjà trié par
   // getVideoProject) et l'état de la variante active au moment où la page a été rendue —
@@ -122,7 +131,14 @@ export default async function VideoProjectPage({
           <TabsTrigger value="importer">Importer</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
-          <BriefPanel brief={brief.text} unknownVars={brief.unknown} />
+          <div className="space-y-4">
+            <ProjectCategorySelect
+              projectId={project.id}
+              categoryId={project.categoryId}
+              categories={categoryOptions}
+            />
+            <BriefPanel brief={brief.text} unknownVars={brief.unknown} />
+          </div>
         </TabsContent>
         <TabsContent value="ecriture">
           <div className="space-y-4">

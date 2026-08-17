@@ -14,6 +14,7 @@ import {
 import { buildBrief } from "@/lib/video/brief";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { briefVarsFor, listVideoProjects } from "@/lib/queries/video";
+import { getBriefCategory } from "@/lib/queries/video-categories";
 import { getArticle } from "@/lib/queries/article";
 import { payloadSchema, type Payload } from "@/lib/video/schema";
 import { defaultAccept, type Diff } from "@/lib/video/import";
@@ -147,7 +148,11 @@ async function construireBrief(projectId: string, variantId?: string): Promise<{
 
   const vars = await briefVarsFor(project, variant);
   const settings = await getVideoSettings();
-  return { brief: buildBrief(settings.briefTemplate, vars).text, variantId: variant?.id ?? null };
+  // L'agent reçoit EXACTEMENT le brief affiché à l'humain, instructions de catégorie comprises :
+  // même producteur (buildBrief), mêmes entrées. Sans cette ligne, l'agent écrirait sous un brief
+  // que personne ne voit.
+  const category = await getBriefCategory(project.categoryId);
+  return { brief: buildBrief(settings.briefTemplate, vars, category).text, variantId: variant?.id ?? null };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
