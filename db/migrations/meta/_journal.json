@@ -176,6 +176,13 @@
       "when": 1786911429610,
       "tag": "0024_quick_zombie",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786940914326,
+      "tag": "0025_hot_maestro",
+      "breakpoints": true
     }
   ]
 }

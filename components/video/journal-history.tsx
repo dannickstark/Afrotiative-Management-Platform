@@ -41,6 +41,18 @@ export type JournalEntryView = {
   errorReport: Issue[];
   rawPayload: unknown;
   revertedAt: string | null;
+  // Task 8 — `null` tant qu'aucun humain n'a ouvert le projet depuis cette écriture d'agent. Seules
+  // les entrées `source: "mcp"` en portent une signification : le marquage
+  // (lib/video/persist.ts#markProjectReviewedCore) ne touche jamais les entrées "copier_coller" ou
+  // "manuel", posées par un humain qui n'a rien à relire.
+  reviewedAt: string | null;
+  // Round de correction final, I3 : `applied.before` est-il présent ? Autrement dit, cette entrée
+  // porte-t-elle l'état d'AVANT sans lequel aucune annulation fidèle n'est dérivable
+  // (lib/video/persist.ts#hasBeforeState). Les écritures DIRECTES d'agent (update_beat,
+  // reorder_beats, update_insert, create_video_project) sont journalisées "applique" avec un
+  // `applied` vide : sans ce drapeau, elles offraient un bouton « Annuler » qui ne pouvait que
+  // refuser — et avec un motif faux (« entrée antérieure à l'enregistrement de l'état d'avant »).
+  revertable: boolean;
 };
 
 function JournalRow({ entry }: { entry: JournalEntryView }) {
@@ -68,7 +80,8 @@ function JournalRow({ entry }: { entry: JournalEntryView }) {
     });
   }
 
-  const canRevert = entry.outcome === "applique" && !entry.revertedAt;
+  // `revertable` en plus de l'issue : un recours qui ne peut pas aboutir ne doit pas être offert.
+  const canRevert = entry.outcome === "applique" && !entry.revertedAt && entry.revertable;
 
   return (
     <li className="space-y-2 rounded-md border p-3 text-sm">
@@ -77,6 +90,13 @@ function JournalRow({ entry }: { entry: JournalEntryView }) {
           <span className="text-muted-foreground">{new Date(entry.createdAt).toLocaleString("fr-FR")}</span>
           <Badge variant="outline">{SOURCE_LABEL[entry.source] ?? entry.source}</Badge>
           <Badge variant={OUTCOME_VARIANT[entry.outcome] ?? "outline"}>{OUTCOME_LABEL[entry.outcome] ?? entry.outcome}</Badge>
+          {/* Même vocabulaire/aspect que components/settings/mcp/agent-activity.tsx (Task 7) —
+              une seule façon de dire « non relue » dans toute l'app, pas une seconde inventée ici. */}
+          {entry.source === "mcp" && entry.reviewedAt === null && (
+            <Badge variant="outline" className="bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30">
+              Non relue
+            </Badge>
+          )}
         </div>
         {canRevert && (
           <Button type="button" variant="outline" size="sm" onClick={handleRevert} disabled={isPending}>

@@ -416,3 +416,13 @@ export const revertJournalEntrySchema = z.object({
   journalId: z.string().uuid(),
 });
 export type RevertJournalEntryInput = z.infer<typeof revertJournalEntrySchema>;
+
+// Task 6 (réglages MCP) — le nom qu'un porteur donne à son propre jeton d'API ("Portable", "CI
+// nocturne"…), affiché ensuite dans la liste à côté du préfixe. Même raison d'être hors de
+// lib/actions/mcp-actions.ts que feedSchema/memberSchema ci-dessus : ce fichier n'a PAS besoin d'un
+// directive "use server" (aucun composant client n'importe cette fonction directement), mais la
+// convention du dépôt regroupe ici tous les schémas de validation, gardés ou non.
+export const apiTokenNameSchema = z.object({
+  name: z.string().trim().min(1, "Le nom du jeton est requis.").max(120, "Nom trop long (max 120 caractères)."),
+});
+export type ApiTokenNameInput = z.infer<typeof apiTokenNameSchema>;

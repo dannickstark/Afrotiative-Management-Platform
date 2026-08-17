@@ -783,6 +783,12 @@ export const scriptJournal = pgTable("script_journal", {
   applied: jsonb("applied").$type<Record<string, unknown>>().notNull().default({}),
   outcome: scriptJournalOutcome("outcome").notNull(),
   revertedAt: timestamp("reverted_at"),
+  // Les arguments exacts reçus par l'outil MCP. Quand un agent se comporte mal, c'est la seule
+  // façon de reconstituer ce qu'il a réellement demandé.
+  toolArgs: jsonb("tool_args").$type<Record<string, unknown>>(),
+  // Posé quand un humain ouvre le projet après une écriture d'agent. `null` = non relue.
+  // Sans cette colonne, « non relue » serait une intention plutôt qu'un état.
+  reviewedAt: timestamp("reviewed_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [index("script_journal_project_idx").on(t.projectId, t.createdAt)]);
 
@@ -790,6 +796,32 @@ export const videoSettings = pgTable("video_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
   briefTemplate: text("brief_template").notNull(),
   wordsPerMinute: integer("words_per_minute").notNull().default(155),
+  // Interrupteur global du serveur MCP. Ouvert par défaut : le module n'a d'intérêt que branché.
+  // Sa raison d'être est l'urgence — couper tous les agents d'un geste sans révoquer, puis
+  // recréer, les jetons un par un.
+  mcpEnabled: boolean("mcp_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   updatedBy: text("updated_by").references(() => user.id),
 });
+
+// ---- Sous-projet 1 bis : jetons d'API pour le serveur MCP ----
+// DÉLIBÉRÉMENT différent de `openrouter_tokens`, qui CHIFFRE ses jetons parce qu'il doit les
+// redonner en clair à un fournisseur tiers. Ici, personne n'a jamais besoin du jeton en clair après
+// sa création : on n'en garde donc qu'un HACHÉ, et une fuite de base ne donne aucun accès.
+export const apiTokens = pgTable("api_tokens", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  // Les premiers caractères du jeton, en clair : c'est ce qui permet de RETROUVER la ligne sans
+  // parcourir toute la table, et à l'utilisateur de reconnaître son jeton dans la liste.
+  prefix: text("prefix").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  // Révocation DOUCE : la ligne survit, donc l'historique du journal continue de nommer la personne
+  // qui a écrit. Une suppression dure ferait perdre cette attribution rétroactivement.
+  revokedAt: timestamp("revoked_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("api_tokens_prefix_uq").on(t.prefix),
+  index("api_tokens_user_idx").on(t.userId),
+]);

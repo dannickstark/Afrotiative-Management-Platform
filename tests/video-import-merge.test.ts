@@ -1,5 +1,7 @@
 import { describe, it, expect } from "bun:test";
-import { toSnapshot, computeMerge, applyMerge, type BeatRow } from "@/lib/video/import";
+import {
+  toSnapshot, computeMerge, applyMerge, defaultAccept, type BeatRow,
+} from "@/lib/video/import";
 import type { BeatPayload } from "@/lib/video/schema";
 
 function beat(id: string, over: Partial<BeatPayload> = {}): BeatPayload {
@@ -200,5 +202,43 @@ describe("forme des inserts (I1)", () => {
     const d = computeMerge([row("b-01", 0), row("b-02", 1)], [beat("b-02"), beat("b-03")]);
     const m = applyMerge(d, { accept: ["b-03", "b-02"] }); // b-01 supprimé mais NON retenu
     expect(m.order).toEqual(["b-02", "b-03", "b-01"]);
+  });
+});
+
+// ── Round de correction final, I1 ────────────────────────────────────────────
+// LA règle produit — « sans sélection explicite, on applique les ajouts et les modifications,
+// jamais les suppressions ni les conflits » — n'existait EN CODE qu'en deux copies : une dans
+// lib/mcp/tools.ts (canal agent, sans revue humaine) et une dans components/video/diff-review.tsx
+// (canal humain). Aucune fonction partagée, aucun test d'accord : faire évoluer la règle sur un
+// canal laissait l'autre ouvert. Elle vit désormais ici, dans le module qui porte déjà computeMerge
+// et applyMerge, et les deux canaux la consomment.
+describe("defaultAccept", () => {
+  it("retient les ajouts et les modifications, jamais les suppressions ni les conflits", () => {
+    const d = computeMerge(
+      [row("b-01", 0), row("b-02", 1), row("b-09", 2)],
+      [beat("b-01", { texte: "texte révisé" }), beat("b-02"), beat("b-03")],
+    );
+    expect(d.added.map((a) => a.externalId)).toEqual(["b-03"]);
+    expect(d.modified.map((m) => m.externalId)).toEqual(["b-01"]);
+    expect(d.removed.map((r) => r.externalId)).toEqual(["b-09"]);
+
+    expect([...defaultAccept(d)].sort()).toEqual(["b-01", "b-03"]);
+  });
+
+  it("ne retient pas un conflit — il ne se tranche jamais tout seul", () => {
+    const base = toSnapshot(beat("b-01"));
+    const ours = toSnapshot(beat("b-01", { texte: "version de la rédaction" }));
+    const d = computeMerge(
+      [{ externalId: "b-01", position: 0, snapshot: ours, importedSnapshot: base }],
+      [beat("b-01", { texte: "version de l'agent" })],
+    );
+    expect(d.conflicts.map((c) => c.externalId)).toEqual(["b-01"]);
+    expect(defaultAccept(d)).toEqual([]);
+  });
+
+  it("tolère un diff partiel — celui relu depuis la colonne jsonb du journal peut n'avoir aucune clé", () => {
+    // `script_journal.diff` vaut `{}` sur une entrée rejetée, et lib/mcp/tools.ts lit ce jsonb tel
+    // quel avant de calculer la sélection par défaut : la règle ne doit pas y lever un TypeError.
+    expect(defaultAccept({} as never)).toEqual([]);
   });
 });
