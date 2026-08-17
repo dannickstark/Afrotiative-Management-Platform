@@ -2,7 +2,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, ilike, inArray } from "drizzle-orm";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
-  db, articles, beatInserts, scriptBeats, scriptJournal, scriptVariants, videoProjects,
+  db, articles, beatInserts, scriptBeats, scriptJournal, scriptVariants, videoCategories, videoProjects,
 } from "@/db";
 import { TOOL_REGISTRY, type ToolSpec } from "@/lib/mcp/registry";
 import { requirePermission } from "@/lib/rbac";
@@ -14,7 +14,7 @@ import {
 import { buildBrief } from "@/lib/video/brief";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { briefVarsFor, listVideoProjects } from "@/lib/queries/video";
-import { getBriefCategory } from "@/lib/queries/video-categories";
+import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-categories";
 import { getArticle } from "@/lib/queries/article";
 import { payloadSchema, type Payload } from "@/lib/video/schema";
 import { defaultAccept, type Diff } from "@/lib/video/import";
@@ -213,8 +213,31 @@ async function dispatch(
       };
     }
 
+    case "list_video_categories": {
+      // Projection à TROIS champs seulement (id, nom, description) — jamais `instructions`. Ce
+      // sont des instructions éditoriales, gardées par la permission `video`/`configure`, alors
+      // que les outils MCP de lecture n'exigent que `video`/`read` (voir registerTools) : les
+      // rendre ici accorderait à tout porteur d'un jeton API un accès à du contenu qui exige
+      // ailleurs un droit supérieur. L'agent reçoit les instructions par la voie prévue — le brief
+      // — une fois le projet effectivement rattaché à la catégorie. Ne PAS "utilement" ajouter
+      // `instructions` à cette réponse : ce serait recréer le contournement que cette séparation
+      // existe pour empêcher.
+      return listVideoCategoryOptions();
+    }
+
     // ── Écritures ─────────────────────────────────────────────────────────
     case "create_video_project": {
+      const categoryId = (args.categoryId as string | undefined) ?? null;
+      // Pré-lecture délibérée avant l'écriture, malgré la fenêtre de concurrence qu'elle laisse
+      // ouverte (une catégorie supprimée entre ce SELECT et l'INSERT ferait alors échouer la
+      // contrainte de clé étrangère malgré tout) : l'alternative est de laisser remonter à l'agent
+      // une violation Postgres brute, qu'il ne peut ni comprendre ni corriger. Un refus explicite
+      // et français ("Catégorie introuvable.") est actionnable ; une erreur SQL ne l'est pas.
+      if (categoryId) {
+        const [cat] = await db.select({ id: videoCategories.id }).from(videoCategories)
+          .where(eq(videoCategories.id, categoryId));
+        if (!cat) throw new Error("Catégorie introuvable.");
+      }
       const projectId = await createVideoProjectCore({
         title: args.title as string,
         subject: (args.subject as string | undefined) ?? null,
@@ -224,9 +247,7 @@ async function dispatch(
         // "16:9", fixe.
         aspectRatio: (args.aspectRatio as string | undefined) ?? "16:9",
         articleId: (args.articleId as string | undefined) ?? null,
-        // Aucun outil MCP ne choisit de catégorie : la spec réserve ce choix au produit (dialogue de
-        // création et sélecteur de la page projet). Un agent crée donc toujours un projet non classé.
-        categoryId: null,
+        categoryId,
         userId: actor.userId,
       });
       // Le brief part dans la MÊME réponse que la création : c'est ce qui évite à l'agent un
