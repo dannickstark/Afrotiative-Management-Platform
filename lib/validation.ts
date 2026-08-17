@@ -344,8 +344,28 @@ export const createVideoProjectSchema = z.object({
   targetDurationSec: z.number().int().min(5).max(14400).nullable(),
   aspectRatio: z.enum(["16:9", "9:16", "1:1"]),
   articleId: z.string().uuid().nullable(),
+  categoryId: z.string().uuid().nullable(),
 });
 export type CreateVideoProjectInput = z.infer<typeof createVideoProjectSchema>;
+
+// Catégories de vidéo : les instructions d'un expert, réutilisées à chaque projet de ce type.
+export const videoCategorySchema = z.object({
+  name: z.string().min(1, "Nom requis").max(80),
+  description: z.string().max(300).nullable(),
+  // MÊME borne que briefTemplate ci-dessus : les deux finissent dans le même brief, une limite plus
+  // haute ici rendrait l'autre illusoire.
+  instructions: z.string().min(1, "Les instructions ne peuvent pas être vides").max(20000),
+  position: z.number().int().min(0).max(999),
+});
+export type VideoCategoryInput = z.infer<typeof videoCategorySchema>;
+
+export const videoCategoryIdSchema = z.object({ id: z.string().uuid("Identifiant invalide") });
+
+export const setProjectCategorySchema = z.object({
+  projectId: z.string().uuid("Identifiant invalide"),
+  // `null` = retirer la catégorie du projet.
+  categoryId: z.string().uuid("Identifiant invalide").nullable(),
+});
 
 // Édition d'un beat depuis l'écran de montage — tous les champs de contenu sont optionnels : seuls
 // ceux effectivement modifiés sont envoyés (updateBeatCore ne touche pas les autres).
