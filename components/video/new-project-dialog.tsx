@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createVideoProject } from "@/lib/actions/video-actions";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
+import type { VideoCategoryOption } from "@/lib/queries/video-categories";
 
 const PLATFORMS = ["youtube_long", "youtube_short", "tiktok", "reel", "interview"] as const;
 const RATIOS = ["16:9", "9:16", "1:1"] as const;
@@ -24,18 +25,23 @@ type FormState = {
   targetDurationMin: string;
   aspectRatio: (typeof RATIOS)[number];
   articleId: string;
+  categoryId: string;
 };
 
 const EMPTY: FormState = {
   title: "", subject: "", platform: "youtube_long", targetDurationMin: "",
-  aspectRatio: "16:9", articleId: "",
+  aspectRatio: "16:9", articleId: "", categoryId: "",
 };
 
 const NO_ARTICLE = "__none__";
+const NO_CATEGORY = "__none__";
 
 // Client Component — porte son propre déclencheur (motif AddMemberDialog). `articles` : les
 // articles `approved`/`published` proposés comme source optionnelle du projet (Task 10).
-export function NewProjectDialog({ articles }: { articles: { id: string; title: string }[] }) {
+// `categories` : les catégories de vidéo disponibles, source optionnelle des instructions de brief.
+export function NewProjectDialog({
+  articles, categories,
+}: { articles: { id: string; title: string }[]; categories: VideoCategoryOption[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY);
@@ -69,6 +75,7 @@ export function NewProjectDialog({ articles }: { articles: { id: string; title: 
           targetDurationSec,
           aspectRatio: form.aspectRatio,
           articleId: form.articleId && form.articleId !== NO_ARTICLE ? form.articleId : null,
+          categoryId: form.categoryId && form.categoryId !== NO_CATEGORY ? form.categoryId : null,
         });
         if (!res.ok) {
           setError(res.message ?? "Échec de la création du projet.");
@@ -112,6 +119,32 @@ export function NewProjectDialog({ articles }: { articles: { id: string; title: 
               onChange={(e) => setForm((f) => ({ ...f, subject: e.target.value }))}
               placeholder="Ce que la vidéo doit démontrer ou raconter"
             />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="project-category">Catégorie</Label>
+            <Select
+              value={form.categoryId || NO_CATEGORY}
+              onValueChange={(v) => setForm((f) => ({ ...f, categoryId: !v || v === NO_CATEGORY ? "" : v }))}
+              disabled={isSaving}
+            >
+              <SelectTrigger id="project-category" className="w-full">
+                <SelectValue placeholder="Aucune catégorie" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_CATEGORY}>Aucune catégorie</SelectItem>
+                {categories.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                    {c.description && (
+                      <span className="ml-2 text-xs text-muted-foreground">{c.description}</span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Les instructions de la catégorie seront ajoutées au brief de cette vidéo.
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
