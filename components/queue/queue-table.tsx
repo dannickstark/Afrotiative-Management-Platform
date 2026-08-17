@@ -32,13 +32,27 @@ export function QueueTable({
   const searchParams = useSearchParams();
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [wizardOpen, setWizardOpen] = useState(false);
-  const cols = buildColumns(categories);
+  // Article ciblé par un clic sur le badge « N à choisir » d'une ligne : quand il est défini,
+  // l'assistant s'ouvre scopé à ce seul article plutôt que sur tout le lot en attente. Le bouton en
+  // tête de tableau, lui, laisse ce champ à null (parcours du lot complet).
+  const [focusedArticleId, setFocusedArticleId] = useState<string | null>(null);
 
   // Articles dont une régénération en mode manuel a garé des candidats : la source de vérité
   // reste articles.pending_image_candidates, ces lignes n'en sont qu'une projection pour l'assistant.
   const pendingPicks: PendingPick[] = rows
     .filter((r) => r.pendingImageCandidates.length > 0)
     .map((r) => ({ articleId: r.id, title: r.title, currentImageUrl: r.imageUrl, candidates: r.pendingImageCandidates }));
+
+  // Lot RÉELLEMENT passé à l'assistant : un seul article quand on vient du badge d'une ligne, sinon
+  // tout le lot en attente (bouton en tête de tableau).
+  const activePicks = focusedArticleId
+    ? pendingPicks.filter((p) => p.articleId === focusedArticleId)
+    : pendingPicks;
+
+  const cols = buildColumns(categories, (articleId) => {
+    setFocusedArticleId(articleId);
+    setWizardOpen(true);
+  });
 
   const sorting: SortingState = [{ id: sort.column, desc: sort.direction === "desc" }];
 
@@ -88,15 +102,17 @@ export function QueueTable({
         </Button>
       )}
       <ImagePickWizard
-        // key sur le CONTENU du lot, pas juste monté une fois : pickRegeneratedImage fait
-        // revalidatePath("/queue"), qui rétrécit `pendingPicks` sous l'assistant ouvert et décale
-        // tous les index (le composant possède index/done, rien ne les remet à zéro). Un lot changé
-        // — un pick qui aboutit, ou une session ultérieure avec un nouveau lot en attente — doit
-        // donc démonter/remonter l'assistant plutôt que de faire vivre son état à travers un
+        // key sur le CONTENU du lot RÉELLEMENT transmis (activePicks), pas juste monté une fois :
+        // pickRegeneratedImage fait revalidatePath("/queue"), qui rétrécit `pendingPicks` sous
+        // l'assistant ouvert et décale tous les index (le composant possède index/done, rien ne les
+        // remet à zéro). Un lot changé — un pick qui aboutit, une session ultérieure avec un nouveau
+        // lot en attente, OU un basculement entre mode scopé (un seul article) et mode complet —
+        // doit donc démonter/remonter l'assistant plutôt que de faire vivre son état à travers un
         // tableau `picks` qui a bougé sous lui.
-        key={pendingPicks.map((p) => p.articleId).join("|")}
-        picks={pendingPicks} open={wizardOpen} onOpenChange={setWizardOpen}
-        onAllDone={() => router.refresh()}
+        key={activePicks.map((p) => p.articleId).join("|")}
+        picks={activePicks} open={wizardOpen}
+        onOpenChange={(v) => { setWizardOpen(v); if (!v) setFocusedArticleId(null); }}
+        onAllDone={() => { setFocusedArticleId(null); router.refresh(); }}
       />
       <div className="overflow-x-auto rounded-lg border">
         <Table>
