@@ -31,6 +31,14 @@ Avant d'écrire, cherche sur Internet :
 
 Rattache chaque affirmation chiffrée à une source dans le champ \`sources\` du beat concerné.`;
 
+export type BriefCategory = { name: string; instructions: string };
+
+export function categoryBlock(category: BriefCategory): string {
+  return `## Instructions de la catégorie — ${category.name}
+
+${category.instructions.trim()}`;
+}
+
 /**
  * Interpolation `{{cle}}`. Une variable inconnue est LAISSÉE TELLE QUELLE et remontée à l'appelant :
  * la remplacer par du vide ferait disparaître une faute de frappe dans un prompt qu'on colle sans
@@ -73,7 +81,17 @@ ${JSON.stringify(contractJsonSchema(), null, 2)}
 ${JSON.stringify(EXAMPLE_PAYLOAD, null, 2)}`;
 }
 
-export function buildBrief(template: string, vars: BriefVars): { text: string; unknown: string[] } {
+/**
+ * Le bloc de la catégorie s'insère entre le style maison et le bloc Recherche — jamais après le
+ * contrat, qui doit rester le dernier mot du brief (c'est lui qui garantit que l'import fonctionne).
+ * Catégorie absente ou instructions blanches ⇒ brief strictement identique à celui d'avant.
+ */
+export function buildBrief(
+  template: string, vars: BriefVars, category?: BriefCategory | null,
+): { text: string; unknown: string[] } {
   const rendered = renderTemplate(template, vars);
-  return { text: `${rendered.text}\n\n${RESEARCH_BLOCK}\n\n${contractBlock()}`, unknown: rendered.unknown };
+  const blocks = [rendered.text];
+  if (category && category.instructions.trim() !== "") blocks.push(categoryBlock(category));
+  blocks.push(RESEARCH_BLOCK, contractBlock());
+  return { text: blocks.join("\n\n"), unknown: rendered.unknown };
 }

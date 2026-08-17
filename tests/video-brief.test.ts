@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { renderTemplate, contractBlock, buildBrief, DEFAULT_BRIEF_TEMPLATE, type BriefVars } from "@/lib/video/brief";
+import { renderTemplate, contractBlock, buildBrief, DEFAULT_BRIEF_TEMPLATE, categoryBlock, type BriefVars, type BriefCategory } from "@/lib/video/brief";
 import { payloadSchema, SCHEMA_VERSION } from "@/lib/video/schema";
 
 const VARS: BriefVars = {
@@ -74,5 +74,52 @@ describe("buildBrief", () => {
 
   it("le modèle par défaut n'a aucune variable inconnue", () => {
     expect(buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS).unknown).toEqual([]);
+  });
+});
+
+const CATEGORIE: BriefCategory = {
+  name: "Investigation",
+  instructions: "Chaque affirmation doit citer deux sources indépendantes.",
+};
+
+describe("bloc catégorie", () => {
+  it("titre la section avec le nom et reprend les instructions telles quelles", () => {
+    const b = categoryBlock(CATEGORIE);
+    expect(b).toContain("## Instructions de la catégorie — Investigation");
+    expect(b).toContain("Chaque affirmation doit citer deux sources indépendantes.");
+  });
+
+  it("sans catégorie, le brief est identique à celui d'avant", () => {
+    // Garantie de non-régression : c'est le brief que reçoivent tous les projets existants.
+    expect(buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS, null).text)
+      .toBe(buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS).text);
+  });
+
+  it("place les instructions APRÈS le style maison et AVANT le bloc Recherche", () => {
+    const t = buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS, CATEGORIE).text;
+    const style = t.indexOf("Ligne éditoriale");
+    const categorie = t.indexOf("## Instructions de la catégorie");
+    const recherche = t.indexOf("## Recherche attendue");
+    expect(style).toBeGreaterThan(-1);
+    expect(categorie).toBeGreaterThan(style);
+    expect(recherche).toBeGreaterThan(categorie);
+  });
+
+  it("laisse le contrat en dernier mot du brief", () => {
+    // Le contrat garantit que l'import fonctionne : aucune instruction d'expert ne doit pouvoir le
+    // contredire par simple position dans le texte.
+    const t = buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS, CATEGORIE).text;
+    expect(t.indexOf("## Format de réponse")).toBeGreaterThan(t.indexOf("## Instructions de la catégorie"));
+  });
+
+  it("des instructions blanches ne produisent aucun bloc", () => {
+    // Un titre de section suivi du vide est un signal parasite pour le modèle.
+    const t = buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS, { name: "Vide", instructions: "   \n " }).text;
+    expect(t).not.toContain("## Instructions de la catégorie");
+    expect(t).toBe(buildBrief(DEFAULT_BRIEF_TEMPLATE, VARS).text);
+  });
+
+  it("ne perturbe pas la détection des variables inconnues", () => {
+    expect(buildBrief("Ton : {{inexistante}}", VARS, CATEGORIE).unknown).toEqual(["inexistante"]);
   });
 });
