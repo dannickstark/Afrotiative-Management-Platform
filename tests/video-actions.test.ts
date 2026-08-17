@@ -27,7 +27,7 @@ function payloadWithBeats(beats: Payload["variantes"][number]["beats"]): Payload
 async function newProject(title: string): Promise<{ projectId: string; variantId: string }> {
   const projectId = await createVideoProjectCore({
     title, subject: "sujet", platform: "youtube_long",
-    targetDurationSec: 720, aspectRatio: "16:9", articleId: null, userId: null,
+    targetDurationSec: 720, aspectRatio: "16:9", articleId: null, categoryId: null, userId: null,
   });
   const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.projectId, projectId));
   return { projectId, variantId: variant.id };

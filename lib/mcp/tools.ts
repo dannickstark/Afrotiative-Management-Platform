@@ -219,6 +219,9 @@ async function dispatch(
         // "16:9", fixe.
         aspectRatio: (args.aspectRatio as string | undefined) ?? "16:9",
         articleId: (args.articleId as string | undefined) ?? null,
+        // Aucun outil MCP ne choisit de catégorie : la spec réserve ce choix au produit (dialogue de
+        // création et sélecteur de la page projet). Un agent crée donc toujours un projet non classé.
+        categoryId: null,
         userId: actor.userId,
       });
       // Le brief part dans la MÊME réponse que la création : c'est ce qui évite à l'agent un
