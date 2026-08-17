@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { EmptyState } from "@/components/shell/empty-state";
 import { formatDate } from "@/lib/format";
@@ -36,6 +37,8 @@ export function TokenList({
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [canWrite, setCanWrite] = useState(true);
+  const [canReadArticles, setCanReadArticles] = useState(true);
   const [createError, setCreateError] = useState<string | null>(null);
   const [justCreated, setJustCreated] = useState<{ name: string; token: string } | null>(null);
   const [isCreating, startCreating] = useTransition();
@@ -48,7 +51,7 @@ export function TokenList({
     setCreateError(null);
     startCreating(async () => {
       try {
-        const res = await createApiToken(name.trim());
+        const res = await createApiToken({ name: name.trim(), canWrite, canReadArticles });
         if (!res.ok) {
           setCreateError(res.message);
           toast.error(res.message);
@@ -56,6 +59,8 @@ export function TokenList({
         }
         setJustCreated({ name: name.trim(), token: res.token });
         setName("");
+        setCanWrite(true);
+        setCanReadArticles(true);
         toast.success("Jeton créé.");
         router.refresh();
       } catch (err) {
@@ -117,6 +122,30 @@ export function TokenList({
             placeholder="ex. Claude Desktop, portable"
           />
         </div>
+        <div className="flex items-center gap-3 rounded-lg border border-border px-3 py-2">
+          <Switch
+            id="new-token-can-write" checked={canWrite} disabled={isCreating}
+            onCheckedChange={setCanWrite}
+          />
+          <div className="space-y-0.5">
+            <Label htmlFor="new-token-can-write" className="cursor-pointer">Écriture</Label>
+            <p className="text-xs text-muted-foreground">
+              Décoché, ce jeton ne pourra que lire : ni création de projet, ni import de script.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 rounded-lg border border-border px-3 py-2">
+          <Switch
+            id="new-token-can-read-articles" checked={canReadArticles} disabled={isCreating}
+            onCheckedChange={setCanReadArticles}
+          />
+          <div className="space-y-0.5">
+            <Label htmlFor="new-token-can-read-articles" className="cursor-pointer">Accès aux articles</Label>
+            <p className="text-xs text-muted-foreground">
+              Décoché, ce jeton ne pourra pas lister ni lire les articles de la rédaction.
+            </p>
+          </div>
+        </div>
         {createError && <p className="text-sm text-destructive" role="alert">{createError}</p>}
         <Button onClick={handleCreate} disabled={isCreating} className="self-end">
           {isCreating ? <Loader2 className="animate-spin" aria-hidden /> : <Plus aria-hidden />}
@@ -159,6 +188,8 @@ function TokenListRow({
           <span className="truncate font-medium">{token.name}</span>
           <code className="text-xs text-muted-foreground">{token.prefix}…</code>
           {owner && <span className="truncate text-xs text-muted-foreground">{owner}</span>}
+          {!token.canWrite && <Badge variant="secondary">Lecture seule</Badge>}
+          {!token.canReadArticles && <Badge variant="secondary">Sans articles</Badge>}
           {revoked && (
             <Badge variant="outline" className="bg-[var(--status-draft)]/15 text-[var(--status-draft)] border-[var(--status-draft)]/30">
               Révoqué
