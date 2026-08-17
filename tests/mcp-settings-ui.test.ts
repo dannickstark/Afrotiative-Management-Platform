@@ -69,7 +69,8 @@ describe("ConnectionPanel", () => {
 describe("TokenList — propriétaire du jeton", () => {
   const base: TokenRow = {
     id: "t-1", userId: "u-moi", name: "Portable", prefix: "afro_vid_abc",
-    ownerName: "Awa Diallo", lastUsedAt: null, revokedAt: null, createdAt: new Date("2026-08-01T10:00:00Z"),
+    ownerName: "Awa Diallo", canWrite: true, canReadArticles: true,
+    lastUsedAt: null, revokedAt: null, createdAt: new Date("2026-08-01T10:00:00Z"),
   };
   const autre: TokenRow = {
     ...base, id: "t-2", userId: "u-autre", name: "Poste rédaction", prefix: "afro_vid_xyz",

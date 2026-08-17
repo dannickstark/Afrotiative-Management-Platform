@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { can, requirePermission } from "@/lib/rbac";
 import { createApiTokenCore, revokeApiTokenCore, setMcpEnabledCore } from "@/lib/queries/mcp";
-import { apiTokenNameSchema } from "@/lib/validation";
+import { apiTokenSchema } from "@/lib/validation";
 
 // Voir/gérer SES PROPRES jetons demande "video:manage" (les trois rôles, journaliste compris —
 // c'est lui qui écrit les scripts). `seesAll` (voir les jetons de toute l'équipe, actionner
@@ -21,13 +21,17 @@ async function guard() {
 }
 
 export async function createApiToken(
-  name: string,
+  input: unknown,
 ): Promise<{ ok: true; tokenId: string; token: string } | { ok: false; message: string }> {
   const { user } = await guard();
-  const parsed = apiTokenNameSchema.safeParse({ name });
+  const parsed = apiTokenSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0].message };
 
-  const { tokenId, token } = await createApiTokenCore({ userId: user.id, name: parsed.data.name });
+  const { tokenId, token } = await createApiTokenCore({
+    userId: user.id,
+    name: parsed.data.name,
+    scope: { canWrite: parsed.data.canWrite, canReadArticles: parsed.data.canReadArticles },
+  });
   revalidatePath("/settings/mcp");
   return { ok: true, tokenId, token };
 }

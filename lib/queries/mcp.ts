@@ -8,6 +8,7 @@
 import { desc, eq } from "drizzle-orm";
 import { db, apiTokens, videoProjects, videoSettings, scriptJournal, user as userTable } from "@/db";
 import { generateToken } from "@/lib/mcp/token";
+import type { McpScope } from "@/lib/mcp/scope";
 import { DEFAULT_BRIEF_TEMPLATE } from "@/lib/video/brief";
 import { DEFAULT_WPM } from "@/lib/video/duration";
 
@@ -20,6 +21,8 @@ export type TokenRow = {
   // jetons sans dire à qui ils sont. `null` seulement si la ligne utilisateur a disparu.
   ownerName: string | null;
   prefix: string;
+  canWrite: boolean;
+  canReadArticles: boolean;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
   createdAt: Date;
@@ -29,12 +32,20 @@ export type TokenRow = {
 // n'est ni journalisé (aucun `console.log`, aucune écriture qui le contiendrait), ni relu : la
 // table `api_tokens` ne stocke que `tokenHash` (lib/mcp/token.ts), donc même une relecture complète
 // de la ligne ne pourrait pas le faire réapparaître.
+//
+// `scope` est REQUIS, pas optionnel avec un défaut : le seul appelant est l'action
+// (lib/actions/mcp-actions.ts), qui le reçoit du formulaire. Un défaut ici rendrait invisible un
+// appelant qui l'oublierait — la rétro-compatibilité vient du défaut de COLONNE (db/schema.ts),
+// pas d'un défaut de fonction.
 export async function createApiTokenCore(
-  { userId, name }: { userId: string; name: string },
+  { userId, name, scope }: { userId: string; name: string; scope: McpScope },
 ): Promise<{ tokenId: string; token: string }> {
   const t = generateToken();
   const [row] = await db.insert(apiTokens)
-    .values({ userId, name, prefix: t.prefix, tokenHash: t.tokenHash })
+    .values({
+      userId, name, prefix: t.prefix, tokenHash: t.tokenHash,
+      canWrite: scope.canWrite, canReadArticles: scope.canReadArticles,
+    })
     .returning({ id: apiTokens.id });
   return { tokenId: row.id, token: t.token };
 }
@@ -51,6 +62,8 @@ export async function listTokensCore(
     name: apiTokens.name,
     ownerName: userTable.name,
     prefix: apiTokens.prefix,
+    canWrite: apiTokens.canWrite,
+    canReadArticles: apiTokens.canReadArticles,
     lastUsedAt: apiTokens.lastUsedAt,
     revokedAt: apiTokens.revokedAt,
     createdAt: apiTokens.createdAt,

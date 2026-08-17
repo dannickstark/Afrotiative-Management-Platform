@@ -841,6 +841,11 @@ export const apiTokens = pgTable("api_tokens", {
   // parcourir toute la table, et à l'utilisateur de reconnaître son jeton dans la liste.
   prefix: text("prefix").notNull(),
   tokenHash: text("token_hash").notNull(),
+  // La portée du JETON, distincte du rôle de son propriétaire (lib/mcp/scope.ts). Défaut `true` des
+  // DEUX côtés : c'est ce qui rend la migration rétro-compatible sans réécrire une ligne — un jeton
+  // émis avant les portées conserve exactement les pouvoirs qu'il avait.
+  canWrite: boolean("can_write").notNull().default(true),
+  canReadArticles: boolean("can_read_articles").notNull().default(true),
   lastUsedAt: timestamp("last_used_at"),
   // Révocation DOUCE : la ligne survit, donc l'historique du journal continue de nommer la personne
   // qui a écrit. Une suppression dure ferait perdre cette attribution rétroactivement.
