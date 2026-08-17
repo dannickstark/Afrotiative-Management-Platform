@@ -4,12 +4,13 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import {
   createVideoProjectSchema, updateBeatSchema, updateInsertSchema, prepareImportSchema, applyImportSchema,
-  reorderBeatsSchema, revertJournalEntrySchema,
+  reorderBeatsSchema, revertJournalEntrySchema, setProjectCategorySchema,
 } from "@/lib/validation";
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
   prepareImportCore, applyImportCore, revertJournalEntryCore, RefusalError,
 } from "@/lib/video/persist";
+import { setProjectCategoryCore } from "@/lib/video/categories-persist";
 import type { Diff, Issue } from "@/lib/video/import";
 
 // Round de correction final : toute écriture revalide AUSSI `/video/[id]`, la page où l'édition a
@@ -163,4 +164,20 @@ export async function revertJournalEntry(
   const result = await revertJournalEntryCore(parsed.data.journalId);
   if (result.ok) revalidateVideo();
   return result;
+}
+
+// Changer la catégorie d'un projet vidéo : garde "manage" (comme le reste de ce fichier), pas
+// "configure" — c'est le journaliste qui choisit la catégorie de SA vidéo, "configure" reste
+// réservé à l'édition des catégories elles-mêmes (lib/actions/video-category-actions.ts).
+export async function setProjectCategory(
+  input: unknown,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  const parsed = setProjectCategorySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+
+  const res = await refusable(() => setProjectCategoryCore(parsed.data));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
 }
