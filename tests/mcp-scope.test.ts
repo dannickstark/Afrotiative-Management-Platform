@@ -54,4 +54,14 @@ describe("refusPourPortee", () => {
     const createProject = TOOL_REGISTRY.find((t) => t.name === "create_video_project")!;
     expect(refusPourPortee(createProject, RIEN)).toBe("Ce jeton est en lecture seule. Créez un jeton avec l'écriture pour cette action.");
   });
+
+  // Spec SYNTHÉTIQUE, pas issue du registre : aucun outil "ecriture" + "article" n'existe encore, donc
+  // itérer TOOL_REGISTRY ne peut structurellement pas exercer le cas où les deux refus s'appliquent à
+  // la fois. C'est justement pour verrouiller l'ordre d'évaluation avant qu'un tel outil n'apparaisse
+  // qu'on le construit ici — la signature `Pick<ToolSpec, "kind" | "domain">` de refusPourPortee rend
+  // ce spec minimal suffisant, sans fabriquer un ToolSpec complet.
+  it("conflit entre les deux axes : l'accès aux articles l'emporte, un seul message", () => {
+    const spec = { kind: "ecriture", domain: "article" } as const;
+    expect(refusPourPortee(spec, RIEN)).toBe("Ce jeton n'a pas accès aux articles.");
+  });
 });
