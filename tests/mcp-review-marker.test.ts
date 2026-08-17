@@ -15,7 +15,7 @@ import { cleanupProject } from "./mcp-harness";
 async function newProject(title: string): Promise<string> {
   return createVideoProjectCore({
     title, subject: null, platform: "youtube_long",
-    targetDurationSec: 720, aspectRatio: "16:9", articleId: null, userId: null,
+    targetDurationSec: 720, aspectRatio: "16:9", articleId: null, categoryId: null, userId: null,
   });
 }
 

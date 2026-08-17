@@ -72,6 +72,7 @@ export async function createVideoProjectCore(input: {
   targetDurationSec: number | null;
   aspectRatio: string;
   articleId: string | null;
+  categoryId: string | null;
   userId: string | null;
 }): Promise<string> {
   // Un projet a toujours au moins une variante (spec) : on la crée ici, en position 0, à partir
@@ -82,6 +83,7 @@ export async function createVideoProjectCore(input: {
       title: input.title,
       subject: input.subject,
       articleId: input.articleId,
+      categoryId: input.categoryId,
       createdBy: input.userId,
     }).returning();
 

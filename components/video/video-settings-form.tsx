@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { PageHeader } from "@/components/shell/page-header";
 import { saveVideoSettings } from "@/lib/actions/video-settings-actions";
 import { videoSettingsSchema } from "@/lib/validation";
 
@@ -61,8 +60,6 @@ export function VideoSettingsForm({ settings }: { settings: VideoSettings }) {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <PageHeader title="Vidéo" />
-
       <Card>
         <CardHeader>
           <CardTitle>Modèle de brief</CardTitle>

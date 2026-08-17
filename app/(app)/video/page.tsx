@@ -3,6 +3,7 @@ import { desc, inArray } from "drizzle-orm";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { listVideoProjects } from "@/lib/queries/video";
+import { listVideoCategoryOptions } from "@/lib/queries/video-categories";
 import { PageHeader } from "@/components/shell/page-header";
 import { ProjectList } from "@/components/video/project-list";
 import { NewProjectDialog } from "@/components/video/new-project-dialog";
@@ -13,12 +14,13 @@ export default async function VideoPage() {
   const user = await requireUser();
   requirePermission(user.role, "video", "read");
 
-  const [projects, sourceArticles] = await Promise.all([
+  const [projects, sourceArticles, categories] = await Promise.all([
     listVideoProjects(),
     db.select({ id: articles.id, title: articles.title }).from(articles)
       .where(inArray(articles.status, ["approved", "published"]))
       .orderBy(desc(articles.updatedAt))
       .limit(200),
+    listVideoCategoryOptions(),
   ]);
 
   return (
@@ -26,7 +28,7 @@ export default async function VideoPage() {
       <PageHeader
         title="Vidéo"
         description="Scripts, briefs et montage des projets vidéo."
-        actions={<NewProjectDialog articles={sourceArticles} />}
+        actions={<NewProjectDialog articles={sourceArticles} categories={categories} />}
       />
       <ProjectList projects={projects} />
     </div>
