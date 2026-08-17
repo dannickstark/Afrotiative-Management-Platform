@@ -59,7 +59,7 @@ export function VideoSettingsForm({ settings }: { settings: VideoSettings }) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-2xl space-y-6">
       <Card>
         <CardHeader>
           <CardTitle>Modèle de brief</CardTitle>

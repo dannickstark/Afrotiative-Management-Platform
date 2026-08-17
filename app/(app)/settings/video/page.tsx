@@ -11,7 +11,7 @@ export default async function Page() {
   requirePermission(user.role, "video", "configure");
   const [settings, categories] = await Promise.all([getVideoSettings(), listVideoCategories()]);
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="space-y-6">
       <PageHeader title="Vidéo" />
       <CategoryManager categories={categories} />
       <VideoSettingsForm settings={settings} />

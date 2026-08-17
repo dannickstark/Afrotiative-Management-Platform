@@ -28,11 +28,16 @@ export function ProjectCategorySelect({
   function handleChange(value: string | null) {
     const next = !value || value === NO_CATEGORY ? null : value;
     startSaving(async () => {
-      const res = await setProjectCategory({ projectId, categoryId: next });
-      if (!res.ok) { toast.error(res.message); return; }
-      toast.success("Catégorie mise à jour.");
-      // Le brief est rendu côté serveur : il faut rafraîchir pour le voir se réécrire.
-      router.refresh();
+      try {
+        const res = await setProjectCategory({ projectId, categoryId: next });
+        if (!res.ok) { toast.error(res.message); return; }
+        toast.success("Catégorie mise à jour.");
+        // Le brief est rendu côté serveur : il faut rafraîchir pour le voir se réécrire.
+        router.refresh();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Échec de la mise à jour.";
+        toast.error(message);
+      }
     });
   }
 
@@ -46,7 +51,12 @@ export function ProjectCategorySelect({
         <SelectContent>
           <SelectItem value={NO_CATEGORY}>Aucune catégorie</SelectItem>
           {categories.map((c) => (
-            <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+            <SelectItem key={c.id} value={c.id}>
+              {c.name}
+              {c.description && (
+                <span className="ml-2 text-xs text-muted-foreground">{c.description}</span>
+              )}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>

@@ -63,7 +63,9 @@ export function CategoryManager({ categories }: { categories: VideoCategoryRow[]
                 <TableRow key={c.id}>
                   <TableCell className="font-medium">{c.name}</TableCell>
                   <TableCell className="text-muted-foreground">{c.description ?? "—"}</TableCell>
-                  <TableCell className="max-w-md truncate text-muted-foreground">{c.instructions}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <span className="block max-w-md truncate">{c.instructions}</span>
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{c.projectCount}</TableCell>
                   <TableCell className="text-right">
                     <Button variant="ghost" size="icon" aria-label={`Modifier ${c.name}`} onClick={() => setEditing(c)}>

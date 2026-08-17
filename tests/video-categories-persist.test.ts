@@ -85,6 +85,10 @@ describe("rattachement d'un projet", () => {
     expect(p).toBeDefined();
     expect(p.categoryId).toBeNull();
   });
+
+  it("supprimer un identifiant inexistant est un refus métier, symétrique à updateVideoCategoryCore", async () => {
+    await expect(deleteVideoCategoryCore(crypto.randomUUID())).rejects.toBeInstanceOf(RefusalError);
+  });
 });
 
 describe("getBriefCategory", () => {

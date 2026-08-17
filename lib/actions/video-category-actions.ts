@@ -69,7 +69,8 @@ export async function deleteVideoCategory(
   const parsed = videoCategoryIdSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
 
-  await deleteVideoCategoryCore(parsed.data.id);
+  const res = await refusable(() => deleteVideoCategoryCore(parsed.data.id));
+  if (!res.ok) return res;
   revalidate();
   return { ok: true };
 }

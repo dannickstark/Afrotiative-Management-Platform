@@ -61,7 +61,9 @@ export async function updateVideoCategoryCore(
 // Les projets rattachés retombent sur « aucune catégorie » par le ON DELETE SET NULL du schéma —
 // rien à faire ici, et surtout aucune suppression en cascade de projets.
 export async function deleteVideoCategoryCore(id: string): Promise<void> {
-  await db.delete(videoCategories).where(eq(videoCategories.id, id));
+  const deleted = await db.delete(videoCategories).where(eq(videoCategories.id, id))
+    .returning({ id: videoCategories.id });
+  if (deleted.length === 0) throw new RefusalError("Catégorie introuvable.");
 }
 
 export async function setProjectCategoryCore(
