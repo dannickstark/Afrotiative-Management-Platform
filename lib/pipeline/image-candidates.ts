@@ -26,15 +26,15 @@ const CHROME_WORDS = [
 // Un "mot" de chrome ne doit matcher qu'en tant que segment complet — pas en sous-chaîne d'un mot
 // plus long. `\b` est INSUFFISANT ici : en JS, `_` et les chiffres font partie de `\w`, donc `\b`
 // NE borne PAS sur eux — `/\blogo\b/i.test("site_logo_2024.png")` est `false`. On utilise donc des
-// lookarounds explicites qui exigent qu'un caractère alphanumérique [A-Za-z0-9] NE précède/suive PAS
-// le mot : "site_logo_2024.png" matche désormais (le `_` sépare bien "logo" du reste), tandis que
-// "iconic", "socialite" et un chiffre accolé sans séparateur ("logo2.png", où le chiffre PROLONGE le
-// mot plutôt que de le border) ne matchent toujours pas.
+// lookarounds explicites exigeant qu'une LETTRE ne précède/suive pas le mot. Le `_` ET les chiffres
+// bornent donc tous les deux : "site_logo_2024.png" et "logo2.png" matchent, alors que "iconic" —
+// où une vraie lettre prolonge le mot — ne matche pas. Les chiffres bornent délibérément : un
+// suffixe numérique (`logo2`, `banner3`) est une numérotation de fichier, pas un mot différent.
 // (Tradeoff assumé : ceci matche aussi bien dans le path que dans la query — un mot de chrome
 // apparaissant dans un paramètre de requête sans rapport avec le fichier serait donc, lui aussi,
 // considéré comme du chrome. On ne restructure pas la mécanique de matching pour ce cas rare.)
 const CHROME_PATTERN = new RegExp(
-  `(?:${CHROME_WORDS.map((w) => `(?<![A-Za-z0-9])${w}(?![A-Za-z0-9])`).join("|")})`,
+  `(?:${CHROME_WORDS.map((w) => `(?<![A-Za-z])${w}(?![A-Za-z])`).join("|")})`,
   "i",
 );
 

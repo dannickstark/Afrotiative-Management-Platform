@@ -48,16 +48,16 @@ describe("filterImageCandidates", () => {
     ]);
   });
 
-  it("borne bien le mot de chrome quand il est délimité par `_` (site_logo_2024.png est écarté — `\\b` seul y échouait) et ne matche pas quand un chiffre PROLONGE le mot sans séparateur (logo2.png, comme iconic, survit)", () => {
+  it("borne le mot de chrome sur `_` ET sur les chiffres (site_logo_2024.png et logo2.png sont écartés — `\\b` seul échouait sur les deux)", () => {
     const out = filterImageCandidates([
       c("https://x.test/photo-legitime.jpg"),
       c("https://x.test/assets/site_logo_2024.png"),
       c("https://x.test/assets/logo2.png"),
+      c("https://x.test/assets/banner3.png"),
     ]);
-    expect(out.map((i) => i.url)).toEqual([
-      "https://x.test/photo-legitime.jpg",
-      "https://x.test/assets/logo2.png",
-    ]);
+    // Seule la photo survit : un suffixe numérique est une numérotation de fichier, pas un mot
+    // différent — `logo2` reste du chrome.
+    expect(out.map((i) => i.url)).toEqual(["https://x.test/photo-legitime.jpg"]);
   });
 
   it("ne se laisse pas piéger par des segments légitimes contenant 'icon' ou 'social' en sous-chaîne (ex: iconic, socialite)", () => {
