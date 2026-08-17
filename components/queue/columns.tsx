@@ -13,8 +13,13 @@ import { relativeDate, type ArticleStatus } from "@/lib/format";
 
 // Fabrique (et non un tableau statique) : la colonne « Complétude » rend désormais <FixPopover>,
 // qui a besoin de la liste des catégories pour son sélecteur — thread depuis QueueView →
-// QueueTable → buildColumns.
-export function buildColumns(categories: { id: string; name: string }[]): ColumnDef<QueueRow>[] {
+// QueueTable → buildColumns. `onPickImages` suit le même principe pour le badge « à choisir » de
+// la colonne « Image » : il ouvre l'assistant SCOPÉ à cet article, contrairement au bouton en tête
+// de tableau qui parcourt tout le lot en attente.
+export function buildColumns(
+  categories: { id: string; name: string }[],
+  onPickImages: (articleId: string) => void,
+): ColumnDef<QueueRow>[] {
   return [
     { id: "select", enableSorting: false,
       header: ({ table }) => (
@@ -51,9 +56,19 @@ export function buildColumns(categories: { id: string; name: string }[]): Column
               </div>
             )}
             {row.original.pendingImageCount > 0 && (
-              <Badge variant="secondary" title="Une régénération a trouvé des images candidates en attente de votre choix">
-                {row.original.pendingImageCount} à choisir
-              </Badge>
+              // Vrai bouton (focusable au clavier), pas un badge inerte : c'est l'élément qui
+              // attire l'œil dans la ligne, il doit donc être le point d'entrée réel de
+              // l'assistant, scopé à CET article (contrairement au bouton en tête de tableau).
+              <button
+                type="button"
+                onClick={() => onPickImages(row.original.id)}
+                title="Choisir l'image à la une de cet article"
+                aria-label="Choisir l'image à la une de cet article"
+              >
+                <Badge variant="secondary" className="cursor-pointer hover:bg-secondary/80">
+                  {row.original.pendingImageCount} à choisir
+                </Badge>
+              </button>
             )}
           </div>
         );

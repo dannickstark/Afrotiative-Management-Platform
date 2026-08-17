@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/validation";
 import { aiFailureMessage } from "@/lib/ai/failure-message";
 import { planRegeneration } from "@/lib/pipeline/regen-plan";
+import { filterImageCandidates } from "@/lib/pipeline/image-candidates";
 import type { RegenStage } from "@/lib/pipeline/regen-live";
 
 // Cœur de la régénération, par article — appelé depuis lib/pipeline/regen-job.ts pour chaque
@@ -63,18 +64,24 @@ export async function regenerateArticle(
   }));
 
   const extracted: { mediaName: string; url: string; text: string }[] = [];
-  const candidates: ImageCandidate[] = [];
+  const rawCandidates: ImageCandidate[] = [];
   for (const r of results) {
     if (r === null) continue;
     extracted.push({ mediaName: r.mediaName, url: r.url, text: r.text });
     // Une même image peut être servie par deux sources — on déduplique sur l'URL, en gardant la
     // PREMIÈRE provenance vue (l'ordre des sources est stable, celui de article_sources).
     for (const img of r.images) {
-      if (!candidates.some((c) => c.url === img)) {
-        candidates.push({ url: img, sourceUrl: r.url, mediaName: r.mediaName });
+      if (!rawCandidates.some((c) => c.url === img)) {
+        rawCandidates.push({ url: img, sourceUrl: r.url, mediaName: r.mediaName });
       }
     }
   }
+  // Nettoie le bruit avant que la liste ne serve à quoi que ce soit : chrome de site, vignettes
+  // minuscules et variantes de redimensionnement de la même photo (voir lib/pipeline/image-
+  // candidates.ts). Le résultat alimente À LA FOIS le choix de l'IA (mode auto, candidateImages
+  // ci-dessous) et le bac de choix manuel du /queue (candidates, garé plus bas) — les deux chemins
+  // doivent voir la même liste nettoyée.
+  const candidates = filterImageCandidates(rawCandidates);
   const candidateImages = candidates.map((c) => c.url);
   if (extracted.length === 0) return { ok: false, message: "Impossible d'extraire les sources (indisponibles ou extracteur non configuré).", title: article.title };
 

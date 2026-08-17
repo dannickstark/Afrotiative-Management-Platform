@@ -62,7 +62,7 @@ export function ImagePickWizard({ picks, open, onOpenChange, onAllDone }: {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-3xl">
+      <DialogContent className="sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle>Choisir l&apos;image à la une</DialogTitle>
           <DialogDescription>
@@ -70,7 +70,9 @@ export function ImagePickWizard({ picks, open, onOpenChange, onAllDone }: {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-[200px_1fr]">
+        {/* Colonne de référence réduite à 150px (au lieu de 200px) : sans image actuelle elle
+            n'affiche que le mot « Aucune » et ne doit pas priver la grille de candidats d'espace. */}
+        <div className="grid gap-4 sm:grid-cols-[150px_1fr]">
           <div className="space-y-1">
             <p className="text-sm font-medium">Image actuelle</p>
             {current.currentImageUrl
@@ -78,7 +80,14 @@ export function ImagePickWizard({ picks, open, onOpenChange, onAllDone }: {
               ? <img src={current.currentImageUrl} alt="" className="w-full rounded border object-cover" />
               : <p className="text-sm text-muted-foreground">Aucune</p>}
           </div>
-          <div className="grid max-h-96 grid-cols-2 gap-2 overflow-y-auto lg:grid-cols-3">
+          {/* Hauteur de vignette FIXE (h-28), pas aspect-video : dans une grille dont la hauteur est
+              plafonnée, les lignes auto-dimensionnées se compressent pour tenir dans max-h plutôt que
+              de déborder, et aspect-ratio perd face à une hauteur de ligne devenue trop petite —
+              object-cover réduit alors chaque photo à une lamelle illisible. Une hauteur fixe empêche
+              les lignes de se comprimer : la grille est alors forcée de déborder et de défiler
+              (overflow-y-auto) au lieu de tasser les images. Le plafond est aussi relevé (32rem) pour
+              exploiter la largeur du dialogue élargi (sm:max-w-5xl) plutôt que le 3xl d'origine.  */}
+          <div className="grid max-h-[32rem] grid-cols-2 gap-2 overflow-y-auto lg:grid-cols-3">
             {current.candidates.map((c) => (
               <button
                 key={c.url} type="button" disabled={busy} onClick={() => void choose(c)}
@@ -86,7 +95,7 @@ export function ImagePickWizard({ picks, open, onOpenChange, onAllDone }: {
                 title={`${c.mediaName} — ${c.url}`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element -- idem */}
-                <img src={c.url} alt="" className="aspect-video w-full object-cover" />
+                <img src={c.url} alt="" className="h-28 w-full object-cover" />
                 <span className="block truncate px-1 py-0.5 text-xs text-muted-foreground">{c.mediaName}</span>
               </button>
             ))}
