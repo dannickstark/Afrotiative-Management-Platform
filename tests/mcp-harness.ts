@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { generateToken } from "@/lib/mcp/token";
 import { registerTools } from "@/lib/mcp/tools";
 import type { McpActor } from "@/lib/mcp/auth";
+import { FULL_SCOPE, type McpScope } from "@/lib/mcp/scope";
 import type { Role } from "@/lib/auth";
 
 // Harnais des tests MCP (fichier NON-test : aucun `describe` ici). Il monte un vrai serveur MCP et
@@ -23,7 +24,10 @@ const ROLE_SANS_DROIT = "porteur_sans_droit" as Role;
 
 export async function makeActor(
   role: Role,
-  opts?: { revokeVideoManage?: boolean },
+  // `scope` par défaut à `FULL_SCOPE` : les tests écrits avant la portée (Task 3) construisent leurs
+  // acteurs sans jamais la mentionner, et doivent continuer à se comporter comme un jeton d'avant la
+  // portée — c'est exactement ce que `FULL_SCOPE` représente (lib/mcp/scope.ts).
+  opts?: { revokeVideoManage?: boolean; scope?: McpScope },
 ): Promise<TestActor> {
   const userId = `test-mcp-${crypto.randomUUID()}`;
   await db.insert(userTable).values({
@@ -41,6 +45,7 @@ export async function makeActor(
     userId,
     tokenId: token.id,
     role: opts?.revokeVideoManage ? ROLE_SANS_DROIT : role,
+    scope: opts?.scope ?? FULL_SCOPE,
     cleanup: async () => {
       // `api_tokens.user_id` est en cascade, mais on supprime explicitement : le nettoyage doit
       // rester lisible même si la contrainte change.

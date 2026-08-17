@@ -7,6 +7,7 @@ import {
 import { TOOL_REGISTRY, type ToolSpec } from "@/lib/mcp/registry";
 import { requirePermission } from "@/lib/rbac";
 import type { McpActor } from "@/lib/mcp/auth";
+import { refusPourPortee } from "@/lib/mcp/scope";
 import {
   applyImportCore, createVideoProjectCore, prepareImportCore, readScriptCore, reorderBeatsCore,
   updateBeatCore, updateBeatInsertCore,
@@ -62,7 +63,11 @@ export function registerTools(server: McpServer, actor: McpActor): void {
       spec.name,
       { title: spec.name, description: spec.description, inputSchema: schemaEnregistrable(spec) },
       async (args: Record<string, unknown>) => {
+        // Le RÔLE d'abord, la PORTÉE ensuite : la portée d'un jeton ne doit jamais pouvoir accorder
+        // ce que le rôle refuse — elle ne fait que retirer (lib/mcp/scope.ts).
         if (spec.kind === "ecriture") requirePermission(actor.role, "video", "manage");
+        const refus = refusPourPortee(spec, actor.scope);
+        if (refus) throw new Error(refus);
         const payload = await dispatch(spec.name, args, actor);
         return { content: [{ type: "text" as const, text: JSON.stringify(payload) }] };
       },

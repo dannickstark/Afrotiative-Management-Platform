@@ -4,8 +4,9 @@ import { prefixOf, tokenMatches } from "@/lib/mcp/token";
 import { isSessionUsable } from "@/lib/session";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import type { Role } from "@/lib/auth";
+import type { McpScope } from "@/lib/mcp/scope";
 
-export type McpActor = { userId: string; role: Role; tokenId: string };
+export type McpActor = { userId: string; role: Role; tokenId: string; scope: McpScope };
 export type AuthOutcome =
   | { ok: true; actor: McpActor }
   | { ok: false; status: 401 | 403 | 503; message: string };
@@ -45,6 +46,9 @@ export async function authenticateMcp(authorizationHeader: string | null): Promi
 
   return {
     ok: true,
-    actor: { userId: row.userId, role: owner.role, tokenId: row.id },
+    actor: {
+      userId: row.userId, role: owner.role, tokenId: row.id,
+      scope: { canWrite: row.canWrite, canReadArticles: row.canReadArticles },
+    },
   };
 }

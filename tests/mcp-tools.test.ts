@@ -357,3 +357,42 @@ describe("outils MCP", () => {
       .rejects.toThrow();
   }, 30_000);
 });
+
+// ── Task 3 : la portée du jeton s'applique à chaque appel ───────────────────
+// Deux acteurs au rôle « editor » (donc AVEC video:manage) mais à la portée réduite : si le refus
+// venait du rôle, ces tests seraient verts pour la mauvaise raison. C'est la portée, et seulement
+// elle, qui doit produire le refus ici.
+describe("portée du jeton au dispatch", () => {
+  let lectureSeule: TestActor;
+  let sansArticles: TestActor;
+
+  beforeAll(async () => {
+    lectureSeule = await makeActor("editor", { scope: { canWrite: false, canReadArticles: true } });
+    sansArticles = await makeActor("editor", { scope: { canWrite: true, canReadArticles: false } });
+  });
+  afterAll(async () => {
+    await lectureSeule.cleanup();
+    await sansArticles.cleanup();
+  });
+
+  it("un jeton en lecture seule est refusé à l'écriture, avec un message actionnable", async () => {
+    await expect(callTool(lectureSeule, "create_video_project", {
+      title: "Test MCP — refus de portée", platform: "youtube_long",
+    })).rejects.toThrow("Ce jeton est en lecture seule.");
+  }, 30_000);
+
+  it("le même jeton lit sans encombre", async () => {
+    const r = await callTool(lectureSeule, "list_video_projects", {});
+    expect(Array.isArray(r)).toBe(true);
+  }, 30_000);
+
+  it("un jeton sans accès aux articles est refusé sur get_article", async () => {
+    await expect(callTool(sansArticles, "get_article", { articleId: crypto.randomUUID() }))
+      .rejects.toThrow("Ce jeton n'a pas accès aux articles.");
+  }, 30_000);
+
+  it("le même jeton garde le domaine vidéo", async () => {
+    const r = await callTool(sansArticles, "list_video_categories", {});
+    expect(Array.isArray(r)).toBe(true);
+  }, 30_000);
+});
