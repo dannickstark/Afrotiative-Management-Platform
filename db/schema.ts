@@ -658,6 +658,28 @@ export const scriptJournalSource = pgEnum("script_journal_source", ["copier_coll
 // simplement en attente de décision.
 export const scriptJournalOutcome = pgEnum("script_journal_outcome", ["rejete", "en_attente", "applique", "annule"]);
 
+// Les instructions d'un expert pour un type de vidéo (storytelling, interview, investigation…).
+// Écrites une fois en Réglages, elles sont injectées automatiquement dans le brief de tout projet
+// rattaché — c'est ce qui rend le savoir éditorial réutilisable sans recopie manuelle.
+export const videoCategories = pgTable("video_categories", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  // Une ligne, montrée sous le nom dans le menu de sélection : ce qui aide à CHOISIR. Distincte des
+  // instructions, jamais affichées au moment du choix.
+  description: text("description"),
+  instructions: text("instructions").notNull(),
+  position: integer("position").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  // C'est du contenu éditorial : savoir qui a touché aux instructions en dernier compte.
+  updatedBy: text("updated_by").references(() => user.id),
+}, (t) => [
+  // Insensible à la casse : deux « Interview » dans un menu déroulant sont indiscernables pour
+  // l'employé qui choisit.
+  uniqueIndex("video_categories_name_unique").on(sql`lower(${t.name})`),
+  index("video_categories_position_idx").on(t.position),
+]);
+
 export const videoProjects = pgTable("video_projects", {
   id: uuid("id").primaryKey().defaultRandom(),
   title: text("title").notNull(),
@@ -665,12 +687,15 @@ export const videoProjects = pgTable("video_projects", {
   status: videoProjectStatus("status").notNull().default("brouillon"),
   // Origine double (spec §décision 6) : un projet dérive d'un article approuvé OU naît autonome.
   articleId: uuid("article_id").references(() => articles.id),
+  // `set null` et non `cascade` : supprimer une catégorie ne doit JAMAIS détruire un projet vidéo.
+  categoryId: uuid("category_id").references(() => videoCategories.id, { onDelete: "set null" }),
   createdBy: text("created_by").references(() => user.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
   index("video_projects_status_idx").on(t.status),
   index("video_projects_article_idx").on(t.articleId),
+  index("video_projects_category_idx").on(t.categoryId),
 ]);
 
 export const scriptVariants = pgTable("script_variants", {
