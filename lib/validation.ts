@@ -118,6 +118,10 @@ export const pipelineSettingsSchema = z.object({
   // Default recency cutoff (hours). Nullable = "no limit". `.default(null)` keeps existing callers
   // that don't send the field valid (mirrors alertEmailEnabled's default-for-compat pattern).
   defaultMaxItemAgeHours: z.number().int().positive("Doit être un entier positif").max(720, "Maximum 720 heures (30 jours)").nullable().default(null),
+  // `.default("auto")` (et non un enum nu) pour la même raison qu'alertEmailEnabled ci-dessus : le
+  // payload existant de PipelineSettingsForm n'envoie pas encore ce champ, et un champ requis
+  // casserait le safeParse côté client au moment même où ce schéma change.
+  regenerateImageMode: z.enum(["auto", "manual"]).default("auto"),
 });
 export type PipelineSettingsInput = z.infer<typeof pipelineSettingsSchema>;
 
@@ -144,6 +148,26 @@ export const regenerateFieldsSchema = z.object({
   category: z.boolean(), tags: z.boolean(), image: z.boolean(),
 }).refine((f) => Object.values(f).some(Boolean), { message: "Sélectionnez au moins un champ à régénérer." });
 export type RegenerateFieldsInput = z.infer<typeof regenerateFieldsSchema>;
+
+// Entrée de startRegenJob. Le plafond de 10 est la même garde de coût que la barre d'actions du
+// /queue applique côté client (extraction réseau + appel IA par article) — répété ici parce qu'une
+// action serveur ne fait jamais confiance à la garde d'UI.
+export const startRegenJobSchema = z.object({
+  articleIds: z.array(z.string().uuid()).min(1, "Sélectionnez au moins un article.").max(10, "Maximum 10 articles par renvoi."),
+  fields: regenerateFieldsSchema,
+  imageMode: z.enum(["auto", "manual"]).default("auto"),
+});
+export type StartRegenJobInput = z.infer<typeof startRegenJobSchema>;
+
+// Choix d'image manuel. `null` = « Aucune image » : on vide la liste en attente SANS toucher à
+// l'image en place (l'invariant « ne jamais détruire une image » vaut aussi pour un choix humain —
+// vider l'image est une action distincte, disponible dans le panneau image de l'article).
+export const imagePickSchema = z.object({
+  url: z.string().url(),
+  credit: z.string().nullable(),
+  sourceUrl: z.string().url().nullable(),
+}).nullable();
+export type ImagePickInput = z.infer<typeof imagePickSchema>;
 
 export const improveInputSchema = z.object({
   instruction: z.string().max(500, "Instruction trop longue (max 500 caractères).").optional(),

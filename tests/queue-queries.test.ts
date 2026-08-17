@@ -64,4 +64,12 @@ describe("parseQueueSearchParams", () => {
   it("prend la première valeur d'un paramètre répété", () => {
     expect(parseQueueSearchParams({ q: ["alpha", "beta"] }).search).toBe("alpha");
   });
+
+  it("?img=pending active le filtre du bac d'images", () => {
+    expect(parseQueueSearchParams({ img: "pending" }).pendingImage).toBe(true);
+  });
+  it("une valeur img inconnue est ignorée", () => {
+    expect(parseQueueSearchParams({ img: "nimporte" }).pendingImage).toBeUndefined();
+    expect(parseQueueSearchParams({}).pendingImage).toBeUndefined();
+  });
 });

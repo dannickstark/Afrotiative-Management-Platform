@@ -22,14 +22,22 @@ const ALL_CHECKED: RegenerateFieldsInput = { title: true, body: true, excerpt: t
 // Variante « N articles » de RegenerateDialog (components/article/regenerate-dialog.tsx) : mêmes six
 // cases, même défaut (tout coché). Présentationnel uniquement — c'est la barre d'actions parente qui
 // possède l'appel serveur, le pending et le rapport de succès partiel (on réutilise sa machinerie).
-export function BulkRegenerateDialog({ count, disabled, onConfirm }:
-  { count: number; disabled?: boolean; onConfirm: (fields: RegenerateFieldsInput) => void }) {
+export function BulkRegenerateDialog({ count, disabled, onConfirm, defaultImageMode }:
+  {
+    count: number; disabled?: boolean;
+    onConfirm: (fields: RegenerateFieldsInput, imageMode: "auto" | "manual") => void;
+    defaultImageMode: "auto" | "manual";
+  }) {
   const [open, setOpen] = useState(false);
   const [fields, setFields] = useState<RegenerateFieldsInput>(ALL_CHECKED);
+  const [imageMode, setImageMode] = useState<"auto" | "manual">(defaultImageMode);
 
   function handleOpenChange(next: boolean) {
     setOpen(next);
-    if (!next) setFields(ALL_CHECKED); // Reset à « tout coché » à chaque fermeture.
+    if (!next) {
+      setFields(ALL_CHECKED); // Reset à « tout coché » à chaque fermeture.
+      setImageMode(defaultImageMode);
+    }
   }
 
   function toggle(key: FieldKey) {
@@ -40,7 +48,7 @@ export function BulkRegenerateDialog({ count, disabled, onConfirm }:
 
   function handleConfirm() {
     if (noneChecked) return;
-    onConfirm(fields);
+    onConfirm(fields, imageMode);
     handleOpenChange(false);
   }
 
@@ -68,6 +76,21 @@ export function BulkRegenerateDialog({ count, disabled, onConfirm }:
             </Label>
           ))}
         </div>
+        {fields.image && (
+          <fieldset className="space-y-1 rounded border p-2">
+            <legend className="px-1 text-sm font-medium">Choix de l&apos;image</legend>
+            {([["auto", "L'IA choisit parmi les images trouvées"], ["manual", "Je choisis moi-même (depuis la file)"]] as const).map(([value, label]) => (
+              <Label key={value} htmlFor={`bulk-regen-mode-${value}`} className="flex cursor-pointer items-center gap-2 font-normal">
+                <input
+                  id={`bulk-regen-mode-${value}`} type="radio" name="bulk-regen-mode"
+                  checked={imageMode === value}
+                  onChange={() => setImageMode(value)}
+                />
+                {label}
+              </Label>
+            ))}
+          </fieldset>
+        )}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)}>Annuler</Button>
           <Button type="button" onClick={handleConfirm} disabled={noneChecked}>

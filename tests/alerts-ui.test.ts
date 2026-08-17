@@ -204,6 +204,7 @@ describe("persistPipelineSettings — alert-email fields round-trip (SP9b Findin
     alertEmailEnabled: false,
     alertEmailRecipients: null as string | null,
     defaultMaxItemAgeHours: null as number | null,
+    regenerateImageMode: "auto" as "auto" | "manual",
   };
 
   it("persists alertEmailEnabled=true + a recipients list (the exact write that was a no-op before the fix)", async () => {

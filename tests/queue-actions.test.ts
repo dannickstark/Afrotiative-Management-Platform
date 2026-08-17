@@ -60,7 +60,8 @@ mock.module("next/cache", () => ({
   revalidateTag: realRevalidateTag,
 }));
 
-const { bulkApprove, bulkReject, regenerateInQueue } = await import("@/lib/actions/queue-actions");
+const { bulkApprove, bulkReject } = await import("@/lib/actions/queue-actions");
+const { startRegenJob } = await import("@/lib/actions/regen-actions");
 
 const ALL_FIELDS = { title: true, body: true, excerpt: true, category: true, tags: true, image: true };
 
@@ -145,27 +146,20 @@ describe("bulkReject", () => {
   });
 });
 
-// regenerateInQueue est l'action UNITAIRE (un seul article) appelée en boucle côté client par la
-// barre d'actions, qui possède désormais la progression X/N et le plafond de 10. Elle lève sur la
-// garde RBAC et la validation des champs (AVANT le cœur), mais renvoie { ok:false } — sans lever —
-// sur un échec métier unitaire (article introuvable, aucune source…). Pas de revalidatePath ici :
-// le client rafraîchit une seule fois en fin de boucle.
-describe("regenerateInQueue", () => {
+// startRegenJob (lib/actions/regen-actions.ts) est désormais le SEUL point d'entrée du renvoi à
+// l'IA — lot ET unitaire (Tâche 11). La garde RBAC et la validation des champs sont couvertes ici ;
+// le comportement métier (job, progression, échec par article) est couvert par les tests dédiés à
+// regen-job/regen-store/regenerate-core.
+describe("startRegenJob", () => {
   it("refuse une sélection de champs entièrement décochée (aucun champ à régénérer)", async () => {
-    // La validation des champs (regenerateFieldsSchema.parse) lève AVANT tout appel au cœur.
-    await expect(regenerateInQueue(
-      faker.string.uuid(),
-      { title: false, body: false, excerpt: false, category: false, tags: false, image: false },
-    )).rejects.toThrow();
-  });
-
-  it("rapporte { ok:false } (sans lever) un article sans source", async () => {
-    // Article seedé sans aucune ligne article_sources → regenerateArticle s'arrête sur « Aucune
-    // source à régénérer. » AVANT tout appel réseau/IA. L'action ne lève pas : échec métier unitaire.
-    const id = await seedArticle({ status: "pending", title: "Sans source pour renvoi IA" });
-    const res = await regenerateInQueue(id, ALL_FIELDS);
+    // safeParse échoue AVANT tout accès DB : { ok:false, message } sans lever.
+    const res = await startRegenJob({
+      articleIds: [faker.string.uuid()],
+      fields: { title: false, body: false, excerpt: false, category: false, tags: false, image: false },
+      imageMode: "auto",
+    });
     expect(res.ok).toBe(false);
-    expect(res.message).toBe("Aucune source à régénérer.");
+    if (!res.ok) expect(res.message).toBe("Sélectionnez au moins un champ à régénérer.");
   });
 });
 
@@ -177,7 +171,7 @@ describe("regenerateInQueue", () => {
 // les describes bulkApprove/bulkReject ci-dessus n'est donc jamais affecté (ils tournent avant, et
 // afterAll ci-dessous repointe explicitement sur FAKE_ADMIN dès la fin de cette section, avant que
 // le afterAll global ne restaure les vraies implémentations).
-describe("RBAC : bulkApprove/bulkReject refusent un rôle sans permission", () => {
+describe("RBAC : bulkApprove/bulkReject/startRegenJob refusent un rôle sans permission", () => {
   beforeAll(() => {
     mock.module("@/lib/session", () => ({ getSession: realGetSession, requireUser: async () => FAKE_JOURNALIST }));
   });
@@ -202,8 +196,8 @@ describe("RBAC : bulkApprove/bulkReject refusent un rôle sans permission", () =
     expect(revs.some((r) => r.action === "rejeté")).toBe(false);
   });
 
-  it("regenerateInQueue : un journaliste est refusé (article:regenerate)", async () => {
+  it("startRegenJob : un journaliste est refusé (article:regenerate)", async () => {
     const id = await seedArticle({ status: "pending" });
-    await expect(regenerateInQueue(id, ALL_FIELDS)).rejects.toThrow();
+    await expect(startRegenJob({ articleIds: [id], fields: ALL_FIELDS, imageMode: "auto" })).rejects.toThrow();
   });
 });

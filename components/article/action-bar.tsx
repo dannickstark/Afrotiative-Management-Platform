@@ -17,6 +17,7 @@ import { saveDraft, rejectArticle, approveAndPublish, schedule } from "@/lib/act
 // must not see Rejeter / Renvoyer à l'IA / Approuver & publier / Planifier.
 export function ActionBar({
   articleId, title, bodyHtml, excerpt, categoryId, tags, featuredImageUrl, imageCredit, imageSourceUrl, readOnly,
+  defaultImageMode,
 }: {
   articleId: string;
   title: string;
@@ -28,6 +29,7 @@ export function ActionBar({
   imageCredit: string | null;
   imageSourceUrl: string | null;
   readOnly: boolean;
+  defaultImageMode: "auto" | "manual";
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -129,7 +131,7 @@ export function ActionBar({
           onConfirm={handleReject}
         />
 
-        <RegenerateDialog articleId={articleId} disabled={disabled} />
+        <RegenerateDialog articleId={articleId} disabled={disabled} defaultImageMode={defaultImageMode} />
 
         <Popover open={scheduleOpen} onOpenChange={setScheduleOpen}>
           <PopoverTrigger

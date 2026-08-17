@@ -5,8 +5,8 @@ import type { ArticleDraft } from "@/lib/ai/schema";
 import type { AiFailureReason } from "@/lib/ai/failure-message";
 import { faker } from "@faker-js/faker";
 
-// regenerateArticle est le cœur unitaire partagé par regenerate (action unitaire) et
-// regenerateInQueue (appelé en boucle par la barre d'actions du /queue, un article par appel).
+// regenerateArticle est le cœur unitaire appelé pour chaque article du job de renvoi à l'IA
+// (lib/pipeline/regen-job.ts, déclenché par startRegenJob — lot ET unitaire, voir Tâche 11).
 // Il est PLAIN (pas de "use server") : ni RBAC ni revalidatePath ici, donc on peut
 // l'exercer directement sous `bun test`, sans mocker session/next-cache.
 //
@@ -25,19 +25,31 @@ import { faker } from "@faker-js/faker";
 // seulement par chance, à cause de l'ordre alphabétique des fichiers.
 // NB : on destructure les VALEURS (et non l'objet de namespace), car mock.module() mute l'objet
 // d'exports en place — garder le namespace rendrait la fonction MOCKÉE dans afterAll.
-const { extractExternal: realExtractExternal } = await import("@/lib/extract");
+const { extractExternal: realExtractExternal, extract: realExtract } = await import("@/lib/extract");
 const { generateArticle: realGenerateArticle } = await import("@/lib/ai/generate-article");
 
-let extractExternalImpl: (url: string) => Promise<{ title: string; text: string; images: string[]; via: string; attempts: unknown[] }> =
+let extractCalls: string[] = [];
+let extractImpl: (url: string) => Promise<{ title: string; text: string; images: string[]; via: string; attempts: unknown[] }> =
   async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
+let extractExternalImpl = extractImpl;
 mock.module("@/lib/extract", () => ({
+  extract: (url: string) => { extractCalls.push(url); return extractImpl(url); },
   extractExternal: (url: string) => extractExternalImpl(url),
 }));
 
+// Le wrapper MÉMORISE l'entrée (assertions sur les sources / les images candidates) ET la
+// TRANSMET à l'implémentation (assertions sur `fields` / `current`, chemin de génération partielle
+// venu de main). Transmettre tous les arguments n'est pas cosmétique : `mock.module` est global au
+// processus et n'est jamais défait, donc un wrapper qui tronque sa signature corromprait aussi les
+// autres fichiers de test chargés ensuite.
+let lastGenerateInput: { sources: { url: string }[]; candidateImages: string[] } | null = null;
 let generateArticleImpl: (input?: unknown) => Promise<{ draft: ArticleDraft; via: string; failure?: AiFailureReason; failureDetail?: string }> =
   async () => { throw new Error("generateArticleImpl not set"); };
 mock.module("@/lib/ai/generate-article", () => ({
-  generateArticle: (input: unknown) => generateArticleImpl(input),
+  generateArticle: (input: { sources: { url: string }[]; candidateImages: string[] }) => {
+    lastGenerateInput = input;
+    return generateArticleImpl(input);
+  },
 }));
 
 // regenerate-core.ts importe aussi dynamiquement @/lib/pipeline/regenerate (applyRegeneration) —
@@ -72,6 +84,22 @@ async function seedArticleWithSource(overrides: Partial<typeof articles.$inferIn
   return id;
 }
 
+// Variante à plusieurs sources, pour les tests d'extraction ci-dessous (parallélisme, timeout).
+// `seedArticle` alimente déjà `createdArticleIds`, donc le nettoyage dans `afterAll` couvre aussi
+// ces articles sans array de plus.
+async function seedArticleWithSources(urls: string[]): Promise<{ articleId: string }> {
+  const articleId = await seedArticle();
+  await db.insert(articleSources).values(urls.map((url) => ({ articleId, mediaName: "Test", url })));
+  return { articleId };
+}
+
+const draftFixture: ArticleDraft = {
+  title: "Titre régénéré", bodyHtml: "<p>Corps régénéré assez long pour passer.</p>",
+  excerpt: "Extrait", category: "Économie", tags: ["a"],
+  featuredImageUrl: null, imageCredit: null, imageSourceUrl: null,
+  confidence: { categoryUncertain: false, imageMissing: true, clusterUncertain: false },
+};
+
 afterAll(async () => {
   // Restauration réelle EN PREMIER : les factories mock.module ci-dessus délèguent toujours à ces
   // variables, donc les repointer sur les fonctions réelles rend leur comportement d'origine à tout
@@ -79,6 +107,7 @@ afterAll(async () => {
   // Bun). L'ordre compte : le nettoyage DB ci-dessous peut jeter (base indisponible, ligne
   // verrouillée) et abandonnerait alors les mocks en place pour tout le reste du processus `bun
   // test` — exactement la fuite que cette restauration existe pour empêcher.
+  extractImpl = realExtract as unknown as typeof extractImpl;
   extractExternalImpl = realExtractExternal as unknown as typeof extractExternalImpl;
   generateArticleImpl = realGenerateArticle as unknown as typeof generateArticleImpl;
   if (createdArticleIds.length) await db.delete(articles).where(inArray(articles.id, createdArticleIds));
@@ -142,5 +171,187 @@ describe("regenerateArticle (cœur unitaire)", () => {
     expect(r.message).toBe(aiFailureMessage("unconfigured", "régénération"));
     expect(r.message).toBe("Aucun fournisseur IA configuré — régénération impossible.");
     expect(r.title).toBe("Article sans raison");
+  });
+});
+
+describe("regenerateArticle — extraction", () => {
+  it("utilise extract() (et non extractExternal) sur les sources de l'article", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    extractCalls = [];
+    generateArticleImpl = async () => ({ draft: draftFixture, via: "openrouter" });
+    await regenerateArticle(articleId, { ...ALL }, null);
+    expect(extractCalls).toEqual(["https://a.test/1"]);
+  });
+
+  it("extrait les sources EN PARALLÈLE", async () => {
+    const { articleId } = await seedArticleWithSources([
+      "https://a.test/1", "https://a.test/2", "https://a.test/3",
+    ]);
+    // On mesure la CONCURRENCE, pas le temps écoulé : regenerateArticle enchaîne plusieurs
+    // allers-retours vers la base distante partagée avant et après l'extraction, si bien qu'aucune
+    // borne d'horloge ne peut isoler la phase d'extraction de façon fiable. Compter les extractions
+    // simultanées teste directement la propriété voulue, sans dépendre de la latence réseau.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    extractImpl = async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 100));
+      inFlight -= 1;
+      return { title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] };
+    };
+    generateArticleImpl = async () => ({ draft: draftFixture, via: "openrouter" });
+
+    await regenerateArticle(articleId, { ...ALL }, null, { timeoutMs: 5000 });
+
+    // Séquentiel donnerait maxInFlight === 1.
+    expect(maxInFlight).toBe(3);
+  });
+
+  it("une source qui dépasse le délai est ignorée, les autres passent", async () => {
+    const { articleId } = await seedArticleWithSources(["https://slow.test/1", "https://fast.test/2"]);
+    extractImpl = async (url) => {
+      // 6000 ms, strictement > timeoutMs (5000 ms) ci-dessous : un délai IDENTIQUE créerait une
+      // égalité de course entre le setTimeout interne de cette extraction (déjà armé quand elle est
+      // appelée, avant même que withTimeout() ne pose le sien) et celui de withTimeout — égalité que
+      // Promise.race tranche systématiquement en faveur du premier setTimeout arme, donc en faveur
+      // de l'extraction, jamais du timeout. Vérifié empiriquement sur ce runtime Bun.
+      if (url.includes("slow")) await new Promise((r) => setTimeout(r, 6000));
+      return { title: "t", text: `Contenu de ${url}, assez long pour compter.`, images: [], via: "test", attempts: [] };
+    };
+    let seenSources = 0;
+    generateArticleImpl = async () => { seenSources = lastGenerateInput?.sources.length ?? 0; return { draft: draftFixture, via: "openrouter" }; };
+    const r = await regenerateArticle(articleId, { ...ALL }, null, { timeoutMs: 5000 });
+    expect(r.ok).toBe(true);
+    expect(seenSources).toBe(1);
+  }, 15000);
+});
+
+describe("regenerateArticle — image sans candidat", () => {
+  it("image SEULE et zéro candidat : échoue sans appeler l'IA et sans toucher l'article", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg", imageCredit: "Ancien" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
+    let called = false;
+    generateArticleImpl = async () => { called = true; return { draft: draftFixture, via: "openrouter" }; };
+
+    const r = await regenerateArticle(articleId, { title: false, body: false, excerpt: false, category: false, tags: false, image: true }, null, { timeoutMs: 5000 });
+
+    expect(r.ok).toBe(false);
+    expect(r.message).toBe("Aucune image candidate trouvée — image inchangée.");
+    expect(called).toBe(false);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg");
+    expect(row.imageCredit).toBe("Ancien");
+  });
+
+  it("image + titre et zéro candidat : applique le titre, épargne l'image, avertit", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu extrait de test, assez long.", images: [], via: "test", attempts: [] });
+    generateArticleImpl = async () => ({ draft: { ...draftFixture, title: "Titre tout neuf" }, via: "openrouter" });
+
+    const r = await regenerateArticle(articleId, { title: true, body: false, excerpt: false, category: false, tags: false, image: true }, null, { timeoutMs: 5000 });
+
+    expect(r.ok).toBe(true);
+    expect(r.message).toContain("Aucune image candidate trouvée");
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.title).toBe("Titre tout neuf");
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg");
+  });
+});
+
+describe("candidats d'image avec provenance", () => {
+  it("étiquette chaque image candidate avec sa source", async () => {
+    const { articleId } = await seedArticleWithSources(["https://media-a.test/1"]);
+    extractImpl = async () => ({
+      title: "t", text: "Contenu extrait de test, assez long.",
+      images: ["https://media-a.test/img1.jpg", "https://media-a.test/img2.jpg"],
+      via: "test", attempts: [],
+    });
+    let seenCandidates: string[] = [];
+    generateArticleImpl = async () => {
+      seenCandidates = (lastGenerateInput as { candidateImages: string[] } | null)?.candidateImages ?? [];
+      return { draft: { ...draftFixture, featuredImageUrl: "https://media-a.test/img1.jpg" }, via: "openrouter" };
+    };
+    const r = await regenerateArticle(articleId, { title: false, body: false, excerpt: false, category: false, tags: false, image: true }, null, { timeoutMs: 5000 });
+    expect(r.ok).toBe(true);
+    expect(seenCandidates).toEqual(["https://media-a.test/img1.jpg", "https://media-a.test/img2.jpg"]);
+  });
+});
+
+describe("regenerateArticle — modes d'image", () => {
+  const IMAGE_ONLY = { title: false, body: false, excerpt: false, category: false, tags: false, image: true };
+
+  it("auto, image seule : passe par generateArticle (génération partielle) et écrit son image", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
+    let seenFields: { image: boolean; body: boolean } | undefined;
+    generateArticleImpl = async (input) => {
+      seenFields = (input as { fields: { image: boolean; body: boolean } }).fields;
+      return { draft: { ...draftFixture, featuredImageUrl: "https://a.test/i.jpg", imageCredit: "Test" }, via: "openrouter" };
+    };
+
+    const r = await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "auto", timeoutMs: 5000 });
+
+    expect(r.ok).toBe(true);
+    expect(r.awaitingImage).toBeFalsy();
+    // La sélection est transmise telle quelle : le corps n'est PAS demandé au modèle.
+    expect(seenFields?.image).toBe(true);
+    expect(seenFields?.body).toBe(false);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://a.test/i.jpg");
+    expect(row.pendingImageCandidates).toBeNull();
+  });
+
+  it("manuel, image seule : aucun LLM, gare les candidats, awaitingImage", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg", "https://a.test/j.jpg"], via: "test", attempts: [] });
+    let generated = false;
+    generateArticleImpl = async () => { generated = true; return { draft: draftFixture, via: "openrouter" }; };
+
+    const r = await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "manual", timeoutMs: 5000 });
+
+    expect(r.ok).toBe(true);
+    expect(r.awaitingImage).toBe(true);
+    expect(generated).toBe(false);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg"); // intacte jusqu'au choix
+    expect(row.pendingImageCandidates).toEqual([
+      { url: "https://a.test/i.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" },
+      { url: "https://a.test/j.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" },
+    ]);
+  });
+
+  it("manuel, image + titre : applique le titre ET gare les candidats", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    await db.update(articles).set({ featuredImageUrl: "https://ancienne/img.jpg" }).where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
+    generateArticleImpl = async () => ({ draft: { ...draftFixture, title: "Titre neuf", featuredImageUrl: "https://a.test/i.jpg" }, via: "openrouter" });
+
+    const r = await regenerateArticle(articleId, { ...IMAGE_ONLY, title: true }, null, { imageMode: "manual", timeoutMs: 5000 });
+
+    expect(r.awaitingImage).toBe(true);
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.title).toBe("Titre neuf");
+    expect(row.featuredImageUrl).toBe("https://ancienne/img.jpg"); // intacte jusqu'au choix
+    expect(row.pendingImageCandidates).toHaveLength(1);
+  });
+
+  it("auto : un renvoi qui choisit une image efface une liste de candidats garée précédemment", async () => {
+    const { articleId } = await seedArticleWithSources(["https://a.test/1"]);
+    // Simule un renvoi MANUEL antérieur ayant garé des candidats.
+    await db.update(articles)
+      .set({ pendingImageCandidates: [{ url: "https://vieux/x.jpg", sourceUrl: "https://a.test/1", mediaName: "Test" }] })
+      .where(eq(articles.id, articleId));
+    extractImpl = async () => ({ title: "t", text: "Contenu assez long pour compter.", images: ["https://a.test/i.jpg"], via: "test", attempts: [] });
+    generateArticleImpl = async () => ({ draft: { ...draftFixture, featuredImageUrl: "https://a.test/i.jpg" }, via: "openrouter" });
+
+    await regenerateArticle(articleId, IMAGE_ONLY, null, { imageMode: "auto", timeoutMs: 5000 });
+
+    const [row] = await db.select().from(articles).where(eq(articles.id, articleId));
+    expect(row.featuredImageUrl).toBe("https://a.test/i.jpg");
+    expect(row.pendingImageCandidates).toBeNull();
   });
 });

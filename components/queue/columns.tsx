@@ -40,12 +40,21 @@ export function buildColumns(categories: { id: string; name: string }[]): Column
         </div>) },
     { id: "image", header: "Image", enableSorting: false, enableGlobalFilter: false, cell: ({ row }) => {
         const url = row.original.imageUrl;
-        return url ? (
-          // eslint-disable-next-line @next/next/no-img-element -- external, per-article seed URLs; no next.config remote pattern configured.
-          <img src={url} alt="" className="h-10 w-16 rounded-md object-cover" />
-        ) : (
-          <div className="flex h-10 w-16 items-center justify-center rounded-md border border-dashed bg-muted/50">
-            <ImageOff className="size-4 text-muted-foreground" />
+        return (
+          <div className="flex items-center gap-2">
+            {url ? (
+              // eslint-disable-next-line @next/next/no-img-element -- external, per-article seed URLs; no next.config remote pattern configured.
+              <img src={url} alt="" className="h-10 w-16 rounded-md object-cover" />
+            ) : (
+              <div className="flex h-10 w-16 items-center justify-center rounded-md border border-dashed bg-muted/50">
+                <ImageOff className="size-4 text-muted-foreground" />
+              </div>
+            )}
+            {row.original.pendingImageCount > 0 && (
+              <Badge variant="secondary" title="Une régénération a trouvé des images candidates en attente de votre choix">
+                {row.original.pendingImageCount} à choisir
+              </Badge>
+            )}
           </div>
         );
       } },

@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/session";
 import { isLockActive } from "@/lib/lock";
 import { can } from "@/lib/rbac";
 import { getStudioConfig } from "@/lib/studio/config";
+import { getPipelineSettings } from "@/lib/queries/settings";
 import { EditorShell } from "@/components/article/editor-shell";
 import { db, wpTags } from "@/db";
 
@@ -25,6 +26,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
   const diffusionChannels = await getEnabledChannelsForArticle(id);
   const canSendDiffusion = can(user.role, "social", "send");
   const r2Configured = getStudioConfig() !== null;
+  const settings = await getPipelineSettings();
   return (
     <EditorShell
       article={article}
@@ -34,6 +36,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ id: st
       diffusionChannels={diffusionChannels}
       canSendDiffusion={canSendDiffusion}
       r2Configured={r2Configured}
+      defaultImageMode={settings.regenerateImageMode as "auto" | "manual"}
     />
   );
 }

@@ -1,5 +1,5 @@
-import { db, articles, articleSources, wpCategories } from "@/db";
-import { and, asc, desc, eq, ilike, sql, type SQL } from "drizzle-orm";
+import { db, articles, articleSources, wpCategories, type ImageCandidate } from "@/db";
+import { and, asc, desc, eq, ilike, isNotNull, sql, type SQL } from "drizzle-orm";
 import { sortMissingFields, type MissingField } from "@/lib/pipeline/completeness";
 import type { ArticleStatus } from "@/lib/format";
 import { resolveQueueSort, type QueueSortCol } from "./queue-sort";
@@ -23,6 +23,9 @@ export type QueueFilters = {
   search?: string;
   categoryId?: string;
   source?: SourceBucket;
+  // Bac « images à choisir » : axe séparé du statut (un article en attente d'image reste
+  // `pending`) — donc son propre paramètre plutôt qu'une valeur de statut supplémentaire.
+  pendingImage?: true;
   sortColumn: QueueSortCol;
   sortDirection: "asc" | "desc";
   page: number;
@@ -35,6 +38,8 @@ export type QueueRow = {
   imageUrl: string | null; generatedAt: Date | null; status: string;
   low: boolean; score: number | null;
   missingFields: MissingField[];
+  pendingImageCount: number;
+  pendingImageCandidates: ImageCandidate[];
 };
 
 export type QueuePage = { rows: QueueRow[]; total: number; page: number; pageCount: number };
@@ -83,9 +88,13 @@ export function parseQueueSearchParams(
   const pageRaw = Number(str(sp.page));
   const page = Number.isFinite(pageRaw) && pageRaw >= 1 ? Math.floor(pageRaw) : 1;
 
+  // Bac « images à choisir » : les articles dont une régénération en mode manuel a garé des
+  // candidats. Paramètre séparé du statut — un article en attente d'image reste `pending`.
+  const pendingImage = str(sp.img) === "pending" ? (true as const) : undefined;
+
   return {
-    status, search: str(sp.q), categoryId: str(sp.cat), source, sortColumn, sortDirection,
-    page, pageSize: QUEUE_PAGE_SIZE,
+    status, search: str(sp.q), categoryId: str(sp.cat), source, pendingImage,
+    sortColumn, sortDirection, page, pageSize: QUEUE_PAGE_SIZE,
   };
 }
 
@@ -117,6 +126,7 @@ export async function getQueue(f: QueueFilters): Promise<QueuePage> {
   if (f.categoryId) conds.push(eq(articles.categoryId, f.categoryId));
   if (f.source === "single") conds.push(sql`${SOURCE_COUNT} <= 1`);
   if (f.source === "multiple") conds.push(sql`${SOURCE_COUNT} > 1`);
+  if (f.pendingImage) conds.push(isNotNull(articles.pendingImageCandidates));
   const where = conds.length ? and(...conds) : undefined;
 
   const total = await db.$count(articles, where);
@@ -133,6 +143,7 @@ export async function getQueue(f: QueueFilters): Promise<QueuePage> {
     generatedAt: articles.generatedAt, status: articles.status,
     confidenceFlags: articles.confidenceFlags, score: articles.score,
     missingFields: articles.missingFields, sourceCount: SOURCE_COUNT,
+    pendingImageCandidates: articles.pendingImageCandidates,
   }).from(articles)
     .leftJoin(wpCategories, eq(articles.categoryId, wpCategories.id))
     .where(where)
@@ -152,6 +163,10 @@ export async function getQueue(f: QueueFilters): Promise<QueuePage> {
       ),
       // Normalisé à la lecture : couvre aussi les lignes écrites avant le sous-projet D.
       missingFields: sortMissingFields((r.missingFields ?? []) as MissingField[]),
+      // Exposé en plus du décompte (Task 18 en aura besoin pour l'assistant de choix) : une
+      // seule projection porte les deux plutôt qu'un second aller-retour sur lib/queries/queue.ts.
+      pendingImageCount: (r.pendingImageCandidates ?? []).length,
+      pendingImageCandidates: (r.pendingImageCandidates ?? []) as ImageCandidate[],
     })),
     total, page, pageCount,
   };

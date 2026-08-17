@@ -1,0 +1,1 @@
+ALTER TABLE "articles" ADD COLUMN "pending_image_candidates" jsonb;

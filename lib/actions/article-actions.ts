@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { saveDraftSchema, type SaveDraftInput, regenerateFieldsSchema, improveInputSchema, type RegenerateFieldsInput, type ImproveActionInput, fixFieldsSchema, type FixFieldsInput } from "@/lib/validation";
+import { saveDraftSchema, type SaveDraftInput, improveInputSchema, type ImproveActionInput, fixFieldsSchema, type FixFieldsInput } from "@/lib/validation";
 import { isLockActive } from "@/lib/lock";
 import { publishArticle } from "@/lib/wp/publish";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
@@ -57,26 +57,6 @@ export async function rejectArticle(input: { id: string; reason: string }) {
   await db.update(articles).set({ status: "rejected", rejectReason: reason, updatedAt: new Date() }).where(eq(articles.id, id));
   await db.insert(articleRevisions).values({ articleId: id, actorId: user.id, action: "rejeté", detail: reason });
   revalidatePath(`/article/${id}`); revalidatePath("/queue");
-}
-
-// Real regeneration: re-extract every existing source, regenerate a full draft, and apply only
-// the checked fields. RBAC runs FIRST (cheap, statically-imported); the per-article work lives in
-// regenerateArticle (lib/pipeline/regenerate-core.ts), a plain module whose dynamic imports keep
-// the jsdom-heavy extraction/generation graph out of this "use server" module's static analysis
-// (mirrors reprocessRawItem in lib/actions/pipeline-actions.ts). The core is shared verbatim with
-// the /queue client loop (regenerateInQueue in lib/actions/queue-actions.ts), called once per
-// article so the bar can show live X/N progress.
-export async function regenerate(articleId: string, fields: RegenerateFieldsInput): Promise<{ ok: boolean; message: string }> {
-  const user = await requireUser();
-  requirePermission(user.role, "article", "regenerate");
-  const parsed = regenerateFieldsSchema.safeParse(fields);
-  if (!parsed.success) return { ok: false, message: "Sélectionnez au moins un champ à régénérer." };
-
-  const { regenerateArticle } = await import("@/lib/pipeline/regenerate-core");
-  const { ok, message } = await regenerateArticle(articleId, parsed.data, user.id);
-
-  revalidatePath(`/article/${articleId}`); revalidatePath("/queue");
-  return { ok, message };
 }
 
 // AI-assisted body rewrite driven by an optional editor instruction. Reuses applyRegeneration

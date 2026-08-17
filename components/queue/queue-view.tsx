@@ -5,11 +5,12 @@ import { PageHeader } from "@/components/shell/page-header";
 import type { QueueFilters as Filters, QueuePage } from "@/lib/queries/queue";
 
 export function QueueView({
-  page, filters, categories,
+  page, filters, categories, defaultImageMode,
 }: {
   page: QueuePage;
   filters: Filters;
   categories: { id: string; name: string }[];
+  defaultImageMode: "auto" | "manual";
 }) {
   return (
     <div className="space-y-6">
@@ -26,6 +27,7 @@ export function QueueView({
         rows={page.rows}
         categories={categories}
         sort={{ column: filters.sortColumn, direction: filters.sortDirection }}
+        defaultImageMode={defaultImageMode}
       />
       {page.pageCount > 1 && <QueuePagination page={page.page} pageCount={page.pageCount} />}
     </div>
