@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { KIND_LABEL } from "./beat-list";
+import { defaultAccept } from "@/lib/video/import";
 import type { BeatChange, BeatConflict, BeatSnapshot, Diff } from "@/lib/video/import";
 
 // Task 13 — libellés français des champs fusionnés (lib/video/import.ts#MERGE_FIELDS), affichés
@@ -196,8 +197,11 @@ function RemovedRow({
   );
 }
 
+// La règle produit elle-même est dans lib/video/import.ts#defaultAccept (round de correction final,
+// I1) : ce composant ne la RÉÉCRIT plus, il la consomme — le canal agent (lib/mcp/tools.ts) consomme
+// la même, et un test verrouille l'accord des deux.
 function defaultAccepted(diff: Diff): Set<string> {
-  return new Set([...diff.added, ...diff.modified].map((c) => c.externalId));
+  return new Set(defaultAccept(diff));
 }
 
 // Task 13 — revue du diff calculé par computeMerge (lib/video/import.ts). Règle produit imposée

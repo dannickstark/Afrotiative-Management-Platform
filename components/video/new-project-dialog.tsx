@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createVideoProject } from "@/lib/actions/video-actions";
-import { PLATFORM_LABEL } from "@/components/video/project-list";
+import { PLATFORM_LABEL } from "@/lib/video/labels";
 
 const PLATFORMS = ["youtube_long", "youtube_short", "tiktok", "reel", "interview"] as const;
 const RATIOS = ["16:9", "9:16", "1:1"] as const;

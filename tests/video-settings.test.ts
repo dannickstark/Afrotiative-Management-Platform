@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { videoSettingsSchema } from "@/lib/validation";
 import { DEFAULT_BRIEF_TEMPLATE, buildBrief } from "@/lib/video/brief";
+import { VIDEO_SETTINGS_KEYS } from "@/lib/queries/video-settings";
 
 describe("videoSettingsSchema", () => {
   it("accepte des réglages plausibles", () => {
@@ -14,6 +15,14 @@ describe("videoSettingsSchema", () => {
   it("refuse une cadence hors bornes", () => {
     expect(videoSettingsSchema.safeParse({ briefTemplate: "x", wordsPerMinute: 20 }).success).toBe(false);
     expect(videoSettingsSchema.safeParse({ briefTemplate: "x", wordsPerMinute: 500 }).success).toBe(false);
+  });
+});
+
+describe("VIDEO_SETTINGS_KEYS", () => {
+  it("les réglages vidéo exposent l'interrupteur MCP", () => {
+    // Le point : sans ce champ dans la projection, l'interrupteur ne serait jamais lu et ne
+    // fermerait rien — la garde de la Task 4 serait un décor.
+    expect(VIDEO_SETTINGS_KEYS).toContain("mcpEnabled");
   });
 });
 

@@ -11,6 +11,7 @@ const rows: ProjectRow[] = [{
   estimatedSec: 725,
   articleTitle: "Une PME ivoirienne à l'export",
   updatedAt: new Date("2026-08-16T10:00:00Z"),
+  unreviewedCount: 0,
 }];
 
 describe("ProjectList", () => {
@@ -38,5 +39,23 @@ describe("ProjectList", () => {
   it("montre un état vide explicite quand il n'y a aucun projet", () => {
     const html = renderToStaticMarkup(React.createElement(ProjectList, { projects: [] }));
     expect(html).toContain("Aucune vidéo");
+  });
+
+  it("n'affiche aucun badge « non relue » quand le compteur est à zéro", () => {
+    const html = renderToStaticMarkup(React.createElement(ProjectList, { projects: rows }));
+    expect(html).not.toContain("non relue");
+  });
+
+  it("affiche le compteur d'écritures d'agent non relues (Task 8)", () => {
+    const withUnreviewed: ProjectRow[] = [{ ...rows[0], unreviewedCount: 2 }];
+    const html = renderToStaticMarkup(React.createElement(ProjectList, { projects: withUnreviewed }));
+    expect(html).toContain("2 non relues");
+  });
+
+  it("accorde « non relue » au singulier pour un seul projet concerné", () => {
+    const withUnreviewed: ProjectRow[] = [{ ...rows[0], unreviewedCount: 1 }];
+    const html = renderToStaticMarkup(React.createElement(ProjectList, { projects: withUnreviewed }));
+    expect(html).toContain("1 non relue");
+    expect(html).not.toContain("1 non relues");
   });
 });

@@ -1,15 +1,15 @@
 import {
   db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, scriptJournalSource,
 } from "@/db";
-import { and, asc, eq, gt, inArray, ne } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, ne } from "drizzle-orm";
 import {
-  applyMerge, computeMerge, normalizeInserts, parseIncoming, stripEnvelope, type BeatRow,
-  type BeatSnapshot, type Diff, type Issue, type Mutations,
+  applyMerge, computeMerge, normalizeInserts, parseIncoming, stripEnvelope, toPayloadBeat,
+  type BeatRow, type BeatSnapshot, type Diff, type Issue, type Mutations,
 } from "@/lib/video/import";
 import { estimateSeconds } from "@/lib/video/duration";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { getVideoSettings } from "@/lib/queries/video-settings";
-import type { InsertPayload, VariantPayload } from "@/lib/video/schema";
+import { SCHEMA_VERSION, type InsertPayload, type Payload, type VariantPayload } from "@/lib/video/schema";
 
 // Cœur DB brut du module vidéo — délibérément SANS "use server" (voir lib/actions/video-actions.ts
 // pour le motif). C'est aussi la SEULE exception à « lib/video/* n'importe jamais @/db » : le
@@ -50,6 +50,16 @@ type BeforeBeat = {
 // `before` optionnel (round de correction 2, I10) : les entrées "applique" écrites avant son
 // introduction n'en portent pas — revertJournalEntryCore doit le tolérer, pas planter dessus.
 type AppliedRecord = Mutations & { before?: BeforeBeat[] };
+
+/**
+ * L'entrée de journal porte-t-elle l'état d'AVANT, seule matière première d'une annulation fidèle ?
+ * Exportée (round de correction final, I3) pour que l'écran de projet n'offre le bouton « Annuler »
+ * QUE là où revertJournalEntryCore peut aboutir : le prédicat est un seul, partagé, plutôt qu'une
+ * lecture du jsonb recopiée côté rendu — deux lectures finiraient par ne plus s'accorder.
+ */
+export function hasBeforeState(applied: unknown): applied is { before: BeforeBeat[] } {
+  return Array.isArray((applied as { before?: unknown } | null)?.before);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Création de projet
@@ -293,11 +303,21 @@ async function writeJournal(dbLike: DbLike, args: {
   errorReport: unknown[];
   diff: Record<string, unknown>;
   outcome: JournalOutcome;
+  // Provenance MCP (SP1 bis, Task 5) : le nom de l'outil et ses arguments, écrits DU PREMIER COUP
+  // avec la ligne. L'appelant MCP les apposait auparavant par une seconde requête, ce qui l'obligeait
+  // — sur un rejet, où aucun identifiant n'est rendu — à retrouver « la ligne la plus récente du
+  // projet » : deux imports concurrents sur le même projet pouvaient alors s'échanger leurs
+  // arguments, donc leur mémoire de l'état de la variante. Le chemin humain ne passe rien
+  // (`source: "copier_coller"`), et les colonnes restent nulles comme avant.
+  toolName?: string | null;
+  toolArgs?: Record<string, unknown> | null;
 }): Promise<string> {
   const [entry] = await dbLike.insert(scriptJournal).values({
     projectId: args.projectId,
     variantId: args.variantId,
     source: args.source,
+    toolName: args.toolName ?? null,
+    toolArgs: args.toolArgs ?? null,
     actorUserId: args.userId,
     schemaVersion: args.schemaVersion,
     rawPayload: args.rawPayload,
@@ -365,8 +385,15 @@ async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
     .orderBy(asc(beatInserts.position));
 
   const insertsByBeat = new Map<string, InsertPayload[]>();
+  // Les UUID des lignes d'insert, dans le MÊME ordre que les inserts normalisés ci-dessous : c'est
+  // ce qui permet à readScriptCore (round de correction final, C1) de rendre à l'agent de quoi
+  // appeler `update_insert` sans jamais mêler cet identifiant technique aux clés du contrat.
+  const insertIdsByBeat = new Map<string, { insertId: string; linkStatus: string }[]>();
   for (const ins of inserts) {
     const list = insertsByBeat.get(ins.beatId) ?? [];
+    const ids = insertIdsByBeat.get(ins.beatId) ?? [];
+    ids.push({ insertId: ins.id, linkStatus: ins.linkStatus });
+    insertIdsByBeat.set(ins.beatId, ids);
     // Mêmes clés, dans le même ordre que insertPayloadSchema (lib/video/schema.ts) — garanti par
     // `normalizeInserts`, le producteur commun (round de correction final, I1) plutôt que par un
     // mapping recopié ici : computeMerge compare les instantanés par JSON.stringify, donc une forme
@@ -387,6 +414,7 @@ async function loadFullBeatRows(dbLike: DbLike, variantId: string) {
     id: b.id,
     externalId: b.externalId,
     position: b.position,
+    insertIds: insertIdsByBeat.get(b.id) ?? [],
     locallyEditedAt: b.locallyEditedAt,
     durationOverrideSec: b.durationOverrideSec,
     estimatedDurationSec: b.estimatedDurationSec,
@@ -411,6 +439,59 @@ async function loadBeatRows(dbLike: DbLike, variantId: string): Promise<BeatRow[
   }));
 }
 
+/**
+ * L'état d'une variante RENDU DANS LE VOCABULAIRE DU CONTRAT (round de correction final, C1) —
+ * c'est-à-dire une charge utile que l'agent peut réviser puis resoumettre telle quelle à
+ * `submit_script`, sans traduction de sa part. C'est le cœur qui la produit, jamais lib/mcp/tools.ts :
+ * le mapping colonnes → instantané vit déjà ici (`loadFullBeatRows`), et l'instantané → contrat dans
+ * lib/video/import.ts (`toPayloadBeat`, l'inverse exact de `toSnapshot`). Le rendre ailleurs, à la
+ * main, c'est ce qui avait produit DEUX vocabulaires dans une seule charge utile — beats en interne,
+ * inserts en contrat — et, au premier aller-retour, un script dupliqué en silence.
+ *
+ * Les identifiants techniques (UUID de beat et d'insert) sont RENDUS, mais dans un bloc à part :
+ * `update_beat` et `update_insert` les exigent, et l'agent ne peut pas les deviner. Ils portent les
+ * noms mêmes de ces arguments (`beatId`, `insertId`), donc ils ne peuvent pas être confondus avec la
+ * clé `id` du contrat, qui est l'externalId — c'est précisément cette confusion qui a coûté C1.
+ */
+export async function readScriptCore(variantId: string): Promise<{
+  variantId: string;
+  projectId: string;
+  payload: Payload;
+  identifiantsInternes: {
+    id: string; beatId: string; dureeEstimeeSec: number;
+    inserts: { insertId: string; linkStatus: string }[];
+  }[];
+} | null> {
+  const [variant] = await db.select().from(scriptVariants).where(eq(scriptVariants.id, variantId));
+  if (!variant) return null;
+  const [project] = await db.select().from(videoProjects).where(eq(videoProjects.id, variant.projectId));
+  if (!project) return null;
+
+  const rows = await loadFullBeatRows(db, variantId);
+
+  return {
+    variantId,
+    projectId: project.id,
+    payload: {
+      schema_version: SCHEMA_VERSION,
+      projet: { titre: project.title, sujet: project.subject, angle: null },
+      variantes: [{
+        plateforme: variant.platform as VariantPayload["plateforme"],
+        duree_cible_sec: variant.targetDurationSec,
+        ratio: variant.aspectRatio as VariantPayload["ratio"],
+        beats: rows.map((r) => toPayloadBeat(r.externalId, r.snapshot)),
+      }],
+    },
+    identifiantsInternes: rows.map((r) => ({
+      id: r.externalId,
+      beatId: r.id,
+      // La durée qui fait foi à l'écran : la retouche manuelle l'emporte sur l'estimation.
+      dureeEstimeeSec: r.durationOverrideSec ?? r.estimatedDurationSec,
+      inserts: r.insertIds,
+    })),
+  };
+}
+
 // spokenText d'un beat de payload, assaini AVANT tout calcul de diff (round de correction 2, I7) :
 // `importedSnapshot` est écrit APRÈS sanitizeArticleHtml (voir sanitizeSnapshot plus bas), donc
 // comparer un `theirs` non assaini au `base`/`ours` (tous deux assainis) ferait apparaître une
@@ -427,11 +508,14 @@ export async function prepareImportCore(args: {
   raw: string;
   userId: string | null;
   source: JournalSource;
+  // Renseignés par le seul appelant MCP (lib/mcp/tools.ts) : voir writeJournal ci-dessus.
+  toolName?: string | null;
+  toolArgs?: Record<string, unknown> | null;
 }): Promise<{ ok: true; journalId: string; diff: Diff } | { ok: false; issues: Issue[] }> {
   const parsed = parseIncoming(args.raw);
   if (!parsed.ok) {
     await writeJournal(db, {
-      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
+      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
       schemaVersion: null, rawPayload: rawPayloadForJournal(args.raw), errorReport: parsed.issues,
       diff: {}, outcome: "rejete",
     });
@@ -443,7 +527,7 @@ export async function prepareImportCore(args: {
   if (!targetVariant) {
     const issues: Issue[] = [{ path: "variantId", message: "Variante introuvable pour ce projet." }];
     await writeJournal(db, {
-      projectId: args.projectId, variantId: null, source: args.source, userId: args.userId,
+      projectId: args.projectId, variantId: null, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
       errorReport: issues, diff: {}, outcome: "rejete",
     });
@@ -488,7 +572,7 @@ export async function prepareImportCore(args: {
 
   if (issues.length > 0) {
     await writeJournal(db, {
-      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId,
+      projectId: args.projectId, variantId: args.variantId, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
       schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
       errorReport: issues, diff: {}, outcome: "rejete",
     });
@@ -526,7 +610,7 @@ export async function prepareImportCore(args: {
   // pas remonter les diffs simplement en attente de décision. applyImportCore la fait passer à
   // "applique" au moment décisif, et refuse d'agir si l'entrée n'est plus "en_attente".
   const journalId = await writeJournal(db, {
-    projectId: args.projectId, variantId: targetVariant.id, source: args.source, userId: args.userId,
+    projectId: args.projectId, variantId: targetVariant.id, source: args.source, userId: args.userId, toolName: args.toolName, toolArgs: args.toolArgs,
     schemaVersion: parsed.payload.schema_version, rawPayload: rawPayloadForJournal(args.raw),
     errorReport: [], diff: diff as unknown as Record<string, unknown>, outcome: "en_attente",
   });
@@ -772,8 +856,20 @@ export async function revertJournalEntryCore(
       const applied = entry.applied as unknown as AppliedRecord;
       // (round de correction 2, I10) : les entrées "applique" écrites avant l'introduction de
       // `applied.before` n'en portent pas — refus explicite plutôt qu'un TypeError sur `undefined`.
-      if (!applied.before) {
-        throw new RefusalError("Cette entrée est antérieure à l'enregistrement de l'état d'avant, elle n'est pas annulable.");
+      //
+      // Round de correction final (I3) : le motif est désormais DISTINGUÉ. Une écriture DIRECTE
+      // d'agent (update_beat, reorder_beats, update_insert, create_video_project) est journalisée
+      // "applique" avec un `applied` entièrement vide — il n'y a pas de fusion à décrire, seulement
+      // un acte à attribuer (lib/mcp/tools.ts#journaliserEcritureDirecte). Lui répondre qu'elle est
+      // « antérieure à l'enregistrement de l'état d'avant » était FAUX : elle est postérieure, elle
+      // n'a simplement jamais eu d'état d'avant à enregistrer. Sur le chemin que le spec présente
+      // comme le recours humain, un motif faux est pire qu'un refus.
+      if (!hasBeforeState(applied)) {
+        throw new RefusalError(
+          applied.create === undefined && applied.update === undefined
+            ? "Cette entrée est une retouche directe d'agent, pas un import : elle n'a pas d'état d'avant enregistré et ne peut pas être annulée d'un geste. Corrigez le beat concerné depuis l'onglet Écriture."
+            : "Cette entrée est antérieure à l'enregistrement de l'état d'avant, elle n'est pas annulable.",
+        );
       }
       const before = applied.before;
 
@@ -890,4 +986,38 @@ export async function revertJournalEntryCore(
     if (e instanceof RefusalError) return { ok: false as const, message: e.message };
     throw e;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Marqueur « non relue » (Task 8)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// L'utilisateur a accepté qu'un agent applique un import sans passer par la revue de diff humaine
+// — le mécanisme central qui empêche un modèle d'effacer un beat par omission. Ce marqueur en est
+// un des garde-fous compensatoires (spec Task 8) : toute écriture d'agent (`source: "mcp"`) naît
+// avec `reviewedAt` à `null` et le reste jusqu'à ce qu'un humain ouvre le projet.
+//
+// UN SEUL `UPDATE` sur `script_journal`, hors de toute transaction et de l'ordre de verrouillage
+// video_projects < script_variants < script_journal < script_beats < beat_inserts documenté plus
+// haut dans ce fichier : le marquage ne touche QUE le journal, jamais une ligne de beat, donc il
+// n'a besoin d'aucun verrou de rang supérieur et ne peut pas rouvrir les interblocages ABBA que
+// quatre rounds de correction ont mis quatre passes à éliminer sur updateBeatCore/
+// updateBeatInsertCore/applyImportCore/revertJournalEntryCore. Rester en dehors de cette chaîne est
+// une propriété à préserver, pas un détail d'implémentation — ne jamais l'appeler depuis l'intérieur
+// d'une des transactions ci-dessus.
+//
+// `userId` fait partie de la signature (brief Task 8) mais n'est aujourd'hui PAS écrit :
+// `script_journal.reviewedAt` (db/schema.ts) n'a pas de colonne `reviewedBy` compagne — seul le
+// MOMENT où un humain a ouvert le projet compte pour ce garde-fou, pas encore QUI. Le paramètre
+// reste dans la signature plutôt que d'être retiré : l'appelant naturel (la page projet) connaît
+// déjà `requireUser()`, et une future colonne `reviewedBy` n'aurait pas à changer cet appel.
+export async function markProjectReviewedCore(projectId: string, userId: string | null): Promise<void> {
+  void userId;
+  await db.update(scriptJournal)
+    .set({ reviewedAt: new Date() })
+    .where(and(
+      eq(scriptJournal.projectId, projectId),
+      eq(scriptJournal.source, "mcp"),
+      isNull(scriptJournal.reviewedAt),
+    ));
 }

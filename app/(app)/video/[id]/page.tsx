@@ -1,16 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, eq } from "drizzle-orm";
-import { db, articles, distributions } from "@/db";
 import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
-import { getVideoProject } from "@/lib/queries/video";
+import { briefVarsFor, getVideoProject } from "@/lib/queries/video";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
-import { getWpConfig } from "@/lib/wp/config";
-import { wpPostUrl } from "@/lib/wp/post-url";
+import { hasBeforeState, markProjectReviewedCore } from "@/lib/video/persist";
 import { PageHeader } from "@/components/shell/page-header";
-import { PLATFORM_LABEL } from "@/components/video/project-list";
+import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { BriefPanel } from "@/components/video/brief-panel";
 import { BeatList, type BeatView } from "@/components/video/beat-list";
 import { ImportPanel } from "@/components/video/import-panel";
@@ -36,6 +33,18 @@ export default async function VideoProjectPage({
 
   const project = await getVideoProject(id);
   if (!project) notFound();
+
+  // Task 8 : ouvrir ce projet marque « relues » toutes les écritures d'agent (source "mcp")
+  // encore non relues. Volontairement APRÈS le chargement de `project` ci-dessus (le brief
+  // l'exige) : `journalEntries` plus bas est construit à partir de CET instantané, donc les
+  // badges « Non relue » rendus pendant CETTE visite reflètent encore fidèlement l'état
+  // d'avant-marquage — c'est précisément la visite où l'humain doit les voir. La promesse n'est
+  // PAS awaited : un marquage lent ou en échec ne doit ni retarder ni faire échouer le rendu de
+  // la page (comportement imposé, brief Task 8) ; une écriture d'agent qui arrive après ce point
+  // reste "non relue" pour la prochaine ouverture, comme voulu.
+  markProjectReviewedCore(id, user.id).catch((e) => {
+    console.error("Marquage « relue » du projet a échoué :", e);
+  });
 
   const settings = await getVideoSettings();
 
@@ -76,35 +85,10 @@ export default async function VideoProjectPage({
     sources: b.sources,
   }));
 
-  // Champs article : vides quand aucun article n'est lié (Task 11 brief) — même motif d'absence
-  // « gracieuse » que lib/studio/bindings.ts#articleTokenValues pour {{article.url}} : l'URL
-  // publique n'existe qu'après diffusion WordPress, jamais reconstruite autrement.
-  let articleTitre = "";
-  let articleUrl = "";
-  let articleExtrait = "";
-  if (project.articleId) {
-    const [article] = await db.select().from(articles).where(eq(articles.id, project.articleId));
-    if (article) {
-      articleTitre = article.title;
-      articleExtrait = article.excerpt ?? "";
-      const [dist] = await db.select().from(distributions)
-        .where(and(eq(distributions.articleId, project.articleId), eq(distributions.channel, "wordpress")))
-        .limit(1);
-      const baseUrl = getWpConfig()?.baseUrl ?? null;
-      articleUrl = wpPostUrl(baseUrl, dist?.externalId ?? null) ?? "";
-    }
-  }
-
-  const vars: BriefVars = {
-    titre: project.title,
-    sujet: project.subject ?? "",
-    plateforme: variant ? (PLATFORM_LABEL[variant.platform] ?? variant.platform) : "",
-    duree_cible: variant?.targetDurationSec ? `${Math.round(variant.targetDurationSec / 60)} min` : "",
-    ratio: variant?.aspectRatio ?? "",
-    article_titre: articleTitre,
-    article_url: articleUrl,
-    article_extrait: articleExtrait,
-  };
+  // Les variables du brief viennent de `briefVarsFor` (lib/queries/video.ts) — LA même fonction que
+  // celle qu'appelle l'outil MCP (round de correction 1, Task 5 du SP1 bis). Construites ici ligne à
+  // ligne, elles auraient divergé de celles remises à l'agent dès la première retouche.
+  const vars: BriefVars = await briefVarsFor(project, variant ?? null);
 
   const brief = buildBrief(settings.briefTemplate, vars);
 
@@ -121,6 +105,11 @@ export default async function VideoProjectPage({
     errorReport: (j.errorReport ?? []) as Issue[],
     rawPayload: j.rawPayload,
     revertedAt: j.revertedAt ? j.revertedAt.toISOString() : null,
+    reviewedAt: j.reviewedAt ? j.reviewedAt.toISOString() : null,
+    // Round de correction final, I3 : le MÊME prédicat que la garde serveur
+    // (lib/video/persist.ts#hasBeforeState), pas une seconde lecture du jsonb écrite ici — sinon
+    // l'écran et le serveur pourraient un jour ne plus s'accorder sur ce qui est annulable.
+    revertable: hasBeforeState(j.applied),
   }));
 
   return (

@@ -31,6 +31,11 @@ export const SETTINGS_CHILDREN: NavChild[] = [
   // Diffusion panel, not this administration surface (same split as team/integrations/pipeline
   // above, all admin-only for the analogous reason).
   { href: "/settings/social", label: "Réseaux sociaux", roles: ["admin"] },
+  // Task 7 (serveur MCP) — page gardée par "video:manage" (lib/rbac.ts), pas "video:configure"
+  // comme Vidéo ci-dessus : les TROIS rôles ont accès à l'écran (chacun gère au moins SES PROPRES
+  // jetons), l'interrupteur et la vue "toute l'équipe" restant réservés à video:configure à
+  // l'intérieur même de la page (app/(app)/settings/mcp/page.tsx).
+  { href: "/settings/mcp", label: "MCP", roles: ["admin", "editor", "journalist"] },
 ];
 
 // NOTE sur `href: "/settings"` : il n'existe pas de page à cette adresse (app/(app)/settings/
@@ -87,11 +92,18 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     id: "reglages",
     label: "Réglages",
-    roles: ["admin", "editor"],
+    // Task 7 (round de correction) : ouvert à "journalist" — sinon /settings/mcp existe dans
+    // SETTINGS_CHILDREN sans qu'aucun chemin de navigation n'y mène jamais pour ce rôle, alors
+    // même qu'il détient video:manage et gère donc ses propres jetons (c'est lui qui écrit les
+    // scripts vidéo). Le filtrage à trois niveaux de filterSections fait le reste : les cinq
+    // autres sous-pages restent fermées (leurs propres `roles` sur SETTINGS_CHILDREN excluent
+    // toujours journalist), donc un journaliste ne voit ici que « Réglages » réduit à sa seule
+    // entrée « MCP ».
+    roles: ["admin", "editor", "journalist"],
     items: [
       {
         href: "/settings", label: "Réglages", icon: Settings,
-        roles: ["admin", "editor"], items: SETTINGS_CHILDREN,
+        roles: ["admin", "editor", "journalist"], items: SETTINGS_CHILDREN,
       },
     ],
   },

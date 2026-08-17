@@ -176,6 +176,35 @@ export function toSnapshot(beat: BeatPayload): BeatSnapshot {
   };
 }
 
+/**
+ * L'INVERSE exact de `toSnapshot` (round de correction final, C1) : d'un instantané interne vers le
+ * fragment de contrat correspondant. `get_script` (lib/mcp/tools.ts, via readScriptCore) rendait
+ * jusqu'ici le vocabulaire INTERNE — `id` valant l'UUID de ligne, plus `kind`, `spokenText`,
+ * `directionNote`… — alors que l'agent doit produire `id` (= l'externalId), `type`, `texte`,
+ * `note_realisation`… L'agent qui lisait, révisait et resoumettait en reportant `id` → `id`
+ * envoyait donc des UUID comme identifiants de beats ; un UUID satisfait BEAT_ID_RE, donc rien ne le
+ * refusait, computeMerge y voyait N suppressions (non appliquées par défaut) et N ajouts (appliqués)
+ * — le script était DUPLIQUÉ en silence. C'est le mode d'échec même que get_script existe pour
+ * supprimer.
+ *
+ * Écrite ICI, collée à `toSnapshot`, et typée `BeatPayload` : la sortie est celle de
+ * lib/video/schema.ts, donc un renommage de clé du contrat casse la compilation au lieu de laisser
+ * les deux sens diverger en silence.
+ */
+export function toPayloadBeat(externalId: string, snapshot: BeatSnapshot): BeatPayload {
+  return {
+    id: externalId,
+    type: snapshot.kind,
+    texte: snapshot.spokenText,
+    note_realisation: snapshot.directionNote,
+    texte_ecran: snapshot.screenText,
+    transition_entree: snapshot.transitionIn,
+    transition_sortie: snapshot.transitionOut,
+    sources: snapshot.sources,
+    inserts: normalizeInserts(snapshot.inserts),
+  };
+}
+
 export type BeatRow = {
   externalId: string;
   position: number;
@@ -261,6 +290,28 @@ export function computeMerge(current: BeatRow[], next: BeatPayload[]): Diff {
     if (!incoming.has(row.externalId)) diff.removed.push({ externalId: row.externalId });
   }
   return diff;
+}
+
+/**
+ * LA règle produit, en UN seul endroit (round de correction final, I1) : sans sélection explicite,
+ * on retient les ajouts et les modifications, JAMAIS les suppressions ni les conflits. Un modèle qui
+ * abrège sa réponse ne doit pas pouvoir effacer un beat par omission, et un conflit ne se tranche
+ * jamais tout seul.
+ *
+ * Elle vivait en DEUX copies — lib/mcp/tools.ts (canal agent, sans revue humaine) et
+ * components/video/diff-review.tsx (canal humain) — sans fonction partagée ni test d'accord : la
+ * faire évoluer sur un canal laissait l'autre ouvert, et c'est le canal agent qui compte le plus.
+ * Son domicile est ici, aux côtés de computeMerge (qui produit le diff) et d'applyMerge (qui
+ * consomme la sélection).
+ *
+ * `Partial<Diff>` toléré : lib/mcp/tools.ts relit le diff depuis la colonne jsonb du journal, où une
+ * entrée rejetée porte `{}`. La règle rend alors une sélection vide, elle ne lève pas.
+ */
+export function defaultAccept(diff: Partial<Diff>): string[] {
+  return [
+    ...(diff.added ?? []).map((a) => a.externalId),
+    ...(diff.modified ?? []).map((m) => m.externalId),
+  ];
 }
 
 /**
