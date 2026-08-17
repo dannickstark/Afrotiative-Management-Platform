@@ -2,7 +2,7 @@
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Loader2, Pencil, Plus, Trash2 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardAction, CardContent } from "@/components/ui/card";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -31,15 +31,15 @@ export function CategoryManager({ categories }: { categories: VideoCategoryRow[]
 
   return (
     <Card>
-      <CardHeader className="flex-row items-start justify-between gap-4">
-        <div className="space-y-1.5">
-          <CardTitle>Catégories de vidéo</CardTitle>
-          <CardDescription>
-            Les instructions propres à un type de vidéo — storytelling, interview, investigation…
-            Elles sont ajoutées automatiquement au brief de chaque projet rattaché.
-          </CardDescription>
-        </div>
-        <Button onClick={() => setCreating(true)}><Plus aria-hidden /> Nouvelle catégorie</Button>
+      <CardHeader>
+        <CardTitle>Catégories de vidéo</CardTitle>
+        <CardDescription>
+          Les instructions propres à un type de vidéo — storytelling, interview, investigation…
+          Elles sont ajoutées automatiquement au brief de chaque projet rattaché.
+        </CardDescription>
+        <CardAction>
+          <Button onClick={() => setCreating(true)}><Plus aria-hidden /> Nouvelle catégorie</Button>
+        </CardAction>
       </CardHeader>
       <CardContent>
         {categories.length === 0 ? (
@@ -111,6 +111,18 @@ function CategoryDialog({
     setError(null);
   }
 
+  // Point de sortie UNIQUE du dialogue — le bouton « Annuler » passe par ici plutôt que d'appeler
+  // `onClose` directement, pour ne jamais court-circuiter la remise à zéro de `openedFor` : sans
+  // cela, ré-ouvrir la même catégorie après un « Annuler » sauterait la garde de réinitialisation
+  // (`openedFor === key`) et réafficherait le brouillon annulé au lieu des données réelles. Même
+  // motif que `handleOpenChange` dans components/settings/add-member-dialog.tsx.
+  function handleOpenChange(next: boolean) {
+    if (!next) {
+      setOpenedFor(null);
+      onClose();
+    }
+  }
+
   function handleSave() {
     const payload = {
       name: form.name,
@@ -125,8 +137,7 @@ function CategoryDialog({
           : await createVideoCategory(payload);
         if (!res.ok) { setError(res.message); toast.error(res.message); return; }
         toast.success(category ? "Catégorie modifiée." : "Catégorie créée.");
-        setOpenedFor(null);
-        onClose();
+        handleOpenChange(false);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Échec de l'enregistrement.";
         setError(message);
@@ -136,7 +147,7 @@ function CategoryDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) { setOpenedFor(null); onClose(); } }}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{category ? "Modifier la catégorie" : "Nouvelle catégorie"}</DialogTitle>
@@ -181,7 +192,7 @@ function CategoryDialog({
           {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={isSaving}>Annuler</Button>
+          <Button variant="ghost" onClick={() => handleOpenChange(false)} disabled={isSaving}>Annuler</Button>
           <Button onClick={handleSave} disabled={isSaving}>
             {isSaving && <Loader2 className="animate-spin" aria-hidden />}
             {isSaving ? "Enregistrement…" : "Enregistrer"}
