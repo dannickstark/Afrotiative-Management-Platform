@@ -3,6 +3,7 @@ import { TOOL_REGISTRY, toolByName } from "@/lib/mcp/registry";
 
 const EXPECTED = [
   "list_video_projects", "get_script", "get_video_brief", "list_articles", "get_article",
+  "list_video_categories",
   "create_video_project", "submit_script", "apply_script",
   "update_beat", "reorder_beats", "update_insert",
 ];
@@ -25,10 +26,11 @@ describe("registre d'outils MCP", () => {
     for (const t of TOOL_REGISTRY) expect(["lecture", "ecriture"]).toContain(t.kind);
   });
 
-  it("les cinq outils de lecture sont bien classés en lecture", () => {
+  it("les six outils de lecture sont bien classés en lecture", () => {
     const lecture = TOOL_REGISTRY.filter((t) => t.kind === "lecture").map((t) => t.name).sort();
     expect(lecture).toEqual([
-      "get_article", "get_script", "get_video_brief", "list_articles", "list_video_projects",
+      "get_article", "get_script", "get_video_brief", "list_articles", "list_video_categories",
+      "list_video_projects",
     ]);
   });
 
