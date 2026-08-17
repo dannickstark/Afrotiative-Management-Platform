@@ -126,6 +126,10 @@ export function NewProjectDialog({
               value={form.categoryId || NO_CATEGORY}
               onValueChange={(v) => setForm((f) => ({ ...f, categoryId: !v || v === NO_CATEGORY ? "" : v }))}
               disabled={isSaving}
+              // `items` : correspondance valeur → libellé, pour que `<SelectValue>` affiche le nom
+              // choisi dès qu'il l'est, sans dépendre d'une première ouverture du menu (les
+              // `SelectItem` ne s'enregistrent qu'à leur montage).
+              items={{ [NO_CATEGORY]: "Aucune catégorie", ...Object.fromEntries(categories.map((c) => [c.id, c.name])) }}
             >
               <SelectTrigger id="project-category" className="w-full">
                 <SelectValue placeholder="Aucune catégorie" />

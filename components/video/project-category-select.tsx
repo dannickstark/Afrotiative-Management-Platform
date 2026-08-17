@@ -17,6 +17,14 @@ export function ProjectCategorySelect({
   const router = useRouter();
   const [isSaving, startSaving] = useTransition();
 
+  // `items` donne à `<Select>` la correspondance valeur → libellé : sans elle, `<SelectValue>`
+  // n'a rien à consulter avant que le menu ait été ouvert une première fois (les `SelectItem` ne
+  // s'enregistrent qu'à leur montage) et affiche la valeur brute — l'UUID de la catégorie, ou le
+  // sentinel `__none__` — au lieu du nom, dès le premier rendu. Ce contrôle n'existe que pour
+  // montrer la catégorie courante du projet ouvert : cet affichage brut serait un échec fonctionnel.
+  const items: Record<string, string> = { [NO_CATEGORY]: "Aucune catégorie" };
+  for (const c of categories) items[c.id] = c.name;
+
   function handleChange(value: string | null) {
     const next = !value || value === NO_CATEGORY ? null : value;
     startSaving(async () => {
@@ -31,7 +39,7 @@ export function ProjectCategorySelect({
   return (
     <div className="flex items-center gap-3">
       <Label htmlFor="brief-category" className="shrink-0">Catégorie</Label>
-      <Select value={categoryId ?? NO_CATEGORY} onValueChange={handleChange} disabled={isSaving}>
+      <Select value={categoryId ?? NO_CATEGORY} onValueChange={handleChange} disabled={isSaving} items={items}>
         <SelectTrigger id="brief-category" className="w-72">
           <SelectValue placeholder="Aucune catégorie" />
         </SelectTrigger>
