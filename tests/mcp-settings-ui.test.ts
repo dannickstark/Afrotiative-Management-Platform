@@ -96,3 +96,32 @@ describe("TokenList — propriétaire du jeton", () => {
     expect(sien).not.toContain("Awa Diallo");
   });
 });
+
+// Round de correction finale, constat 4 : aucune assertion ne couvrait les badges de portée
+// (spec §4 — « seulement quand la portée est restreinte »). La seconde assertion ci-dessous compte
+// autant que la première : un badge qui s'affiche TOUJOURS passerait le premier test tout en
+// trahissant la promesse faite à l'utilisateur.
+describe("TokenList — badges de portée", () => {
+  const base: TokenRow = {
+    id: "t-1", userId: "u-moi", name: "Portable", prefix: "afro_vid_abc",
+    ownerName: "Awa Diallo", canWrite: true, canReadArticles: true,
+    lastUsedAt: null, revokedAt: null, createdAt: new Date("2026-08-01T10:00:00Z"),
+  };
+
+  function html(tokens: TokenRow[]) {
+    return renderToStaticMarkup(React.createElement(TokenList, {
+      tokens, currentUserId: "u-moi", seesAll: false,
+    }));
+  }
+
+  it("un jeton en lecture seule affiche « Lecture seule »", () => {
+    const lectureSeule: TokenRow = { ...base, canWrite: false };
+    expect(html([lectureSeule])).toContain("Lecture seule");
+  });
+
+  it("un jeton à portée complète n'affiche NI « Lecture seule » NI « Sans articles »", () => {
+    const rendu = html([base]);
+    expect(rendu).not.toContain("Lecture seule");
+    expect(rendu).not.toContain("Sans articles");
+  });
+});

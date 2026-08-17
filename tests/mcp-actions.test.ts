@@ -147,4 +147,27 @@ describe("portée d'un jeton", () => {
     expect(row.canWrite).toBe(true);
     expect(row.canReadArticles).toBe(true);
   });
+
+  // Round de correction finale, constat 2 : aucun test ne fermait la boucle base → acteur. Les
+  // tests d'outils MCP (tests/mcp-tools.test.ts) INJECTENT la portée par `makeActor({ scope })`
+  // sans jamais repasser par `authenticateMcp`, et le harnais insère même la ligne de jeton SANS
+  // les colonnes de portée (tests/mcp-harness.ts) : ligne et acteur peuvent diverger sans qu'aucun
+  // test ne s'en aperçoive. Si `lib/mcp/auth.ts` renvoyait `FULL_SCOPE` en dur au lieu de
+  // `{ canWrite: row.canWrite, canReadArticles: row.canReadArticles }`, toute la suite resterait
+  // verte. Celui-ci crée un jeton restreint par le vrai chemin d'écriture (createApiTokenCore) et
+  // authentifie par le vrai chemin de lecture (authenticateMcp) — la seule façon d'éprouver le
+  // câblage réel entre les deux.
+  it("authenticateMcp câble la portée de la ligne dans l'acteur, pas seulement `listTokensCore`", async () => {
+    const { tokenId, token } = await createApiTokenCore({
+      userId: editor.userId, name: `Test-Cablage-${Date.now()}`,
+      scope: { canWrite: false, canReadArticles: false },
+    });
+    created.push(tokenId);
+
+    const auth = await authenticateMcp(`Bearer ${token}`);
+    expect(auth.ok).toBe(true);
+    if (auth.ok) {
+      expect(auth.actor.scope).toEqual({ canWrite: false, canReadArticles: false });
+    }
+  });
 });

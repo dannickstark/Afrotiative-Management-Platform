@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/session";
 import { can, requirePermission } from "@/lib/rbac";
 import { createApiTokenCore, revokeApiTokenCore, setMcpEnabledCore } from "@/lib/queries/mcp";
-import { apiTokenSchema } from "@/lib/validation";
+import { apiTokenSchema, type ApiTokenInput } from "@/lib/validation";
 
 // Voir/gérer SES PROPRES jetons demande "video:manage" (les trois rôles, journaliste compris —
 // c'est lui qui écrit les scripts). `seesAll` (voir les jetons de toute l'équipe, actionner
@@ -21,9 +21,12 @@ async function guard() {
 }
 
 export async function createApiToken(
-  input: unknown,
+  input: ApiTokenInput,
 ): Promise<{ ok: true; tokenId: string; token: string } | { ok: false; message: string }> {
   const { user } = await guard();
+  // Le type n'est qu'une aide au développement : cette action reste un point d'entrée réseau, donc
+  // `safeParse` continue de valider une entrée qui n'a de garanti que ce que le typage promet côté
+  // client — jamais ce qu'un appelant réel envoie réellement.
   const parsed = apiTokenSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0].message };
 

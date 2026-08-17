@@ -7,7 +7,7 @@ import {
 import { TOOL_REGISTRY, type ToolSpec } from "@/lib/mcp/registry";
 import { requirePermission } from "@/lib/rbac";
 import type { McpActor } from "@/lib/mcp/auth";
-import { refusPourPortee } from "@/lib/mcp/scope";
+import { refusPourPortee, type McpScope } from "@/lib/mcp/scope";
 import {
   applyImportCore, createVideoProjectCore, prepareImportCore, readScriptCore, reorderBeatsCore,
   updateBeatCore, updateBeatInsertCore,
@@ -142,7 +142,13 @@ async function localiserBeat(beatId: string): Promise<{ variantId: string; proje
 // `briefVarsFor` (lib/queries/video.ts) est le producteur unique depuis le round de correction 2 (I4).
 // Les deux chemins les assemblaient auparavant ligne à ligne et auraient divergé à la première
 // retouche — l'agent aurait écrit sous un brief que personne ne voit.
-async function construireBrief(projectId: string, variantId?: string): Promise<{
+//
+// SEUL point d'expurgation d'article du chemin MCP (finding 1, vague de correction finale) : à la
+// fois `get_video_brief` et `create_video_project` (les deux seuls appelants) passent par ce
+// producteur unique, donc purger ICI — avant le rendu du gabarit — suffit aux deux, sans recopier la
+// même condition dans chaque `case` de `dispatch`. `briefVarsFor` (lib/queries/video.ts) reste
+// délibérément ignorant de la portée : elle sert aussi l'écran web /video/[id], qui n'en a pas.
+async function construireBrief(projectId: string, scope: McpScope, variantId?: string): Promise<{
   brief: string; variantId: string | null;
 }> {
   const [project] = await db.select().from(videoProjects).where(eq(videoProjects.id, projectId));
@@ -152,6 +158,15 @@ async function construireBrief(projectId: string, variantId?: string): Promise<{
   const variant = (variantId ? variants.find((v) => v.id === variantId) : variants[0]) ?? null;
 
   const vars = await briefVarsFor(project, variant);
+  // Un jeton privé d'articles ne doit trouver AUCUNE trace de la rédaction dans le brief qu'il
+  // reçoit — même quand le projet est réellement rattaché à un article et que `briefVarsFor` les a
+  // légitimement remplies pour l'écran web. Le reste du brief (titre, sujet, plateforme, durée,
+  // ratio, instructions de catégorie) est inchangé : seule la fenêtre article se ferme.
+  if (!scope.canReadArticles) {
+    vars.article_titre = "";
+    vars.article_url = "";
+    vars.article_extrait = "";
+  }
   const settings = await getVideoSettings();
   // L'agent reçoit EXACTEMENT le brief affiché à l'humain, instructions de catégorie comprises :
   // même producteur (buildBrief), mêmes entrées. Sans cette ligne, l'agent écrirait sous un brief
@@ -169,8 +184,15 @@ async function dispatch(
 ): Promise<unknown> {
   switch (name) {
     // ── Lectures ──────────────────────────────────────────────────────────
-    case "list_video_projects":
-      return listVideoProjects();
+    case "list_video_projects": {
+      const projects = await listVideoProjects();
+      // `listVideoProjects` (lib/queries/video.ts) sert aussi l'écran web /video, qui n'a pas de
+      // portée : la jointure `articles` y reste. Ici, côté MCP, un jeton privé d'articles ne doit
+      // pas apprendre le titre d'un article par ce détour — `null`, pas un champ retiré, pour ne
+      // pas changer la forme du type `VideoProjectListRow`.
+      if (actor.scope.canReadArticles) return projects;
+      return projects.map((p) => ({ ...p, articleTitle: null }));
+    }
 
     case "get_script": {
       // Rendu par le CŒUR (readScriptCore), dans le vocabulaire du CONTRAT, et non recomposé ici à
@@ -189,7 +211,7 @@ async function dispatch(
 
     case "get_video_brief": {
       const projectId = args.projectId as string;
-      const { brief, variantId } = await construireBrief(projectId);
+      const { brief, variantId } = await construireBrief(projectId, actor.scope);
       return { projectId, variantId, brief };
     }
 
@@ -233,6 +255,14 @@ async function dispatch(
     // ── Écritures ─────────────────────────────────────────────────────────
     case "create_video_project": {
       const categoryId = (args.categoryId as string | undefined) ?? null;
+      const articleId = (args.articleId as string | undefined) ?? null;
+      // Un jeton privé d'articles ne peut pas rattacher de projet à un article : un rattachement
+      // silencieusement ignoré serait pire que ce refus — l'agent croirait son projet sourcé alors
+      // qu'il ne le serait pas. `domain: "video"` sur cet outil (lib/mcp/registry.ts) ne suffit pas
+      // à couvrir ce cas : refusPourPortee ne regarde que le domaine de l'OUTIL, pas ses arguments.
+      if (articleId && !actor.scope.canReadArticles) {
+        throw new Error("Ce jeton n'a pas accès aux articles : impossible de rattacher articleId à ce projet.");
+      }
       // Pré-lecture délibérée avant l'écriture, malgré la fenêtre de concurrence qu'elle laisse
       // ouverte (une catégorie supprimée entre ce SELECT et l'INSERT ferait alors échouer la
       // contrainte de clé étrangère malgré tout) : l'alternative est de laisser remonter à l'agent
@@ -251,13 +281,13 @@ async function dispatch(
         // Même défaut que la boîte de dialogue de création (components/video/new-project-dialog.tsx) :
         // "16:9", fixe.
         aspectRatio: (args.aspectRatio as string | undefined) ?? "16:9",
-        articleId: (args.articleId as string | undefined) ?? null,
+        articleId,
         categoryId,
         userId: actor.userId,
       });
       // Le brief part dans la MÊME réponse que la création : c'est ce qui évite à l'agent un
       // aller-retour pour connaître le contrat auquel sa prochaine réponse doit obéir.
-      const { brief, variantId } = await construireBrief(projectId);
+      const { brief, variantId } = await construireBrief(projectId, actor.scope);
       await journaliserEcritureDirecte({
         projectId, variantId, toolName: name, toolArgs: args, actorUserId: actor.userId,
       });
