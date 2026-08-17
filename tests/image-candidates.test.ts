@@ -33,10 +33,31 @@ describe("filterImageCandidates", () => {
       c("https://x.test/img/blank.png"),
       c("https://x.test/img/placeholder-default.png"),
       c("https://x.test/emoji/smile.png"),
-      c("https://x.test/share/twitter-card.png"),
-      c("https://x.test/social/facebook-og.png"),
     ]);
     expect(out.map((i) => i.url)).toEqual(["https://x.test/photo-legitime.jpg"]);
+  });
+
+  it("ne filtre PLUS 'share' et 'social' — vocabulaire éditorial courant sur une publication économique/financière (safaricom-share-price, rse-social-corporate)", () => {
+    const out = filterImageCandidates([
+      c("https://x.test/wp-content/uploads/2024/05/safaricom-share-price.jpg"),
+      c("https://x.test/wp-content/uploads/2024/05/rse-social-corporate.jpg"),
+    ]);
+    expect(out.map((i) => i.url)).toEqual([
+      "https://x.test/wp-content/uploads/2024/05/safaricom-share-price.jpg",
+      "https://x.test/wp-content/uploads/2024/05/rse-social-corporate.jpg",
+    ]);
+  });
+
+  it("borne bien le mot de chrome quand il est délimité par `_` (site_logo_2024.png est écarté — `\\b` seul y échouait) et ne matche pas quand un chiffre PROLONGE le mot sans séparateur (logo2.png, comme iconic, survit)", () => {
+    const out = filterImageCandidates([
+      c("https://x.test/photo-legitime.jpg"),
+      c("https://x.test/assets/site_logo_2024.png"),
+      c("https://x.test/assets/logo2.png"),
+    ]);
+    expect(out.map((i) => i.url)).toEqual([
+      "https://x.test/photo-legitime.jpg",
+      "https://x.test/assets/logo2.png",
+    ]);
   });
 
   it("ne se laisse pas piéger par des segments légitimes contenant 'icon' ou 'social' en sous-chaîne (ex: iconic, socialite)", () => {
@@ -67,12 +88,22 @@ describe("filterImageCandidates", () => {
     expect(urls).toContain("https://x.test/photo2.jpg?width=800");
   });
 
-  it("regroupe les variantes de redimensionnement (-WxH) sous une même base et garde la plus grande", () => {
+  it("regroupe les variantes de redimensionnement (-WxH) sous une même base et garde l'ORIGINAL nu (convention WordPress : le nu est l'upload d'origine, souvent plus grand que tout resize déclaré)", () => {
     const out = filterImageCandidates([
       c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-150x150.jpg"),
       c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-768x432.jpg"),
       c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-1024x576.jpg"),
       c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare.jpg"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].url).toBe("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare.jpg");
+  });
+
+  it("sans URL nue dans le groupe, garde la plus grande variante dimensionnée (repli inchangé)", () => {
+    const out = filterImageCandidates([
+      c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-150x150.jpg"),
+      c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-768x432.jpg"),
+      c("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-1024x576.jpg"),
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].url).toBe("https://www.ecofin.com/wp-content/uploads/2024/05/safaricom-cloudflare-1024x576.jpg");

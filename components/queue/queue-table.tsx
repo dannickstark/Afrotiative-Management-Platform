@@ -91,6 +91,15 @@ export function QueueTable({
   // agir en lot sur des lignes qu'on ne voit plus serait dangereux.
   useEffect(() => { setRowSelection({}); }, [rows]);
 
+  // Un lot devenu vide alors que l'assistant est ouvert — rafraîchissement concurrent, candidats
+  // consommés ailleurs — laisserait une fenêtre ouverte qui ne rend RIEN. On referme proprement.
+  useEffect(() => {
+    if (wizardOpen && activePicks.length === 0) {
+      setWizardOpen(false);
+      setFocusedArticleId(null);
+    }
+  }, [wizardOpen, activePicks.length]);
+
   const selectedIds = Object.keys(rowSelection).filter((id) => rowSelection[id]);
   const selectedRows = rows.filter((r) => selectedIds.includes(r.id));
 

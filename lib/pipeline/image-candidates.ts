@@ -12,17 +12,31 @@ const MAX_DEFAULT = 12;
 // Segments de chemin qui trahissent presque toujours du chrome de site plutôt qu'une photo
 // éditoriale. On matche des SEGMENTS de chemin (délimités par `/`, `-`, `_`, `.`), jamais une
 // sous-chaîne nue : `icon` nu attraperait "iconic", `social` nu attraperait "socialite" ou le nom
-// d'une publication. Voir buildChromePattern ci-dessous pour la mécanique exacte.
+// d'une publication. Voir CHROME_PATTERN ci-dessous pour la mécanique exacte.
+// NB : `share` et `social` ont été délibérément RETIRÉS de cette liste — MAIMP est une publication
+// économique/financière où « share price » et « responsabilité sociale » sont du vocabulaire
+// éditorial courant, pas du chrome de site. Les vraies icônes de partage social sont de toute façon
+// presque toujours interceptées par la règle .svg ou par la règle « déclaré minuscule ». Ne pas les
+// réintroduire sans revoir ce compromis.
 const CHROME_WORDS = [
   "logo", "favicon", "icon", "avatar", "sprite", "banner", "banniere",
-  "pixel", "spacer", "blank", "placeholder", "emoji", "share", "social",
+  "pixel", "spacer", "blank", "placeholder", "emoji",
 ];
 
-// Un "mot" de chrome ne doit matcher qu'en tant que segment complet (entre limites de mot) — pas en
-// sous-chaîne d'un mot plus long. `\b` suffit ici car tous les mots de CHROME_WORDS sont
-// alphabétiques : `\b` borne déjà sur `/`, `-`, `_`, `.` et sur les chiffres, donc "iconic" (bordé
-// par "icon" + "ic") ne matche pas la frontière `\bicon\b`, et "socialite" non plus.
-const CHROME_PATTERN = new RegExp(`\\b(?:${CHROME_WORDS.join("|")})\\b`, "i");
+// Un "mot" de chrome ne doit matcher qu'en tant que segment complet — pas en sous-chaîne d'un mot
+// plus long. `\b` est INSUFFISANT ici : en JS, `_` et les chiffres font partie de `\w`, donc `\b`
+// NE borne PAS sur eux — `/\blogo\b/i.test("site_logo_2024.png")` est `false`. On utilise donc des
+// lookarounds explicites qui exigent qu'un caractère alphanumérique [A-Za-z0-9] NE précède/suive PAS
+// le mot : "site_logo_2024.png" matche désormais (le `_` sépare bien "logo" du reste), tandis que
+// "iconic", "socialite" et un chiffre accolé sans séparateur ("logo2.png", où le chiffre PROLONGE le
+// mot plutôt que de le border) ne matchent toujours pas.
+// (Tradeoff assumé : ceci matche aussi bien dans le path que dans la query — un mot de chrome
+// apparaissant dans un paramètre de requête sans rapport avec le fichier serait donc, lui aussi,
+// considéré comme du chrome. On ne restructure pas la mécanique de matching pour ce cas rare.)
+const CHROME_PATTERN = new RegExp(
+  `(?:${CHROME_WORDS.map((w) => `(?<![A-Za-z0-9])${w}(?![A-Za-z0-9])`).join("|")})`,
+  "i",
+);
 
 const NON_PHOTO_EXT = /\.(svg|ico|gif)(?:$|\?)/i;
 
@@ -91,26 +105,36 @@ function applyFilters(candidates: ImageCandidate[]): ImageCandidate[] {
     (c) => !isNonPhotographic(c.url) && !isChrome(c.url) && !isDeclaredTiny(c.url),
   );
 
-  // Regroupe par clé de base et ne garde qu'UN représentant par groupe : celui aux plus grandes
-  // dimensions déclarées, sinon (aucune variante dimensionnée dans le groupe) celui sans suffixe.
-  // On préserve la provenance et le rang du PREMIER élément vu pour la position finale — l'ordre
-  // d'entrée est celui des sources, pas quelque chose qu'on veut perturber en dehors du gain de
-  // dédoublonnage lui-même.
-  // Aire déclarée : -1 signifie "aucune dimension connue" (pas de suffixe -WxH), ce qui la place
-  // toujours en dessous de la moindre variante dimensionnée dans le classement par aire.
-  const groups = new Map<string, { firstIndex: number; best: ImageCandidate; bestArea: number }>();
+  // Regroupe par clé de base et ne garde qu'UN représentant par groupe : celui SANS suffixe -WxH
+  // (l'URL "nue") si le groupe en contient une, sinon celui aux plus grandes dimensions déclarées.
+  // Convention WordPress : le fichier nu (`photo.jpg`) est l'ORIGINAL téléversé, et les variantes
+  // `-WxH` (`photo-1024x576.jpg`) sont des redimensionnements générés — souvent plus PETITS que
+  // l'original (un original 2400×1350 à côté d'un "large" 1024×576). Garder systématiquement la
+  // plus grande variante DÉCLARÉE revenait donc à livrer une image moins résolue que ce qui est
+  // disponible. On préserve la provenance et le rang du PREMIER élément vu pour la position finale
+  // — l'ordre d'entrée est celui des sources, pas quelque chose qu'on veut perturber en dehors du
+  // gain de dédoublonnage lui-même.
+  // Aire déclarée : -1 signifie "aucune dimension connue" (pas de suffixe -WxH — soit l'original nu,
+  // soit une URL qui n'obéit pas à cette convention).
+  const groups = new Map<string, { firstIndex: number; best: ImageCandidate; bestArea: number; hasBare: boolean }>();
   survivors.forEach((c, index) => {
     const key = baseKey(c.url);
     const dim = suffixDimensions(c.url);
     const area = dim ? dim.width * dim.height : -1;
+    const isBare = dim === null;
     const existing = groups.get(key);
     if (!existing) {
-      groups.set(key, { firstIndex: index, best: c, bestArea: area });
+      groups.set(key, { firstIndex: index, best: c, bestArea: area, hasBare: isBare });
       return;
     }
-    // Aire strictement plus grande gagne. Si le groupe n'a encore vu AUCUNE variante dimensionnée
-    // (bestArea === -1) et que celle-ci non plus n'en a pas, on garde la première vue (stabilité).
-    if (area > existing.bestArea) {
+    // L'URL nue (originale) gagne toujours dès qu'elle apparaît dans le groupe. Sinon, aire
+    // strictement plus grande gagne ; à égalité d'absence de dimension, on garde la première vue
+    // (stabilité).
+    if (isBare && !existing.hasBare) {
+      existing.best = c;
+      existing.bestArea = area;
+      existing.hasBare = true;
+    } else if (!existing.hasBare && area > existing.bestArea) {
       existing.best = c;
       existing.bestArea = area;
     }
