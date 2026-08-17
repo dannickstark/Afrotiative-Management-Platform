@@ -25,6 +25,7 @@ type FormState = {
   alertEmailEnabled: boolean;
   alertEmailRecipients: string;
   defaultMaxItemAgeHours: string;
+  regenerateImageMode: "auto" | "manual";
 };
 
 function toFormState(settings: PipelineSettings): FormState {
@@ -40,6 +41,7 @@ function toFormState(settings: PipelineSettings): FormState {
     alertEmailEnabled: settings.alertEmailEnabled,
     alertEmailRecipients: settings.alertEmailRecipients ?? "",
     defaultMaxItemAgeHours: settings.defaultMaxItemAgeHours == null ? "" : String(settings.defaultMaxItemAgeHours),
+    regenerateImageMode: settings.regenerateImageMode as "auto" | "manual",
   };
 }
 
@@ -65,6 +67,7 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
       alertEmailEnabled: form.alertEmailEnabled,
       alertEmailRecipients: form.alertEmailRecipients,
       defaultMaxItemAgeHours: form.defaultMaxItemAgeHours.trim() === "" ? null : Number(form.defaultMaxItemAgeHours),
+      regenerateImageMode: form.regenerateImageMode,
     };
     const validated = pipelineSettingsSchema.safeParse(payload);
     if (!validated.success) {
@@ -133,6 +136,21 @@ export function PipelineSettingsForm({ settings }: { settings: PipelineSettings 
               onChange={(e) => setForm((f) => ({ ...f, clusterThreshold: e.target.value }))}
             />
             <p className="text-xs text-muted-foreground">Entre 0 et 1. Plus la valeur est élevée, plus le regroupement des sujets similaires est strict.</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="regen-image-mode">Choix de l&apos;image à la une (renvoi à l&apos;IA)</Label>
+            <select
+              id="regen-image-mode"
+              className="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
+              value={form.regenerateImageMode}
+              onChange={(e) => setForm((f) => ({ ...f, regenerateImageMode: e.target.value as "auto" | "manual" }))}
+            >
+              <option value="auto">Automatique — l&apos;IA choisit parmi les images trouvées</option>
+              <option value="manual">Manuel — je choisis depuis le bac de la file</option>
+            </select>
+            <p className="text-sm text-muted-foreground">
+              Valeur par défaut. Chaque renvoi à l&apos;IA peut la surcharger dans sa fenêtre.
+            </p>
           </div>
         </CardContent>
       </Card>

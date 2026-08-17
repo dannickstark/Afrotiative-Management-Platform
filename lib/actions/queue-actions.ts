@@ -6,7 +6,7 @@ import { requireUser } from "@/lib/session";
 import { requirePermission } from "@/lib/rbac";
 import { publishArticle } from "@/lib/wp/publish";
 import { blockingGapsForArticle, MISSING_LABEL } from "@/lib/pipeline/completeness";
-import { bulkIdsSchema, bulkRejectSchema, regenerateFieldsSchema, type RegenerateFieldsInput } from "@/lib/validation";
+import { bulkIdsSchema, bulkRejectSchema } from "@/lib/validation";
 import { z } from "zod";
 
 export async function quickApprove(id: string) {
@@ -91,34 +91,6 @@ export async function bulkApprove(ids: string[]): Promise<BulkResult> {
 
   revalidatePath("/queue"); revalidatePath("/dashboard");
   return result;
-}
-
-/**
- * Renvoie à l'IA UN SEUL article — même cœur partagé que regenerate (regenerateArticle). C'est la
- * brique appelée EN BOUCLE côté client par la barre d'actions du /queue, qui affiche la progression
- * « Renvoi à l'IA… 3/10 » entre chaque itération. La boucle vit désormais dans le client, pas ici.
- *
- * PAS de revalidatePath ici, à dessein : le client possède l'unique rafraîchissement de fin de
- * boucle (router.refresh, une seule fois). Une revalidation à chaque itération démonterait la barre
- * en effaçant la sélection en plein milieu du lot — exactement ce qu'on veut éviter.
- *
- * Le plafond de 10 (bien plus coûteux qu'approuver/rejeter : extraction réseau + appel IA par
- * article) est désormais une garde d'UI : chaque appel ne porte qu'un article. On lève sur la garde
- * RBAC et la validation des champs — tout AVANT le cœur — mais on renvoie { ok:false } sans lever
- * sur un échec métier unitaire (article introuvable, aucune source…), pour que la boucle continue.
- */
-export async function regenerateInQueue(
-  articleId: string,
-  fields: RegenerateFieldsInput,
-): Promise<{ ok: boolean; message: string }> {
-  const user = await requireUser();
-  requirePermission(user.role, "article", "regenerate");
-  const parsedFields = regenerateFieldsSchema.parse(fields);
-  // Import dynamique : garde le graphe d'extraction/génération lourd (jsdom) hors de l'analyse
-  // statique de ce module "use server" — même discipline que regenerate côté unitaire.
-  const { regenerateArticle } = await import("@/lib/pipeline/regenerate-core");
-  const { ok, message } = await regenerateArticle(articleId, parsedFields, user.id);
-  return { ok, message };
 }
 
 export async function bulkReject(input: { ids: string[]; reason: string }): Promise<BulkResult> {

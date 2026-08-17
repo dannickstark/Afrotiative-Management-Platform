@@ -152,6 +152,10 @@ export const clusters = pgTable("clusters", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// Image candidate scrapée, avec sa provenance : le crédit et le lien source d'un choix MANUEL en
+// découlent directement, ce qui est plus fiable qu'un crédit deviné par le modèle.
+export type ImageCandidate = { url: string; sourceUrl: string; mediaName: string };
+
 // ---- articles ----
 export const articles = pgTable("articles", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -163,6 +167,10 @@ export const articles = pgTable("articles", {
   featuredImageUrl: text("featured_image_url"),
   imageCredit: text("image_credit"),
   imageSourceUrl: text("image_source_url"),
+  // Images candidates en attente d'un choix manuel (mode `manual` du renvoi à l'IA). NULL = rien à
+  // choisir. C'est cette seule colonne qui alimente le bac, le badge et le filtre du /queue — l'état
+  // vit sur l'article, pas sur le job, pour survivre à la purge de celui-ci.
+  pendingImageCandidates: jsonb("pending_image_candidates").$type<ImageCandidate[]>(),
   aiAuthor: boolean("ai_author").notNull().default(true),
   createdBy: text("created_by").references(() => user.id),
   clusterId: uuid("cluster_id").references(() => clusters.id),
@@ -300,6 +308,45 @@ export const pipelineSteps = pgTable("pipeline_steps", {
   at: timestamp("at").notNull().defaultNow(),
 });
 
+// ---- « Renvoyer à l'IA » asynchrone (job détaché + progression sondée) ----
+// Volontairement SÉPARÉ de pipeline_runs : l'index unique partiel « un seul run actif » de cette
+// table doit rester valable, et une régénération doit pouvoir tourner PENDANT une ingestion.
+// Les colonnes de statut sont en `text` et non en pgEnum : drizzle applique toutes les migrations
+// en attente dans UNE transaction, et PostgreSQL interdit de référencer une valeur d'enum ajoutée
+// dans cette même transaction (SQLSTATE 55P04) — voir le long commentaire sur pipeline_runs.
+export const regenJobs = pgTable("regen_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actorId: text("actor_id").references(() => user.id),
+  fields: jsonb("fields").notNull(),        // RegenerateFieldsInput
+  imageMode: text("image_mode").notNull().default("auto"), // auto | manual (câblé en phase 3)
+  total: integer("total").notNull(),
+  done: integer("done").notNull().default(0),
+  status: text("status").notNull().default("running"), // running | done | failed | cancelled
+  cancelRequested: boolean("cancel_requested").notNull().default(false),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+});
+
+export const regenJobItems = pgTable("regen_job_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  jobId: uuid("job_id").notNull().references(() => regenJobs.id, { onDelete: "cascade" }),
+  articleId: uuid("article_id").notNull().references(() => articles.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),           // instantané, pour un rapport d'échec lisible
+  stage: text("stage").notNull().default("queued"), // queued | extracting | generating | writing
+  status: text("status").notNull().default("pending"), // pending | ok | failed | awaiting_image
+  message: text("message"),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+}, (t) => [
+  // Un article est dans AU PLUS un item non terminé : deux jobs ne peuvent pas régénérer le même
+  // article en même temps (double écriture, révisions entrelacées). Prédicat sur `finished_at is
+  // null` et non sur `status`, pour la même raison d'immutabilité que pipeline_runs_one_running.
+  // `awaiting_image` est TERMINAL : finished_at est renseigné, l'article redevient éligible — le
+  // choix d'image en attente vit dans articles.pending_image_candidates, pas dans le job.
+  uniqueIndex("regen_job_items_one_inflight_per_article").on(t.articleId).where(sql`${t.finishedAt} is null`),
+  index("regen_job_items_job_idx").on(t.jobId),
+]);
+
 // ---- pipeline settings (DB-backed, admin-editable singleton — SP1) ----
 // Always exactly one row, id=1. Env vars (MAX_ITEMS_PER_RUN, CLUSTER_THRESHOLD, …) remain the seed
 // default for the very first read (see getPipelineSettings()); after that this table is the
@@ -326,6 +373,12 @@ export const pipelineSettings = pgTable("pipeline_settings", {
   // knob for the OpenRouter token pool work; not env-seeded (like scoreThreshold above), so the
   // column default below is this setting's only source of truth on first seed.
   openrouterMinContentChars: integer("openrouter_min_content_chars").notNull().default(400),
+  // Mode de choix de l'image à la une lors d'un renvoi à l'IA : `auto` = generateArticle choisit
+  // lui-même parmi les images scrapées, via son chemin de génération partielle sensible à la
+  // sélection (lib/ai/generate-article.ts) — aucun appel LLM dédié à part ; `manual` = les
+  // candidats sont garés sur l'article et l'éditeur tranche depuis le bac du /queue. `text` et non
+  // pgEnum — voir la contrainte globale du plan. Détail du choix : lib/pipeline/regen-plan.ts.
+  regenerateImageMode: text("regenerate_image_mode").notNull().default("auto"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

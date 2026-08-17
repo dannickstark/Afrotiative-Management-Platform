@@ -1,6 +1,6 @@
 {
-  "id": "c3ed5d67-9ebc-460f-8f83-059727a1fa66",
-  "prevId": "53679ed9-9130-4972-a5b2-da0a64c3bb8b",
+  "id": "260f01c3-04db-446d-82fd-498f92fa042d",
+  "prevId": "eeb23ca4-f3e2-4d6e-96ae-0473439dfed0",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -489,6 +489,12 @@
         "image_source_url": {
           "name": "image_source_url",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pending_image_candidates": {
+          "name": "pending_image_candidates",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },
@@ -1624,6 +1630,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": 400
+        },
+        "regenerate_image_mode": {
+          "name": "regenerate_image_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'auto'"
         },
         "updated_at": {
           "name": "updated_at",

@@ -1,6 +1,6 @@
 {
-  "id": "c3ed5d67-9ebc-460f-8f83-059727a1fa66",
-  "prevId": "53679ed9-9130-4972-a5b2-da0a64c3bb8b",
+  "id": "eeb23ca4-f3e2-4d6e-96ae-0473439dfed0",
+  "prevId": "c3ed5d67-9ebc-460f-8f83-059727a1fa66",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1624,6 +1624,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": 400
+        },
+        "regenerate_image_mode": {
+          "name": "regenerate_image_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'auto'"
         },
         "updated_at": {
           "name": "updated_at",

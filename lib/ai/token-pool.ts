@@ -5,7 +5,7 @@
 // NO "use server" — same reasoning as lib/diffusion/crypto.ts's header comment: decryptSecret must
 // never be reachable from an unauthenticated Server Action entry point, and a decrypted secret
 // must exist only inside a server-side call (here: the caller that actually hits OpenRouter).
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db, openrouterTokens } from "@/db";
 import { decryptSecret } from "@/lib/diffusion/crypto";
 import { getPipelineConfig, type PipelineConfig } from "@/lib/config/pipeline-config";
@@ -28,8 +28,20 @@ export type OpenRouterPoolState = { tokens: PooledToken[]; configured: boolean }
 // Charge l'état du pool en UNE seule requête : on lit TOUTES les lignes (le filtre
 // actif/hors-cooldown est appliqué en mémoire juste après, la table compte au plus quelques
 // dizaines de lignes) parce que `configured` a besoin de savoir si des lignes existent, y compris
-// celles que le filtre SQL d'origine écartait. Ordre inchangé : sortOrder attribué par l'admin,
-// puis createdAt comme départage stable. Une ligne dont le déchiffrement échoue (clé
+// celles que le filtre SQL d'origine écartait.
+//
+// ORDRE = MOINS RÉCEMMENT UTILISÉ D'ABORD (`lastUsedAt` croissant, NULLS FIRST). C'est ce qui rend
+// la rotation effectivement tournante. L'ordre précédent (sortOrder d'abord) repartait du même
+// jeton à CHAQUE appel — chaque article, chaque légende — sans aucune mémoire d'un appel à l'autre :
+// le premier jeton absorbait la totalité du trafic et les suivants n'étaient contactés qu'en cas
+// d'échec, si bien que leurs comptes OpenRouter affichaient une consommation nulle. `markTokenResult`
+// horodatant `lastUsedAt` à chaque issue (succès comme échec), trier dessus fait passer en tête
+// celui qui a le plus attendu, et la charge se répartit d'elle-même. `sortOrder` puis `createdAt`
+// ne servent plus qu'à départager — notamment les jetons jamais utilisés (`lastUsedAt` NULL), qui
+// passent devant tout le monde et respectent alors la priorité voulue par l'admin.
+// La clé d'environnement, elle, reste ajoutée EN DERNIER (voir plus bas) : sans ligne en base elle
+// n'a pas de `lastUsedAt` à comparer, et son rôle est justement d'être le filet de secours.
+// Une ligne dont le déchiffrement échoue (clé
 // CREDENTIALS_ENCRYPTION_KEY tournée, données corrompues) est ignorée et non jetée — une mauvaise
 // ligne ne doit jamais faire tomber tout le pool — mais elle compte quand même comme une
 // configuration existante. La clé d'environnement (cfg.openrouter?.apiKey), si présente, est
@@ -40,7 +52,14 @@ export async function loadOpenRouterPoolState(cfg: PipelineConfig = getPipelineC
   const rows = await db
     .select()
     .from(openrouterTokens)
-    .orderBy(asc(openrouterTokens.sortOrder), asc(openrouterTokens.createdAt));
+    .orderBy(
+      // NULLS FIRST explicite : en PostgreSQL, ASC classe les NULL en DERNIER par défaut, ce qui
+      // reléguerait en queue les jetons jamais utilisés — exactement les seuls qu'il faut servir
+      // en priorité.
+      sql`${openrouterTokens.lastUsedAt} asc nulls first`,
+      asc(openrouterTokens.sortOrder),
+      asc(openrouterTokens.createdAt),
+    );
 
   const now = Date.now();
   const tokens: PooledToken[] = [];

@@ -7,27 +7,34 @@ import { Button } from "@/components/ui/button";
 import { RoleGate } from "@/components/role-gate";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { BulkRegenerateDialog } from "@/components/queue/bulk-regenerate-dialog";
-import { bulkApprove, bulkReject, regenerateInQueue, type BulkResult } from "@/lib/actions/queue-actions";
+import { bulkApprove, bulkReject, type BulkResult } from "@/lib/actions/queue-actions";
+import { startRegenJob } from "@/lib/actions/regen-actions";
+import { RegenProgress } from "@/components/queue/regen-progress";
+import { summarizeRegenJob, type RegenJobView } from "@/lib/pipeline/regen-live";
 import type { RegenerateFieldsInput } from "@/lib/validation";
 import type { QueueRow } from "@/lib/queries/queue";
 
-export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () => void }) {
+export function BulkActionBar({ rows, onDone, defaultImageMode }:
+  { rows: QueueRow[]; onDone: () => void; defaultImageMode: "auto" | "manual" }) {
   const router = useRouter();
-  // Un unique `pending` pilote les DEUX chemins (approuver/rejeter ET renvoi à l'IA). On abandonne
-  // useTransition pour le renvoi : la boucle client doit rendre la progression X/N entre chaque
-  // itération, or useTransition regrouperait ces mises à jour et n'afficherait aucun état
-  // intermédiaire. Un booléen manuel garde les deux chemins cohérents (boutons désactivés, spinner).
+  // Un unique `pending` pilote les DEUX chemins (approuver/rejeter ET renvoi à l'IA). Le renvoi à
+  // l'IA ne boucle plus côté client : il ouvre un job côté serveur et laisse RegenProgress sonder sa
+  // progression (voir jobId ci-dessous).
   const [pending, setPending] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [failures, setFailures] = useState<BulkResult["failed"]>([]);
 
   if (rows.length === 0) return null;
   const ids = rows.map((r) => r.id);
   const n = rows.length;
   // Le renvoi en lot est bien plus coûteux qu'approuver/rejeter (extraction réseau + appel IA par
-  // article) : plafonné à 10. C'est désormais une pure garde d'UI — la boucle client appelle
-  // regenerateInQueue un article à la fois. Approuver/Rejeter NE sont PAS concernés.
+  // article) : plafonné à 10. C'est une garde d'UI côté client — startRegenJob la répète côté
+  // serveur (validation). Approuver/Rejeter NE sont PAS concernés.
   const tooMany = n > 10;
+  // Un job en vol verrouille TOUTE la barre, pas seulement le bouton qui l'a lancé : approuver ou
+  // rejeter les lignes en cours de réécriture serait une course, et « Effacer la sélection »
+  // démonterait la barre (garde rows.length === 0) en emportant le seul observateur du job.
+  const busy = pending || jobId !== null;
 
   function report(res: BulkResult, verb: string) {
     setFailures(res.failed);
@@ -51,55 +58,64 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
     }
   }
 
-  // Renvoi à l'IA piloté par le client : on boucle sur regenerateInQueue (un article par appel) en
-  // mettant à jour la progression entre chaque itération pour afficher « Renvoi à l'IA… 3/10 ».
-  async function runRegenerate(fields: RegenerateFieldsInput) {
-    // SNAPSHOT des ids+titres : la boucle ne doit PAS dépendre du prop `rows` en cours de route (il
-    // peut changer sous nos pieds si la page se rafraîchit).
-    const items = rows.map((r) => ({ id: r.id, title: r.title }));
+  // Le lot n'est plus une boucle client : on ouvre UN job côté serveur et on sonde sa progression
+  // (components/queue/regen-progress.tsx). La barre reste montée pendant tout le job — aucune
+  // revalidation en cours de route ne peut plus effacer la sélection à mi-parcours.
+  async function runRegenerate(fields: RegenerateFieldsInput, imageMode: "auto" | "manual") {
     setFailures([]);
-    setPending(true);
-    setProgress({ done: 0, total: items.length });
-    const okIds: string[] = [];
-    const failed: BulkResult["failed"] = [];
-    for (let i = 0; i < items.length; i++) {
-      try {
-        const res = await regenerateInQueue(items[i].id, fields);
-        if (res.ok) okIds.push(items[i].id);
-        else failed.push({ id: items[i].id, title: items[i].title, message: res.message });
-      } catch (err) {
-        failed.push({ id: items[i].id, title: items[i].title, message: err instanceof Error ? err.message : "Échec du renvoi à l'IA." });
-      }
-      setProgress({ done: i + 1, total: items.length });
+    // startRegenJob JETTE sur un refus RBAC et rejette sur tout aléa DB/transport. BulkRegenerateDialog
+    // appelle cette fonction sans l'attendre (onConfirm est synchrone côté enfant) : sans ce
+    // try/catch, un rejet ici deviendrait une unhandled rejection ET l'éditeur ne verrait aucun toast.
+    try {
+      const res = await startRegenJob({ articleIds: rows.map((r) => r.id), fields, imageMode });
+      if (!res.ok) { toast.error(res.message); return; }
+      setJobId(res.jobId);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Renvoi à l'IA impossible.");
     }
-    setProgress(null);
-    setPending(false);
-    setFailures(failed);
-    if (failed.length === 0) {
-      toast.success(`${okIds.length} article${okIds.length > 1 ? "s" : ""} renvoyé${okIds.length > 1 ? "s" : ""} à l'IA.`);
+  }
+
+  function handleJobFinished(job: RegenJobView) {
+    setJobId(null);
+    const { ok, failed, awaitingImage } = summarizeRegenJob(job);
+    // finalizeRegenJob balaie les items non traités d'une annulation avec status "failed" (voir
+    // lib/pipeline/regen-store.ts) — un artefact de fermeture, pas un échec réel. Le statut du JOB
+    // porte le bon verdict : un job annulé se rapporte comme tel, jamais comme un lot d'échecs, et
+    // ses items balayés ne polluent pas la liste des échecs affichée sous la barre.
+    if (job.status === "cancelled") {
+      setFailures([]);
+      toast.warning(ok > 0
+        ? `Renvoi à l'IA annulé — ${ok} article${ok > 1 ? "s" : ""} déjà traité${ok > 1 ? "s" : ""}.`
+        : "Renvoi à l'IA annulé.");
       onDone();
-      // Unique rafraîchissement de fin de boucle : met à jour le contenu régénéré, et la sélection
-      // se vide proprement (aucune revalidation en cours d'itération n'a démonté la barre).
+      router.refresh();
+      return;
+    }
+    setFailures(job.items.filter((i) => i.status === "failed").map((i) => ({ id: i.articleId, title: i.title, message: i.message ?? "Échec." })));
+    if (failed === 0) {
+      const extra = awaitingImage > 0 ? ` — ${awaitingImage} image${awaitingImage > 1 ? "s" : ""} à choisir` : "";
+      toast.success(`${ok + awaitingImage} article${ok + awaitingImage > 1 ? "s" : ""} renvoyé${ok + awaitingImage > 1 ? "s" : ""} à l'IA${extra}.`);
+      onDone();
       router.refresh();
     } else {
       // Succès partiel : PAS de refresh, pour garder la barre montée et la liste des échecs visible.
-      toast.warning(`${okIds.length} renvoyé${okIds.length > 1 ? "s" : ""} à l'IA, ${failed.length} en échec.`);
+      toast.warning(`${ok} renvoyé${ok > 1 ? "s" : ""} à l'IA, ${failed} en échec.`);
     }
   }
 
   return (
     <div className="sticky bottom-4 z-20 mx-auto w-fit rounded-lg border bg-background/95 px-4 py-2 shadow-lg backdrop-blur">
       <div className="flex items-center gap-3">
-        <span className="flex items-center gap-2 text-sm font-medium">
-          {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
-          {progress
-            ? `Renvoi à l'IA… ${progress.done}/${progress.total}`
-            : `${n} sélectionné${n > 1 ? "s" : ""}`}
-        </span>
+        {jobId !== null
+          ? <RegenProgress key={jobId} jobId={jobId} onFinished={handleJobFinished} />
+          : <span className="flex items-center gap-2 text-sm font-medium">
+              {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
+              {n} sélectionné{n > 1 ? "s" : ""}
+            </span>}
 
         <RoleGate allow={["admin", "editor"]}>
           <ConfirmDialog
-            trigger={<Button size="sm" disabled={pending}>Approuver et publier</Button>}
+            trigger={<Button size="sm" disabled={busy}>Approuver et publier</Button>}
             title={`Publier ${n} article${n > 1 ? "s" : ""} ?`}
             /* La phrase dit explicitement ce que fait l'action : approuver PUBLIE
                immédiatement sur WordPress — c'est déjà la sémantique de l'action unitaire. */
@@ -110,7 +126,7 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
 
           <ConfirmDialog
             trigger={
-              <Button size="sm" variant="ghost" disabled={pending}
+              <Button size="sm" variant="ghost" disabled={busy}
                 className="text-destructive hover:bg-destructive/10 hover:text-destructive">
                 Rejeter
               </Button>
@@ -125,13 +141,14 @@ export function BulkActionBar({ rows, onDone }: { rows: QueueRow[]; onDone: () =
 
           <BulkRegenerateDialog
             count={n}
-            disabled={pending || tooMany}
-            onConfirm={(fields) => runRegenerate(fields)}
+            disabled={busy || tooMany}
+            defaultImageMode={defaultImageMode}
+            onConfirm={(fields, imageMode) => runRegenerate(fields, imageMode)}
           />
           {tooMany && <span className="text-xs text-muted-foreground">Maximum 10 par lot</span>}
         </RoleGate>
 
-        <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setFailures([]); onDone(); }}>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setFailures([]); onDone(); }}>
           Effacer la sélection
         </Button>
       </div>

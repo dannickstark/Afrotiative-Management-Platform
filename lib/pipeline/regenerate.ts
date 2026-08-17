@@ -23,8 +23,13 @@ export function selectRegenerationColumns(draft: ArticleDraft, fields: Regenerat
   const columns: Record<string, unknown> = {};
   if (fields.title) columns.title = draft.title;
   if (fields.excerpt) columns.excerpt = draft.excerpt;
-  if (fields.image) {
-    columns.featuredImageUrl = draft.featuredImageUrl ?? null;
+  // INVARIANT « ne jamais détruire une image » : une régénération dont le brouillon n'a retenu
+  // AUCUNE image (liste de candidats vide, ou choix du modèle rejeté par sanitizeDraft) ne doit pas
+  // écrire null par-dessus l'image existante — c'était le bug d'une régénération « image seule »,
+  // qui coûtait une génération complète pour ne faire qu'effacer l'image. Sans clé émise ici, le
+  // `set({ ...sel.columns })` de l'appelant laisse simplement les trois colonnes intactes.
+  if (fields.image && draft.featuredImageUrl) {
+    columns.featuredImageUrl = draft.featuredImageUrl;
     columns.imageCredit = draft.imageCredit ?? null;
     columns.imageSourceUrl = draft.imageSourceUrl ?? null;
   }

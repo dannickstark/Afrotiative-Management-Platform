@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/session";
 import { getQueue, parseQueueSearchParams } from "@/lib/queries/queue";
-import { getTaxonomy } from "@/lib/queries/settings";
+import { getTaxonomy, getPipelineSettings } from "@/lib/queries/settings";
 import { QueueView } from "@/components/queue/queue-view";
 
 export default async function QueuePage({
@@ -10,12 +10,13 @@ export default async function QueuePage({
 }) {
   await requireUser();
   const filters = parseQueueSearchParams(await searchParams);
-  const [page, { categories }] = await Promise.all([getQueue(filters), getTaxonomy()]);
+  const [page, { categories }, settings] = await Promise.all([getQueue(filters), getTaxonomy(), getPipelineSettings()]);
   return (
     <QueueView
       page={page}
       filters={filters}
       categories={categories.map((c) => ({ id: c.id, name: c.name }))}
+      defaultImageMode={settings.regenerateImageMode as "auto" | "manual"}
     />
   );
 }

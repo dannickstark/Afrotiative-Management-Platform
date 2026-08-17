@@ -159,8 +159,29 @@
     {
       "idx": 22,
       "version": "7",
-      "when": 1786902542430,
-      "tag": "0022_medical_maximus",
+      "when": 1786910178036,
+      "tag": "0022_big_tomas",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786911091138,
+      "tag": "0023_lonely_scorpion",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786911429610,
+      "tag": "0024_quick_zombie",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786940914326,
+      "tag": "0025_hot_maestro",
       "breakpoints": true
     }
   ]

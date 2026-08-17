@@ -6,8 +6,10 @@ import {
   type SortingState, type OnChangeFn,
 } from "@tanstack/react-table";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Button } from "@/components/ui/button";
 import { buildColumns } from "./columns";
 import { BulkActionBar } from "./bulk-action-bar";
+import { ImagePickWizard, type PendingPick } from "./image-pick-wizard";
 import type { QueueRow, QueueSortCol } from "@/lib/queries/queue";
 
 function ariaSort(state: false | "asc" | "desc"): "ascending" | "descending" | "none" {
@@ -15,7 +17,7 @@ function ariaSort(state: false | "asc" | "desc"): "ascending" | "descending" | "
 }
 
 export function QueueTable({
-  rows, categories, sort,
+  rows, categories, sort, defaultImageMode,
 }: {
   rows: QueueRow[];
   categories: { id: string; name: string }[];
@@ -23,12 +25,20 @@ export function QueueTable({
   // sans `?sort` dans l'URL (repli sur le tri par défaut). Reflété tel quel dans l'indicateur
   // d'en-tête : l'ordre affiché dans la colonne « Généré » au premier chargement EST le tri réel.
   sort: { column: QueueSortCol; direction: "asc" | "desc" };
+  defaultImageMode: "auto" | "manual";
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [wizardOpen, setWizardOpen] = useState(false);
   const cols = buildColumns(categories);
+
+  // Articles dont une régénération en mode manuel a garé des candidats : la source de vérité
+  // reste articles.pending_image_candidates, ces lignes n'en sont qu'une projection pour l'assistant.
+  const pendingPicks: PendingPick[] = rows
+    .filter((r) => r.pendingImageCandidates.length > 0)
+    .map((r) => ({ articleId: r.id, title: r.title, currentImageUrl: r.imageUrl, candidates: r.pendingImageCandidates }));
 
   const sorting: SortingState = [{ id: sort.column, desc: sort.direction === "desc" }];
 
@@ -72,6 +82,22 @@ export function QueueTable({
 
   return (
     <>
+      {pendingPicks.length > 0 && (
+        <Button type="button" variant="secondary" size="sm" className="mb-2" onClick={() => setWizardOpen(true)}>
+          Choisir les images ({pendingPicks.length})
+        </Button>
+      )}
+      <ImagePickWizard
+        // key sur le CONTENU du lot, pas juste monté une fois : pickRegeneratedImage fait
+        // revalidatePath("/queue"), qui rétrécit `pendingPicks` sous l'assistant ouvert et décale
+        // tous les index (le composant possède index/done, rien ne les remet à zéro). Un lot changé
+        // — un pick qui aboutit, ou une session ultérieure avec un nouveau lot en attente — doit
+        // donc démonter/remonter l'assistant plutôt que de faire vivre son état à travers un
+        // tableau `picks` qui a bougé sous lui.
+        key={pendingPicks.map((p) => p.articleId).join("|")}
+        picks={pendingPicks} open={wizardOpen} onOpenChange={setWizardOpen}
+        onAllDone={() => router.refresh()}
+      />
       <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -109,7 +135,7 @@ export function QueueTable({
           </TableBody>
         </Table>
       </div>
-      <BulkActionBar rows={selectedRows} onDone={() => setRowSelection({})} />
+      <BulkActionBar rows={selectedRows} onDone={() => setRowSelection({})} defaultImageMode={defaultImageMode} />
     </>
   );
 }
