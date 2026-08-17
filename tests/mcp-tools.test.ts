@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, scriptVariants, scriptBeats, scriptJournal } from "@/db";
-import { asc, eq } from "drizzle-orm";
+import { db, scriptVariants, scriptBeats, scriptJournal, videoCategories, videoProjects } from "@/db";
+import { asc, eq, inArray } from "drizzle-orm";
 import { EXAMPLE_PAYLOAD, beatPayloadSchema, insertPayloadSchema, payloadSchema } from "@/lib/video/schema";
 import { prepareImportCore } from "@/lib/video/persist";
+import { createVideoCategoryCore } from "@/lib/video/categories-persist";
 import { callTool, makeActor, cleanupProject, type TestActor } from "./mcp-harness";
 
 let projectId: string | undefined;
@@ -16,6 +17,11 @@ let lecteur: TestActor | null = null;
 // y produirait légitimement une modification. Le défaut visé se mesure sur un script fraîchement
 // appliqué, où relire puis resoumettre ne peut RIEN changer.
 let projetAllerRetour: string | undefined;
+// Catégories créées par les tests de Task « categoryId » ci-dessous, et le projet qui la porte —
+// déclarés ici pour la même raison que `projectId` : le nettoyage doit avoir lieu même si le test
+// qui les crée échoue en cours de route (base Neon partagée).
+const categorieIds: string[] = [];
+let projetCategorise: string | undefined;
 
 beforeAll(async () => { actor = await makeActor("editor"); });
 afterAll(async () => {
@@ -24,6 +30,10 @@ afterAll(async () => {
   try {
     await cleanupProject(projectId);
     await cleanupProject(projetAllerRetour);
+    await cleanupProject(projetCategorise);
+    if (categorieIds.length > 0) {
+      await db.delete(videoCategories).where(inArray(videoCategories.id, categorieIds));
+    }
   } finally {
     if (lecteur) await lecteur.cleanup();
     if (actor) await actor.cleanup();
@@ -280,6 +290,55 @@ describe("outils MCP", () => {
     const beats = await db.select().from(scriptBeats).where(eq(scriptBeats.variantId, prep.variantId));
     expect(beats.length).toBe(EXAMPLE_PAYLOAD.variantes[0].beats.length);
   }, 60_000);
+
+  // ── categoryId sur create_video_project ─────────────────────────────────
+  it("list_video_categories renvoie id/nom/description, jamais les instructions", async () => {
+    const catId = await createVideoCategoryCore({
+      name: `Test MCP — catégorie liste ${Date.now()}`,
+      description: "Description visible au choix.",
+      instructions: "Instructions éditoriales, réservées au brief — jamais à cette liste.",
+      position: 0, userId: null,
+    });
+    categorieIds.push(catId);
+
+    const r = await callTool(actor, "list_video_categories", {});
+    expect(Array.isArray(r)).toBe(true);
+    const nôtre = r.find((c: { id: string }) => c.id === catId);
+    expect(nôtre).toBeDefined();
+    expect(nôtre.name).toContain("Test MCP — catégorie liste");
+    expect(nôtre.description).toBe("Description visible au choix.");
+    expect(nôtre.instructions).toBeUndefined();
+    expect(Object.keys(nôtre).sort()).toEqual(["description", "id", "name"]);
+  }, 30_000);
+
+  it("create_video_project avec un categoryId valide le persiste ET le brief porte les instructions de la catégorie", async () => {
+    const catId = await createVideoCategoryCore({
+      name: `Test MCP — catégorie création ${Date.now()}`,
+      description: null,
+      instructions: "Toujours vérifier deux sources indépendantes avant de citer un chiffre.",
+      position: 0, userId: null,
+    });
+    categorieIds.push(catId);
+
+    const r = await callTool(actor, "create_video_project", {
+      title: "Test MCP — projet catégorisé", platform: "youtube_long",
+      targetDurationSec: 600, categoryId: catId,
+    });
+    projetCategorise = r.projectId;
+
+    const [project] = await db.select().from(videoProjects).where(eq(videoProjects.id, r.projectId));
+    expect(project.categoryId).toBe(catId);
+    // LE point : le brief renvoyé dans la MÊME réponse porte déjà les instructions de la catégorie
+    // — pas seulement l'identifiant persisté.
+    expect(r.brief).toContain("Toujours vérifier deux sources indépendantes avant de citer un chiffre.");
+  }, 30_000);
+
+  it("create_video_project refuse un categoryId inconnu avec un message français clair", async () => {
+    await expect(callTool(actor, "create_video_project", {
+      title: "Test MCP — categoryId inconnu", platform: "youtube_long",
+      categoryId: crypto.randomUUID(),
+    })).rejects.toThrow("Catégorie introuvable.");
+  }, 30_000);
 
   it("un porteur sans droit d'écriture est refusé", async () => {
     lecteur = await makeActor("journalist", { revokeVideoManage: true });

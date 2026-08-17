@@ -48,10 +48,17 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
     inputSchema: { articleId: uuid },
   },
   {
+    name: "list_video_categories",
+    kind: "lecture",
+    description:
+      "Liste les catégories de vidéo utilisables à la création d'un espace vidéo (identifiant, nom, description). À appeler avant create_video_project pour choisir un categoryId pertinent.",
+    inputSchema: {},
+  },
+  {
     name: "create_video_project",
     kind: "ecriture",
     description:
-      "Crée un espace vidéo et renvoie son brief dans la même réponse. Une variante par défaut est créée avec la plateforme, la durée cible et le cadrage donnés.",
+      "Crée un espace vidéo et renvoie son brief dans la même réponse. Une variante par défaut est créée avec la plateforme, la durée cible et le cadrage donnés. Rattache-la à une catégorie avec categoryId (appelle d'abord list_video_categories pour en choisir une) : les instructions de cette catégorie apparaîtront automatiquement dans le brief renvoyé par CET appel.",
     inputSchema: {
       title: z.string().min(1).max(200),
       subject: z.string().max(2000).optional(),
@@ -59,6 +66,7 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
       targetDurationSec: z.number().int().min(5).max(14400).optional(),
       aspectRatio: z.enum(RATIOS).optional(),
       articleId: uuid.optional(),
+      categoryId: uuid.optional(),
     },
   },
   {
