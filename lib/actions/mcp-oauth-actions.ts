@@ -6,10 +6,12 @@
 // la portée choisie ici (upsertOauthScopeCore) avec le rôle de l'utilisateur.
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { requireUser } from "@/lib/session";
-import { findOauthConsentGrant, upsertOauthScopeCore } from "@/lib/queries/mcp-oauth";
+import { can } from "@/lib/rbac";
+import { findOauthConsentGrant, revokeOauthConnectionCore, upsertOauthScopeCore } from "@/lib/queries/mcp-oauth";
 
 const approveSchema = z.object({
   clientId: z.string().min(1),
@@ -56,4 +58,17 @@ export async function denyOauthConsent(consentCode: string): Promise<{ ok: false
     headers: await headers(),
   });
   redirect(res.redirectURI);
+}
+
+// Task 7 — panneau « Connexions OAuth » de /settings/mcp. Même paire de droits que
+// lib/actions/mcp-actions.ts's revokeApiToken : voir SES PROPRES connexions demande seulement
+// d'être connecté (requireUser), tandis que "video:configure" (admin/éditeur) élargit à celles de
+// toute l'équipe — revokeOauthConnectionCore refait le même contrôle côté serveur, donc ce garde
+// n'est qu'une défense en profondeur, pas la seule.
+export async function revokeOauthConnection(scopeId: string): Promise<{ ok: boolean; message?: string }> {
+  const u = await requireUser();
+  const seesAll = can(u.role, "video", "configure");
+  const res = await revokeOauthConnectionCore({ scopeId, userId: u.id, seesAll });
+  if (res.ok) revalidatePath("/settings/mcp");
+  return res;
 }
