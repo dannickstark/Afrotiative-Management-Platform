@@ -71,16 +71,19 @@ describe("authenticateMcp", () => {
     if (!r.ok) expect(r.status).toBe(401);
   });
 
-  it("refuse un jeton d'un autre espace de noms sans interroger la table des jetons", async () => {
+  it("refuse un jeton d'un autre espace de noms sans interroger la table des jetons personnels", async () => {
     const selectSpy = spyOn(db, "select");
     const r = await authenticateMcp("Bearer sk-quelque-chose-etranger-et-long");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.status).toBe(401);
     // getVideoSettings() effectue déjà UN select (sur videoSettings) avant même de lire l'en-tête.
-    // Le point vérifié ici : le court-circuit prefixOf() empêche toute requête SUPPLÉMENTAIRE sur
-    // apiTokens. Si ce court-circuit disparaissait, ce compteur passerait à 2 et le test échouerait
-    // — contrairement à une simple assertion sur le statut, qui resterait vraie dans les deux cas.
-    expect(selectSpy).toHaveBeenCalledTimes(1);
+    // Depuis le branchement OAuth (Task 5), un préfixe étranger à `apiTokens` tente maintenant le
+    // jeton d'accès OAuth : auth.api.getMcpSession() ajoute UN select (sur la table d'accès OAuth de
+    // better-auth, via le même adaptateur drizzle). Le point vérifié reste que le court-circuit
+    // prefixOf() empêche toute requête sur `apiTokens`/`user` — juste deux selects désormais, pas
+    // plus : si ce plafond disparaissait, ce compteur grimperait et le test échouerait, contrairement
+    // à une simple assertion sur le statut qui resterait vraie dans les deux cas.
+    expect(selectSpy).toHaveBeenCalledTimes(2);
     selectSpy.mockRestore();
   });
 
