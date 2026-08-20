@@ -855,3 +855,56 @@ export const apiTokens = pgTable("api_tokens", {
   uniqueIndex("api_tokens_prefix_uq").on(t.prefix),
   index("api_tokens_user_idx").on(t.userId),
 ]);
+
+// --- OAuth 2.1 / MCP (SP1 ter) — tables gérées par le plugin better-auth ---
+export const oauthApplication = pgTable("oauth_application", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  icon: text("icon"),
+  metadata: text("metadata"),
+  clientId: text("client_id").notNull().unique(),
+  clientSecret: text("client_secret"),
+  redirectUrls: text("redirect_urls").notNull(),
+  type: text("type").notNull(),
+  disabled: boolean("disabled").notNull().default(false),
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("oauth_application_client_idx").on(t.clientId)]);
+
+export const oauthAccessToken = pgTable("oauth_access_token", {
+  id: text("id").primaryKey(),
+  accessToken: text("access_token").notNull().unique(),
+  refreshToken: text("refresh_token").notNull().unique(),
+  accessTokenExpiresAt: timestamp("access_token_expires_at").notNull(),
+  refreshTokenExpiresAt: timestamp("refresh_token_expires_at").notNull(),
+  clientId: text("client_id").notNull().references(() => oauthApplication.clientId, { onDelete: "cascade" }),
+  userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+  scopes: text("scopes").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("oauth_access_token_client_idx").on(t.clientId), index("oauth_access_token_user_idx").on(t.userId)]);
+
+export const oauthConsent = pgTable("oauth_consent", {
+  id: text("id").primaryKey(),
+  clientId: text("client_id").notNull().references(() => oauthApplication.clientId, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  scopes: text("scopes").notNull(),
+  consentGiven: boolean("consent_given").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [index("oauth_consent_client_idx").on(t.clientId), index("oauth_consent_user_idx").on(t.userId)]);
+
+// --- Portée par connexion OAuth (source de vérité de nos deux axes) ---
+export const mcpOauthScope = pgTable("mcp_oauth_scope", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(),
+  canWrite: boolean("can_write").notNull().default(true),
+  canReadArticles: boolean("can_read_articles").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  lastUsedAt: timestamp("last_used_at"),
+}, (t) => [
+  uniqueIndex("mcp_oauth_scope_user_client_uq").on(t.userId, t.clientId),
+  index("mcp_oauth_scope_user_idx").on(t.userId),
+]);
