@@ -51,9 +51,9 @@ describe("ConnectionPanel", () => {
     expect(html).toContain("VOTRE_JETON");
   });
 
-  it("dit que claude.ai web attend OAuth", () => {
+  it("dit que claude.ai web se connecte via OAuth", () => {
     const html = renderToStaticMarkup(React.createElement(ConnectionPanel, props));
-    expect(html).toContain("OAuth");
+    expect(html).toContain("claude.ai (web) se connecte via OAuth");
   });
 
   it("signale un serveur désactivé", () => {
