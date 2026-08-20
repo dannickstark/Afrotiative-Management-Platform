@@ -9,7 +9,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { requireUser } from "@/lib/session";
-import { upsertOauthScopeCore } from "@/lib/queries/mcp-oauth";
+import { findOauthConsentGrant, upsertOauthScopeCore } from "@/lib/queries/mcp-oauth";
 
 const approveSchema = z.object({
   clientId: z.string().min(1),
@@ -21,12 +21,24 @@ const approveSchema = z.object({
 export async function approveOauthConsent(
   input: { clientId: string; consentCode: string; canWrite: boolean; canReadArticles: boolean },
 ): Promise<{ ok: false; message: string }> {
-  const u = await requireUser(); // tout utilisateur connecté non banni
+  await requireUser(); // porte : tout utilisateur connecté non banni peut ATTEINDRE cet écran —
+  // mais la ligne de portée ci-dessous est clée sur le grant AUTORITAIRE du consent_code, jamais
+  // sur cette session : voir findOauthConsentGrant (lib/queries/mcp-oauth.ts) pour pourquoi.
   const parsed = approveSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: "Requête de consentement invalide." };
+
+  const grant = await findOauthConsentGrant(parsed.data.consentCode);
+  if (!grant) return { ok: false, message: "Session de consentement invalide ou expirée." };
+  // Le clientId soumis par le POST est falsifiable côté client ; on ne l'utilise jamais pour
+  // clouer la portée — seulement pour détecter un désaccord avec le grant réel et refuser plutôt
+  // que d'enregistrer sous la mauvaise clé (pas d'état partiel : aucun upsert avant ce contrôle).
+  if (grant.clientId !== parsed.data.clientId) {
+    return { ok: false, message: "Le client ne correspond pas à la demande de consentement." };
+  }
+
   await upsertOauthScopeCore({
-    userId: u.id,
-    clientId: parsed.data.clientId,
+    userId: grant.userId,
+    clientId: grant.clientId,
     scope: { canWrite: parsed.data.canWrite, canReadArticles: parsed.data.canReadArticles },
   });
   const res = await auth.api.oAuthConsent({
