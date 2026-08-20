@@ -50,7 +50,7 @@ const PURE_FILES = new Set<string>([
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
   "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-crawl4ai.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
   "image-candidates.test.ts", "image-pick-wizard.test.ts", "interval-picker.test.ts", "live-panel.test.ts",
-  "mcp-registry.test.ts", "mcp-schema.test.ts", "mcp-scope.test.ts", "mcp-settings-ui.test.ts", "mcp-token.test.ts", "mock-llm.test.ts", "nav-sections.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
+  "mcp-registry.test.ts", "mcp-schema.test.ts", "mcp-scope.test.ts", "mcp-settings-ui.test.ts", "mcp-token.test.ts", "mock-llm.test.ts", "nav-sections.test.ts", "oauth-scope-map.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
   "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "regen-live.test.ts", "regen-plan.test.ts", "regen-progress.test.ts", "resend.test.ts", "rss-parse.test.ts",
   "run-config-dialog.test.ts", "run-detail.test.ts", "run-outcome.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
   "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts",
