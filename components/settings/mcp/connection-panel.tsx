@@ -106,9 +106,9 @@ export function ConnectionPanel({
           </div>
           <p className="text-xs text-muted-foreground">
             Remplacez {PLACEHOLDER} par un jeton créé ci-dessous — affiché une seule fois à sa
-            création. claude.ai (web) ne peut pas utiliser ces extraits : il attend une connexion
-            via OAuth, pas un en-tête Authorization posé à la main ; utilisez Claude Desktop, Claude
-            Code, ou un client MCP compatible avec un jeton porteur.
+            création. claude.ai (web) se connecte via OAuth : ajoutez ce serveur comme connecteur
+            MCP et autorisez l'accès depuis votre compte, sans coller de jeton. Claude Desktop et
+            Claude Code utilisent le jeton porteur ci-dessus.
           </p>
         </div>
       </CardContent>

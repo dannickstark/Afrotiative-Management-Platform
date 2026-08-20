@@ -11,7 +11,15 @@ export const runtime = "nodejs";
 async function handle(req: Request): Promise<Response> {
   const auth = await authenticateMcp(req.headers.get("authorization"));
   if (!auth.ok) {
-    return Response.json({ error: auth.message }, { status: auth.status });
+    // Le 401 doit annoncer les métadonnées de ressource protégée pour que la découverte OAuth
+    // fonctionne (claude.ai web) — le 503 (interrupteur) et les autres statuts n'en ont pas besoin.
+    const headers = auth.status === 401
+      ? {
+          "WWW-Authenticate": `Bearer resource_metadata="${process.env.BETTER_AUTH_URL ?? ""}/.well-known/oauth-protected-resource"`,
+          "Access-Control-Expose-Headers": "WWW-Authenticate",
+        }
+      : undefined;
+    return Response.json({ error: auth.message }, { status: auth.status, headers });
   }
   const server = new McpServer({ name: "afrotiative-video", version: "1.0.0" });
   registerTools(server, auth.actor);

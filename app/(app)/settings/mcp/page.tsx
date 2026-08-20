@@ -3,9 +3,11 @@ import { requireUser } from "@/lib/session";
 import { can, requirePermission } from "@/lib/rbac";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { listTokensCore, recentAgentActivityCore } from "@/lib/queries/mcp";
+import { listOauthConnectionsCore } from "@/lib/queries/mcp-oauth";
 import { PageHeader } from "@/components/shell/page-header";
 import { ConnectionPanel } from "@/components/settings/mcp/connection-panel";
 import { TokenList } from "@/components/settings/mcp/token-list";
+import { OAuthConnections } from "@/components/settings/mcp/oauth-connections";
 import { ToolCatalog } from "@/components/settings/mcp/tool-catalog";
 import { AgentActivity } from "@/components/settings/mcp/agent-activity";
 import { McpSwitch } from "@/components/settings/mcp/mcp-switch";
@@ -21,9 +23,10 @@ export default async function Page() {
   requirePermission(user.role, "video", "manage");
   const seesAll = can(user.role, "video", "configure");
 
-  const [settings, tokens, activity, h] = await Promise.all([
+  const [settings, tokens, connections, activity, h] = await Promise.all([
     getVideoSettings(),
     listTokensCore({ userId: user.id, seesAll }),
+    listOauthConnectionsCore({ userId: user.id, seesAll }),
     recentAgentActivityCore(ACTIVITY_LIMIT),
     headers(),
   ]);
@@ -60,6 +63,13 @@ export default async function Page() {
         seesAll={seesAll} addressGuessed={addressGuessed}
       />
       <TokenList tokens={tokens} currentUserId={user.id} seesAll={seesAll} />
+      <section className="space-y-3">
+        <h2 className="font-serif text-lg">Connexions OAuth</h2>
+        <p className="text-sm text-muted-foreground">
+          Applications reliées via OAuth (claude.ai web). Révoquez pour couper l&#39;accès.
+        </p>
+        <OAuthConnections connections={connections} showOwner={seesAll} />
+      </section>
       <ToolCatalog />
       <AgentActivity activity={activity} />
       {/* Le geste d'urgence est le DERNIER de l'écran, pas le premier (round de correction) : on

@@ -3,6 +3,9 @@ import { db, apiTokens, user as userTable } from "@/db";
 import { prefixOf, tokenMatches } from "@/lib/mcp/token";
 import { isSessionUsable } from "@/lib/session";
 import { getVideoSettings } from "@/lib/queries/video-settings";
+import { auth } from "@/lib/auth";
+import { getOauthScopeCore, touchOauthScopeCore } from "@/lib/queries/mcp-oauth";
+import { buildOauthActor } from "@/lib/mcp/oauth-actor";
 import type { Role } from "@/lib/auth";
 import type { McpScope } from "@/lib/mcp/scope";
 
@@ -27,10 +30,25 @@ export async function authenticateMcp(authorizationHeader: string | null): Promi
   const raw = authorizationHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!raw) return { ok: false, status: 401, message: REJECT };
 
-  // Un en-tête d'un autre espace de noms n'atteint jamais la base : on économise une requête sur
-  // chaque sonde automatisée qui passe.
+  // Un en-tête d'un autre espace de noms n'atteint jamais la table des jetons personnels : on
+  // tente plutôt le jeton d'accès OAuth (claude.ai web) avant de renoncer.
   const prefix = prefixOf(raw);
-  if (!prefix) return { ok: false, status: 401, message: REJECT };
+  if (!prefix) {
+    const headers = new Headers({ authorization: authorizationHeader ?? "" });
+    const oauthSession = await auth.api.getMcpSession({ headers });
+    if (!oauthSession) return { ok: false, status: 401, message: REJECT };
+    const [owner] = await db.select().from(userTable).where(eq(userTable.id, oauthSession.userId)).limit(1);
+    const scope = await getOauthScopeCore({ userId: oauthSession.userId, clientId: oauthSession.clientId });
+    const outcome = buildOauthActor({
+      session: { userId: oauthSession.userId, clientId: oauthSession.clientId },
+      owner: owner ? { role: owner.role, banned: owner.banned } : null,
+      scope,
+    });
+    if (outcome.ok) {
+      await touchOauthScopeCore({ userId: oauthSession.userId, clientId: oauthSession.clientId });
+    }
+    return outcome;
+  }
 
   const [row] = await db.select().from(apiTokens).where(eq(apiTokens.prefix, prefix)).limit(1);
   if (!row) return { ok: false, status: 401, message: REJECT };
