@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, scriptVariants, scriptBeats, scriptJournal, videoCategories, videoProjects } from "@/db";
+import { db, articles, scriptVariants, scriptBeats, scriptJournal, videoCategories, videoProjects, videoSettings } from "@/db";
 import { asc, eq, inArray } from "drizzle-orm";
 import { EXAMPLE_PAYLOAD, beatPayloadSchema, insertPayloadSchema, payloadSchema } from "@/lib/video/schema";
 import { prepareImportCore } from "@/lib/video/persist";
 import { createVideoCategoryCore } from "@/lib/video/categories-persist";
+import { FULL_SCOPE } from "@/lib/mcp/scope";
+import { DEFAULT_BRIEF_TEMPLATE } from "@/lib/video/brief";
+import { getVideoSettings } from "@/lib/queries/video-settings";
 import { callTool, makeActor, cleanupProject, type TestActor } from "./mcp-harness";
 
 let projectId: string | undefined;
@@ -355,5 +358,142 @@ describe("outils MCP", () => {
   it("l'annulation n'est pas exposée", async () => {
     await expect(callTool(actor, "revert_journal_entry", { journalId: crypto.randomUUID() }))
       .rejects.toThrow();
+  }, 30_000);
+});
+
+// ── Task 3 : la portée du jeton s'applique à chaque appel ───────────────────
+// Deux acteurs au rôle « editor » (donc AVEC video:manage) mais à la portée réduite : si le refus
+// venait du rôle, ces tests seraient verts pour la mauvaise raison. C'est la portée, et seulement
+// elle, qui doit produire le refus ici.
+describe("portée du jeton au dispatch", () => {
+  let lectureSeule: TestActor;
+  let sansArticles: TestActor;
+
+  beforeAll(async () => {
+    lectureSeule = await makeActor("editor", { scope: { canWrite: false, canReadArticles: true } });
+    sansArticles = await makeActor("editor", { scope: { canWrite: true, canReadArticles: false } });
+  });
+  afterAll(async () => {
+    await lectureSeule.cleanup();
+    await sansArticles.cleanup();
+  });
+
+  it("un jeton en lecture seule est refusé à l'écriture, avec un message actionnable", async () => {
+    await expect(callTool(lectureSeule, "create_video_project", {
+      title: "Test MCP — refus de portée", platform: "youtube_long",
+    })).rejects.toThrow("Ce jeton est en lecture seule.");
+  }, 30_000);
+
+  it("le même jeton lit sans encombre", async () => {
+    const r = await callTool(lectureSeule, "list_video_projects", {});
+    expect(Array.isArray(r)).toBe(true);
+  }, 30_000);
+
+  it("un jeton sans accès aux articles est refusé sur get_article", async () => {
+    await expect(callTool(sansArticles, "get_article", { articleId: crypto.randomUUID() }))
+      .rejects.toThrow("Ce jeton n'a pas accès aux articles.");
+  }, 30_000);
+
+  it("le même jeton garde le domaine vidéo", async () => {
+    const r = await callTool(sansArticles, "list_video_categories", {});
+    expect(Array.isArray(r)).toBe(true);
+  }, 30_000);
+});
+
+// ── Round de correction finale, constat 1 ────────────────────────────────────
+// `list_video_projects`, `get_video_brief` et `create_video_project` sont tous les trois annotés
+// `domain: "video"` — `refusPourPortee` ne les bloque donc jamais pour un jeton sans accès aux
+// articles — mais tous les trois exposaient du contenu d'article par un détour (jointure
+// `articleTitle`, variables de brief non filtrées). La promesse faite dans
+// components/settings/mcp/token-list.tsx (« ce jeton ne pourra pas lister ni lire les articles de
+// la rédaction ») doit tenir malgré cette annotation, sans réécrire tools/list ni le domaine.
+describe("expurgation d'article dans le domaine vidéo (constat 1)", () => {
+  let sansArticles: TestActor;
+  let complet: TestActor;
+  let articleId: string;
+  let projetViaComplet: string | undefined;
+  let projetComplet: string | undefined;
+  // La base Neon est PARTAGÉE : un autre test peut avoir laissé `video_settings.briefTemplate` sur
+  // un modèle sans `{{article_titre}}`/`{{article_extrait}}`, ce qui rendrait les assertions
+  // positives de ce bloc vraies pour la MAUVAISE raison (le placeholder absent, pas la portée
+  // complète). On fige le modèle par défaut le temps du bloc et on restaure la valeur d'origine
+  // ensuite — même geste que tests/mcp-actions.test.ts pour `mcpEnabled`.
+  let modeleOriginal: string | null = null;
+
+  const TITRE_ARTICLE = "Article test — expurgation MCP";
+  const EXTRAIT_ARTICLE = "Chapô que seul un jeton avec accès aux articles doit voir.";
+
+  beforeAll(async () => {
+    sansArticles = await makeActor("editor", { scope: { canWrite: true, canReadArticles: false } });
+    complet = await makeActor("editor", { scope: FULL_SCOPE });
+    const [a] = await db.insert(articles).values({
+      title: TITRE_ARTICLE, excerpt: EXTRAIT_ARTICLE, status: "draft",
+    }).returning({ id: articles.id });
+    articleId = a.id;
+
+    modeleOriginal = (await getVideoSettings()).briefTemplate;
+    const [row] = await db.select().from(videoSettings).limit(1);
+    if (row) await db.update(videoSettings).set({ briefTemplate: DEFAULT_BRIEF_TEMPLATE }).where(eq(videoSettings.id, row.id));
+  });
+
+  afterAll(async () => {
+    try {
+      await cleanupProject(projetViaComplet);
+      await cleanupProject(projetComplet);
+      await db.delete(articles).where(eq(articles.id, articleId));
+      const [row] = await db.select().from(videoSettings).limit(1);
+      if (row && modeleOriginal !== null) {
+        await db.update(videoSettings).set({ briefTemplate: modeleOriginal }).where(eq(videoSettings.id, row.id));
+      }
+    } finally {
+      await sansArticles.cleanup();
+      await complet.cleanup();
+    }
+  });
+
+  it("create_video_project refuse un articleId quand le jeton n'a pas accès aux articles", async () => {
+    await expect(callTool(sansArticles, "create_video_project", {
+      title: "Test MCP — rattachement refusé", platform: "youtube_long", articleId,
+    })).rejects.toThrow(/pas accès aux articles/);
+  }, 30_000);
+
+  it("le brief lu par un jeton sans articles n'a AUCUNE trace de l'article rattaché", async () => {
+    // Le projet est créé avec le jeton COMPLET (le rattachement lui-même n'est pas en cause ici) ;
+    // c'est la LECTURE du brief par le jeton restreint qui est sous test.
+    const cree = await callTool(complet, "create_video_project", {
+      title: "Test MCP — projet source d'article", platform: "youtube_long", articleId,
+    });
+    projetViaComplet = cree.projectId;
+    expect(cree.brief).toContain(TITRE_ARTICLE);
+
+    const brief = await callTool(sansArticles, "get_video_brief", { projectId: cree.projectId });
+    expect(brief.brief).not.toContain(TITRE_ARTICLE);
+    expect(brief.brief).not.toContain(EXTRAIT_ARTICLE);
+  }, 30_000);
+
+  it("list_video_projects rend articleTitle à null pour un jeton sans articles", async () => {
+    const r = await callTool(sansArticles, "list_video_projects", {});
+    const nôtre = (r as { id: string; articleTitle: string | null }[]).find((p) => p.id === projetViaComplet);
+    expect(nôtre).toBeDefined();
+    expect(nôtre!.articleTitle).toBeNull();
+  }, 30_000);
+
+  // Non-régression — l'assertion qui compte le plus : un jeton à portée complète garde EXACTEMENT
+  // le comportement d'avant cette correction.
+  it("un jeton à portée complète garde le brief et le titre d'article d'avant la correction", async () => {
+    const cree = await callTool(complet, "create_video_project", {
+      title: "Test MCP — projet à portée complète", platform: "youtube_long", articleId,
+    });
+    projetComplet = cree.projectId;
+    expect(cree.brief).toContain(TITRE_ARTICLE);
+    expect(cree.brief).toContain(EXTRAIT_ARTICLE);
+
+    const brief = await callTool(complet, "get_video_brief", { projectId: cree.projectId });
+    expect(brief.brief).toContain(TITRE_ARTICLE);
+    expect(brief.brief).toContain(EXTRAIT_ARTICLE);
+
+    const liste = await callTool(complet, "list_video_projects", {});
+    const nôtre = (liste as { id: string; articleTitle: string | null }[]).find((p) => p.id === cree.projectId);
+    expect(nôtre?.articleTitle).toBe(TITRE_ARTICLE);
   }, 30_000);
 });

@@ -6,7 +6,7 @@
 // à TOOL_REGISTRY lui-même, pas à une liste figée dans le test.
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { TOOL_REGISTRY, type ToolKind } from "@/lib/mcp/registry";
+import { TOOL_REGISTRY, type ToolDomain, type ToolKind } from "@/lib/mcp/registry";
 
 const KIND_LABEL: Record<ToolKind, string> = { lecture: "Lecture", ecriture: "Écriture" };
 
@@ -14,6 +14,8 @@ const KIND_BADGE_STYLE: Record<ToolKind, string> = {
   lecture: "bg-[var(--status-approved)]/15 text-[var(--status-approved)] border-[var(--status-approved)]/30",
   ecriture: "bg-[var(--status-pending)]/15 text-[var(--status-pending)] border-[var(--status-pending)]/30",
 };
+
+const DOMAIN_LABEL: Record<ToolDomain, string> = { video: "Vidéo", article: "Articles" };
 
 export function ToolCatalog() {
   return (
@@ -36,9 +38,12 @@ export function ToolCatalog() {
               <code className="text-sm font-medium">{tool.name}</code>
               <p className="text-sm text-muted-foreground">{tool.description}</p>
             </div>
-            <Badge variant="outline" className={`shrink-0 ${KIND_BADGE_STYLE[tool.kind]}`}>
-              {KIND_LABEL[tool.kind]}
-            </Badge>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Badge variant="outline">{DOMAIN_LABEL[tool.domain]}</Badge>
+              <Badge variant="outline" className={KIND_BADGE_STYLE[tool.kind]}>
+                {KIND_LABEL[tool.kind]}
+              </Badge>
+            </div>
           </div>
         ))}
       </CardContent>
