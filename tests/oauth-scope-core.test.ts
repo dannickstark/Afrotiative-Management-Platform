@@ -17,7 +17,7 @@ afterAll(async () => {
 test("upsert → get → list → revoke", async () => {
   await db.insert(user).values({ id: uid, name: "Testeur", email: "t-oauth@x.test" }).onConflictDoNothing();
   await db.insert(oauthApplication).values({
-    id: "app-1", name: "Claude test", clientId: cid, redirectUrls: "https://claude.ai/cb", type: "web",
+    id: "app-oauth-scope-core-1", name: "Claude test", clientId: cid, redirectUrls: "https://claude.ai/cb", type: "web",
   }).onConflictDoNothing();
 
   await upsertOauthScopeCore({ userId: uid, clientId: cid, scope: { canWrite: true, canReadArticles: false } });

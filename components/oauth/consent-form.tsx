@@ -3,6 +3,7 @@
 // portée (écriture / lecture des articles), mêmes libellés que components/settings/mcp/token-list.tsx
 // pour la cohérence avec le reste de l'UI MCP.
 import { useTransition, useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -34,14 +35,18 @@ export function ConsentForm(
       <div className="flex gap-3">
         <Button
           variant="outline" disabled={pending}
-          onClick={() => start(() => { void denyOauthConsent(consentCode); })}
+          onClick={() => start(async () => {
+            const res = await denyOauthConsent(consentCode);
+            if (res && !res.ok) toast.error(res.message ?? "Échec du refus.");
+          })}
         >
           Refuser
         </Button>
         <Button
           disabled={pending}
-          onClick={() => start(() => {
-            void approveOauthConsent({ clientId, consentCode, canWrite, canReadArticles });
+          onClick={() => start(async () => {
+            const res = await approveOauthConsent({ clientId, consentCode, canWrite, canReadArticles });
+            if (res && !res.ok) toast.error(res.message ?? "Échec de l'autorisation.");
           })}
         >
           Autoriser

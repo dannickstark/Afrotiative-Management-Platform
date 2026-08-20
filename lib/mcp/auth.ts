@@ -34,7 +34,7 @@ export async function authenticateMcp(authorizationHeader: string | null): Promi
   // tente plutôt le jeton d'accès OAuth (claude.ai web) avant de renoncer.
   const prefix = prefixOf(raw);
   if (!prefix) {
-    const headers = new Headers(authorizationHeader ? { authorization: authorizationHeader } : {});
+    const headers = new Headers({ authorization: authorizationHeader ?? "" });
     const oauthSession = await auth.api.getMcpSession({ headers });
     if (!oauthSession) return { ok: false, status: 401, message: REJECT };
     const [owner] = await db.select().from(userTable).where(eq(userTable.id, oauthSession.userId)).limit(1);
