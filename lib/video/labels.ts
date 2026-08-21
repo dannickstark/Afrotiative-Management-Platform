@@ -23,3 +23,12 @@ export const INSERT_KIND_LABEL: Record<string, string> = {
 export const LINK_STATUS_LABEL: Record<string, string> = {
   non_verifie: "À vérifier", ok: "OK", mort: "Mort", interdit: "Interdit",
 };
+
+export const TAKE_STATUS_LABEL: Record<string, string> = {
+  bonne: "Bonne", mauvaise: "Mauvaise", a_revoir: "À revoir",
+};
+
+export const VIDEO_STATUS_LABEL: Record<string, string> = {
+  brouillon: "Brouillon", en_ecriture: "En écriture", pret_a_tourner: "Prêt à tourner",
+  tourne: "Tourné", en_montage: "En montage", publie: "Publié", archive: "Archivé",
+};

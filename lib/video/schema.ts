@@ -17,6 +17,8 @@ export const RATIOS = ["16:9", "9:16", "1:1"] as const;
 export const TC_RE = /^\d{2}:\d{2}:\d{2}(\.\d{1,3})?$/;
 export const INSERT_KINDS = ["image", "video", "extrait", "graphique", "fichier"] as const;
 export type InsertKind = (typeof INSERT_KINDS)[number];
+export const TAKE_STATUSES = ["bonne", "mauvaise", "a_revoir"] as const;
+export type TakeStatus = (typeof TAKE_STATUSES)[number];
 export const BEAT_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
 // Spec §2.2 : « `url` : http/https uniquement ». `z.string().url()` nu laisse passer

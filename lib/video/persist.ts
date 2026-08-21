@@ -14,6 +14,7 @@ import {
 } from "@/lib/video/schema";
 import { verifyUrl } from "@/lib/video/link-check";
 import { mapWithConcurrency } from "@/lib/async-pool";
+import { estTransitionAutorisee } from "@/lib/video/tournage-rules";
 
 // Cœur DB brut du module vidéo — délibérément SANS "use server" (voir lib/actions/video-actions.ts
 // pour le motif). C'est aussi la SEULE exception à « lib/video/* n'importe jamais @/db » : le
@@ -1075,6 +1076,27 @@ export async function revertJournalEntryCore(
 // MOMENT où un humain a ouvert le projet compte pour ce garde-fou, pas encore QUI. Le paramètre
 // reste dans la signature plutôt que d'être retiré : l'appelant naturel (la page projet) connaît
 // déjà `requireUser()`, et une future colonne `reviewedBy` n'aurait pas à changer cet appel.
+// ─────────────────────────────────────────────────────────────────────────────
+// Transition de statut de projet (SP4, Task 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Première écriture de `videoProjects.status` dans ce fichier — pas de variante impliquée, donc le
+// verrou porte directement sur la ligne `videoProjects` (contrairement aux cœurs de beat ci-dessus,
+// qui verrouillent la variante en tête). `estTransitionAutorisee` (lib/video/tournage-rules.ts) est
+// la seule source de vérité des transitions permises — refus métier sinon, pas un `RefusalError` de
+// contournement.
+export async function setProjectStatusCore(input: { projectId: string; to: string }): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [proj] = await tx.select({ status: videoProjects.status }).from(videoProjects)
+      .where(eq(videoProjects.id, input.projectId)).for("update");
+    if (!proj) throw new RefusalError("Projet introuvable.");
+    if (!estTransitionAutorisee(proj.status, input.to)) throw new RefusalError("Transition de statut non autorisée.");
+    await tx.update(videoProjects)
+      .set({ status: input.to as (typeof videoProjects.$inferInsert)["status"], updatedAt: new Date() })
+      .where(eq(videoProjects.id, input.projectId));
+  });
+}
+
 export async function markProjectReviewedCore(projectId: string, userId: string | null): Promise<void> {
   void userId;
   await db.update(scriptJournal)

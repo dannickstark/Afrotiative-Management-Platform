@@ -16,7 +16,9 @@ import { VerifyAllLinks } from "@/components/video/verify-all-links";
 import { ImportPanel } from "@/components/video/import-panel";
 import { JournalHistory, type JournalEntryView } from "@/components/video/journal-history";
 import { ConducteurView } from "@/components/video/conducteur-view";
+import { TournageView } from "@/components/video/tournage-view";
 import { readConducteurCore } from "@/lib/montage/persist";
+import { readTournageCore } from "@/lib/video/takes-core";
 import { listSharesCore } from "@/lib/montage/access";
 import { MontageSharePanel } from "@/components/video/montage-share-panel";
 import { Badge } from "@/components/ui/badge";
@@ -70,6 +72,10 @@ export default async function VideoProjectPage({
   // active — même `readConducteurCore` que celui écrit Task 3, qui recalcule tout depuis la DB
   // (aucun état dérivé stocké).
   const conducteur = activeVariant ? (await readConducteurCore(activeVariant.id))?.conducteur ?? null : null;
+
+  // Onglet Tournage (Task 5, SP4) : le journal de prises + prompteur pour la variante active —
+  // même lecture recalculée-depuis-la-DB que readConducteurCore ci-dessus.
+  const tournage = activeVariant ? await readTournageCore(activeVariant.id) : null;
 
   // Panneau « Accès monteur » (Task 7) : les liens de partage existants pour CE projet — chargés
   // inconditionnellement, la garde `video:manage` ne s'applique qu'au rendu du panneau ci-dessous
@@ -143,12 +149,13 @@ export default async function VideoProjectPage({
   return (
     <div className="space-y-6">
       <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue={sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
+      <Tabs defaultValue={sp.tab === "tournage" ? "tournage" : sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
           <TabsTrigger value="ecriture">Écriture</TabsTrigger>
           <TabsTrigger value="importer">Importer</TabsTrigger>
           <TabsTrigger value="montage">Montage</TabsTrigger>
+          <TabsTrigger value="tournage">Tournage</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
           <div className="space-y-4">
@@ -221,6 +228,13 @@ export default async function VideoProjectPage({
               <p className="text-sm text-muted-foreground">Aucune variante.</p>
             )}
           </div>
+        </TabsContent>
+        <TabsContent value="tournage">
+          {tournage ? (
+            <TournageView projectId={project.id} status={tournage.status} beats={tournage.beats} />
+          ) : (
+            <p className="text-sm text-muted-foreground">Aucune variante.</p>
+          )}
         </TabsContent>
       </Tabs>
     </div>
