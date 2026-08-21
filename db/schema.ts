@@ -40,7 +40,7 @@ export const pipelineStatus = pgEnum("pipeline_status", [
   "paused",    // Pause: parked mid-run with a checkpoint, resumable (Task 4)
 ]);
 export const distributionStatus = pgEnum("distribution_status", ["stubbed", "pending", "sent", "failed"]);
-export const userRole = pgEnum("user_role", ["admin", "editor", "journalist"]);
+export const userRole = pgEnum("user_role", ["admin", "editor", "journalist", "monteur"]);
 
 // ---- Better-Auth tables ----
 export const user = pgTable("user", {
