@@ -1,12 +1,24 @@
 import type { Conducteur } from "@/lib/video/rundown";
 import { Badge } from "@/components/ui/badge";
+import { BeatCheckToggle, InsertDeadFlag } from "@/components/video/conducteur-annotations";
 
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60), s = sec % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-export function ConducteurView({ conducteur }: { conducteur: Conducteur }) {
+// Task 9 : `annotate` optionnelle — absente, la vue reste strictement en lecture seule (patron
+// d'origine, Task 4) ; présente, elle porte soit `projectId` (voie app, garde video:annotate déjà
+// vérifiée par l'appelant) soit `shareToken` (voie jeton de partage), jamais les deux à la fois en
+// pratique. C'est cette même valeur qui redescend telle quelle vers les server actions
+// (toggleBeatChecked/flagInsertDead), qui l'imposent ou la vérifient — la vue ne fait AUCUN choix
+// d'autorisation elle-même.
+export function ConducteurView({
+  conducteur, annotate,
+}: {
+  conducteur: Conducteur;
+  annotate?: { projectId?: string; shareToken?: string };
+}) {
   const { beats, totals } = conducteur;
   return (
     <div className="space-y-4">
@@ -31,6 +43,9 @@ export function ConducteurView({ conducteur }: { conducteur: Conducteur }) {
                 <span className="text-muted-foreground">{fmt(b.durationSec)}</span>
                 {b.breathRisk && <Badge variant="outline">souffle</Badge>}
                 {b.speakerName && <span className="text-muted-foreground">· {b.speakerName}</span>}
+                {annotate && b.id && (
+                  <BeatCheckToggle beatId={b.id} checked={b.checked} annotate={annotate} />
+                )}
               </div>
               {b.spokenText && <p className="mt-2 text-sm">{b.spokenText}</p>}
               {b.directionNote && <p className="mt-1 text-xs text-muted-foreground">Réal. : {b.directionNote}</p>}
@@ -52,6 +67,9 @@ export function ConducteurView({ conducteur }: { conducteur: Conducteur }) {
                       <Badge variant={ins.linkStatus === "mort" || ins.linkStatus === "interdit" ? "destructive" : "outline"}>
                         {ins.linkLabel}
                       </Badge>
+                      {annotate && (
+                        <InsertDeadFlag insertId={ins.id} linkStatus={ins.linkStatus} annotate={annotate} />
+                      )}
                     </li>
                   ))}
                 </ul>

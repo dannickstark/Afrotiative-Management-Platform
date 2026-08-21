@@ -22,7 +22,11 @@ export default async function MontagePublicPage(
   return (
     <div className="space-y-4">
       <h1 className="font-serif text-2xl">{project.title}</h1>
-      {read ? <ConducteurView conducteur={read.conducteur} /> : <p>Aucun conducteur.</p>}
+      {read ? (
+        <ConducteurView conducteur={read.conducteur} annotate={{ shareToken: token }} />
+      ) : (
+        <p>Aucun conducteur.</p>
+      )}
     </div>
   );
 }

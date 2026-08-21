@@ -198,7 +198,14 @@ export default async function VideoProjectPage({
             {can(user.role, "video", "manage") && (
               <MontageSharePanel projectId={project.id} shares={shares} canManage />
             )}
-            {conducteur ? <ConducteurView conducteur={conducteur} /> : <p className="text-sm text-muted-foreground">Aucune variante.</p>}
+            {conducteur ? (
+              <ConducteurView
+                conducteur={conducteur}
+                annotate={can(user.role, "video", "annotate") ? { projectId: project.id } : undefined}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">Aucune variante.</p>
+            )}
           </div>
         </TabsContent>
       </Tabs>

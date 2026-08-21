@@ -8,6 +8,9 @@ export type RundownInsertInput = {
 };
 
 export type RundownBeatInput = {
+  // Facultatif : `readConducteurCore` le renseigne (Task 9, annotations monteur) mais les tests
+  // purs de buildConducteur n'ont pas besoin de le fournir.
+  id?: string;
   position: number; kind: string; spokenText: string;
   directionNote: string | null; screenText: string | null;
   transitionIn: string | null; transitionOut: string | null;
@@ -23,6 +26,7 @@ export type ConducteurInsert = {
 };
 
 export type ConducteurBeat = {
+  id?: string;
   position: number; kind: string; kindLabel: string; spokenText: string;
   directionNote: string | null; screenText: string | null;
   transitionIn: string | null; transitionOut: string | null;
@@ -42,6 +46,7 @@ export function buildConducteur(
   resolveMedia: (url: string | null, r2Key: string | null) => string | null,
 ): Conducteur {
   const outBeats: ConducteurBeat[] = beats.map((b) => ({
+    id: b.id,
     position: b.position,
     kind: b.kind,
     kindLabel: BEAT_KIND_LABEL[b.kind] ?? b.kind,

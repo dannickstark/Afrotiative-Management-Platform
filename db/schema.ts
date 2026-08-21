@@ -650,7 +650,7 @@ export const insertKind = pgEnum("insert_kind", ["image", "video", "extrait", "g
 // `interdit` = refusé par le garde SSRF (lib/url-guard.ts) ; `mort` = URL légitime qui ne répond
 // plus. Les deux se lisent différemment côté monteur, d'où deux valeurs et non une.
 export const linkStatus = pgEnum("link_status", ["non_verifie", "ok", "mort", "interdit"]);
-export const scriptJournalSource = pgEnum("script_journal_source", ["copier_coller", "mcp", "manuel"]);
+export const scriptJournalSource = pgEnum("script_journal_source", ["copier_coller", "mcp", "manuel", "monteur"]);
 // "en_attente" (round de correction 1, Task 9) : un diff préparé mais pas encore appliqué —
 // prepareImportCore doit journaliser AVANT que l'utilisateur ne décide, pour qu'applyImportCore
 // puisse relire l'entrée par journalId. Distinct d'"annule" (qui signifie « revenu en arrière »,
