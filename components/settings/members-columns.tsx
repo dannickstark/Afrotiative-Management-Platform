@@ -15,13 +15,10 @@ import { cn } from "@/lib/utils";
 import type { Member } from "@/lib/queries/settings";
 import type { Role } from "@/lib/auth";
 
-// Task 5 (conducteur de montage) : "monteur" existe désormais au niveau RBAC (lib/auth's Role) mais
-// n'est pas assignable depuis /settings/team — ROLES ci-dessous (et donc ce Select) le retient
-// intentionnellement en dehors. `as const satisfies readonly Role[]` keeps the literal union (so
-// AssignableRole stays the 3-way subset, matching setMemberRole's roleEnum-typed param) while still
-// checking every entry is a valid Role.
-export const ROLES = ["journalist", "editor", "admin"] as const satisfies readonly Role[];
-type AssignableRole = (typeof ROLES)[number];
+// Task 5 (conducteur de montage) : le rôle est attribuable via cet écran d'admin d'équipe existant
+// (pas de nouvel écran) — "monteur" rejoint donc les rôles assignables ici, au même titre que les
+// trois autres (lib/validation.ts's roleEnum accepts it too, so setMemberRole below stays in sync).
+export const ROLES: Role[] = ["journalist", "editor", "admin", "monteur"];
 
 // "Statut" is derived from the raw `banned` boolean (member.banned → "disabled" | "active"), not a
 // DB column of its own — moved verbatim from the old hand-rolled members-table.tsx, same
@@ -56,7 +53,7 @@ const equalsFilter: FilterFn<Member> = (row, columnId, filterValue) => String(ro
 function RoleSelectCell({ member }: { member: Member }) {
   const [isChangingRole, startRoleChange] = useTransition();
 
-  function handleRoleChange(role: AssignableRole) {
+  function handleRoleChange(role: Role) {
     if (role === member.role) return;
     startRoleChange(async () => {
       try {
@@ -71,7 +68,7 @@ function RoleSelectCell({ member }: { member: Member }) {
 
   return (
     <div className="flex items-center gap-1.5">
-      <Select value={member.role} onValueChange={(v) => handleRoleChange(v as AssignableRole)} disabled={isChangingRole}>
+      <Select value={member.role} onValueChange={(v) => handleRoleChange(v as Role)} disabled={isChangingRole}>
         <SelectTrigger className="w-36" aria-label={`Rôle de ${member.name}`}>
           <SelectValue placeholder="Rôle">{(v: Role) => ROLE_LABEL[v]}</SelectValue>
         </SelectTrigger>
