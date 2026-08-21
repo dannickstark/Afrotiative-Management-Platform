@@ -8,11 +8,20 @@ const CSV_HEADER = [
   "tc_in", "tc_out", "media_url", "credit", "rights", "link_status",
 ];
 
+// Neutralise l'injection de formule CSV : si le premier caractère déclencherait l'exécution
+// d'une formule à l'ouverture dans Excel/Sheets (= + - @ ou tabulation/retour chariot en tête),
+// préfixer d'une apostrophe avant tout échappement RFC 4180.
+const CSV_FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+
+function neutralizeCsvFormula(s: string): string {
+  return CSV_FORMULA_TRIGGER.test(s) ? `'${s}` : s;
+}
+
 // RFC 4180 : entourer de guillemets si la valeur contient une virgule, un guillemet ou un retour
 // à la ligne ; doubler tout guillemet interne.
 function csvField(value: string | number | null): string {
   if (value === null || value === undefined) return "";
-  const s = String(value);
+  const s = neutralizeCsvFormula(String(value));
   if (/[",\r\n]/.test(s)) {
     return `"${s.replace(/"/g, '""')}"`;
   }

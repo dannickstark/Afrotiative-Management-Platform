@@ -56,6 +56,22 @@ test("toShotListCsv : échappe virgule, guillemet et retour ligne (RFC 4180)", (
   expect(csv).toContain('"ligne1\nligne2"');
 });
 
+test("toShotListCsv : neutralise l'injection de formule (=, +, -, @) en tête de champ", () => {
+  const c = buildConducteur([
+    beat({
+      position: 0, kind: "narration", estimatedDurationSec: 5,
+      inserts: [
+        { id: "i1", kind: "image", url: "http://x", r2Key: null, tcIn: null, tcOut: null, displayDurationSec: null, credit: "=SUM(A1)", rightsNote: "@rights, ok", linkStatus: "ok" },
+      ],
+    }),
+  ], resolve);
+  const csv = toShotListCsv(c);
+  // credit préfixé d'une apostrophe (pas de virgule/guillemet → pas de quoting RFC 4180)
+  expect(csv).toContain(",'=SUM(A1),");
+  // rightsNote préfixé d'une apostrophe ET quoté RFC 4180 (contient une virgule)
+  expect(csv).toContain(`"'@rights, ok"`);
+});
+
 test("toShotListJson : reflète le conducteur", () => {
   const c = buildConducteur([beat({ position: 0 })], resolve);
   const json = toShotListJson(c) as { beats: unknown[] };
