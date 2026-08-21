@@ -72,7 +72,7 @@ const PURE_FILES = new Set<string>([
   "studio-save-indicator.test.ts", "studio-scene.test.ts", "studio-server-import.test.ts",
   "studio-shape-gallery.test.ts", "studio-shape-render.test.ts", "studio-shapes.test.ts",
   "studio-snap.test.ts", "studio-texte-panel.test.ts", "studio-token-picker.test.ts",
-  "studio-tokens.test.ts", "studio-use-preview.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
+  "studio-tokens.test.ts", "studio-use-preview.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "tournage-rules.test.ts", "use-persisted-filters.test.ts",
   "video-beat-list.test.ts", "video-brief-panel.test.ts", "video-brief.test.ts", "video-categories-schema.test.ts", "video-categories-validation.test.ts", "video-contract.test.ts",
   "video-diff-review.test.ts", "video-duration.test.ts", "video-journal-history.test.ts", "video-import-merge.test.ts", "video-import-parse.test.ts",
   "video-labels.test.ts", "video-project-list.test.ts", "video-rbac-nav.test.ts", "video-rundown.test.ts", "video-schema-db.test.ts", "video-settings.test.ts", "video-timecode.test.ts",
