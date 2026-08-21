@@ -223,3 +223,14 @@
   .studio-motion-slide { transition: none; }
   .studio-motion-outline { transition: none; }
 }
+
+/* Surlignage du prompteur vidéo (rich-editor.tsx via highlight-mark.ts, lib/highlight.ts pour la
+   correspondance couleur↔classe). Hors `@layer` (comme les `.studio-motion-*` ci-dessus) pour
+   garantir la priorité sur les utilitaires Tailwind (`@layer utilities`) — nécessaire car le
+   contenu vient de HTML sérialisé (`<mark class="hl-jaune">`) et non de classes composées au
+   rendu. Teintes tunées pour rester lisibles (texte sombre) en thème clair ET sombre : les marques
+   se lisent sur leur propre fond de teinte, pas sur le fond de page. */
+mark.hl-jaune, .hl-jaune { background-color: oklch(0.87 0.17 95); color: oklch(0.2 0.02 95); border-radius: 2px; }
+mark.hl-vert,  .hl-vert  { background-color: oklch(0.85 0.15 150); color: oklch(0.2 0.03 150); border-radius: 2px; }
+mark.hl-rouge, .hl-rouge { background-color: oklch(0.83 0.13 25);  color: oklch(0.2 0.03 25);  border-radius: 2px; }
+mark.hl-bleu,  .hl-bleu  { background-color: oklch(0.85 0.1 240);  color: oklch(0.2 0.03 240); border-radius: 2px; }

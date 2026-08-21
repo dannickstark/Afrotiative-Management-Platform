@@ -11,6 +11,60 @@
         ],
         "createdAt": "2026-08-16T06:12:23.482Z",
         "reason": "Fixture de style satori (bordure 20px sur LES QUATRE cotes) prouvant que satori peint la bordure hors du clip-path — moteur de rendu, pas une carte d'UI. Lignes preexistantes, non introduites par ce chantier."
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.87 0.17 95)",
+        "createdAt": "2026-08-21T22:27:48.161Z",
+        "reason": "task-2-brief.md: new .hl-jaune highlight tint, tuned oklch per spec"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.2 0.02 95)",
+        "createdAt": "2026-08-21T22:27:48.212Z",
+        "reason": "task-2-brief.md: readable text color on .hl-jaune tint"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.85 0.15 150)",
+        "createdAt": "2026-08-21T22:27:48.261Z",
+        "reason": "task-2-brief.md: new .hl-vert highlight tint"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.2 0.03 150)",
+        "createdAt": "2026-08-21T22:27:48.310Z",
+        "reason": "task-2-brief.md: readable text color on .hl-vert tint"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.83 0.13 25)",
+        "createdAt": "2026-08-21T22:27:48.360Z",
+        "reason": "task-2-brief.md: new .hl-rouge highlight tint"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.2 0.03 25)",
+        "createdAt": "2026-08-21T22:27:48.406Z",
+        "reason": "task-2-brief.md: readable text color on .hl-rouge tint"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.85 0.1 240)",
+        "createdAt": "2026-08-21T22:27:48.454Z",
+        "reason": "task-2-brief.md: new .hl-bleu highlight tint"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "oklch(0.2 0.03 240)",
+        "createdAt": "2026-08-21T22:27:48.504Z",
+        "reason": "task-2-brief.md: readable text color on .hl-bleu tint"
+      },
+      {
+        "rule": "design-system-radius",
+        "value": "2px",
+        "createdAt": "2026-08-21T22:27:48.554Z",
+        "reason": "task-2-brief.md: highlight mark radius, matches small chrome-radius precedent"
       }
     ]
   }
