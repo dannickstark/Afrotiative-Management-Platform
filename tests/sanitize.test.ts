@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, test, expect } from "bun:test";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 
 // Pure function, no DB — SP4 Task 2.
@@ -121,5 +121,13 @@ describe("sanitizeArticleHtml", () => {
   it("style sur mark supprimé ; span non autorisé", () => {
     expect(sanitizeArticleHtml('<p><mark style="background:red">x</mark></p>')).not.toContain("style");
     expect(sanitizeArticleHtml('<p><span class="hl-jaune">x</span></p>')).not.toContain("hl-jaune");
+  });
+
+  test("un <mark> valide ne conserve NI data-* NI on* NI autre attribut", () => {
+    const out = sanitizeArticleHtml('<p><mark class="hl-jaune" data-x="1" onclick="alert(1)" title="t">x</mark></p>');
+    expect(out).toContain('<mark class="hl-jaune">x</mark>');
+    expect(out).not.toContain("data-x");
+    expect(out).not.toContain("onclick");
+    expect(out).not.toContain("title");
   });
 });

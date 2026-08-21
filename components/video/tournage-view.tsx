@@ -312,9 +312,9 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
             setHtml(h);
             dirtyRef.current = true;
           }}
-          editable
+          editable={!isSaving}
           allowHighlight
-          className="prompteur-editor"
+          className="font-editorial prose prose-neutral max-w-none focus:outline-none prompteur-editor"
         />
         {beat.directionNote && <p className="text-sm">{beat.directionNote}</p>}
       </div>
