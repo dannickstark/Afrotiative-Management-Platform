@@ -10,3 +10,16 @@ export const PLATFORM_LABEL: Record<string, string> = {
   reel: "Reel",
   interview: "Interview",
 };
+
+export const BEAT_KIND_LABEL: Record<string, string> = {
+  narration: "Narration", question: "Question", reponse: "Réponse", insert: "Insert",
+  broll: "B-roll", transition: "Transition", texte_ecran: "Texte écran", son: "Son", note: "Note",
+};
+
+export const INSERT_KIND_LABEL: Record<string, string> = {
+  image: "Image", video: "Vidéo", extrait: "Extrait", graphique: "Graphique", fichier: "Fichier",
+};
+
+export const LINK_STATUS_LABEL: Record<string, string> = {
+  non_verifie: "À vérifier", ok: "OK", mort: "Mort", interdit: "Interdit",
+};
