@@ -4,7 +4,11 @@ import { resolveShare } from "@/lib/montage/access";
 import { readConducteurCore } from "@/lib/montage/persist";
 import { ConducteurView } from "@/components/video/conducteur-view";
 
-export default async function MontagePublicPage(
+// Vue imprimable (Task 10) : même lecture que app/(public)/montage/[token]/page.tsx, mais sans
+// aucun lien d'action (annotate absent → ConducteurView reste strictement en lecture seule) et
+// avec une feuille @media print qui masque la barre d'actions "no-print" — l'utilisateur imprime
+// cette page et choisit « Enregistrer en PDF » dans la boîte de dialogue du navigateur.
+export default async function MontagePrintPage(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params;
@@ -21,15 +25,20 @@ export default async function MontagePublicPage(
   const read = await readConducteurCore(variant.id);
   return (
     <div className="space-y-4">
-      <h1 className="font-serif text-2xl">{project.title}</h1>
-      <div className="flex flex-wrap gap-3 text-sm underline">
-        <a href={`/montage/${token}/print`}>Version imprimable</a>
-        <a href={`/api/montage/export?token=${token}&format=csv`}>Export CSV</a>
-        <a href={`/api/montage/export?token=${token}&format=json`}>Export JSON</a>
-        <a href={`/api/montage/export?token=${token}&format=manifest`}>Manifeste médias</a>
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          @page { margin: 1.5cm; }
+        }
+      `}</style>
+      <div className="no-print flex items-center justify-between gap-2 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+        <span className="text-muted-foreground">
+          Imprimez cette page (Ctrl/Cmd+P) puis « Enregistrer en PDF ».
+        </span>
       </div>
+      <h1 className="font-serif text-2xl">{project.title}</h1>
       {read ? (
-        <ConducteurView conducteur={read.conducteur} annotate={{ shareToken: token }} />
+        <ConducteurView conducteur={read.conducteur} />
       ) : (
         <p>Aucun conducteur.</p>
       )}

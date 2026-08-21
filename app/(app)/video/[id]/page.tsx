@@ -198,6 +198,13 @@ export default async function VideoProjectPage({
             {can(user.role, "video", "manage") && (
               <MontageSharePanel projectId={project.id} shares={shares} canManage />
             )}
+            {activeVariant && (
+              <div className="flex flex-wrap gap-3 text-sm underline">
+                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=csv`}>Export CSV</a>
+                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=json`}>Export JSON</a>
+                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=manifest`}>Manifeste médias</a>
+              </div>
+            )}
             {conducteur ? (
               <ConducteurView
                 conducteur={conducteur}
