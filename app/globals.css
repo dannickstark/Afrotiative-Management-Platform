@@ -234,3 +234,18 @@ mark.hl-jaune, .hl-jaune { background-color: oklch(0.87 0.17 95); color: oklch(0
 mark.hl-vert,  .hl-vert  { background-color: oklch(0.85 0.15 150); color: oklch(0.2 0.03 150); border-radius: 2px; }
 mark.hl-rouge, .hl-rouge { background-color: oklch(0.83 0.13 25);  color: oklch(0.2 0.03 25);  border-radius: 2px; }
 mark.hl-bleu,  .hl-bleu  { background-color: oklch(0.85 0.1 240);  color: oklch(0.2 0.03 240); border-radius: 2px; }
+
+/* Scope prompteur (tournage-view.tsx#PrompteurMode) : fond blanc/texte noir FORCÉ — indépendant du
+   thème clair/sombre de l'appli, y compris en plein écran natif (requestFullscreen) où le contenu
+   doit rester lisible sous n'importe quel éclairage de tournage. Hors `@layer` pour prévaloir sur
+   les classes Tailwind `dark:` posées plus haut dans l'arbre. */
+.prompteur-surface { background-color: #fff; color: #000; }
+.prompteur-surface .prompteur-editor { font-size: 1.5rem; line-height: 1.4; color: #000; min-height: 40vh; }
+@media (min-width: 640px) { .prompteur-surface .prompteur-editor { font-size: 1.875rem; } }
+/* Surlignages vifs sur blanc, texte noir (contraste AA) */
+.prompteur-surface mark.hl-jaune { background-color: #fde047; color: #000; }
+.prompteur-surface mark.hl-vert  { background-color: #86efac; color: #000; }
+.prompteur-surface mark.hl-rouge { background-color: #fca5a5; color: #000; }
+.prompteur-surface mark.hl-bleu  { background-color: #93c5fd; color: #000; }
+/* La toolbar TipTap et le focus outline restent visibles sur blanc */
+.prompteur-surface .prose { color: #000; }
