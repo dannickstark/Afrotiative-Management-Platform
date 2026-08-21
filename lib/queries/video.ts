@@ -1,4 +1,4 @@
-import { db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, articles, distributions } from "@/db";
+import { db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, articles, distributions, interviewSpeakers } from "@/db";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { getWpConfig } from "@/lib/wp/config";
@@ -213,3 +213,19 @@ export async function getVideoProject(id: string) {
 }
 
 export type VideoProjectDetail = NonNullable<Awaited<ReturnType<typeof getVideoProject>>>;
+
+export type SpeakerRow = {
+  id: string; name: string; role: string | null;
+  consentGiven: boolean; consentNote: string | null; createdAt: Date;
+};
+
+// Intervenants d'un projet (mode interview, SP5), du plus ancien au plus récent — consommée par
+// l'écran de gestion des intervenants et par le cœur d'écriture (lib/video/speakers-persist.ts).
+export async function listSpeakers(projectId: string): Promise<SpeakerRow[]> {
+  return db.select({
+    id: interviewSpeakers.id, name: interviewSpeakers.name, role: interviewSpeakers.role,
+    consentGiven: interviewSpeakers.consentGiven, consentNote: interviewSpeakers.consentNote,
+    createdAt: interviewSpeakers.createdAt,
+  }).from(interviewSpeakers).where(eq(interviewSpeakers.projectId, projectId))
+    .orderBy(asc(interviewSpeakers.createdAt));
+}
