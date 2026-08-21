@@ -12,6 +12,10 @@ import { Badge } from "@/components/ui/badge";
 import { RichEditor } from "@/components/article/rich-editor";
 import { updateBeat, updateInsert } from "@/lib/actions/video-actions";
 import { isBreathRisk } from "@/lib/video/duration";
+import { insertSpanSeconds } from "@/lib/video/timecode";
+import { INSERT_KINDS } from "@/lib/video/schema";
+import { INSERT_KIND_LABEL } from "@/lib/video/labels";
+import { formatDate } from "@/lib/format";
 import type { BeatView, InsertView } from "./beat-list";
 
 const LINK_STATUS_LABEL: Record<string, string> = {
@@ -43,72 +47,173 @@ function toForm(beat: BeatView): FormState {
   };
 }
 
-// Complément Task 12 (revue) — un insert dont seule l'URL est éditée n'a pas besoin de rejouer le
-// bouton « Enregistrer » du beat : `InsertRow` porte sa propre mutation locale et son propre appel
-// à `updateInsert`, indépendant du formulaire du beat. `disabled` reflète l'enregistrement en cours
-// du BEAT (form.spokenText etc.) : les deux enregistrements ne se recouvrent pas fonctionnellement,
-// mais désactiver toute la fiche pendant l'un évite une incohérence visuelle si les deux
-// s'enchaînent vite.
-function InsertRow({
+type InsertFormState = {
+  kind: string;
+  url: string;
+  tcIn: string;
+  tcOut: string;
+  displayDurationSec: string;
+  credit: string;
+  rightsNote: string;
+};
+
+function toInsertForm(insert: InsertView): InsertFormState {
+  return {
+    kind: insert.kind,
+    url: insert.url ?? "",
+    tcIn: insert.tcIn ?? "",
+    tcOut: insert.tcOut ?? "",
+    displayDurationSec: insert.displayDurationSec === null ? "" : String(insert.displayDurationSec),
+    credit: insert.credit ?? "",
+    rightsNote: insert.rightsNote ?? "",
+  };
+}
+
+// Task 5 (SP3) — l'insert est désormais un formulaire complet : nature, timecodes, durée
+// d'affichage, crédit, droits et URL se modifient ensemble via un seul bouton Enregistrer qui
+// appelle `updateInsert` (élargi Task 2). Un `<select>` natif plutôt que le `<Select>` shadcn/Radix :
+// ce dernier ne rend pas ses options sous `renderToStaticMarkup` (portail/JS requis), alors que le
+// test pur (tests/insert-row.test.ts) doit pouvoir lire les libellés dans le HTML statique.
+export function InsertRow({
   insert, disabled, onSaved,
 }: {
   insert: InsertView;
   disabled: boolean;
   onSaved: (patch: Partial<InsertView> & { id: string }) => void;
 }) {
-  const [url, setUrl] = useState(insert.url ?? "");
+  const [form, setForm] = useState<InsertFormState>(() => toInsertForm(insert));
   const [isPending, startTransition] = useTransition();
 
   // Resynchronise si l'insert change de source (autre onglet, autre session) — même motif que
   // BeatInspector#toForm.
-  useEffect(() => { setUrl(insert.url ?? ""); }, [insert.id, insert.url]);
+  useEffect(() => { setForm(toInsertForm(insert)); }, [insert.id]);
 
-  const changed = url.trim() !== (insert.url ?? "");
+  const span = insertSpanSeconds(form.tcIn || null, form.tcOut || null);
 
   function handleSave() {
-    const next = url.trim() === "" ? null : url.trim();
+    const url = form.url.trim() === "" ? null : form.url.trim();
+    const tcIn = form.tcIn.trim() === "" ? null : form.tcIn.trim();
+    const tcOut = form.tcOut.trim() === "" ? null : form.tcOut.trim();
+    const credit = form.credit.trim() === "" ? null : form.credit.trim();
+    const rightsNote = form.rightsNote.trim() === "" ? null : form.rightsNote.trim();
+    const displayDurationSec = form.displayDurationSec.trim() === "" ? null : Number(form.displayDurationSec);
     startTransition(async () => {
-      const res = await updateInsert({ insertId: insert.id, url: next });
+      const res = await updateInsert({
+        insertId: insert.id,
+        url,
+        kind: form.kind as (typeof INSERT_KINDS)[number],
+        tcIn,
+        tcOut,
+        displayDurationSec,
+        credit,
+        rightsNote,
+      });
       if (!res.ok) {
         toast.error(res.message);
         return;
       }
-      toast.success("URL de l'insert enregistrée.");
-      // Une URL corrigée à la main n'a jamais été vérifiée — même remise à zéro que
-      // updateBeatInsertCore (lib/video/persist.ts) côté serveur, reflétée ici sans aller
-      // recharger la ligne.
-      onSaved({ id: insert.id, url: next, linkStatus: "non_verifie" });
+      toast.success("Insert enregistré.");
+      onSaved({
+        id: insert.id,
+        kind: form.kind,
+        url,
+        tcIn,
+        tcOut,
+        displayDurationSec,
+        credit,
+        rightsNote,
+        // Une URL corrigée à la main n'a jamais été vérifiée — même remise à zéro que
+        // updateBeatInsertCore (lib/video/persist.ts) côté serveur.
+        linkStatus: url !== (insert.url ?? null) ? "non_verifie" : insert.linkStatus,
+      });
     });
   }
 
   return (
-    <li className="space-y-1.5 rounded-md border p-2 text-xs">
+    <li className="space-y-2 rounded-md border p-2 text-xs">
       <div className="flex items-center justify-between gap-2">
-        <Badge variant="outline">{insert.kind}</Badge>
+        <select
+          value={form.kind} disabled={disabled || isPending}
+          onChange={(e) => setForm({ ...form, kind: e.target.value })}
+          aria-label="Nature de l'insert"
+          className="h-8 rounded-md border bg-transparent px-2 text-xs"
+        >
+          {INSERT_KINDS.map((k) => (
+            <option key={k} value={k}>{INSERT_KIND_LABEL[k] ?? k}</option>
+          ))}
+        </select>
         <Badge variant="secondary">{LINK_STATUS_LABEL[insert.linkStatus] ?? insert.linkStatus}</Badge>
       </div>
-      <div className="flex gap-2">
+
+      <div className="space-y-1">
+        <Label htmlFor={`insert-url-${insert.id}`}>URL</Label>
         <Input
-          value={url} disabled={disabled || isPending}
-          onChange={(e) => setUrl(e.target.value)}
+          id={`insert-url-${insert.id}`}
+          value={form.url} disabled={disabled || isPending}
+          onChange={(e) => setForm({ ...form, url: e.target.value })}
           placeholder="https://…"
-          aria-label="URL de l'insert"
           className="font-mono text-xs"
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSave(); } }}
         />
-        <Button type="button" variant="outline" size="sm" disabled={disabled || isPending || !changed} onClick={handleSave}>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label htmlFor={`insert-tc-in-${insert.id}`}>Entrée</Label>
+          <Input
+            id={`insert-tc-in-${insert.id}`}
+            value={form.tcIn} disabled={disabled || isPending}
+            onChange={(e) => setForm({ ...form, tcIn: e.target.value })}
+            placeholder="HH:MM:SS"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`insert-tc-out-${insert.id}`}>Sortie</Label>
+          <Input
+            id={`insert-tc-out-${insert.id}`}
+            value={form.tcOut} disabled={disabled || isPending}
+            onChange={(e) => setForm({ ...form, tcOut: e.target.value })}
+            placeholder="HH:MM:SS"
+          />
+        </div>
+      </div>
+      {span !== null && <p className="text-muted-foreground">Portée : {span} s</p>}
+
+      <div className="space-y-1">
+        <Label htmlFor={`insert-duration-${insert.id}`}>Durée d&apos;affichage (secondes)</Label>
+        <Input
+          id={`insert-duration-${insert.id}`} type="number" min={1}
+          value={form.displayDurationSec} disabled={disabled || isPending}
+          onChange={(e) => setForm({ ...form, displayDurationSec: e.target.value })}
+        />
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor={`insert-credit-${insert.id}`}>Crédit</Label>
+        <Input
+          id={`insert-credit-${insert.id}`}
+          value={form.credit} disabled={disabled || isPending}
+          onChange={(e) => setForm({ ...form, credit: e.target.value })}
+        />
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor={`insert-rights-${insert.id}`}>Droits</Label>
+        <Input
+          id={`insert-rights-${insert.id}`}
+          value={form.rightsNote} disabled={disabled || isPending}
+          onChange={(e) => setForm({ ...form, rightsNote: e.target.value })}
+        />
+      </div>
+
+      {insert.linkCheckedAt && (
+        <p className="text-muted-foreground">Vérifié le {formatDate(insert.linkCheckedAt)}</p>
+      )}
+
+      <div className="flex justify-end">
+        <Button type="button" variant="outline" size="sm" disabled={disabled || isPending} onClick={handleSave}>
           {isPending && <Loader2 className="animate-spin" aria-hidden />}
           Enregistrer
         </Button>
-      </div>
-      {/* Le reste de l'insert reste en lecture : aucune action serveur ne couvre encore
-          l'écriture des timecodes/durée d'affichage/crédit — seule l'URL en a une
-          (updateInsert), au motif exact du spec §6. */}
-      <div className="flex flex-wrap gap-x-3 text-muted-foreground">
-        {insert.tcIn && <span>Entrée : {insert.tcIn}</span>}
-        {insert.tcOut && <span>Sortie : {insert.tcOut}</span>}
-        {insert.displayDurationSec !== null && <span>Durée d&apos;affichage : {insert.displayDurationSec} s</span>}
-        {insert.credit && <span>Crédit : {insert.credit}</span>}
       </div>
     </li>
   );
@@ -116,9 +221,9 @@ function InsertRow({
 
 // Task 12 — panneau latéral d'édition d'un beat. Enregistre via `updateBeat`
 // (lib/actions/video-actions.ts), gardée sur video:"manage". Les inserts (beat.inserts) sont édités
-// URL par URL via `updateInsert` (InsertRow ci-dessus, complément de revue) — les autres champs
-// d'un insert (timecodes, durée d'affichage, crédit) restent en lecture, aucune action serveur ne
-// couvrant encore leur écriture.
+// via leur propre formulaire (`InsertRow` ci-dessus, complet depuis Task 5 du SP3 : nature,
+// timecodes, durée d'affichage, crédit et droits, plus l'URL), chacun avec sa propre mutation
+// locale et son propre appel à `updateInsert`, indépendant du formulaire du beat.
 export function BeatInspector({
   beat, open, onOpenChange, onSaved,
 }: {

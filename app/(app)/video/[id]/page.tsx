@@ -98,6 +98,9 @@ export default async function VideoProjectPage({
       displayDurationSec: ins.displayDurationSec,
       credit: ins.credit,
       linkStatus: ins.linkStatus,
+      rightsNote: ins.rightsNote,
+      r2Key: ins.r2Key,
+      linkCheckedAt: ins.linkCheckedAt,
     })),
     sources: b.sources,
   }));
