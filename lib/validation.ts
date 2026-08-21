@@ -383,14 +383,13 @@ export const updateBeatSchema = z.object({
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 
-// Complément Task 12 (revue), restreint au round de correction 1 (I4) — édition d'une URL d'insert
-// depuis l'inspecteur de beat : les URLs d'images/extraits viennent d'un modèle de langage,
-// fréquemment mortes ou fausses, et l'humain doit pouvoir les corriger à la main. C'était la SEULE
-// décision verrouillée par l'utilisateur (spec §6) ; tcIn/tcOut/displayDurationSec/credit/rightsNote
-// ont été retirés — aucun appelant, aucune UI, aucun test, une validation jamais calibrée. Ils
-// reviendront avec le lot qui les rend éditables. Comme les quatre autres points d'entrée gardés de
-// lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui `url` ne serait contrainte
-// que par le typage TypeScript, effacé au runtime (même motif que reorderBeatsSchema ci-dessus).
+// Édition d'un insert (SP3 « Inserts enrichis ») — patch partiel : seul `insertId` est requis, tous
+// les autres champs sont optionnels et seuls ceux effectivement envoyés sont appliqués
+// (updateBeatInsertCore ne touche pas les autres), même logique que updateBeatSchema ci-dessus.
+// `tcOut` doit suivre `tcIn` quand les deux sont fournis (refine ci-dessous). Comme les autres
+// points d'entrée gardés de lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui
+// les champs ne seraient contraints que par le typage TypeScript, effacé au runtime (même motif que
+// reorderBeatsSchema ci-dessus).
 export const updateInsertSchema = z.object({
   insertId: z.string().uuid(),
   url: z.string().url("URL invalide.").refine((u) => /^https?:\/\//i.test(u), "URL invalide (http/https uniquement).")

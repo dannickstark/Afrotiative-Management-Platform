@@ -92,10 +92,10 @@ export async function updateBeat(
   return { ok: true, ...beat.value };
 }
 
-// Complément Task 12 (revue) — l'humain corrige à la main l'URL d'un insert (spec §6 : « liste des
-// inserts avec URL éditable »). Même garde que le reste de ce fichier ; le cœur DB vit dans
-// updateBeatInsertCore (lib/video/persist.ts), pas ici. Restreint à `url` (round de correction 1,
-// I4) : voir le commentaire de updateInsertSchema (lib/validation.ts).
+// Édition d'un insert (SP3 « Inserts enrichis ») — accepte désormais le patch complet
+// (url/kind/tcIn/tcOut/displayDurationSec/credit/rightsNote, tous optionnels), pas seulement `url` :
+// voir le commentaire de updateInsertSchema (lib/validation.ts). Même garde que le reste de ce
+// fichier ; le cœur DB vit dans updateBeatInsertCore (lib/video/persist.ts), pas ici.
 export async function updateInsert(
   input: unknown,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -221,7 +221,8 @@ export async function verifyProjectLinks(
   projectId: string,
 ): Promise<{ ok: true; counts: { ok: number; mort: number; interdit: number } } | { ok: false; message: string }> {
   await guard();
-  const counts = await verifyProjectLinksCore({ projectId });
+  const res = await refusable(() => verifyProjectLinksCore({ projectId }));
+  if (!res.ok) return res;
   revalidateVideo();
-  return { ok: true, counts };
+  return { ok: true, counts: res.value };
 }
