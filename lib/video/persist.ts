@@ -12,6 +12,8 @@ import { getVideoSettings } from "@/lib/queries/video-settings";
 import {
   SCHEMA_VERSION, type InsertKind, type InsertPayload, type Payload, type VariantPayload,
 } from "@/lib/video/schema";
+import { verifyUrl } from "@/lib/video/link-check";
+import { mapWithConcurrency } from "@/lib/async-pool";
 
 // Cœur DB brut du module vidéo — délibérément SANS "use server" (voir lib/actions/video-actions.ts
 // pour le motif). C'est aussi la SEULE exception à « lib/video/* n'importe jamais @/db » : le
@@ -203,11 +205,10 @@ export async function updateBeatCore(input: {
 // Édition d'un insert (Task 12, complément de revue)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Round de correction 1 (Task 12, I4) : restreint à la SEULE `url`, comme verrouillé par
-// l'utilisateur (spec §6 : « URL éditable »). Les autres colonnes de beat_inserts (tcIn, tcOut,
-// displayDurationSec, credit, rightsNote) n'ont ni appelant, ni UI, ni test, ni validation calibrée
-// — elles reviendront avec le lot qui les rend éditables plutôt que d'être exposées ici sans
-// couverture.
+// Patch partiel sur toutes les colonnes éditables de beat_inserts (spec §6 étendue, SP3) : `url`
+// était la seule exposée au round de correction 1 (Task 12, I4) faute d'appelant/UI/validation pour
+// le reste ; ce lot les rend toutes éditables (tcIn, tcOut, displayDurationSec, credit, rightsNote),
+// chacune en patch partiel — absent = non touché, `null` = vidé.
 export async function updateBeatInsertCore(input: {
   insertId: string;
   url?: string | null;
@@ -278,6 +279,52 @@ export async function updateBeatInsertCore(input: {
     // (même motif que updateBeatCore/reorderBeatsCore) : rend l'aperçu d'import périmé.
     await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, locatedBeat.variantId));
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vérification des liens d'insert (SP3, Task 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getInsertUrlCore(insertId: string): Promise<{ url: string | null } | null> {
+  const [row] = await db.select({ url: beatInserts.url }).from(beatInserts).where(eq(beatInserts.id, insertId));
+  return row ?? null;
+}
+
+export async function setInsertLinkStatusCore(
+  input: { insertId: string; status: "ok" | "mort" | "interdit" },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [loc] = await tx.select({ beatId: beatInserts.beatId }).from(beatInserts).where(eq(beatInserts.id, input.insertId));
+    if (!loc) throw new RefusalError("Insert introuvable.");
+    const [beat] = await tx.select({ variantId: scriptBeats.variantId }).from(scriptBeats).where(eq(scriptBeats.id, loc.beatId));
+    if (!beat) throw new RefusalError("Beat introuvable pour cet insert.");
+    // Verrou de variante pour l'ordre habituel ; PAS de bump locallyEditedAt (rafraîchissement de statut).
+    await tx.select({ id: scriptVariants.id }).from(scriptVariants).where(eq(scriptVariants.id, beat.variantId)).for("update");
+    await tx.update(beatInserts).set({ linkStatus: input.status, linkCheckedAt: new Date(), updatedAt: new Date() })
+      .where(eq(beatInserts.id, input.insertId));
+  });
+}
+
+export async function listProjectInsertsForVerifyCore(projectId: string): Promise<{ id: string; url: string | null }[]> {
+  return db.select({ id: beatInserts.id, url: beatInserts.url })
+    .from(beatInserts)
+    .innerJoin(scriptBeats, eq(scriptBeats.id, beatInserts.beatId))
+    .innerJoin(scriptVariants, eq(scriptVariants.id, scriptBeats.variantId))
+    .where(eq(scriptVariants.projectId, projectId));
+}
+
+export async function verifyProjectLinksCore(
+  input: { projectId: string; fetchImpl?: typeof fetch },
+): Promise<{ ok: number; mort: number; interdit: number }> {
+  const inserts = await listProjectInsertsForVerifyCore(input.projectId);
+  const statuses = await mapWithConcurrency(inserts, 5, async (ins) => {
+    const { status } = await verifyUrl(ins.url, { fetchImpl: input.fetchImpl });
+    await setInsertLinkStatusCore({ insertId: ins.id, status });
+    return status;
+  });
+  const counts = { ok: 0, mort: 0, interdit: 0 };
+  for (const s of statuses) counts[s]++;
+  return counts;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

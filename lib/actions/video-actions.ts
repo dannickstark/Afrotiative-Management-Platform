@@ -9,8 +9,10 @@ import {
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
   prepareImportCore, applyImportCore, revertJournalEntryCore, RefusalError,
+  getInsertUrlCore, setInsertLinkStatusCore, verifyProjectLinksCore,
 } from "@/lib/video/persist";
 import { setProjectCategoryCore } from "@/lib/video/categories-persist";
+import { verifyUrl } from "@/lib/video/link-check";
 import type { Diff, Issue } from "@/lib/video/import";
 
 // Round de correction final : toute écriture revalide AUSSI `/video/[id]`, la page où l'édition a
@@ -180,4 +182,29 @@ export async function setProjectCategory(
   if (!res.ok) return res;
   revalidateVideo();
   return { ok: true };
+}
+
+// Vérification de lien d'insert (SP3, Task 3) : un seul insert (l'utilisateur clique « vérifier »
+// sur une ligne précise) ou tout le projet (bouton global). Même garde "manage" que le reste de ce
+// fichier — c'est le journaliste qui déclenche la vérification de ses propres inserts.
+export async function verifyInsertLink(
+  insertId: string,
+): Promise<{ ok: true; status: "ok" | "mort" | "interdit" } | { ok: false; message: string }> {
+  await guard();
+  const insert = await getInsertUrlCore(insertId);
+  if (!insert) return { ok: false, message: "Insert introuvable." };
+  const { status } = await verifyUrl(insert.url);
+  const res = await refusable(() => setInsertLinkStatusCore({ insertId, status }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, status };
+}
+
+export async function verifyProjectLinks(
+  projectId: string,
+): Promise<{ ok: true; counts: { ok: number; mort: number; interdit: number } } | { ok: false; message: string }> {
+  await guard();
+  const counts = await verifyProjectLinksCore({ projectId });
+  revalidateVideo();
+  return { ok: true, counts };
 }
