@@ -240,9 +240,9 @@ async function transition(projectId: string, to: string): Promise<{ ok: true } |
   revalidateVideo();
   return { ok: true };
 }
-export const markReadyToShoot = (projectId: string) => transition(projectId, "pret_a_tourner");
-export const startShooting = (projectId: string) => transition(projectId, "tourne");
-export const finishShooting = (projectId: string) => transition(projectId, "en_montage");
+export async function markReadyToShoot(projectId: string) { return transition(projectId, "pret_a_tourner"); }
+export async function startShooting(projectId: string) { return transition(projectId, "tourne"); }
+export async function finishShooting(projectId: string) { return transition(projectId, "en_montage"); }
 
 function parseStatus(v: unknown): TakeStatus | null {
   return typeof v === "string" && (TAKE_STATUSES as readonly string[]).includes(v) ? (v as TakeStatus) : null;
