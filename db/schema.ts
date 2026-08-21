@@ -751,6 +751,7 @@ export const scriptBeats = pgTable("script_beats", {
   // « l'humain l'a changé », et un ré-import écrase en silence.
   importedSnapshot: jsonb("imported_snapshot").$type<Record<string, unknown>>(),
   locallyEditedAt: timestamp("locally_edited_at"),
+  montageCheckedAt: timestamp("montage_checked_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [

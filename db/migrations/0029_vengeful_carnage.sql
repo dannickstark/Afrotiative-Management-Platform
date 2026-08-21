@@ -1,0 +1,1 @@
+ALTER TABLE "script_beats" ADD COLUMN "montage_checked_at" timestamp;

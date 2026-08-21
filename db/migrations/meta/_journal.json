@@ -204,6 +204,13 @@
       "when": 1787248557371,
       "tag": "0028_eager_thena",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1787295282509,
+      "tag": "0029_vengeful_carnage",
+      "breakpoints": true
     }
   ]
 }
