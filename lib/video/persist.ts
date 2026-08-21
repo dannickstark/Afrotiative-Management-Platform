@@ -9,7 +9,11 @@ import {
 import { estimateSeconds } from "@/lib/video/duration";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { getVideoSettings } from "@/lib/queries/video-settings";
-import { SCHEMA_VERSION, type InsertPayload, type Payload, type VariantPayload } from "@/lib/video/schema";
+import {
+  SCHEMA_VERSION, type InsertKind, type InsertPayload, type Payload, type VariantPayload,
+} from "@/lib/video/schema";
+import { verifyUrl } from "@/lib/video/link-check";
+import { mapWithConcurrency } from "@/lib/async-pool";
 
 // Cœur DB brut du module vidéo — délibérément SANS "use server" (voir lib/actions/video-actions.ts
 // pour le motif). C'est aussi la SEULE exception à « lib/video/* n'importe jamais @/db » : le
@@ -201,14 +205,19 @@ export async function updateBeatCore(input: {
 // Édition d'un insert (Task 12, complément de revue)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Round de correction 1 (Task 12, I4) : restreint à la SEULE `url`, comme verrouillé par
-// l'utilisateur (spec §6 : « URL éditable »). Les autres colonnes de beat_inserts (tcIn, tcOut,
-// displayDurationSec, credit, rightsNote) n'ont ni appelant, ni UI, ni test, ni validation calibrée
-// — elles reviendront avec le lot qui les rend éditables plutôt que d'être exposées ici sans
-// couverture.
+// Patch partiel sur toutes les colonnes éditables de beat_inserts (spec §6 étendue, SP3) : `url`
+// était la seule exposée au round de correction 1 (Task 12, I4) faute d'appelant/UI/validation pour
+// le reste ; ce lot les rend toutes éditables (tcIn, tcOut, displayDurationSec, credit, rightsNote),
+// chacune en patch partiel — absent = non touché, `null` = vidé.
 export async function updateBeatInsertCore(input: {
   insertId: string;
-  url: string | null;
+  url?: string | null;
+  kind?: InsertKind;
+  tcIn?: string | null;
+  tcOut?: string | null;
+  displayDurationSec?: number | null;
+  credit?: string | null;
+  rightsNote?: string | null;
 }): Promise<void> {
   await db.transaction(async (tx) => {
     // Ordre de verrouillage (round de correction 4, inventaire task-9-report.md) : `script_variants`
@@ -238,8 +247,10 @@ export async function updateBeatInsertCore(input: {
 
     // Une URL corrigée à la main n'a jamais été vérifiée : `linkStatus`/`linkCheckedAt` (posés par
     // un futur vérificateur de liens, hors périmètre ici) mentiraient sur l'URL qui vient de
-    // changer si on les laissait tels quels.
-    const urlChanged = input.url !== current.url;
+    // changer si on les laissait tels quels. `url` est désormais optionnel (patch partiel) : absent
+    // = pas touché, donc pas de reset ; seul un url FOURNI et différent du courant invalide le statut.
+    const urlProvided = input.url !== undefined;
+    const urlChanged = urlProvided && input.url !== current.url;
 
     // script_beats AVANT beat_inserts (ordre ci-dessus) : cette édition d'insert est aussi une
     // édition humaine du beat parent, au même titre qu'updateBeatCore — computeMerge doit savoir
@@ -250,19 +261,70 @@ export async function updateBeatInsertCore(input: {
     }).where(eq(scriptBeats.id, locatedInsert.beatId));
 
     // `r2Key` n'est jamais touché ici : c'est la clé de l'asset rapatrié par le SP2 (upload/miroir
-    // R2), sans rapport avec l'URL source que l'humain corrige à la main. Seule `url` est écrite
-    // (round de correction 1, I4) — tcIn/tcOut/displayDurationSec/credit/rightsNote restent hors
-    // périmètre tant qu'aucune UI ne les édite.
-    await tx.update(beatInserts).set({
-      url: input.url,
-      linkStatus: urlChanged ? "non_verifie" : current.linkStatus,
-      linkCheckedAt: urlChanged ? null : current.linkCheckedAt,
-      updatedAt: new Date(),
-    }).where(eq(beatInserts.id, input.insertId));
+    // R2), sans rapport avec l'URL source que l'humain corrige à la main. Patch partiel : n'écrire
+    // QUE les champs fournis (absent = no-op ; null = vider).
+    const patch: Partial<typeof beatInserts.$inferInsert> = { updatedAt: new Date() };
+    if (urlProvided) patch.url = input.url ?? null;
+    if (input.kind !== undefined) patch.kind = input.kind;
+    if (input.tcIn !== undefined) patch.tcIn = input.tcIn;
+    if (input.tcOut !== undefined) patch.tcOut = input.tcOut;
+    if (input.displayDurationSec !== undefined) patch.displayDurationSec = input.displayDurationSec;
+    if (input.credit !== undefined) patch.credit = input.credit;
+    if (input.rightsNote !== undefined) patch.rightsNote = input.rightsNote;
+    // Seul un changement d'URL invalide la vérification (r2Key jamais touché ici).
+    if (urlChanged) { patch.linkStatus = "non_verifie"; patch.linkCheckedAt = null; }
+
+    await tx.update(beatInserts).set(patch).where(eq(beatInserts.id, input.insertId));
 
     // (même motif que updateBeatCore/reorderBeatsCore) : rend l'aperçu d'import périmé.
     await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, locatedBeat.variantId));
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vérification des liens d'insert (SP3, Task 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getInsertUrlCore(insertId: string): Promise<{ url: string | null } | null> {
+  const [row] = await db.select({ url: beatInserts.url }).from(beatInserts).where(eq(beatInserts.id, insertId));
+  return row ?? null;
+}
+
+export async function setInsertLinkStatusCore(
+  input: { insertId: string; status: "ok" | "mort" | "interdit" },
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [loc] = await tx.select({ beatId: beatInserts.beatId }).from(beatInserts).where(eq(beatInserts.id, input.insertId));
+    if (!loc) throw new RefusalError("Insert introuvable.");
+    const [beat] = await tx.select({ variantId: scriptBeats.variantId }).from(scriptBeats).where(eq(scriptBeats.id, loc.beatId));
+    if (!beat) throw new RefusalError("Beat introuvable pour cet insert.");
+    // Verrou de variante pour l'ordre habituel ; PAS de bump locallyEditedAt (rafraîchissement de statut).
+    await tx.select({ id: scriptVariants.id }).from(scriptVariants).where(eq(scriptVariants.id, beat.variantId)).for("update");
+    await tx.update(beatInserts).set({ linkStatus: input.status, linkCheckedAt: new Date(), updatedAt: new Date() })
+      .where(eq(beatInserts.id, input.insertId));
+  });
+}
+
+export async function listProjectInsertsForVerifyCore(projectId: string): Promise<{ id: string; url: string | null }[]> {
+  return db.select({ id: beatInserts.id, url: beatInserts.url })
+    .from(beatInserts)
+    .innerJoin(scriptBeats, eq(scriptBeats.id, beatInserts.beatId))
+    .innerJoin(scriptVariants, eq(scriptVariants.id, scriptBeats.variantId))
+    .where(eq(scriptVariants.projectId, projectId));
+}
+
+export async function verifyProjectLinksCore(
+  input: { projectId: string; fetchImpl?: typeof fetch },
+): Promise<{ ok: number; mort: number; interdit: number }> {
+  const inserts = await listProjectInsertsForVerifyCore(input.projectId);
+  const statuses = await mapWithConcurrency(inserts, 5, async (ins) => {
+    const { status } = await verifyUrl(ins.url, { fetchImpl: input.fetchImpl });
+    await setInsertLinkStatusCore({ insertId: ins.id, status });
+    return status;
+  });
+  const counts = { ok: 0, mort: 0, interdit: 0 };
+  for (const s of statuses) counts[s]++;
+  return counts;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -25,6 +25,9 @@ export type InsertView = {
   displayDurationSec: number | null;
   credit: string | null;
   linkStatus: string;
+  rightsNote: string | null;
+  r2Key: string | null;
+  linkCheckedAt: Date | string | null;
 };
 
 export type BeatView = {

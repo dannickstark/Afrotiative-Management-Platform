@@ -9,8 +9,11 @@ import {
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
   prepareImportCore, applyImportCore, revertJournalEntryCore, RefusalError,
+  getInsertUrlCore, setInsertLinkStatusCore, verifyProjectLinksCore,
 } from "@/lib/video/persist";
 import { setProjectCategoryCore } from "@/lib/video/categories-persist";
+import { verifyUrl } from "@/lib/video/link-check";
+import { uploadInsertMediaCore } from "@/lib/video/insert-upload-core";
 import type { Diff, Issue } from "@/lib/video/import";
 
 // Round de correction final : toute écriture revalide AUSSI `/video/[id]`, la page où l'édition a
@@ -89,10 +92,10 @@ export async function updateBeat(
   return { ok: true, ...beat.value };
 }
 
-// Complément Task 12 (revue) — l'humain corrige à la main l'URL d'un insert (spec §6 : « liste des
-// inserts avec URL éditable »). Même garde que le reste de ce fichier ; le cœur DB vit dans
-// updateBeatInsertCore (lib/video/persist.ts), pas ici. Restreint à `url` (round de correction 1,
-// I4) : voir le commentaire de updateInsertSchema (lib/validation.ts).
+// Édition d'un insert (SP3 « Inserts enrichis ») — accepte désormais le patch complet
+// (url/kind/tcIn/tcOut/displayDurationSec/credit/rightsNote, tous optionnels), pas seulement `url` :
+// voir le commentaire de updateInsertSchema (lib/validation.ts). Même garde que le reste de ce
+// fichier ; le cœur DB vit dans updateBeatInsertCore (lib/video/persist.ts), pas ici.
 export async function updateInsert(
   input: unknown,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -180,4 +183,46 @@ export async function setProjectCategory(
   if (!res.ok) return res;
   revalidateVideo();
   return { ok: true };
+}
+
+// Vérification de lien d'insert (SP3, Task 3) : un seul insert (l'utilisateur clique « vérifier »
+// sur une ligne précise) ou tout le projet (bouton global). Même garde "manage" que le reste de ce
+// fichier — c'est le journaliste qui déclenche la vérification de ses propres inserts.
+export async function verifyInsertLink(
+  insertId: string,
+): Promise<{ ok: true; status: "ok" | "mort" | "interdit" } | { ok: false; message: string }> {
+  await guard();
+  const insert = await getInsertUrlCore(insertId);
+  if (!insert) return { ok: false, message: "Insert introuvable." };
+  const { status } = await verifyUrl(insert.url);
+  const res = await refusable(() => setInsertLinkStatusCore({ insertId, status }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, status };
+}
+
+// Upload R2 d'un média d'insert (SP3, Task 4) : le journaliste dépose une image/un graphique pour
+// remplacer une url externe fragile par un asset hébergé par nous. Même garde "manage" que le reste
+// de ce fichier ; le cœur DB brut vit dans uploadInsertMediaCore (lib/video/insert-upload-core.ts).
+export async function uploadInsertMedia(
+  formData: FormData,
+): Promise<{ ok: true; url: string } | { ok: false; message: string }> {
+  await guard();
+  const insertId = formData.get("insertId");
+  const file = formData.get("file");
+  if (typeof insertId !== "string" || !(file instanceof File)) return { ok: false, message: "Requête invalide." };
+  const res = await refusable(() => uploadInsertMediaCore({ insertId, file }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, url: res.value.url };
+}
+
+export async function verifyProjectLinks(
+  projectId: string,
+): Promise<{ ok: true; counts: { ok: number; mort: number; interdit: number } } | { ok: false; message: string }> {
+  await guard();
+  const res = await refusable(() => verifyProjectLinksCore({ projectId }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, counts: res.value };
 }

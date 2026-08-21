@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { Cron } from "croner";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
+import { TC_RE, INSERT_KINDS } from "@/lib/video/schema";
+import { insertSpanSeconds } from "@/lib/video/timecode";
 
 export const saveDraftSchema = z.object({
   id: z.string().uuid(),
@@ -381,23 +383,27 @@ export const updateBeatSchema = z.object({
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 
-// Complément Task 12 (revue), restreint au round de correction 1 (I4) — édition d'une URL d'insert
-// depuis l'inspecteur de beat : les URLs d'images/extraits viennent d'un modèle de langage,
-// fréquemment mortes ou fausses, et l'humain doit pouvoir les corriger à la main. C'était la SEULE
-// décision verrouillée par l'utilisateur (spec §6) ; tcIn/tcOut/displayDurationSec/credit/rightsNote
-// ont été retirés — aucun appelant, aucune UI, aucun test, une validation jamais calibrée. Ils
-// reviendront avec le lot qui les rend éditables. Comme les quatre autres points d'entrée gardés de
-// lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui `url` ne serait contrainte
-// que par le typage TypeScript, effacé au runtime (même motif que reorderBeatsSchema ci-dessus).
+// Édition d'un insert (SP3 « Inserts enrichis ») — patch partiel : seul `insertId` est requis, tous
+// les autres champs sont optionnels et seuls ceux effectivement envoyés sont appliqués
+// (updateBeatInsertCore ne touche pas les autres), même logique que updateBeatSchema ci-dessus.
+// `tcOut` doit suivre `tcIn` quand les deux sont fournis (refine ci-dessous). Comme les autres
+// points d'entrée gardés de lib/actions/video-actions.ts, ce schéma n'est PAS optionnel — sans lui
+// les champs ne seraient contraints que par le typage TypeScript, effacé au runtime (même motif que
+// reorderBeatsSchema ci-dessus).
 export const updateInsertSchema = z.object({
   insertId: z.string().uuid(),
-  // `.url()` seul accepterait n'importe quel schéma (ftp:, javascript:…) — la contrainte http/https
-  // vient du refine, pas de `.url()`. `null` reste permis (retirer l'URL est un choix humain
-  // légitime) ; seule la clé elle-même n'est pas optionnelle, contrairement à updateBeatSchema où
-  // chaque champ est un no-op s'il est omis — ici c'est le SEUL champ, l'omettre n'aurait aucun sens.
   url: z.string().url("URL invalide.").refine((u) => /^https?:\/\//i.test(u), "URL invalide (http/https uniquement).")
-    .max(2048).nullable(),
-});
+    .max(2048).nullable().optional(),
+  kind: z.enum(INSERT_KINDS).optional(),
+  tcIn: z.string().regex(TC_RE, "Timecode invalide (HH:MM:SS).").nullable().optional(),
+  tcOut: z.string().regex(TC_RE, "Timecode invalide (HH:MM:SS).").nullable().optional(),
+  displayDurationSec: z.number().int().min(1).max(600).nullable().optional(),
+  credit: z.string().max(200).nullable().optional(),
+  rightsNote: z.string().max(500).nullable().optional(),
+}).refine(
+  (v) => !(v.tcIn && v.tcOut) || insertSpanSeconds(v.tcIn, v.tcOut) !== null,
+  { message: "Le point de sortie doit suivre le point d'entrée.", path: ["tcOut"] },
+);
 export type UpdateInsertInput = z.infer<typeof updateInsertSchema>;
 
 // Round de correction 2 (Task 9, I9) : prepareImport/applyImport/reorderBeats/revertJournalEntry
