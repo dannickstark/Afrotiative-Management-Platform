@@ -1,0 +1,1 @@
+ALTER TABLE "script_beats" ADD COLUMN "selected_take_id" uuid;

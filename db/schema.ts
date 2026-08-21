@@ -752,6 +752,10 @@ export const scriptBeats = pgTable("script_beats", {
   importedSnapshot: jsonb("imported_snapshot").$type<Record<string, unknown>>(),
   locallyEditedAt: timestamp("locally_edited_at"),
   montageCheckedAt: timestamp("montage_checked_at"),
+  // Prise retenue pour ce beat (SP4). Référence LOGIQUE vers beat_takes.id, SANS FK : une FK
+  // beat→prise alors que beat_takes.beatId→script_beats cascade formerait un cycle. Cohérence
+  // assurée par les cœurs (selectTakeCore vérifie l'appartenance ; deleteTakeCore efface).
+  selectedTakeId: uuid("selected_take_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
