@@ -111,6 +111,8 @@ export default async function VideoProjectPage({
       linkCheckedAt: ins.linkCheckedAt,
     })),
     sources: b.sources,
+    speakerId: b.speakerId,
+    answersBeatId: b.answersBeatId,
   }));
 
   // Les variables du brief viennent de `briefVarsFor` (lib/queries/video.ts) — LA même fonction que
@@ -187,7 +189,12 @@ export default async function VideoProjectPage({
               </div>
             )}
             {activeVariant ? (
-              <BeatList beats={beats} targetDurationSec={activeVariant.targetDurationSec} variantId={activeVariant.id} />
+              <BeatList
+                beats={beats}
+                targetDurationSec={activeVariant.targetDurationSec}
+                variantId={activeVariant.id}
+                speakers={speakers.map((s) => ({ id: s.id, name: s.name }))}
+              />
             ) : (
               <p className="text-sm text-muted-foreground">Aucune variante pour ce projet.</p>
             )}

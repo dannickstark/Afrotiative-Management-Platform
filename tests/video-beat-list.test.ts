@@ -9,7 +9,11 @@ function beat(over: Partial<BeatView> = {}): BeatView {
     id: "u1", externalId: "b-01-accroche", position: 0, kind: "narration",
     spokenText: "<p>En 2019, cette PME vendait dans deux marchés.</p>",
     directionNote: "Plan serré", screenText: null, transitionIn: null, transitionOut: "cut sec",
-    estimatedDurationSec: 4, durationOverrideSec: null, locallyEdited: false, inserts: [], ...over,
+    estimatedDurationSec: 4, durationOverrideSec: null, locallyEdited: false, inserts: [],
+    // Task 5 (SP5, mode interview) : BeatView gagne speakerId/answersBeatId — null par défaut, un
+    // beat narratif hors mode interview n'a ni l'un ni l'autre.
+    speakerId: null, answersBeatId: null,
+    ...over,
   };
 }
 

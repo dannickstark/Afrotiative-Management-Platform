@@ -45,6 +45,11 @@ export type BeatView = {
   locallyEdited: boolean;
   inserts: InsertView[];
   sources?: string[];
+  // Task 5 (SP5, mode interview) : le locuteur du beat, et — pour un beat `reponse` — la question
+  // à laquelle il répond. Tous deux nullables : un beat narratif n'a ni l'un ni l'autre, et un
+  // beat interview peut rester non attribué (voir beat-inspector.tsx, select « Locuteur »).
+  speakerId: string | null;
+  answersBeatId: string | null;
 };
 
 // Round de correction 1 (Task 12, I2) : durée AFFICHÉE = durée STOCKÉE (`durationOverrideSec ??
@@ -76,7 +81,7 @@ export const KIND_LABEL: Record<string, string> = {
 };
 
 export function BeatList({
-  beats, targetDurationSec, variantId,
+  beats, targetDurationSec, variantId, speakers = [],
 }: {
   beats: BeatView[];
   targetDurationSec: number | null;
@@ -85,6 +90,10 @@ export function BeatList({
   // variantId est toujours fourni : sans lui, reorderBeats n'a pas de variante à cibler et le
   // glisser-déposer reste visuel-seul (voir handleDrop ci-dessous).
   variantId?: string;
+  // Task 5 (SP5) : la liste des intervenants du projet, pour le select « Locuteur » de
+  // BeatInspector. Défaut `[]` — les tests existants (tests/video-beat-list.test.ts) instancient
+  // BeatList sans cette prop, et un projet hors mode interview n'a de toute façon aucun intervenant.
+  speakers?: { id: string; name: string }[];
 }) {
   const [items, setItems] = useState(beats);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -99,6 +108,12 @@ export function BeatList({
 
   const totalSec = items.reduce((sum, b) => sum + storedSeconds(b), 0);
   const selected = items.find((b) => b.id === selectedId) ?? null;
+  // Les beats `question` de LA MÊME variante (`items`, pas `beats` — un réordonnancement en vol ne
+  // doit pas désynchroniser les positions affichées dans le select « Répond à ») — voir
+  // beat-inspector.tsx.
+  const questionBeats = items
+    .filter((b) => b.kind === "question")
+    .map((b) => ({ id: b.id, position: b.position, spokenText: b.spokenText }));
 
   function handleDrop(targetIndex: number) {
     if (!dragId) return;
@@ -226,6 +241,8 @@ export function BeatList({
         open={selected !== null}
         onOpenChange={(open) => { if (!open) setSelectedId(null); }}
         onSaved={handleSaved}
+        speakers={speakers}
+        questionBeats={questionBeats}
       />
     </div>
   );
