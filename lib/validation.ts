@@ -396,6 +396,8 @@ export const updateBeatSchema = z.object({
   transitionOut: z.string().max(120).nullable().optional(),
   durationOverrideSec: z.number().int().min(0).nullable().optional(),
   sources: z.array(z.string().url()).max(20).optional(),
+  speakerId: z.string().uuid().nullable().optional(),
+  answersBeatId: z.string().uuid().nullable().optional(),
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 
