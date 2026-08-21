@@ -17,7 +17,7 @@ import {
   addTake, updateTake, deleteTake, selectTake,
   markReadyToShoot, startShooting, finishShooting,
 } from "@/lib/actions/video-actions";
-import { TAKE_STATUS_LABEL } from "@/lib/video/labels";
+import { TAKE_STATUS_LABEL, VIDEO_STATUS_LABEL } from "@/lib/video/labels";
 import type { TournageBeat } from "@/lib/video/takes-core";
 
 type LogStatus = "bonne" | "mauvaise" | "a_revoir";
@@ -53,7 +53,7 @@ function StatusHeader({ projectId, status }: { projectId: string; status: string
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">Statut :</span>
-        <Badge variant="outline">{status}</Badge>
+        <Badge variant="outline">{VIDEO_STATUS_LABEL[status] ?? status}</Badge>
       </div>
       {button && (
         <Button type="button" size="lg" disabled={isPending} onClick={() => run(button!.action)}>
