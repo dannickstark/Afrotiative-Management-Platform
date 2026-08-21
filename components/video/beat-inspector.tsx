@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, TriangleAlert, X } from "lucide-react";
 import {
@@ -10,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { RichEditor } from "@/components/article/rich-editor";
-import { updateBeat, updateInsert } from "@/lib/actions/video-actions";
+import { updateBeat, updateInsert, verifyInsertLink, uploadInsertMedia } from "@/lib/actions/video-actions";
 import { isBreathRisk } from "@/lib/video/duration";
 import { insertSpanSeconds } from "@/lib/video/timecode";
 import { INSERT_KINDS } from "@/lib/video/schema";
@@ -83,6 +84,8 @@ export function InsertRow({
 }) {
   const [form, setForm] = useState<InsertFormState>(() => toInsertForm(insert));
   const [isPending, startTransition] = useTransition();
+  const [file, setFile] = useState<File | null>(null);
+  const router = useRouter();
 
   // Resynchronise si l'insert change de source (autre onglet, autre session) — même motif que
   // BeatInspector#toForm.
@@ -131,6 +134,47 @@ export function InsertRow({
         linkStatus: urlChanged ? "non_verifie" : insert.linkStatus,
         linkCheckedAt: urlChanged ? null : insert.linkCheckedAt,
       });
+      // Task 6 (SP3) — une url fraîchement corrigée à la main mérite d'être vérifiée tout de suite
+      // plutôt que d'attendre un clic manuel ou le bouton « Vérifier tous les liens » du projet :
+      // enchaînement découplé de la transition d'enregistrement (pas de blocage du bouton
+      // Enregistrer si la vérification est lente), url non nulle seulement — pas de vérification à
+      // déclencher si l'humain vient de vider le champ.
+      if (urlChanged && url !== null) {
+        void verifyInsertLink(insert.id).then((verifyRes) => {
+          if (!verifyRes.ok) return;
+          onSaved({ id: insert.id, linkStatus: verifyRes.status, linkCheckedAt: new Date() });
+        });
+      }
+    });
+  }
+
+  function handleVerify() {
+    startTransition(async () => {
+      const res = await verifyInsertLink(insert.id);
+      if (!res.ok) {
+        toast.error(res.message);
+        return;
+      }
+      toast.success(`Lien vérifié : ${LINK_STATUS_LABEL[res.status] ?? res.status}`);
+      onSaved({ id: insert.id, linkStatus: res.status, linkCheckedAt: new Date() });
+    });
+  }
+
+  function handleUpload() {
+    if (!file) return;
+    const formData = new FormData();
+    formData.set("insertId", insert.id);
+    formData.set("file", file);
+    startTransition(async () => {
+      const res = await uploadInsertMedia(formData);
+      if (!res.ok) {
+        toast.error(res.message);
+        return;
+      }
+      toast.success("Média téléversé.");
+      setFile(null);
+      onSaved({ id: insert.id, url: res.url, linkStatus: "ok", linkCheckedAt: new Date() });
+      router.refresh();
     });
   }
 
@@ -214,7 +258,38 @@ export function InsertRow({
         <p className="text-muted-foreground">Vérifié le {formatDate(insert.linkCheckedAt)}</p>
       )}
 
-      <div className="flex justify-end">
+      {(insert.kind === "image" || insert.kind === "graphique") && (
+        <div className="space-y-1">
+          <Label>Média</Label>
+          {insert.url && (
+            // eslint-disable-next-line @next/next/no-img-element -- vignette d'un média distant/R2, pas un asset optimisable par next/image
+            <img src={insert.url} alt="" className="max-h-24 rounded-md border object-contain" />
+          )}
+          <div className="flex gap-2">
+            <input
+              type="file" accept="image/*" disabled={disabled || isPending}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="text-xs"
+            />
+            <Button
+              type="button" variant="outline" size="sm"
+              disabled={disabled || isPending || !file}
+              onClick={handleUpload}
+            >
+              {isPending && <Loader2 className="animate-spin" aria-hidden />}
+              Téléverser
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2">
+        {insert.url && (
+          <Button type="button" variant="ghost" size="sm" disabled={disabled || isPending} onClick={handleVerify}>
+            {isPending && <Loader2 className="animate-spin" aria-hidden />}
+            Vérifier le lien
+          </Button>
+        )}
         <Button type="button" variant="outline" size="sm" disabled={disabled || isPending} onClick={handleSave}>
           {isPending && <Loader2 className="animate-spin" aria-hidden />}
           Enregistrer

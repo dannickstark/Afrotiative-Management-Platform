@@ -1,8 +1,20 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, mock } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { InsertRow } from "@/components/video/beat-inspector";
 import type { InsertView } from "@/components/video/beat-list";
+
+// InsertRow appelle désormais useRouter() (next/navigation) pour router.refresh() après un upload
+// (Task 6, SP3) — sans ce mock, renderToStaticMarkup échoue avec « invariant expected app router to
+// be mounted ». Même recette que tests/montage-share-panel.test.ts : posée AVANT le premier import
+// du composant, donc import dynamique et non statique (les imports statiques sont hissés).
+const realNavigation = await import("next/navigation");
+mock.module("next/navigation", () => ({
+  ...realNavigation,
+  useRouter: () => ({
+    push: () => {}, refresh: () => {}, replace: () => {}, back: () => {}, forward: () => {}, prefetch: () => {},
+  }),
+}));
+const { InsertRow } = await import("@/components/video/beat-inspector");
 
 const insert: InsertView = {
   id: "6f1c2f7e-0000-4000-8000-000000000001",

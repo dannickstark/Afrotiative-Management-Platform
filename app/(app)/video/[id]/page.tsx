@@ -12,6 +12,7 @@ import { BriefPanel } from "@/components/video/brief-panel";
 import { ProjectCategorySelect } from "@/components/video/project-category-select";
 import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-categories";
 import { BeatList, type BeatView } from "@/components/video/beat-list";
+import { VerifyAllLinks } from "@/components/video/verify-all-links";
 import { ImportPanel } from "@/components/video/import-panel";
 import { JournalHistory, type JournalEntryView } from "@/components/video/journal-history";
 import { ConducteurView } from "@/components/video/conducteur-view";
@@ -161,6 +162,9 @@ export default async function VideoProjectPage({
         </TabsContent>
         <TabsContent value="ecriture">
           <div className="space-y-4">
+            <div className="flex justify-end">
+              <VerifyAllLinks projectId={project.id} />
+            </div>
             {project.variants.length > 1 && (
               <div className="flex flex-wrap gap-2">
                 {project.variants.map((v) => (
