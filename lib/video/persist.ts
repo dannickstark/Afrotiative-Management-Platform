@@ -1115,6 +1115,12 @@ export async function setProjectStatusCore(input: { projectId: string; to: strin
       .where(eq(videoProjects.id, input.projectId)).for("update");
     if (!proj) throw new RefusalError("Projet introuvable.");
     if (!estTransitionAutorisee(proj.status, input.to)) throw new RefusalError("Transition de statut non autorisée.");
+    if (input.to === "en_montage") {
+      const [pending] = await tx.select({ id: interviewSpeakers.id }).from(interviewSpeakers)
+        .where(and(eq(interviewSpeakers.projectId, input.projectId), eq(interviewSpeakers.consentGiven, false)))
+        .limit(1);
+      if (pending) throw new RefusalError("Consentement manquant : un intervenant n'a pas donné son consentement.");
+    }
     await tx.update(videoProjects)
       .set({ status: input.to as (typeof videoProjects.$inferInsert)["status"], updatedAt: new Date() })
       .where(eq(videoProjects.id, input.projectId));
