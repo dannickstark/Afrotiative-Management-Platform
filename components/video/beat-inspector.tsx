@@ -34,6 +34,11 @@ type FormState = {
   transitionOut: string;
   durationOverride: string; // champ texte : "" = pas de forçage, "0" = forçage légitime à zéro
   sources: string[];
+  // Task 5 (SP5) — même convention "" = aucun que les autres champs texte ci-dessus : le select
+  // natif ne peut pas porter `null` comme valeur d'option, donc "" représente « Aucun »/« Aucune »
+  // et se convertit en `null` à l'enregistrement (voir handleSave).
+  speakerId: string;
+  answersBeatId: string;
 };
 
 function toForm(beat: BeatView): FormState {
@@ -45,6 +50,8 @@ function toForm(beat: BeatView): FormState {
     transitionOut: beat.transitionOut ?? "",
     durationOverride: beat.durationOverrideSec === null ? "" : String(beat.durationOverrideSec),
     sources: beat.sources ?? [],
+    speakerId: beat.speakerId ?? "",
+    answersBeatId: beat.answersBeatId ?? "",
   };
 }
 
@@ -305,12 +312,16 @@ export function InsertRow({
 // timecodes, durée d'affichage, crédit et droits, plus l'URL), chacun avec sa propre mutation
 // locale et son propre appel à `updateInsert`, indépendant du formulaire du beat.
 export function BeatInspector({
-  beat, open, onOpenChange, onSaved,
+  beat, open, onOpenChange, onSaved, speakers = [], questionBeats = [],
 }: {
   beat: BeatView | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (patch: Partial<BeatView> & { id: string }) => void;
+  // Task 5 (SP5) — défauts `[]` : les tests existants (ex. tests/beat-inspector.test.ts s'ils
+  // existent) et tout appelant hors mode interview instancient BeatInspector sans ces props.
+  speakers?: { id: string; name: string }[];
+  questionBeats?: { id: string; position: number; spokenText: string }[];
 }) {
   const [form, setForm] = useState<FormState | null>(null);
   const [inserts, setInserts] = useState<InsertView[]>([]);
@@ -367,6 +378,8 @@ export function BeatInspector({
     const transitionIn = form.transitionIn.trim() === "" ? null : form.transitionIn;
     const transitionOut = form.transitionOut.trim() === "" ? null : form.transitionOut;
     const durationOverrideSec = form.durationOverride.trim() === "" ? null : Number(form.durationOverride);
+    const speakerId = form.speakerId === "" ? null : form.speakerId;
+    const answersBeatId = form.answersBeatId === "" ? null : form.answersBeatId;
     startTransition(async () => {
       const res = await updateBeat({
         beatId: beat.id,
@@ -377,6 +390,8 @@ export function BeatInspector({
         transitionOut,
         durationOverrideSec,
         sources: form.sources,
+        speakerId,
+        answersBeatId,
       });
       if (!res.ok) {
         toast.error(res.message);
@@ -401,6 +416,8 @@ export function BeatInspector({
         durationOverrideSec: res.durationOverrideSec,
         estimatedDurationSec: res.estimatedDurationSec,
         sources: form.sources,
+        speakerId,
+        answersBeatId,
       });
     });
   }
@@ -447,6 +464,44 @@ export function BeatInspector({
               </div>
             )}
           </div>
+
+          {/* Task 5 (SP5, mode interview) — `<select>` natif, même motif qu'InsertRow ci-dessus :
+              le `<Select>` shadcn/Radix ne rend pas ses options sous `renderToStaticMarkup`
+              (portail/JS requis), alors que le test pur (tests/beat-inspector-interview.test.ts)
+              doit pouvoir lire les libellés dans le HTML statique. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="beat-speaker">Locuteur</Label>
+            <select
+              id="beat-speaker"
+              value={form.speakerId} disabled={isPending}
+              onChange={(e) => setForm({ ...form, speakerId: e.target.value })}
+              className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+            >
+              <option value="">Aucun</option>
+              {speakers.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {beat.kind === "reponse" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="beat-answers">Répond à</Label>
+              <select
+                id="beat-answers"
+                value={form.answersBeatId} disabled={isPending}
+                onChange={(e) => setForm({ ...form, answersBeatId: e.target.value })}
+                className="h-9 w-full rounded-md border bg-transparent px-2 text-sm"
+              >
+                <option value="">Aucune</option>
+                {questionBeats.map((q) => (
+                  <option key={q.id} value={q.id}>
+                    {`#${q.position + 1} — ${q.spokenText.replace(/<[^>]+>/g, "").slice(0, 60)}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="beat-direction-note">Note de réalisation</Label>

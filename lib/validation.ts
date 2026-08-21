@@ -369,6 +369,22 @@ export const setProjectCategorySchema = z.object({
   categoryId: z.string().uuid("Identifiant invalide").nullable(),
 });
 
+export const createSpeakerSchema = z.object({
+  projectId: z.string().uuid(),
+  name: z.string().min(1, "Nom requis").max(120),
+  role: z.string().max(120).nullable().optional(),
+});
+
+export const updateSpeakerSchema = z.object({
+  speakerId: z.string().uuid(),
+  name: z.string().min(1, "Nom requis").max(120).optional(),
+  role: z.string().max(120).nullable().optional(),
+  consentGiven: z.boolean().optional(),
+  consentNote: z.string().max(1000).nullable().optional(),
+});
+
+export const speakerIdSchema = z.object({ speakerId: z.string().uuid("Identifiant invalide") });
+
 // Édition d'un beat depuis l'écran de montage — tous les champs de contenu sont optionnels : seuls
 // ceux effectivement modifiés sont envoyés (updateBeatCore ne touche pas les autres).
 export const updateBeatSchema = z.object({
@@ -380,6 +396,8 @@ export const updateBeatSchema = z.object({
   transitionOut: z.string().max(120).nullable().optional(),
   durationOverrideSec: z.number().int().min(0).nullable().optional(),
   sources: z.array(z.string().url()).max(20).optional(),
+  speakerId: z.string().uuid().nullable().optional(),
+  answersBeatId: z.string().uuid().nullable().optional(),
 });
 export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 

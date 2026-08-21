@@ -1,5 +1,6 @@
 import {
   db, videoProjects, scriptVariants, scriptBeats, beatInserts, scriptJournal, scriptJournalSource,
+  interviewSpeakers,
 } from "@/db";
 import { and, asc, eq, gt, inArray, isNull, ne } from "drizzle-orm";
 import {
@@ -117,6 +118,8 @@ export async function updateBeatCore(input: {
   transitionOut?: string | null;
   durationOverrideSec?: number | null;
   sources?: string[];
+  speakerId?: string | null;
+  answersBeatId?: string | null;
 }): Promise<{ spokenText: string; estimatedDurationSec: number; durationOverrideSec: number | null }> {
   // (round de correction 3, N2) : `getVideoSettings()` passe par le `db` global, donc une
   // CONNEXION SÉPARÉE de celle de la transaction ci-dessous (laquelle emprunte SA propre connexion
@@ -153,6 +156,30 @@ export async function updateBeatCore(input: {
     const [current] = await tx.select().from(scriptBeats).where(eq(scriptBeats.id, input.beatId));
     if (!current) throw new RefusalError("Beat introuvable.");
 
+    // Assignation d'un locuteur : l'intervenant doit appartenir au projet du beat.
+    if (input.speakerId !== undefined && input.speakerId !== null) {
+      const [proj] = await tx.select({ projectId: scriptVariants.projectId }).from(scriptVariants)
+        .where(eq(scriptVariants.id, current.variantId));
+      const [sp] = await tx.select({ projectId: interviewSpeakers.projectId }).from(interviewSpeakers)
+        .where(eq(interviewSpeakers.id, input.speakerId));
+      if (!sp || !proj || sp.projectId !== proj.projectId) throw new RefusalError("Intervenant absent de ce projet.");
+    }
+    // Mapping Q/R strict : réponse → question de la même variante, jamais soi-même.
+    // La cible peut DANGLER (question supprimée, ex. via fusion d'import) — les lectures le
+    // tolèrent (spec). On ne re-valide donc que si la valeur ENTRANTE change réellement : une
+    // valeur inchangée (même pendante) passe telle quelle, sinon toute sauvegarde ultérieure de ce
+    // beat serait refusée à jamais dès que sa cible disparaît, gelant le beat. Une NOUVELLE valeur
+    // reste intégralement validée ci-dessous.
+    if (input.answersBeatId !== undefined && input.answersBeatId !== null && input.answersBeatId !== current.answersBeatId) {
+      if (current.kind !== "reponse") throw new RefusalError("Seul un beat « réponse » peut répondre à une question.");
+      if (input.answersBeatId === input.beatId) throw new RefusalError("Un beat ne peut pas se répondre à lui-même.");
+      const [target] = await tx.select({ kind: scriptBeats.kind, variantId: scriptBeats.variantId }).from(scriptBeats)
+        .where(eq(scriptBeats.id, input.answersBeatId));
+      if (!target || target.kind !== "question" || target.variantId !== current.variantId) {
+        throw new RefusalError("La cible doit être une question de la même variante.");
+      }
+    }
+
     // `spokenText` vient de l'éditeur riche du monteur — même assainisseur que le corps d'article
     // (spec §8) : on ne fait jamais confiance à du HTML posé côté client sans repasser par DOMPurify.
     const spokenText = input.spokenText !== undefined ? sanitizeArticleHtml(input.spokenText) : current.spokenText;
@@ -179,6 +206,8 @@ export async function updateBeatCore(input: {
       transitionIn: input.transitionIn !== undefined ? input.transitionIn : current.transitionIn,
       transitionOut: input.transitionOut !== undefined ? input.transitionOut : current.transitionOut,
       sources: input.sources !== undefined ? input.sources : current.sources,
+      speakerId: input.speakerId !== undefined ? input.speakerId : current.speakerId,
+      answersBeatId: input.answersBeatId !== undefined ? input.answersBeatId : current.answersBeatId,
       durationOverrideSec,
       estimatedDurationSec,
       // Une édition humaine explicite : ce beat s'écarte désormais potentiellement de son dernier
@@ -1091,6 +1120,12 @@ export async function setProjectStatusCore(input: { projectId: string; to: strin
       .where(eq(videoProjects.id, input.projectId)).for("update");
     if (!proj) throw new RefusalError("Projet introuvable.");
     if (!estTransitionAutorisee(proj.status, input.to)) throw new RefusalError("Transition de statut non autorisée.");
+    if (input.to === "en_montage") {
+      const [pending] = await tx.select({ id: interviewSpeakers.id }).from(interviewSpeakers)
+        .where(and(eq(interviewSpeakers.projectId, input.projectId), eq(interviewSpeakers.consentGiven, false)))
+        .limit(1);
+      if (pending) throw new RefusalError("Consentement manquant : un intervenant n'a pas donné son consentement.");
+    }
     await tx.update(videoProjects)
       .set({ status: input.to as (typeof videoProjects.$inferInsert)["status"], updatedAt: new Date() })
       .where(eq(videoProjects.id, input.projectId));

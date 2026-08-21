@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import {
   createVideoProjectSchema, updateBeatSchema, updateInsertSchema, prepareImportSchema, applyImportSchema,
   reorderBeatsSchema, revertJournalEntrySchema, setProjectCategorySchema,
+  createSpeakerSchema, updateSpeakerSchema, speakerIdSchema,
 } from "@/lib/validation";
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
@@ -12,6 +13,7 @@ import {
   getInsertUrlCore, setInsertLinkStatusCore, verifyProjectLinksCore, setProjectStatusCore,
 } from "@/lib/video/persist";
 import { setProjectCategoryCore } from "@/lib/video/categories-persist";
+import { createSpeakerCore, updateSpeakerCore, deleteSpeakerCore } from "@/lib/video/speakers-persist";
 import { verifyUrl } from "@/lib/video/link-check";
 import { uploadInsertMediaCore } from "@/lib/video/insert-upload-core";
 import { addTakeCore, updateTakeCore, deleteTakeCore, selectTakeCore } from "@/lib/video/takes-core";
@@ -287,6 +289,38 @@ export async function selectTake(
   await guard();
   if (typeof input?.beatId !== "string") return { ok: false, message: "Requête invalide." };
   const res = await refusable(() => selectTakeCore({ beatId: input.beatId, takeId: input.takeId }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
+}
+
+// Intervenants (mode interview, SP5) — mêmes motifs que setProjectCategory : parse Zod, cœur
+// refusable, revalidation, réponse `{ ok, message }` française.
+export async function createSpeaker(input: unknown): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+  await guard();
+  const parsed = createSpeakerSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+  const res = await refusable(() => createSpeakerCore({ projectId: parsed.data.projectId, name: parsed.data.name, role: parsed.data.role ?? null }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, id: res.value };
+}
+
+export async function updateSpeaker(input: unknown): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  const parsed = updateSpeakerSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+  const res = await refusable(() => updateSpeakerCore(parsed.data));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
+}
+
+export async function deleteSpeaker(input: unknown): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  const parsed = speakerIdSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+  const res = await refusable(() => deleteSpeakerCore({ speakerId: parsed.data.speakerId }));
   if (!res.ok) return res;
   revalidateVideo();
   return { ok: true };
