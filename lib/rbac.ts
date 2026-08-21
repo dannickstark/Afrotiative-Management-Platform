@@ -21,7 +21,7 @@ const MATRIX: Matrix = {
     // "configure" (round de correction 1, Task 8) gates /settings/video (SETTINGS_CHILDREN
     // restricts that entry to admin/editor) — kept distinct from "manage", which the journalist
     // also holds for editing video projects/beats in later tasks.
-    video: ["read", "manage", "configure"],
+    video: ["read", "manage", "configure", "annotate"],
   },
   admin: {
     article: ["create", "edit", "approve", "publish", "reject", "regenerate"],
@@ -30,12 +30,17 @@ const MATRIX: Matrix = {
     template: ["read", "manage", "publish"],
     social: ["read", "manage", "send"],
     llmTokens: ["manage"],
-    video: ["read", "manage", "configure"],
+    video: ["read", "manage", "configure", "annotate"],
+  },
+  // Task 5 (conducteur de montage) : rôle dédié au montage — lecture + annotation vidéo
+  // uniquement, aucun accès aux autres ressources.
+  monteur: {
+    video: ["read", "annotate"],
   },
 };
 
 export const ROLE_LABEL: Record<Role, string> = {
-  admin: "Admin", editor: "Éditeur", journalist: "Journaliste",
+  admin: "Admin", editor: "Éditeur", journalist: "Journaliste", monteur: "Monteur",
 };
 
 export function can(role: Role, resource: string, action: string): boolean {

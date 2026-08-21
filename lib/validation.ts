@@ -38,7 +38,7 @@ export function validateFeedInput(input: unknown) {
     : { ok: false as const, message: r.error.issues[0]?.message ?? "Entrée invalide" };
 }
 
-export const roleEnum = z.enum(["admin", "editor", "journalist"]);
+export const roleEnum = z.enum(["admin", "editor", "journalist", "monteur"]);
 
 export const memberSchema = z.object({
   email: z.string().email("Email invalide"),

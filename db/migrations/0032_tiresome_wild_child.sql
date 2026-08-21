@@ -1,0 +1,1 @@
+ALTER TYPE "public"."script_journal_source" ADD VALUE 'monteur';

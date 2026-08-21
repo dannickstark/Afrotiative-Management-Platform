@@ -15,7 +15,10 @@ import { cn } from "@/lib/utils";
 import type { Member } from "@/lib/queries/settings";
 import type { Role } from "@/lib/auth";
 
-export const ROLES: Role[] = ["journalist", "editor", "admin"];
+// Task 5 (conducteur de montage) : le rôle est attribuable via cet écran d'admin d'équipe existant
+// (pas de nouvel écran) — "monteur" rejoint donc les rôles assignables ici, au même titre que les
+// trois autres (lib/validation.ts's roleEnum accepts it too, so setMemberRole below stays in sync).
+export const ROLES: Role[] = ["journalist", "editor", "admin", "monteur"];
 
 // "Statut" is derived from the raw `banned` boolean (member.banned → "disabled" | "active"), not a
 // DB column of its own — moved verbatim from the old hand-rolled members-table.tsx, same

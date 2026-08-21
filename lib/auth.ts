@@ -3,7 +3,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { admin as adminPlugin, mcp } from "better-auth/plugins";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
-import { ac, admin, editor, journalist } from "./permissions";
+import { ac, admin, editor, journalist, monteur } from "./permissions";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg", schema }),
@@ -11,7 +11,7 @@ export const auth = betterAuth({
   plugins: [
     adminPlugin({
       ac,
-      roles: { admin, editor, journalist },
+      roles: { admin, editor, journalist, monteur },
       defaultRole: "journalist",
       adminRoles: ["admin"],
     }),
@@ -29,4 +29,4 @@ export const auth = betterAuth({
   session: { expiresIn: 60 * 60 * 24 * 7 },
 });
 
-export type Role = "admin" | "editor" | "journalist";
+export type Role = "admin" | "editor" | "journalist" | "monteur";

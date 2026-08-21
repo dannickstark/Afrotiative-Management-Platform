@@ -46,12 +46,12 @@ import { cpus } from "node:os";
 const PURE_FILES = new Set<string>([
   "ai-failure-message.test.ts", "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
   "article-preview-incomplete.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
-  "completeness.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
+  "completeness.test.ts", "conducteur-view.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
   "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-crawl4ai.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
   "image-candidates.test.ts", "image-pick-wizard.test.ts", "interval-picker.test.ts", "live-panel.test.ts",
-  "mcp-registry.test.ts", "mcp-schema.test.ts", "mcp-scope.test.ts", "mcp-settings-ui.test.ts", "mcp-token.test.ts", "mock-llm.test.ts", "nav-sections.test.ts", "oauth-actor.test.ts", "oauth-connections-ui.test.ts", "oauth-consent-form.test.ts", "oauth-scope-map.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
-  "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "regen-live.test.ts", "regen-plan.test.ts", "regen-progress.test.ts", "resend.test.ts", "rss-parse.test.ts",
+  "mcp-registry.test.ts", "mcp-schema.test.ts", "mcp-scope.test.ts", "mcp-settings-ui.test.ts", "mcp-token.test.ts", "mock-llm.test.ts", "montage-export.test.ts", "montage-share-panel.test.ts", "montage-token.test.ts", "nav-sections.test.ts", "oauth-actor.test.ts", "oauth-connections-ui.test.ts", "oauth-consent-form.test.ts", "oauth-scope-map.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
+  "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "rbac-monteur.test.ts", "regen-live.test.ts", "regen-plan.test.ts", "regen-progress.test.ts", "resend.test.ts", "rss-parse.test.ts",
   "run-config-dialog.test.ts", "run-detail.test.ts", "run-outcome.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
   "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts",
   "session-guard.test.ts", "settings-nav-icons.test.ts", "settings-rbac.test.ts",
@@ -75,7 +75,7 @@ const PURE_FILES = new Set<string>([
   "studio-tokens.test.ts", "studio-use-preview.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
   "video-beat-list.test.ts", "video-brief-panel.test.ts", "video-brief.test.ts", "video-categories-schema.test.ts", "video-categories-validation.test.ts", "video-contract.test.ts",
   "video-diff-review.test.ts", "video-duration.test.ts", "video-journal-history.test.ts", "video-import-merge.test.ts", "video-import-parse.test.ts",
-  "video-project-list.test.ts", "video-rbac-nav.test.ts", "video-schema-db.test.ts", "video-settings.test.ts",
+  "video-labels.test.ts", "video-project-list.test.ts", "video-rbac-nav.test.ts", "video-rundown.test.ts", "video-schema-db.test.ts", "video-settings.test.ts",
   "with-token-pool.test.ts", "wp-client.test.ts", "wp-config.test.ts",
 ]);
 

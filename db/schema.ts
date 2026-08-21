@@ -40,7 +40,7 @@ export const pipelineStatus = pgEnum("pipeline_status", [
   "paused",    // Pause: parked mid-run with a checkpoint, resumable (Task 4)
 ]);
 export const distributionStatus = pgEnum("distribution_status", ["stubbed", "pending", "sent", "failed"]);
-export const userRole = pgEnum("user_role", ["admin", "editor", "journalist"]);
+export const userRole = pgEnum("user_role", ["admin", "editor", "journalist", "monteur"]);
 
 // ---- Better-Auth tables ----
 export const user = pgTable("user", {
@@ -650,7 +650,7 @@ export const insertKind = pgEnum("insert_kind", ["image", "video", "extrait", "g
 // `interdit` = refusé par le garde SSRF (lib/url-guard.ts) ; `mort` = URL légitime qui ne répond
 // plus. Les deux se lisent différemment côté monteur, d'où deux valeurs et non une.
 export const linkStatus = pgEnum("link_status", ["non_verifie", "ok", "mort", "interdit"]);
-export const scriptJournalSource = pgEnum("script_journal_source", ["copier_coller", "mcp", "manuel"]);
+export const scriptJournalSource = pgEnum("script_journal_source", ["copier_coller", "mcp", "manuel", "monteur"]);
 // "en_attente" (round de correction 1, Task 9) : un diff préparé mais pas encore appliqué —
 // prepareImportCore doit journaliser AVANT que l'utilisateur ne décide, pour qu'applyImportCore
 // puisse relire l'entrée par journalId. Distinct d'"annule" (qui signifie « revenu en arrière »,
@@ -751,6 +751,7 @@ export const scriptBeats = pgTable("script_beats", {
   // « l'humain l'a changé », et un ré-import écrase en silence.
   importedSnapshot: jsonb("imported_snapshot").$type<Record<string, unknown>>(),
   locallyEditedAt: timestamp("locally_edited_at"),
+  montageCheckedAt: timestamp("montage_checked_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 }, (t) => [
@@ -854,6 +855,22 @@ export const apiTokens = pgTable("api_tokens", {
 }, (t) => [
   uniqueIndex("api_tokens_prefix_uq").on(t.prefix),
   index("api_tokens_user_idx").on(t.userId),
+]);
+
+// ---- Conducteur de montage : liens de partage signés ----
+export const montageShares = pgTable("montage_shares", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => videoProjects.id, { onDelete: "cascade" }),
+  tokenPrefix: text("token_prefix").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  createdBy: text("created_by").references(() => user.id),
+  expiresAt: timestamp("expires_at"),
+  revokedAt: timestamp("revoked_at"),
+  lastAccessedAt: timestamp("last_accessed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("montage_shares_prefix_uq").on(t.tokenPrefix),
+  index("montage_shares_project_idx").on(t.projectId),
 ]);
 
 // --- OAuth 2.1 / MCP (SP1 ter) — tables gérées par le plugin better-auth ---

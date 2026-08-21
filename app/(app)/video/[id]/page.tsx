@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/session";
-import { requirePermission } from "@/lib/rbac";
+import { requirePermission, can } from "@/lib/rbac";
 import { briefVarsFor, getVideoProject } from "@/lib/queries/video";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
@@ -14,6 +14,10 @@ import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-
 import { BeatList, type BeatView } from "@/components/video/beat-list";
 import { ImportPanel } from "@/components/video/import-panel";
 import { JournalHistory, type JournalEntryView } from "@/components/video/journal-history";
+import { ConducteurView } from "@/components/video/conducteur-view";
+import { readConducteurCore } from "@/lib/montage/persist";
+import { listSharesCore } from "@/lib/montage/access";
+import { MontageSharePanel } from "@/components/video/montage-share-panel";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Issue } from "@/lib/video/import";
@@ -60,6 +64,17 @@ export default async function VideoProjectPage({
   // arrivent au SP6) — le sélecteur n'a donc pas encore d'effet visible, mais la lecture est déjà
   // prête pour ce jour-là plutôt que de figer un seul `project.variants[0]`.
   const activeVariant = project.variants.find((v) => v.id === sp.variant) ?? project.variants[0] ?? null;
+
+  // Onglet Montage (Task 4, SP2) : la projection en lecture seule du conducteur pour la variante
+  // active — même `readConducteurCore` que celui écrit Task 3, qui recalcule tout depuis la DB
+  // (aucun état dérivé stocké).
+  const conducteur = activeVariant ? (await readConducteurCore(activeVariant.id))?.conducteur ?? null : null;
+
+  // Panneau « Accès monteur » (Task 7) : les liens de partage existants pour CE projet — chargés
+  // inconditionnellement, la garde `video:manage` ne s'applique qu'au rendu du panneau ci-dessous
+  // (même motif que les jetons MCP de /settings/mcp).
+  const shares = await listSharesCore(project.id);
+
   const beats: BeatView[] = (activeVariant?.beats ?? []).map((b) => ({
     id: b.id,
     externalId: b.externalId,
@@ -124,11 +139,12 @@ export default async function VideoProjectPage({
   return (
     <div className="space-y-6">
       <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue={sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
+      <Tabs defaultValue={sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
           <TabsTrigger value="ecriture">Écriture</TabsTrigger>
           <TabsTrigger value="importer">Importer</TabsTrigger>
+          <TabsTrigger value="montage">Montage</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
           <div className="space-y-4">
@@ -175,6 +191,28 @@ export default async function VideoProjectPage({
               <h2 className="text-sm font-medium">Historique des imports</h2>
               <JournalHistory entries={journalEntries} />
             </div>
+          </div>
+        </TabsContent>
+        <TabsContent value="montage">
+          <div className="space-y-6">
+            {can(user.role, "video", "manage") && (
+              <MontageSharePanel projectId={project.id} shares={shares} canManage />
+            )}
+            {activeVariant && (
+              <div className="flex flex-wrap gap-3 text-sm underline">
+                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=csv`}>Export CSV</a>
+                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=json`}>Export JSON</a>
+                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=manifest`}>Manifeste médias</a>
+              </div>
+            )}
+            {conducteur ? (
+              <ConducteurView
+                conducteur={conducteur}
+                annotate={can(user.role, "video", "annotate") ? { projectId: project.id } : undefined}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">Aucune variante.</p>
+            )}
           </div>
         </TabsContent>
       </Tabs>
