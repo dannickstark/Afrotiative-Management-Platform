@@ -857,6 +857,22 @@ export const apiTokens = pgTable("api_tokens", {
   index("api_tokens_user_idx").on(t.userId),
 ]);
 
+// ---- Conducteur de montage : liens de partage signés ----
+export const montageShares = pgTable("montage_shares", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => videoProjects.id, { onDelete: "cascade" }),
+  tokenPrefix: text("token_prefix").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  createdBy: text("created_by").references(() => user.id),
+  expiresAt: timestamp("expires_at"),
+  revokedAt: timestamp("revoked_at"),
+  lastAccessedAt: timestamp("last_accessed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("montage_shares_prefix_uq").on(t.tokenPrefix),
+  index("montage_shares_project_idx").on(t.projectId),
+]);
+
 // --- OAuth 2.1 / MCP (SP1 ter) — tables gérées par le plugin better-auth ---
 export const oauthApplication = pgTable("oauth_application", {
   id: text("id").primaryKey(),
