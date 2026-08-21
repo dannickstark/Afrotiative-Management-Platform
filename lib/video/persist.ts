@@ -165,7 +165,12 @@ export async function updateBeatCore(input: {
       if (!sp || !proj || sp.projectId !== proj.projectId) throw new RefusalError("Intervenant absent de ce projet.");
     }
     // Mapping Q/R strict : réponse → question de la même variante, jamais soi-même.
-    if (input.answersBeatId !== undefined && input.answersBeatId !== null) {
+    // La cible peut DANGLER (question supprimée, ex. via fusion d'import) — les lectures le
+    // tolèrent (spec). On ne re-valide donc que si la valeur ENTRANTE change réellement : une
+    // valeur inchangée (même pendante) passe telle quelle, sinon toute sauvegarde ultérieure de ce
+    // beat serait refusée à jamais dès que sa cible disparaît, gelant le beat. Une NOUVELLE valeur
+    // reste intégralement validée ci-dessous.
+    if (input.answersBeatId !== undefined && input.answersBeatId !== null && input.answersBeatId !== current.answersBeatId) {
       if (current.kind !== "reponse") throw new RefusalError("Seul un beat « réponse » peut répondre à une question.");
       if (input.answersBeatId === input.beatId) throw new RefusalError("Un beat ne peut pas se répondre à lui-même.");
       const [target] = await tx.select({ kind: scriptBeats.kind, variantId: scriptBeats.variantId }).from(scriptBeats)

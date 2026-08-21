@@ -94,3 +94,22 @@ test("answersBeatId : répondre à soi-même est refusé", async () => {
   const { r } = await setup();
   await expect(updateBeatCore({ beatId: r.id, answersBeatId: r.id })).rejects.toBeInstanceOf(RefusalError);
 });
+
+test("answersBeatId pendant (question supprimée) : une édition qui ne le touche pas réussit et le laisse tel quel", async () => {
+  const { q, r, otherKind } = await setup();
+  await updateBeatCore({ beatId: r.id, answersBeatId: q.id });
+
+  // La question ciblée est supprimée (ex. fusion d'import) : answersBeatId devient pendant.
+  await db.delete(scriptBeats).where(eq(scriptBeats.id, q.id));
+
+  // Une édition qui ne touche PAS answersBeatId ne doit pas re-valider la cible pendante — elle
+  // ne doit donc pas être refusée, et la valeur pendante reste inchangée.
+  const result = await updateBeatCore({ beatId: r.id, spokenText: "édité" });
+  expect(result.spokenText).toBe("édité");
+  const [row] = await db.select().from(scriptBeats).where(eq(scriptBeats.id, r.id));
+  expect(row.answersBeatId).toBe(q.id);
+
+  // Poser une NOUVELLE valeur invalide (différente de la valeur pendante actuelle) doit en
+  // revanche toujours être refusé — seule la valeur INCHANGÉE échappe à la re-validation.
+  await expect(updateBeatCore({ beatId: r.id, answersBeatId: otherKind.id })).rejects.toBeInstanceOf(RefusalError);
+});
