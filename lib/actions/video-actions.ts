@@ -13,6 +13,7 @@ import {
 } from "@/lib/video/persist";
 import { setProjectCategoryCore } from "@/lib/video/categories-persist";
 import { verifyUrl } from "@/lib/video/link-check";
+import { uploadInsertMediaCore } from "@/lib/video/insert-upload-core";
 import type { Diff, Issue } from "@/lib/video/import";
 
 // Round de correction final : toute écriture revalide AUSSI `/video/[id]`, la page où l'édition a
@@ -198,6 +199,22 @@ export async function verifyInsertLink(
   if (!res.ok) return res;
   revalidateVideo();
   return { ok: true, status };
+}
+
+// Upload R2 d'un média d'insert (SP3, Task 4) : le journaliste dépose une image/un graphique pour
+// remplacer une url externe fragile par un asset hébergé par nous. Même garde "manage" que le reste
+// de ce fichier ; le cœur DB brut vit dans uploadInsertMediaCore (lib/video/insert-upload-core.ts).
+export async function uploadInsertMedia(
+  formData: FormData,
+): Promise<{ ok: true; url: string } | { ok: false; message: string }> {
+  await guard();
+  const insertId = formData.get("insertId");
+  const file = formData.get("file");
+  if (typeof insertId !== "string" || !(file instanceof File)) return { ok: false, message: "Requête invalide." };
+  const res = await refusable(() => uploadInsertMediaCore({ insertId, file }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, url: res.value.url };
 }
 
 export async function verifyProjectLinks(
