@@ -113,6 +113,12 @@ export function InsertRow({
         return;
       }
       toast.success("Insert enregistré.");
+      // Une URL corrigée à la main n'a jamais été vérifiée — même remise à zéro que
+      // updateBeatInsertCore (lib/video/persist.ts) côté serveur, qui annule aussi
+      // `linkCheckedAt` quand l'url change réellement (revue Task 5 — sinon la ligne
+      // « Vérifié le … » restait affichée avec l'ancienne date à côté du badge « À vérifier »,
+      // une contradiction visible jusqu'au prochain rechargement complet).
+      const urlChanged = url !== (insert.url ?? null);
       onSaved({
         id: insert.id,
         kind: form.kind,
@@ -122,9 +128,8 @@ export function InsertRow({
         displayDurationSec,
         credit,
         rightsNote,
-        // Une URL corrigée à la main n'a jamais été vérifiée — même remise à zéro que
-        // updateBeatInsertCore (lib/video/persist.ts) côté serveur.
-        linkStatus: url !== (insert.url ?? null) ? "non_verifie" : insert.linkStatus,
+        linkStatus: urlChanged ? "non_verifie" : insert.linkStatus,
+        linkCheckedAt: urlChanged ? null : insert.linkCheckedAt,
       });
     });
   }
