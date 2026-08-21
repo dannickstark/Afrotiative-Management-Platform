@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/session";
 import { requirePermission, can } from "@/lib/rbac";
-import { briefVarsFor, getVideoProject } from "@/lib/queries/video";
+import { briefVarsFor, getVideoProject, listSpeakers } from "@/lib/queries/video";
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
 import { hasBeforeState, markProjectReviewedCore } from "@/lib/video/persist";
@@ -21,6 +21,7 @@ import { readConducteurCore } from "@/lib/montage/persist";
 import { readTournageCore } from "@/lib/video/takes-core";
 import { listSharesCore } from "@/lib/montage/access";
 import { MontageSharePanel } from "@/components/video/montage-share-panel";
+import { SpeakersManager } from "@/components/video/speakers-manager";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Issue } from "@/lib/video/import";
@@ -119,9 +120,10 @@ export default async function VideoProjectPage({
 
   // La catégorie du projet — mêmes instructions que celles remises à l'agent MCP, parce que les deux
   // chemins passent par getBriefCategory + buildBrief.
-  const [briefCategory, categoryOptions] = await Promise.all([
+  const [briefCategory, categoryOptions, speakers] = await Promise.all([
     getBriefCategory(project.categoryId),
     listVideoCategoryOptions(),
+    listSpeakers(project.id),
   ]);
 
   const brief = buildBrief(settings.briefTemplate, vars, briefCategory);
@@ -149,13 +151,14 @@ export default async function VideoProjectPage({
   return (
     <div className="space-y-6">
       <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue={sp.tab === "tournage" ? "tournage" : sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
+      <Tabs defaultValue={sp.tab === "intervenants" ? "intervenants" : sp.tab === "tournage" ? "tournage" : sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
           <TabsTrigger value="ecriture">Écriture</TabsTrigger>
           <TabsTrigger value="importer">Importer</TabsTrigger>
           <TabsTrigger value="montage">Montage</TabsTrigger>
           <TabsTrigger value="tournage">Tournage</TabsTrigger>
+          <TabsTrigger value="intervenants">Intervenants</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
           <div className="space-y-4">
@@ -235,6 +238,9 @@ export default async function VideoProjectPage({
           ) : (
             <p className="text-sm text-muted-foreground">Aucune variante.</p>
           )}
+        </TabsContent>
+        <TabsContent value="intervenants">
+          <SpeakersManager projectId={project.id} speakers={speakers} />
         </TabsContent>
       </Tabs>
     </div>

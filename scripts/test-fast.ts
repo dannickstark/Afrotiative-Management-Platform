@@ -55,7 +55,7 @@ const PURE_FILES = new Set<string>([
   "run-config-dialog.test.ts", "run-detail.test.ts", "run-outcome.test.ts", "run-params-schema.test.ts", "run-params.test.ts", "sanitize.test.ts",
   "schedule-expr.test.ts", "schedule-field.test.ts", "score.test.ts", "search.test.ts",
   "session-guard.test.ts", "settings-nav-icons.test.ts", "settings-rbac.test.ts",
-  "shell-nav.test.ts", "smoke.test.ts", "stat-card.test.ts",
+  "shell-nav.test.ts", "smoke.test.ts", "speakers-manager.test.ts", "stat-card.test.ts",
   "status.test.ts", "studio-align.test.ts", "studio-asset-picker.test.ts", "studio-asset-validate.test.ts",
   "studio-canvas.test.ts", "studio-config.test.ts", "studio-constraints-field.test.ts",
   "studio-drag.test.ts", "studio-dynamic-text.test.ts",
