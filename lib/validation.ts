@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { Cron } from "croner";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
+import { TC_RE, INSERT_KINDS } from "@/lib/video/schema";
+import { insertSpanSeconds } from "@/lib/video/timecode";
 
 export const saveDraftSchema = z.object({
   id: z.string().uuid(),
@@ -391,13 +393,18 @@ export type UpdateBeatInput = z.infer<typeof updateBeatSchema>;
 // que par le typage TypeScript, effacé au runtime (même motif que reorderBeatsSchema ci-dessus).
 export const updateInsertSchema = z.object({
   insertId: z.string().uuid(),
-  // `.url()` seul accepterait n'importe quel schéma (ftp:, javascript:…) — la contrainte http/https
-  // vient du refine, pas de `.url()`. `null` reste permis (retirer l'URL est un choix humain
-  // légitime) ; seule la clé elle-même n'est pas optionnelle, contrairement à updateBeatSchema où
-  // chaque champ est un no-op s'il est omis — ici c'est le SEUL champ, l'omettre n'aurait aucun sens.
   url: z.string().url("URL invalide.").refine((u) => /^https?:\/\//i.test(u), "URL invalide (http/https uniquement).")
-    .max(2048).nullable(),
-});
+    .max(2048).nullable().optional(),
+  kind: z.enum(INSERT_KINDS).optional(),
+  tcIn: z.string().regex(TC_RE, "Timecode invalide (HH:MM:SS).").nullable().optional(),
+  tcOut: z.string().regex(TC_RE, "Timecode invalide (HH:MM:SS).").nullable().optional(),
+  displayDurationSec: z.number().int().min(1).max(600).nullable().optional(),
+  credit: z.string().max(200).nullable().optional(),
+  rightsNote: z.string().max(500).nullable().optional(),
+}).refine(
+  (v) => !(v.tcIn && v.tcOut) || insertSpanSeconds(v.tcIn, v.tcOut) !== null,
+  { message: "Le point de sortie doit suivre le point d'entrée.", path: ["tcOut"] },
+);
 export type UpdateInsertInput = z.infer<typeof updateInsertSchema>;
 
 // Round de correction 2 (Task 9, I9) : prepareImport/applyImport/reorderBeats/revertJournalEntry

@@ -9,7 +9,9 @@ import {
 import { estimateSeconds } from "@/lib/video/duration";
 import { sanitizeArticleHtml } from "@/lib/sanitize";
 import { getVideoSettings } from "@/lib/queries/video-settings";
-import { SCHEMA_VERSION, type InsertPayload, type Payload, type VariantPayload } from "@/lib/video/schema";
+import {
+  SCHEMA_VERSION, type InsertKind, type InsertPayload, type Payload, type VariantPayload,
+} from "@/lib/video/schema";
 
 // Cœur DB brut du module vidéo — délibérément SANS "use server" (voir lib/actions/video-actions.ts
 // pour le motif). C'est aussi la SEULE exception à « lib/video/* n'importe jamais @/db » : le
@@ -208,7 +210,13 @@ export async function updateBeatCore(input: {
 // couverture.
 export async function updateBeatInsertCore(input: {
   insertId: string;
-  url: string | null;
+  url?: string | null;
+  kind?: InsertKind;
+  tcIn?: string | null;
+  tcOut?: string | null;
+  displayDurationSec?: number | null;
+  credit?: string | null;
+  rightsNote?: string | null;
 }): Promise<void> {
   await db.transaction(async (tx) => {
     // Ordre de verrouillage (round de correction 4, inventaire task-9-report.md) : `script_variants`
@@ -238,8 +246,10 @@ export async function updateBeatInsertCore(input: {
 
     // Une URL corrigée à la main n'a jamais été vérifiée : `linkStatus`/`linkCheckedAt` (posés par
     // un futur vérificateur de liens, hors périmètre ici) mentiraient sur l'URL qui vient de
-    // changer si on les laissait tels quels.
-    const urlChanged = input.url !== current.url;
+    // changer si on les laissait tels quels. `url` est désormais optionnel (patch partiel) : absent
+    // = pas touché, donc pas de reset ; seul un url FOURNI et différent du courant invalide le statut.
+    const urlProvided = input.url !== undefined;
+    const urlChanged = urlProvided && input.url !== current.url;
 
     // script_beats AVANT beat_inserts (ordre ci-dessus) : cette édition d'insert est aussi une
     // édition humaine du beat parent, au même titre qu'updateBeatCore — computeMerge doit savoir
@@ -250,15 +260,20 @@ export async function updateBeatInsertCore(input: {
     }).where(eq(scriptBeats.id, locatedInsert.beatId));
 
     // `r2Key` n'est jamais touché ici : c'est la clé de l'asset rapatrié par le SP2 (upload/miroir
-    // R2), sans rapport avec l'URL source que l'humain corrige à la main. Seule `url` est écrite
-    // (round de correction 1, I4) — tcIn/tcOut/displayDurationSec/credit/rightsNote restent hors
-    // périmètre tant qu'aucune UI ne les édite.
-    await tx.update(beatInserts).set({
-      url: input.url,
-      linkStatus: urlChanged ? "non_verifie" : current.linkStatus,
-      linkCheckedAt: urlChanged ? null : current.linkCheckedAt,
-      updatedAt: new Date(),
-    }).where(eq(beatInserts.id, input.insertId));
+    // R2), sans rapport avec l'URL source que l'humain corrige à la main. Patch partiel : n'écrire
+    // QUE les champs fournis (absent = no-op ; null = vider).
+    const patch: Partial<typeof beatInserts.$inferInsert> = { updatedAt: new Date() };
+    if (urlProvided) patch.url = input.url ?? null;
+    if (input.kind !== undefined) patch.kind = input.kind;
+    if (input.tcIn !== undefined) patch.tcIn = input.tcIn;
+    if (input.tcOut !== undefined) patch.tcOut = input.tcOut;
+    if (input.displayDurationSec !== undefined) patch.displayDurationSec = input.displayDurationSec;
+    if (input.credit !== undefined) patch.credit = input.credit;
+    if (input.rightsNote !== undefined) patch.rightsNote = input.rightsNote;
+    // Seul un changement d'URL invalide la vérification (r2Key jamais touché ici).
+    if (urlChanged) { patch.linkStatus = "non_verifie"; patch.linkCheckedAt = null; }
+
+    await tx.update(beatInserts).set(patch).where(eq(beatInserts.id, input.insertId));
 
     // (même motif que updateBeatCore/reorderBeatsCore) : rend l'aperçu d'import périmé.
     await tx.update(scriptVariants).set({ updatedAt: new Date() }).where(eq(scriptVariants.id, locatedBeat.variantId));
