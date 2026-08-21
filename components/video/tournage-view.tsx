@@ -224,22 +224,29 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
   const [fs, setFs] = useState(false);
   const [overlay, setOverlay] = useState(false);
 
-  async function save() {
-    if (!dirtyRef.current) return;
+  // Retourne `false` uniquement sur échec réel de la sauvegarde (garde `dirtyRef.current` à
+  // `true`) — tout appelant qui enchaîne sur un changement de beat (`goTo`) DOIT vérifier ce
+  // retour avant de bouger l'index : `setIndex` change `beat.id`, ce qui déclenche le
+  // `useEffect` de resynchronisation ci-dessus et écraserait silencieusement `html`/`dirtyRef`
+  // avec le nouveau beat, perdant l'édit non sauvegardé du beat précédent sans aucun recours.
+  async function save(): Promise<boolean> {
+    if (!dirtyRef.current) return true;
     const res = await updateBeat({ beatId: beat.id, spokenText: html });
     if (!res.ok) {
       toast.error(res.message);
-      return;
+      return false;
     }
     dirtyRef.current = false;
     // `router.refresh()` recharge les beats depuis le serveur — ne pas ré-injecter localement
     // `res.spokenText` par-dessus : le prochain rendu porte déjà la version sanitisée serveur.
     router.refresh();
+    return true;
   }
 
   function goTo(next: number) {
     startSaving(async () => {
-      await save();
+      const ok = await save();
+      if (!ok) return; // reste sur le beat courant — l'édit non sauvegardé est préservé
       setIndex(next);
     });
   }
@@ -248,7 +255,7 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
     function onFullscreenChange() {
       const active = !!document.fullscreenElement;
       setFs(active);
-      if (!active) startSaving(save);
+      if (!active) startSaving(async () => { await save(); });
     }
     document.addEventListener("fullscreenchange", onFullscreenChange);
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
@@ -322,7 +329,7 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
             <Maximize aria-hidden /> Plein écran
           </Button>
         )}
-        <Button type="button" size="lg" disabled={isSaving} onClick={() => startSaving(save)}>
+        <Button type="button" size="lg" disabled={isSaving} onClick={() => startSaving(async () => { await save(); })}>
           {isSaving && <Loader2 className="animate-spin" aria-hidden />}
           Enregistrer
         </Button>
