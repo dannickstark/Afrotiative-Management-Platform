@@ -48,7 +48,7 @@ const PURE_FILES = new Set<string>([
   "article-preview-incomplete.test.ts", "async-pool.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
   "completeness.test.ts", "conducteur-view.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
-  "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-crawl4ai.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
+  "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-crawl4ai.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts", "highlight.test.ts",
   "image-candidates.test.ts", "image-pick-wizard.test.ts", "insert-row.test.ts", "interval-picker.test.ts", "link-check.test.ts", "live-panel.test.ts",
   "mcp-registry.test.ts", "mcp-schema.test.ts", "mcp-scope.test.ts", "mcp-settings-ui.test.ts", "mcp-token.test.ts", "mock-llm.test.ts", "montage-export.test.ts", "montage-share-panel.test.ts", "montage-token.test.ts", "nav-sections.test.ts", "oauth-actor.test.ts", "oauth-connections-ui.test.ts", "oauth-consent-form.test.ts", "oauth-scope-map.test.ts", "page-header.test.ts", "pipeline-actions.test.ts", "pipeline-config.test.ts",
   "published.test.ts", "queue-queries.test.ts", "rbac.test.ts", "rbac-monteur.test.ts", "regen-live.test.ts", "regen-plan.test.ts", "regen-progress.test.ts", "resend.test.ts", "rss-parse.test.ts",
