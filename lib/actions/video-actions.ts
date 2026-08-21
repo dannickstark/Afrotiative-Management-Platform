@@ -9,11 +9,13 @@ import {
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
   prepareImportCore, applyImportCore, revertJournalEntryCore, RefusalError,
-  getInsertUrlCore, setInsertLinkStatusCore, verifyProjectLinksCore,
+  getInsertUrlCore, setInsertLinkStatusCore, verifyProjectLinksCore, setProjectStatusCore,
 } from "@/lib/video/persist";
 import { setProjectCategoryCore } from "@/lib/video/categories-persist";
 import { verifyUrl } from "@/lib/video/link-check";
 import { uploadInsertMediaCore } from "@/lib/video/insert-upload-core";
+import { addTakeCore, updateTakeCore, deleteTakeCore, selectTakeCore } from "@/lib/video/takes-core";
+import { TAKE_STATUSES, type TakeStatus } from "@/lib/video/schema";
 import type { Diff, Issue } from "@/lib/video/import";
 
 // Round de correction final : toute écriture revalide AUSSI `/video/[id]`, la page où l'édition a
@@ -225,4 +227,67 @@ export async function verifyProjectLinks(
   if (!res.ok) return res;
   revalidateVideo();
   return { ok: true, counts: res.value };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tournage — transitions de statut et prises (SP4, Task 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function transition(projectId: string, to: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  const res = await refusable(() => setProjectStatusCore({ projectId, to }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
+}
+export const markReadyToShoot = (projectId: string) => transition(projectId, "pret_a_tourner");
+export const startShooting = (projectId: string) => transition(projectId, "tourne");
+export const finishShooting = (projectId: string) => transition(projectId, "en_montage");
+
+function parseStatus(v: unknown): TakeStatus | null {
+  return typeof v === "string" && (TAKE_STATUSES as readonly string[]).includes(v) ? (v as TakeStatus) : null;
+}
+
+export async function addTake(
+  input: { beatId: string; status?: string },
+): Promise<{ ok: true; id: string; number: number } | { ok: false; message: string }> {
+  await guard();
+  if (typeof input?.beatId !== "string") return { ok: false, message: "Requête invalide." };
+  const status = input.status === undefined ? undefined : (parseStatus(input.status) ?? undefined);
+  const res = await refusable(() => addTakeCore({ beatId: input.beatId, status }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, id: res.value.id, number: res.value.number };
+}
+
+export async function updateTake(
+  input: { takeId: string; status?: string; note?: string | null },
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  if (typeof input?.takeId !== "string") return { ok: false, message: "Requête invalide." };
+  const status = input.status === undefined ? undefined : parseStatus(input.status);
+  if (input.status !== undefined && status === null) return { ok: false, message: "Statut de prise invalide." };
+  const res = await refusable(() => updateTakeCore({ takeId: input.takeId, status: status ?? undefined, note: input.note }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
+}
+
+export async function deleteTake(takeId: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  const res = await refusable(() => deleteTakeCore({ takeId }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
+}
+
+export async function selectTake(
+  input: { beatId: string; takeId: string | null },
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  if (typeof input?.beatId !== "string") return { ok: false, message: "Requête invalide." };
+  const res = await refusable(() => selectTakeCore({ beatId: input.beatId, takeId: input.takeId }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
 }
