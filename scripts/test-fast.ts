@@ -46,7 +46,7 @@ import { cpus } from "node:os";
 const PURE_FILES = new Set<string>([
   "ai-failure-message.test.ts", "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
   "article-preview-incomplete.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
-  "completeness.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
+  "completeness.test.ts", "conducteur-view.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
   "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-crawl4ai.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts",
   "image-candidates.test.ts", "image-pick-wizard.test.ts", "interval-picker.test.ts", "live-panel.test.ts",

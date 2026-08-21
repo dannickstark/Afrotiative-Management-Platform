@@ -14,6 +14,8 @@ import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-
 import { BeatList, type BeatView } from "@/components/video/beat-list";
 import { ImportPanel } from "@/components/video/import-panel";
 import { JournalHistory, type JournalEntryView } from "@/components/video/journal-history";
+import { ConducteurView } from "@/components/video/conducteur-view";
+import { readConducteurCore } from "@/lib/montage/persist";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Issue } from "@/lib/video/import";
@@ -60,6 +62,12 @@ export default async function VideoProjectPage({
   // arrivent au SP6) — le sélecteur n'a donc pas encore d'effet visible, mais la lecture est déjà
   // prête pour ce jour-là plutôt que de figer un seul `project.variants[0]`.
   const activeVariant = project.variants.find((v) => v.id === sp.variant) ?? project.variants[0] ?? null;
+
+  // Onglet Montage (Task 4, SP2) : la projection en lecture seule du conducteur pour la variante
+  // active — même `readConducteurCore` que celui écrit Task 3, qui recalcule tout depuis la DB
+  // (aucun état dérivé stocké).
+  const conducteur = activeVariant ? (await readConducteurCore(activeVariant.id))?.conducteur ?? null : null;
+
   const beats: BeatView[] = (activeVariant?.beats ?? []).map((b) => ({
     id: b.id,
     externalId: b.externalId,
@@ -124,11 +132,12 @@ export default async function VideoProjectPage({
   return (
     <div className="space-y-6">
       <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue={sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
+      <Tabs defaultValue={sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
           <TabsTrigger value="ecriture">Écriture</TabsTrigger>
           <TabsTrigger value="importer">Importer</TabsTrigger>
+          <TabsTrigger value="montage">Montage</TabsTrigger>
         </TabsList>
         <TabsContent value="brief">
           <div className="space-y-4">
@@ -176,6 +185,9 @@ export default async function VideoProjectPage({
               <JournalHistory entries={journalEntries} />
             </div>
           </div>
+        </TabsContent>
+        <TabsContent value="montage">
+          {conducteur ? <ConducteurView conducteur={conducteur} /> : <p className="text-sm text-muted-foreground">Aucune variante.</p>}
         </TabsContent>
       </Tabs>
     </div>
