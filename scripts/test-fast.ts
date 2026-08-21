@@ -75,7 +75,7 @@ const PURE_FILES = new Set<string>([
   "studio-tokens.test.ts", "studio-use-preview.test.ts", "studio-values.test.ts", "timing-safe.test.ts", "use-persisted-filters.test.ts",
   "video-beat-list.test.ts", "video-brief-panel.test.ts", "video-brief.test.ts", "video-categories-schema.test.ts", "video-categories-validation.test.ts", "video-contract.test.ts",
   "video-diff-review.test.ts", "video-duration.test.ts", "video-journal-history.test.ts", "video-import-merge.test.ts", "video-import-parse.test.ts",
-  "video-labels.test.ts", "video-project-list.test.ts", "video-rbac-nav.test.ts", "video-schema-db.test.ts", "video-settings.test.ts",
+  "video-labels.test.ts", "video-project-list.test.ts", "video-rbac-nav.test.ts", "video-rundown.test.ts", "video-schema-db.test.ts", "video-settings.test.ts",
   "with-token-pool.test.ts", "wp-client.test.ts", "wp-config.test.ts",
 ]);
 
