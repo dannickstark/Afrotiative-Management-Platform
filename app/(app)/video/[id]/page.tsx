@@ -213,7 +213,6 @@ export default async function VideoProjectPage({
             {activeVariant ? (
               <BeatList
                 beats={beats}
-                targetDurationSec={activeVariant.targetDurationSec}
                 variantId={activeVariant.id}
                 speakers={speakers.map((s) => ({ id: s.id, name: s.name }))}
               />

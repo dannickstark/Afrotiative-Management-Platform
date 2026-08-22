@@ -5,11 +5,11 @@ import { Film, TriangleAlert } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shell/empty-state";
-import { DurationMeter } from "./duration-meter";
 import { BeatInspector } from "./beat-inspector";
 import { isBreathRisk } from "@/lib/video/duration";
 import { reorderBeats } from "@/lib/actions/video-actions";
 import { cn } from "@/lib/utils";
+import { INSERT_KIND_LABEL, LINK_STATUS_LABEL } from "@/lib/video/labels";
 
 // Task 12 — Produces (voir brief) : la forme consommée par la vue Écriture. `sources` est
 // optionnel : script_beats.sources existe en base et alimente BeatInspector (liste des sources),
@@ -80,15 +80,59 @@ export const KIND_LABEL: Record<string, string> = {
   note: "Note",
 };
 
+// Task 4 (SP 014 — UX pass) — ordre de gravité des `link_status` (db/schema.ts) pour la pastille
+// « pire statut » de la colonne Médias : mort/interdit (rouge) > non_verifie (ambre) > ok (vert).
+// mort et interdit partagent le même rang — les deux sont rouges, aucun des deux n'est « pire » que
+// l'autre pour cet indicateur agrégé.
+const LINK_STATUS_SEVERITY: Record<string, number> = { ok: 0, non_verifie: 1, mort: 2, interdit: 2 };
+
+// Couleur de la pastille — mêmes tokens `--status-*` que le reste du module (ex.
+// video-status-badge.tsx, project-header.tsx), pas de nouvelle palette.
+const LINK_STATUS_DOT_COLOR: Record<string, string> = {
+  ok: "var(--status-approved)",
+  non_verifie: "var(--status-pending)",
+  mort: "var(--destructive)",
+  interdit: "var(--destructive)",
+};
+
+// Le pire linkStatus parmi les inserts d'un beat, ou null si le beat n'a aucun insert — dans ce
+// cas la colonne Médias n'affiche aucune pastille (brief : « un beat sans insert ne montre aucun
+// point »).
+function worstLinkStatus(inserts: InsertView[]): string | null {
+  if (inserts.length === 0) return null;
+  return inserts.reduce(
+    (worst, i) => (LINK_STATUS_SEVERITY[i.linkStatus] > LINK_STATUS_SEVERITY[worst] ? i.linkStatus : worst),
+    inserts[0].linkStatus,
+  );
+}
+
+// Nombre d'inserts par nature (`insert_kind`, db/schema.ts), dans l'ordre de première apparition —
+// alimente la colonne Médias (ex. « 1 graphique, 2 images »).
+function insertCountsByKind(inserts: InsertView[]): { kind: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const insert of inserts) {
+    counts.set(insert.kind, (counts.get(insert.kind) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([kind, count]) => ({ kind, count }));
+}
+
+// La règle « jamais pré-vérifié » (brief) ne s'applique qu'aux beats qui portent un propos à
+// sourcer — narration et réponse. Un B-roll ou une transition n'a légitimement aucune source.
+function requiresSource(kind: string): boolean {
+  return kind === "narration" || kind === "reponse";
+}
+
 export function BeatList({
-  beats, targetDurationSec, variantId, speakers = [],
+  beats, variantId, speakers = [],
 }: {
   beats: BeatView[];
-  targetDurationSec: number | null;
-  // Optionnel : le contrat du plan (brief Task 12) ne porte que `beats`/`targetDurationSec` — les
-  // tests instancient BeatList sans variantId. En usage réel (app/(app)/video/[id]/page.tsx),
-  // variantId est toujours fourni : sans lui, reorderBeats n'a pas de variante à cibler et le
-  // glisser-déposer reste visuel-seul (voir handleDrop ci-dessous).
+  // Optionnel : le contrat du plan (brief Task 12) ne portait à l'origine que
+  // `beats`/`targetDurationSec` — les tests instancient BeatList sans variantId. En usage réel
+  // (app/(app)/video/[id]/page.tsx), variantId est toujours fourni : sans lui, reorderBeats n'a
+  // pas de variante à cibler et le glisser-déposer reste visuel-seul (voir handleDrop ci-dessous).
+  // `targetDurationSec` a été retiré (Task 4, SP 014 — UX pass) avec la bande DurationMeter : le
+  // cumul/la cible vivent désormais dans le bandeau de projet (Task 3, project-header.tsx), qui
+  // reçoit `targetDurationSec` directement de la variante.
   variantId?: string;
   // Task 5 (SP5) : la liste des intervenants du projet, pour le select « Locuteur » de
   // BeatInspector. Défaut `[]` — les tests existants (tests/video-beat-list.test.ts) instancient
@@ -106,7 +150,6 @@ export function BeatList({
     setItems(beats);
   }, [beats]);
 
-  const totalSec = items.reduce((sum, b) => sum + storedSeconds(b), 0);
   const selected = items.find((b) => b.id === selectedId) ?? null;
   // Les beats `question` de LA MÊME variante (`items`, pas `beats` — un réordonnancement en vol ne
   // doit pas désynchroniser les positions affichées dans le select « Répond à ») — voir
@@ -152,8 +195,6 @@ export function BeatList({
 
   return (
     <div className="space-y-4">
-      <DurationMeter totalSec={totalSec} targetSec={targetDurationSec} />
-
       <Table>
         <TableHeader>
           <TableRow>
@@ -162,11 +203,16 @@ export function BeatList({
             <TableHead>Type</TableHead>
             <TableHead>Texte</TableHead>
             <TableHead className="text-right">Durée</TableHead>
+            <TableHead>Médias</TableHead>
+            <TableHead>Sources</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {items.map((beat, index) => {
             const breathRisk = isBreathRisk(beat.spokenText);
+            const worstStatus = worstLinkStatus(beat.inserts);
+            const sourceCount = beat.sources?.length ?? 0;
+            const missingSource = requiresSource(beat.kind) && sourceCount === 0;
             return (
               <TableRow
                 key={beat.id}
@@ -230,11 +276,72 @@ export function BeatList({
                 <TableCell className={cn("text-right tabular-nums", breathRisk && "text-[var(--status-pending)]")}>
                   {storedSeconds(beat)} s
                 </TableCell>
+                <TableCell>
+                  {beat.inserts.length === 0 ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span>
+                        {insertCountsByKind(beat.inserts).map(({ kind, count }, i) => (
+                          <span key={kind}>
+                            {i > 0 && ", "}
+                            {count} {(INSERT_KIND_LABEL[kind] ?? kind).toLowerCase()}
+                          </span>
+                        ))}
+                      </span>
+                      {worstStatus && (
+                        <span
+                          className="inline-block size-1.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: LINK_STATUS_DOT_COLOR[worstStatus] }}
+                          title={LINK_STATUS_LABEL[worstStatus] ?? worstStatus}
+                          aria-label={LINK_STATUS_LABEL[worstStatus] ?? worstStatus}
+                        />
+                      )}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell>
+                  {missingSource ? (
+                    <Badge variant="destructive">0</Badge>
+                  ) : (
+                    <span className="tabular-nums text-sm">{sourceCount}</span>
+                  )}
+                </TableCell>
               </TableRow>
             );
           })}
         </TableBody>
       </Table>
+
+      {/* Légende des trois pastilles de statut de lien (colonne Médias) — même code couleur que
+          le reste du module, jamais la couleur seule : voir aussi le `title`/`aria-label` posé sur
+          chaque pastille ci-dessus. */}
+      <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <span
+            className="inline-block size-1.5 rounded-full"
+            style={{ backgroundColor: LINK_STATUS_DOT_COLOR.ok }}
+            aria-hidden
+          />
+          {LINK_STATUS_LABEL.ok}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span
+            className="inline-block size-1.5 rounded-full"
+            style={{ backgroundColor: LINK_STATUS_DOT_COLOR.non_verifie }}
+            aria-hidden
+          />
+          {LINK_STATUS_LABEL.non_verifie}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span
+            className="inline-block size-1.5 rounded-full"
+            style={{ backgroundColor: LINK_STATUS_DOT_COLOR.mort }}
+            aria-hidden
+          />
+          {LINK_STATUS_LABEL.mort} / {LINK_STATUS_LABEL.interdit}
+        </span>
+      </p>
 
       <BeatInspector
         beat={selected}
