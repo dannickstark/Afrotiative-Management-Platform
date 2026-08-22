@@ -22,12 +22,15 @@ export type ProjectRow = {
   title: string;
   status: string;
   platforms: string[];
+  // Durée cumulée de la VARIANTE DE TÊTE, face à la cible de cette même variante — jamais la somme
+  // de toutes les variantes, qui sont des rendus alternatifs d'une même histoire (revue finale, F3).
   estimatedSec: number;
   articleTitle: string | null;
   updatedAt: Date;
   // Task 8 — nombre d'écritures d'agent non relues (lib/video/persist.ts#markProjectReviewedCore).
   unreviewedCount: number;
-  // Task 2 (SP 014) — alimente la colonne « Durée / cible » et la colonne « À traiter ».
+  // Task 2 (SP 014) — `targetSec` complète la colonne « Durée / cible » (cible de la variante de
+  // tête) ; les deux suivants alimentent la colonne « À traiter », comptés sur tout le projet.
   targetSec: number | null;
   deadLinkCount: number;
   missingConsentCount: number;
@@ -41,6 +44,13 @@ function fmt(totalSec: number): string {
   const minutes = Math.floor(totalSec / 60);
   const seconds = totalSec % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+// Recherche insensible à la casse ET aux accents : « ecole » doit trouver « école ». Sans ça,
+// l'utilisateur lit « Aucun résultat pour ces filtres » et en conclut que le projet n'existe pas
+// (revue finale, F6). NFD décompose « é » en « e » + accent combinant, que \p{Diacritic} retire.
+function fold(s: string): string {
+  return s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 }
 
 function needsAction(p: ProjectRow): boolean {
@@ -141,9 +151,9 @@ export function ProjectListFilters({ projects }: { projects: ProjectRow[] }) {
   const isFilterActive = search.trim() !== "" || status !== "" || platform !== "";
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = fold(search.trim());
     return projects.filter((p) => {
-      if (q !== "" && !p.title.toLowerCase().includes(q)) return false;
+      if (q !== "" && !fold(p.title).includes(q)) return false;
       if (status !== "" && p.status !== status) return false;
       if (platform !== "" && !p.platforms.includes(platform)) return false;
       return true;
