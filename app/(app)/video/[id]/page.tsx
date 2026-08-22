@@ -18,7 +18,8 @@ import { TournageView } from "@/components/video/tournage-view";
 import { readConducteurCore } from "@/lib/montage/persist";
 import { readTournageCore } from "@/lib/video/takes-core";
 import { listSharesCore } from "@/lib/montage/access";
-import { MontageSharePanel } from "@/components/video/montage-share-panel";
+import { MontageShareDialog } from "@/components/video/montage-share-dialog";
+import { MontageExportBar } from "@/components/video/montage-export-bar";
 import { SpeakersManager } from "@/components/video/speakers-manager";
 import { VariantManager } from "@/components/video/variant-manager";
 import { AspectRatioGuide } from "@/components/video/aspect-ratio-guide";
@@ -240,16 +241,12 @@ export default async function VideoProjectPage({
         </TabsContent>
         <TabsContent value="montage">
           <div className="space-y-6">
-            {can(user.role, "video", "manage") && (
-              <MontageSharePanel projectId={project.id} shares={shares} canManage />
-            )}
-            {activeVariant && (
-              <div className="flex flex-wrap gap-3 text-sm underline">
-                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=csv`}>Export CSV</a>
-                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=json`}>Export JSON</a>
-                <a href={`/api/montage/export?variantId=${activeVariant.id}&format=manifest`}>Manifeste médias</a>
-              </div>
-            )}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>{activeVariant && <MontageExportBar variantId={activeVariant.id} />}</div>
+              {can(user.role, "video", "manage") && (
+                <MontageShareDialog projectId={project.id} shares={shares} canManage />
+              )}
+            </div>
             {conducteur ? (
               <ConducteurView
                 conducteur={conducteur}
