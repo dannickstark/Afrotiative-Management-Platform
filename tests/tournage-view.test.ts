@@ -30,10 +30,14 @@ const beat: TournageBeat = {
   ],
 };
 
+// Task 3 (SP 014 — UX pass) : le bouton d'avancement de statut a quitté TournageView pour le
+// bandeau de projet (components/video/project-header.tsx, cf. tests/project-header.test.ts) —
+// TournageView ne prend donc plus `projectId`/`status` et ne rend plus StatusHeader. Ce fichier ne
+// couvre plus que ce qui reste : le texte parlé, les boutons de log, et l'état vide.
 describe("TournageView", () => {
   it("affiche le texte parlé, le libellé de statut de prise et les boutons de log", () => {
     const html = renderToStaticMarkup(
-      React.createElement(TournageView, { projectId: "p-1", status: "pret_a_tourner", beats: [beat] }),
+      React.createElement(TournageView, { beats: [beat] }),
     );
     expect(html).toContain("Bienvenue dans cette vidéo sur les fondations.");
     expect(html).toContain("Bonne");
@@ -41,30 +45,18 @@ describe("TournageView", () => {
     expect(html).toContain("À revoir");
   });
 
-  it("affiche le bouton de transition adapté au statut pret_a_tourner", () => {
+  it("ne rend plus de bouton de transition de statut (déplacé dans le bandeau de projet)", () => {
     const html = renderToStaticMarkup(
-      React.createElement(TournageView, { projectId: "p-1", status: "pret_a_tourner", beats: [beat] }),
+      React.createElement(TournageView, { beats: [beat] }),
     );
-    expect(html).toContain("Démarrer le tournage");
-  });
-
-  it("affiche le bouton de transition adapté au statut en_ecriture", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(TournageView, { projectId: "p-1", status: "en_ecriture", beats: [beat] }),
-    );
-    expect(html).toContain("Marquer prêt à tourner");
-  });
-
-  it("affiche le bouton de transition adapté au statut tourne", () => {
-    const html = renderToStaticMarkup(
-      React.createElement(TournageView, { projectId: "p-1", status: "tourne", beats: [beat] }),
-    );
-    expect(html).toContain("Tournage terminé");
+    expect(html).not.toContain("Démarrer le tournage");
+    expect(html).not.toContain("Marquer prêt à tourner");
+    expect(html).not.toContain("Tournage terminé");
   });
 
   it("état vide : aucun beat", () => {
     const html = renderToStaticMarkup(
-      React.createElement(TournageView, { projectId: "p-1", status: "en_ecriture", beats: [] }),
+      React.createElement(TournageView, { beats: [] }),
     );
     expect(html).toContain("Aucun beat");
   });

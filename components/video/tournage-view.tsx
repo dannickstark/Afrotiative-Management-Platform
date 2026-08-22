@@ -16,10 +16,9 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { RichEditor } from "@/components/article/rich-editor";
 import { AspectRatioGuide } from "@/components/video/aspect-ratio-guide";
 import {
-  addTake, updateTake, deleteTake, selectTake,
-  markReadyToShoot, startShooting, finishShooting, updateBeat,
+  addTake, updateTake, deleteTake, selectTake, updateBeat,
 } from "@/lib/actions/video-actions";
-import { TAKE_STATUS_LABEL, VIDEO_STATUS_LABEL } from "@/lib/video/labels";
+import { TAKE_STATUS_LABEL } from "@/lib/video/labels";
 import type { TournageBeat } from "@/lib/video/takes-core";
 
 type LogStatus = "bonne" | "mauvaise" | "a_revoir";
@@ -29,43 +28,6 @@ const LOG_BUTTONS: { status: LogStatus; label: string }[] = [
   { status: "mauvaise", label: "Mauvaise" },
   { status: "a_revoir", label: "À revoir" },
 ];
-
-function StatusHeader({ projectId, status }: { projectId: string; status: string }) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-
-  function run(action: (projectId: string) => Promise<{ ok: true } | { ok: false; message: string }>) {
-    startTransition(async () => {
-      const res = await action(projectId);
-      if (!res.ok) {
-        toast.error(res.message);
-        return;
-      }
-      toast.success("Statut mis à jour.");
-      router.refresh();
-    });
-  }
-
-  let button: { label: string; action: (projectId: string) => Promise<{ ok: true } | { ok: false; message: string }> } | null = null;
-  if (status === "en_ecriture") button = { label: "Marquer prêt à tourner", action: markReadyToShoot };
-  else if (status === "pret_a_tourner") button = { label: "Démarrer le tournage", action: startShooting };
-  else if (status === "tourne") button = { label: "Tournage terminé", action: finishShooting };
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Statut :</span>
-        <Badge variant="outline">{VIDEO_STATUS_LABEL[status] ?? status}</Badge>
-      </div>
-      {button && (
-        <Button type="button" size="lg" disabled={isPending} onClick={() => run(button!.action)}>
-          {isPending && <Loader2 className="animate-spin" aria-hidden />}
-          {button.label}
-        </Button>
-      )}
-    </div>
-  );
-}
 
 function LogButtons({ beatId, disabled, onDone }: { beatId: string; disabled?: boolean; onDone: () => void }) {
   const [isPending, startTransition] = useTransition();
@@ -346,10 +308,8 @@ function PrompteurMode({ beats, aspectRatio }: { beats: TournageBeat[]; aspectRa
 }
 
 export function TournageView({
-  projectId, status, beats, aspectRatio = "16:9",
+  beats, aspectRatio = "16:9",
 }: {
-  projectId: string;
-  status: string;
   beats: TournageBeat[];
   aspectRatio?: string;
 }) {
@@ -357,7 +317,6 @@ export function TournageView({
 
   return (
     <div className="space-y-6">
-      <StatusHeader projectId={projectId} status={status} />
       <div className="flex items-center gap-2">
         <Button type="button" variant={prompteur ? "default" : "outline"} size="lg" onClick={() => setPrompteur((p) => !p)}>
           Mode prompteur

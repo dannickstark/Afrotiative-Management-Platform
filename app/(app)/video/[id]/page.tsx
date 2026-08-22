@@ -5,7 +5,7 @@ import { briefVarsFor, getVideoProject, listSpeakers } from "@/lib/queries/video
 import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
 import { hasBeforeState, markProjectReviewedCore } from "@/lib/video/persist";
-import { PageHeader } from "@/components/shell/page-header";
+import { ProjectHeader } from "@/components/video/project-header";
 import { BriefPanel } from "@/components/video/brief-panel";
 import { ProjectCategorySelect } from "@/components/video/project-category-select";
 import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-categories";
@@ -149,10 +149,35 @@ export default async function VideoProjectPage({
     revertable: hasBeforeState(j.applied),
   }));
 
+  // Reprise par le sélecteur de variante du bandeau (ProjectHeader) : un lien `?variant=` doit
+  // garder l'utilisateur sur l'onglet qu'il regardait plutôt que de le renvoyer sur Brief — même
+  // valeur que celle qui pilote `defaultValue` de `<Tabs>` juste en dessous.
+  const currentTab = sp.tab === "intervenants" ? "intervenants" : sp.tab === "tournage" ? "tournage" : sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief";
+
   return (
     <div className="space-y-6">
-      <PageHeader title={project.title} description={project.subject ?? undefined} />
-      <Tabs defaultValue={sp.tab === "intervenants" ? "intervenants" : sp.tab === "tournage" ? "tournage" : sp.tab === "montage" ? "montage" : sp.tab === "importer" ? "importer" : sp.tab === "ecriture" ? "ecriture" : "brief"}>
+      <ProjectHeader
+        projectId={project.id}
+        title={project.title}
+        status={project.status}
+        variants={project.variants.map((v) => ({
+          id: v.id,
+          platform: v.platform,
+          aspectRatio: v.aspectRatio,
+          targetDurationSec: v.targetDurationSec,
+          beats: v.beats.map((b) => ({
+            durationOverrideSec: b.durationOverrideSec,
+            estimatedDurationSec: b.estimatedDurationSec,
+            inserts: b.inserts.map((ins) => ({ linkStatus: ins.linkStatus })),
+          })),
+        }))}
+        activeVariantId={activeVariant?.id ?? null}
+        currentTab={currentTab}
+        journal={project.journal.map((j) => ({ source: j.source, reviewedAt: j.reviewedAt ? j.reviewedAt.toISOString() : null }))}
+        speakers={speakers.map((s) => ({ id: s.id, name: s.name, consentGiven: s.consentGiven }))}
+        canManage={can(user.role, "video", "manage")}
+      />
+      <Tabs defaultValue={currentTab}>
         <TabsList>
           <TabsTrigger value="brief">Brief</TabsTrigger>
           <TabsTrigger value="ecriture">Écriture</TabsTrigger>
@@ -238,7 +263,7 @@ export default async function VideoProjectPage({
         </TabsContent>
         <TabsContent value="tournage">
           {tournage ? (
-            <TournageView projectId={project.id} status={tournage.status} beats={tournage.beats} aspectRatio={activeVariant?.aspectRatio ?? "16:9"} />
+            <TournageView beats={tournage.beats} aspectRatio={activeVariant?.aspectRatio ?? "16:9"} />
           ) : (
             <p className="text-sm text-muted-foreground">Aucune variante.</p>
           )}
