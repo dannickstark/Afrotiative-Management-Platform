@@ -21,7 +21,7 @@ import {
 import { TAKE_STATUS_LABEL } from "@/lib/video/labels";
 import type { TournageBeat } from "@/lib/video/takes-core";
 import {
-  TournageProgressHeader, filterBeats,
+  TournageProgressHeader, filterBeats, resolveExpandedId,
   type TournageFilter,
 } from "@/components/video/tournage-progress";
 
@@ -202,10 +202,23 @@ function CompactBeatRow({ beat, onExpand }: { beat: TournageBeat; onExpand: () =
 // en carte pleine" au singulier.
 function JournalMode({ beats }: { beats: TournageBeat[] }) {
   const [filter, setFilter] = useState<TournageFilter>("tous");
+  // `expandedId` n'avance PAS tout seul quand une prise est loguée pour le beat déplié (voir
+  // LogButtons#onDone dans JournalBeatCard, qui ne fait que router.refresh()) : c'est délibéré
+  // (revue Task 6, ronde 2) — sur le plateau on logue souvent plusieurs prises d'affilée pour le
+  // même beat, et faire sauter la carte au beat suivant sous les doigts de la personne qui filme
+  // serait pire qu'un clic volontaire sur "Déplier". Ne pas "corriger" ça en auto-avançant.
   const firstUnresolved = beats.find((b) => b.selectedTakeId === null) ?? beats[0];
   const [expandedId, setExpandedId] = useState<string | undefined>(firstUnresolved?.id);
 
   const visible = filterBeats(beats, filter);
+
+  // `expandedId` est posé une fois au montage à partir de la liste NON filtrée — un changement de
+  // filtre peut donc l'exclure de `visible` (revue Task 6, ronde 2 : finding important). Sans
+  // repli, plus aucune carte pleine ne serait rendue tant que l'utilisateur n'a pas cliqué
+  // "Déplier", ce qui prive le plateau de ses boutons 44px précisément quand un filtre est actif.
+  // `resolveExpandedId` (components/video/tournage-progress.tsx) dérive donc la carte pleine à
+  // afficher à CHAQUE rendu plutôt que de faire confiance au seul état stocké.
+  const effectiveExpandedId = resolveExpandedId(visible, expandedId);
 
   return (
     <div className="space-y-4">
@@ -215,7 +228,7 @@ function JournalMode({ beats }: { beats: TournageBeat[] }) {
       ) : (
         <div className="space-y-4">
           {visible.map((b) => (
-            b.id === expandedId ? (
+            b.id === effectiveExpandedId ? (
               <JournalBeatCard key={b.id} beat={b} />
             ) : (
               <CompactBeatRow key={b.id} beat={b} onExpand={() => setExpandedId(b.id)} />

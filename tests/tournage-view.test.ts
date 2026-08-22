@@ -16,7 +16,7 @@ mock.module("next/navigation", () => ({
   }),
 }));
 const { TournageView } = await import("@/components/video/tournage-view");
-const { TournageProgressHeader, filterBeats, beatNeedsReview, beatHasNoTake } = await import(
+const { TournageProgressHeader, filterBeats, beatNeedsReview, beatHasNoTake, resolveExpandedId } = await import(
   "@/components/video/tournage-progress"
 );
 
@@ -160,5 +160,34 @@ describe("filterBeats / beatNeedsReview / beatHasNoTake", () => {
     expect(beatHasNoTake(beatToReview)).toBe(false);
     expect(beatNeedsReview(beatToReview)).toBe(true);
     expect(beatNeedsReview(beat)).toBe(false);
+  });
+});
+
+// Revue Task 6, ronde 2 — finding important : `expandedId` était figé au montage sur la liste non
+// filtrée ; un filtre qui l'excluait de `visible` faisait disparaître toute carte pleine (donc les
+// boutons plateau 44px) tant que l'utilisateur ne cliquait pas "Déplier". `resolveExpandedId` est
+// la fonction pure qui répare ça — testée directement ici plutôt que par simulation de clic
+// (renderToStaticMarkup ne peut pas déclencher onClick : il n'y a pas d'hydratation).
+describe("resolveExpandedId", () => {
+  it("garde le beat déplié courant s'il est toujours visible", () => {
+    expect(resolveExpandedId([beat, beatToReview], beat.id)).toBe(beat.id);
+  });
+
+  it("retombe sur le premier beat visible sans prise retenue si le beat déplié n'est plus visible", () => {
+    // Scénario du finding : beatNoTake est déplié par défaut (premier beat sans prise retenue sur
+    // la liste complète), mais le filtre « à revoir » ne montre que beatToReview.
+    const visibleAfterFilter = filterBeats([beat, beatNoTake, beatToReview], "a_revoir");
+    expect(visibleAfterFilter).toEqual([beatToReview]);
+    expect(resolveExpandedId(visibleAfterFilter, beatNoTake.id)).toBe(beatToReview.id);
+  });
+
+  it("retombe sur le premier beat visible tout court si aucun n'est sans prise retenue", () => {
+    // beat (b-1) est le seul visible, et il a déjà une prise retenue : pas de candidat "sans
+    // prise", donc repli sur visible[0].
+    expect(resolveExpandedId([beat], "id-disparu")).toBe(beat.id);
+  });
+
+  it("gère une liste visible vide sans lever", () => {
+    expect(resolveExpandedId([], "id-disparu")).toBeUndefined();
   });
 });

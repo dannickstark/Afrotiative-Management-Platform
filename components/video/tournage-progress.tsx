@@ -25,6 +25,22 @@ export function filterBeats(beats: TournageBeat[], filter: TournageFilter): Tour
   return beats;
 }
 
+// Quelle carte doit être "pleine" (accordéon) compte tenu du filtre actif — dérivée à CHAQUE rendu
+// depuis `visible`, jamais figée dans le seul état stocké. Sans ça, changer de filtre pouvait
+// exclure le beat déplié de `visible` : plus aucune carte pleine ne s'affichait (donc plus de
+// boutons plateau 44px) tant que l'utilisateur n'avait pas cliqué "Déplier" (revue Task 6, ronde 2 —
+// finding important, components/video/tournage-view.tsx#JournalMode). Repli : si le beat
+// actuellement déplié est toujours visible, on le garde ; sinon le premier beat visible qui a
+// encore besoin d'attention (pas de prise retenue) ; sinon le premier beat visible tout court.
+export function resolveExpandedId(
+  visible: TournageBeat[], currentExpandedId: string | undefined,
+): string | undefined {
+  if (currentExpandedId !== undefined && visible.some((b) => b.id === currentExpandedId)) {
+    return currentExpandedId;
+  }
+  return (visible.find((b) => b.selectedTakeId === null) ?? visible[0])?.id;
+}
+
 const FILTERS: { value: TournageFilter; label: string }[] = [
   { value: "tous", label: "Tous les beats" },
   { value: "sans_prise", label: "Sans prise" },
