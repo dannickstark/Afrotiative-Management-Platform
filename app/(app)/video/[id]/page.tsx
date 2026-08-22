@@ -160,6 +160,7 @@ export default async function VideoProjectPage({
       <ProjectHeader
         projectId={project.id}
         title={project.title}
+        subject={project.subject}
         status={project.status}
         variants={project.variants.map((v) => ({
           id: v.id,

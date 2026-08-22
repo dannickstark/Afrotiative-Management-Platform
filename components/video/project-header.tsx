@@ -7,6 +7,7 @@
 // d'avancement (useTransition + router.refresh(), même patron que StatusHeader et VariantManager) —
 // la page /video/[id] qui le rend reste, elle, un Server Component.
 import { useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -63,10 +64,13 @@ export type ProjectHeaderJournalEntry = { source: string; reviewedAt: string | n
 export type ProjectHeaderSpeaker = { id: string; name: string; consentGiven: boolean };
 
 export function ProjectHeader({
-  projectId, title, status, variants, activeVariantId, currentTab, journal, speakers, canManage,
+  projectId, title, subject, status, variants, activeVariantId, currentTab, journal, speakers, canManage,
 }: {
   projectId: string;
   title: string;
+  // « Sujet / angle », saisi à la création (components/video/new-project-dialog.tsx) — c'était la
+  // description du PageHeader remplacé par ce bandeau ; il se relit ici sous le titre.
+  subject: string | null;
   status: string;
   variants: ProjectHeaderVariant[];
   activeVariantId: string | null;
@@ -118,9 +122,12 @@ export function ProjectHeader({
       <div className="space-y-3 rounded-xl p-4 ring-1 ring-foreground/10">
         {/* Ligne 1 : titre, pastille de statut, bouton d'avancement. */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-heading text-2xl font-semibold tracking-tight">{title}</h1>
-            <VideoStatusBadge status={status} />
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="font-heading text-2xl font-semibold tracking-tight">{title}</h1>
+              <VideoStatusBadge status={status} />
+            </div>
+            {subject && <p className="text-sm text-muted-foreground">{subject}</p>}
           </div>
           {canManage && advance && (
             <Button type="button" disabled={isPending} onClick={handleAdvance}>
@@ -149,15 +156,21 @@ export function ProjectHeader({
               {variants.map((v) => {
                 const isActive = v.id === activeVariant?.id;
                 return (
-                  <a key={v.id} href={`/video/${projectId}?tab=${currentTab}&variant=${v.id}`}>
+                  // <Link> et non <a> : un changement de variante est une navigation interne, elle
+                  // doit garder l'état client des onglets (filtres/dépliage du Journal, Task 6) —
+                  // même choix que components/video/project-list.tsx.
+                  <Link key={v.id} href={`/video/${projectId}?tab=${currentTab}&variant=${v.id}`}>
+                    {/* La variante active est un ÉTAT DE SÉLECTION, pas une action primaire : pas de
+                        terracotta pleine (DESIGN.md, règle « Actions Only »). Secondary + anneau,
+                        et `aria-current` porte l'information pour les lecteurs d'écran. */}
                     <Badge
-                      variant={isActive ? "default" : "outline"}
-                      className={isActive ? "active" : undefined}
+                      variant={isActive ? "secondary" : "outline"}
+                      className={isActive ? "ring-1 ring-foreground/25" : undefined}
                       aria-current={isActive ? "true" : undefined}
                     >
                       {PLATFORM_LABEL[v.platform] ?? v.platform} · {v.aspectRatio}
                     </Badge>
-                  </a>
+                  </Link>
                 );
               })}
             </div>
@@ -177,7 +190,11 @@ export function ProjectHeader({
               </Badge>
             )}
             {deadLinkCount > 0 && (
-              <Badge variant="destructive">{deadLinkCount} lien(s) mort(s)</Badge>
+              // « sur le projet » : ce compte couvre TOUTES les variantes, alors que la ligne de
+              // totaux du conducteur (components/video/conducteur-view.tsx), rendue quelques pixels
+              // plus bas dans l'onglet Montage, compte les liens morts de la SEULE variante active.
+              // Sans cette précision, deux nombres différents portaient le même libellé.
+              <Badge variant="destructive">{deadLinkCount} lien(s) mort(s) sur le projet</Badge>
             )}
             {missingConsentCount > 0 && (
               <Badge variant="destructive">{missingConsentCount} consentement(s)</Badge>
@@ -188,24 +205,22 @@ export function ProjectHeader({
 
       {/* Consentement manquant + projet tourné : la mise en montage sera refusée côté serveur
           (lib/video/persist.ts, RefusalError) — ce bandeau ne fait qu'annoncer le blocage avant que
-          l'écriture ne le découvre en s'y heurtant. Une ligne par intervenant sans consentement,
-          plutôt qu'une seule phrase agrégée : la formulation au singulier (« … n'a pas donné son
-          consentement ») reste correcte quel que soit le nombre de personnes concernées. */}
+          l'écriture ne le découvre en s'y heurtant. UNE seule région `role="alert"` qui énumère les
+          intervenants concernés : une alerte par personne faisait annoncer quatre fois la même
+          chose par les lecteurs d'écran, et répétait quatre fois le même lien (revue finale, F7).
+          components/video/speakers-manager.tsx énonce déjà le même fait en une phrase. */}
       {status === "tourne" && missingConsentCount > 0 && (
-        <div className="space-y-1.5">
-          {missingConsentSpeakers.map((s) => (
-            <p
-              key={s.id}
-              role="alert"
-              className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-            >
-              {s.name} n&apos;a pas donné son consentement — la mise en montage est bloquée.{" "}
-              <a href={`/video/${projectId}?tab=intervenants`} className="underline">
-                Voir les intervenants
-              </a>
-            </p>
-          ))}
-        </div>
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          {missingConsentSpeakers.map((s) => s.name).join(", ")}{" "}
+          {missingConsentCount > 1 ? "n'ont pas donné leur consentement" : "n'a pas donné son consentement"}
+          {" — la mise en montage est bloquée."}{" "}
+          <Link href={`/video/${projectId}?tab=intervenants`} className="underline">
+            Voir les intervenants
+          </Link>
+        </p>
       )}
     </div>
   );

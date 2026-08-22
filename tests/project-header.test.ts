@@ -44,6 +44,7 @@ function render(overrides: Partial<Parameters<typeof ProjectHeader>[0]> = {}) {
     React.createElement(ProjectHeader, {
       projectId: "p-1",
       title: "La success story de Babadampulu",
+      subject: "Comment une PME ivoirienne a conquis l'export",
       status: "en_ecriture",
       variants: [variantA],
       activeVariantId: "v-1",
@@ -83,7 +84,13 @@ describe("ProjectHeader", () => {
     expect(html).toContain("TikTok");
     expect(html).toContain('href="/video/p-1?tab=ecriture&amp;variant=v-1"');
     expect(html).toContain('href="/video/p-1?tab=ecriture&amp;variant=v-2"');
-    expect(html).toContain("active");
+    // La sélection se lit sur `aria-current`, pas sur une classe : la pastille active n'est plus en
+    // terracotta pleine (DESIGN.md, règle « Actions Only » — revue finale, F4).
+    expect(html).toContain('aria-current="true"');
+    // La pastille active est `secondary` + anneau, jamais `bg-primary` (terracotta) : celle-ci
+    // reste réservée aux actions primaires (ici le seul bouton d'avancement).
+    expect(html).toMatch(/bg-secondary[^>]*ring-1[^>]*aria-current="true"/);
+    expect(html).not.toMatch(/bg-primary[^>]*aria-current="true"/);
   });
 
   it("préserve l'onglet courant dans les liens du sélecteur de variante", () => {
@@ -111,8 +118,10 @@ describe("ProjectHeader", () => {
 
   it("affiche le badge « lien(s) mort(s) » compté sur TOUTES les variantes, pas seulement l'active", () => {
     const html = render({ variants: [variantA, variantB], activeVariantId: "v-1" });
-    // 1 "mort" (variantA) + 1 "interdit" (variantB) = 2.
-    expect(html).toContain("2 lien(s) mort(s)");
+    // 1 "mort" (variantA) + 1 "interdit" (variantB) = 2. Le libellé dit explicitement « sur le
+    // projet » : le conducteur (onglet Montage) affiche juste en dessous le même libellé compté sur
+    // la seule variante active (revue finale, F2).
+    expect(html).toContain("2 lien(s) mort(s) sur le projet");
   });
 
   it("affiche le badge « non relue(s) » à partir des écritures d'agent MCP non relues", () => {
@@ -148,9 +157,24 @@ describe("ProjectHeader", () => {
   it("affiche l'alerte de consentement bloquant quand le projet est tourné et qu'un consentement manque", () => {
     const speakers: ProjectHeaderSpeaker[] = [{ id: "s-1", name: "Awa Koné", consentGiven: false }];
     const html = render({ status: "tourne", speakers });
-    expect(html).toContain("Awa Koné n&#x27;a pas donné son consentement");
+    expect(html).toContain("Awa Koné");
+    expect(html).toContain("n&#x27;a pas donné son consentement");
     expect(html).toContain("la mise en montage est bloquée");
     expect(html).toContain('href="/video/p-1?tab=intervenants"');
+  });
+
+  it("agrège les intervenants sans consentement dans UNE seule région d'alerte", () => {
+    const speakers: ProjectHeaderSpeaker[] = [
+      { id: "s-1", name: "Awa Koné", consentGiven: false },
+      { id: "s-2", name: "Jean Dupont", consentGiven: false },
+      { id: "s-3", name: "Fatou Diallo", consentGiven: true },
+    ];
+    const html = render({ status: "tourne", speakers });
+    // Une seule annonce pour un lecteur d'écran, un seul lien — pas une par personne (F7).
+    expect(html.match(/role="alert"/g)?.length).toBe(1);
+    expect(html.match(/tab=intervenants/g)?.length).toBe(1);
+    expect(html).toContain("Awa Koné, Jean Dupont");
+    expect(html).toContain("n&#x27;ont pas donné leur consentement");
   });
 
   it("n'affiche pas l'alerte de consentement quand le projet n'est pas encore tourné", () => {
@@ -175,5 +199,16 @@ describe("ProjectHeader", () => {
   it("n'affiche jamais le bouton d'avancement sans la permission video:manage", () => {
     const html = render({ status: "en_ecriture", canManage: false });
     expect(html).not.toContain("Marquer prêt à tourner");
+  });
+
+  it("affiche le sujet du projet sous le titre", () => {
+    const html = render();
+    expect(html).toContain("Comment une PME ivoirienne a conquis l&#x27;export");
+  });
+
+  it("n'affiche pas de ligne de sujet quand le projet n'en a pas", () => {
+    const html = render({ subject: null });
+    expect(html).toContain("La success story de Babadampulu");
+    expect(html).not.toContain("Comment une PME ivoirienne");
   });
 });
