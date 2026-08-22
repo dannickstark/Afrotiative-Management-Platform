@@ -2,7 +2,6 @@ import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { BeatList, type BeatView } from "@/components/video/beat-list";
-import { DurationMeter } from "@/components/video/duration-meter";
 
 function beat(over: Partial<BeatView> = {}): BeatView {
   return {
@@ -63,9 +62,10 @@ describe("BeatList", () => {
     expect(html).toContain("9 s");
   });
 
-  // Task 4 (SP 014 — UX pass) : le bandeau DurationMeter est retiré de BeatList (le cumul/la
-  // cible vivent désormais dans le bandeau de projet, Task 3) — mais le composant reste appelable
-  // ailleurs, voir le describe("DurationMeter") plus bas qui l'exerce directement.
+  // Task 4 (SP 014 — UX pass) : la bande de cumul/cible est retirée de BeatList — le cumul et la
+  // cible vivent désormais dans le bandeau de projet (components/video/project-header.tsx, Task 3).
+  // Le composant DurationMeter qui la rendait n'avait plus aucun appelant de production et a été
+  // supprimé à la revue finale, avec le bloc de tests qui le maintenait seul en vie.
   it("n'affiche plus la bande de cumul/cible retirée au profit du bandeau de projet", () => {
     const html = renderToStaticMarkup(
       React.createElement(BeatList, { beats: [beat()] }),
@@ -142,14 +142,16 @@ describe("BeatList", () => {
     const html = renderToStaticMarkup(
       React.createElement(BeatList, { beats: [beat({ kind: "narration", sources: undefined })] }),
     );
-    expect(html).toContain(">0<");
+    // La pastille destructive, pas seulement le chiffre : un beat qui n'exige pas de source et n'en
+    // a aucune rend lui aussi « 0 », dans un simple <span> (revue finale, mineur).
+    expect(html).toMatch(/bg-destructive[^>]*>0</);
   });
 
   it("affiche un badge destructive 0 pour un beat reponse sans source", () => {
     const html = renderToStaticMarkup(
       React.createElement(BeatList, { beats: [beat({ kind: "reponse", sources: [] })] }),
     );
-    expect(html).toContain(">0<");
+    expect(html).toMatch(/bg-destructive[^>]*>0</);
   });
 
   it("n'affiche pas de badge destructive pour un B-roll sans source", () => {
@@ -174,28 +176,5 @@ describe("BeatList", () => {
     expect(html).toContain("OK");
     expect(html).toContain("À vérifier");
     expect(html).toContain("Mort");
-  });
-});
-
-describe("DurationMeter", () => {
-  it("affiche le cumul face à la cible", () => {
-    const html = renderToStaticMarkup(React.createElement(DurationMeter, { totalSec: 725, targetSec: 720 }));
-    expect(html).toContain("12 min 05 s");
-    expect(html).toContain("12 min 00 s");
-  });
-
-  it("affiche un écart signé au-dessus de la cible", () => {
-    const html = renderToStaticMarkup(React.createElement(DurationMeter, { totalSec: 725, targetSec: 720 }));
-    expect(html).toContain("+5 s");
-  });
-
-  it("affiche un écart signé en dessous de la cible", () => {
-    const html = renderToStaticMarkup(React.createElement(DurationMeter, { totalSec: 700, targetSec: 720 }));
-    expect(html).toContain("−20 s");
-  });
-
-  it("n'affiche aucun écart sans cible", () => {
-    const html = renderToStaticMarkup(React.createElement(DurationMeter, { totalSec: 700, targetSec: null }));
-    expect(html).not.toContain("+");
   });
 });
