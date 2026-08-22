@@ -19,14 +19,22 @@ export async function deriveVariantCore(
       .where(eq(scriptVariants.projectId, source.projectId));
     const position = variants.reduce((max, v) => Math.max(max, v.position), -1) + 1;
 
-    const [nv] = await tx.insert(scriptVariants).values({
-      projectId: source.projectId,
-      platform: input.platform as (typeof scriptVariants.$inferInsert)["platform"],
-      aspectRatio: input.aspectRatio,
-      targetDurationSec: input.targetDurationSec,
-      position,
-      derivedFromId: input.sourceVariantId,
-    }).returning({ id: scriptVariants.id });
+    let nv: { id: string };
+    try {
+      [nv] = await tx.insert(scriptVariants).values({
+        projectId: source.projectId,
+        platform: input.platform as (typeof scriptVariants.$inferInsert)["platform"],
+        aspectRatio: input.aspectRatio,
+        targetDurationSec: input.targetDurationSec,
+        position,
+        derivedFromId: input.sourceVariantId,
+      }).returning({ id: scriptVariants.id });
+    } catch (err: any) {
+      if (err?.code === "23505" || err?.cause?.code === "23505") {
+        throw new RefusalError("Une autre variante a été créée au même moment. Réessayez.");
+      }
+      throw err;
+    }
 
     const srcBeats = await tx.select().from(scriptBeats)
       .where(eq(scriptBeats.variantId, input.sourceVariantId)).orderBy(asc(scriptBeats.position));

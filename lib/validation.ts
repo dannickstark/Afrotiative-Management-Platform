@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Cron } from "croner";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
-import { TC_RE, INSERT_KINDS } from "@/lib/video/schema";
+import { TC_RE, INSERT_KINDS, PLATFORMS } from "@/lib/video/schema";
 import { insertSpanSeconds } from "@/lib/video/timecode";
 
 export const saveDraftSchema = z.object({
@@ -465,7 +465,7 @@ export type RevertJournalEntryInput = z.infer<typeof revertJournalEntrySchema>;
 // cible, copie profonde des beats de la variante source (voir lib/video/variants-persist.ts).
 export const deriveVariantSchema = z.object({
   sourceVariantId: z.string().uuid(),
-  platform: z.enum(["youtube_long", "youtube_short", "tiktok", "reel", "interview"]),
+  platform: z.enum(PLATFORMS),
   aspectRatio: z.enum(["16:9", "9:16", "1:1"]),
   targetDurationSec: z.number().int().min(5).max(14400).nullable(),
 });
