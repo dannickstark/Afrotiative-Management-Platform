@@ -45,7 +45,7 @@ import { cpus } from "node:os";
 // Files proven to touch neither DB nor network — the parallel lane. See the regenerate command above.
 const PURE_FILES = new Set<string>([
   "ai-failure-message.test.ts", "ai-fallback.test.ts", "ai-improve.test.ts", "ai-prompt.test.ts", "ai-schema.test.ts",
-  "article-preview-incomplete.test.ts", "async-pool.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
+  "article-preview-incomplete.test.ts", "aspect-ratio-guide.test.ts", "async-pool.test.ts", "auto-publish.test.ts", "brand-mark.test.ts",
   "completeness.test.ts", "conducteur-view.test.ts", "dedup.test.ts", "diffusion-channels.test.ts", "diffusion-panel.test.ts",
   "diffusion-settings-ui.test.ts", "diffusion-setup-guide.test.ts", "dom-harness.test.ts",
   "embeddings.test.ts", "empty-state.test.ts", "extract-chain.test.ts", "extract-crawl4ai.test.ts", "extract-images.test.ts", "extract-ssrf.test.ts", "format-utc.test.ts", "highlight.test.ts",
@@ -77,6 +77,7 @@ const PURE_FILES = new Set<string>([
   "video-beat-list.test.ts", "video-brief-panel.test.ts", "video-brief.test.ts", "video-categories-schema.test.ts", "video-categories-validation.test.ts", "video-contract.test.ts",
   "video-diff-review.test.ts", "video-duration.test.ts", "video-journal-history.test.ts", "video-import-merge.test.ts", "video-import-parse.test.ts",
   "video-labels.test.ts", "video-project-list.test.ts", "video-rbac-nav.test.ts", "video-rundown.test.ts", "video-schema-db.test.ts", "video-settings.test.ts", "video-timecode.test.ts",
+  "variant-manager.test.ts",
   "verify-all-links.test.ts",
   "with-token-pool.test.ts", "wp-client.test.ts", "wp-config.test.ts",
 ]);

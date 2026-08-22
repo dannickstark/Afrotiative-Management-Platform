@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Cron } from "croner";
 import { isSafePublicHttpUrl } from "@/lib/url-guard";
-import { TC_RE, INSERT_KINDS } from "@/lib/video/schema";
+import { TC_RE, INSERT_KINDS, PLATFORMS } from "@/lib/video/schema";
 import { insertSpanSeconds } from "@/lib/video/timecode";
 
 export const saveDraftSchema = z.object({
@@ -460,6 +460,19 @@ export const revertJournalEntrySchema = z.object({
   journalId: z.string().uuid(),
 });
 export type RevertJournalEntryInput = z.infer<typeof revertJournalEntrySchema>;
+
+// SP6 (variantes dérivées) — dériver une variante en copie une nouvelle plateforme/ratio/durée
+// cible, copie profonde des beats de la variante source (voir lib/video/variants-persist.ts).
+export const deriveVariantSchema = z.object({
+  sourceVariantId: z.string().uuid(),
+  platform: z.enum(PLATFORMS),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]),
+  targetDurationSec: z.number().int().min(5).max(14400).nullable(),
+});
+export type DeriveVariantInput = z.infer<typeof deriveVariantSchema>;
+
+export const variantIdSchema = z.object({ variantId: z.string().uuid("Identifiant invalide") });
+export type VariantIdInput = z.infer<typeof variantIdSchema>;
 
 // Task 6 (réglages MCP), puis étendu Task 2 (portée) — le nom qu'un porteur donne à son propre
 // jeton d'API ("Portable", "CI nocturne"…), affiché ensuite dans la liste à côté du préfixe, et la

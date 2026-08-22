@@ -14,6 +14,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { RichEditor } from "@/components/article/rich-editor";
+import { AspectRatioGuide } from "@/components/video/aspect-ratio-guide";
 import {
   addTake, updateTake, deleteTake, selectTake,
   markReadyToShoot, startShooting, finishShooting, updateBeat,
@@ -200,7 +201,7 @@ function JournalBeatCard({ beat }: { beat: TournageBeat }) {
   );
 }
 
-function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
+function PrompteurMode({ beats, aspectRatio }: { beats: TournageBeat[]; aspectRatio: string }) {
   const router = useRouter();
   const [index, setIndex] = useState(0);
   const beat = beats[index];
@@ -303,6 +304,7 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
           Suivant <ChevronRight aria-hidden />
         </Button>
       </div>
+      <AspectRatioGuide ratio={aspectRatio} />
       <div className="space-y-3 text-center">
         <p className="text-sm">{beat.kindLabel}</p>
         <RichEditor
@@ -344,11 +346,12 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
 }
 
 export function TournageView({
-  projectId, status, beats,
+  projectId, status, beats, aspectRatio = "16:9",
 }: {
   projectId: string;
   status: string;
   beats: TournageBeat[];
+  aspectRatio?: string;
 }) {
   const [prompteur, setPrompteur] = useState(false);
 
@@ -363,7 +366,7 @@ export function TournageView({
       {beats.length === 0 ? (
         <p className="text-sm text-muted-foreground">Aucun beat à tourner.</p>
       ) : prompteur ? (
-        <PrompteurMode beats={beats} />
+        <PrompteurMode beats={beats} aspectRatio={aspectRatio} />
       ) : (
         <div className="space-y-4">
           {beats.map((b) => (
