@@ -21,6 +21,7 @@ import { listSharesCore } from "@/lib/montage/access";
 import { MontageSharePanel } from "@/components/video/montage-share-panel";
 import { SpeakersManager } from "@/components/video/speakers-manager";
 import { VariantManager } from "@/components/video/variant-manager";
+import { AspectRatioGuide } from "@/components/video/aspect-ratio-guide";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Issue } from "@/lib/video/import";
 
@@ -183,6 +184,7 @@ export default async function VideoProjectPage({
               }))}
               activeVariantId={activeVariant?.id ?? null}
             />
+            {activeVariant && <AspectRatioGuide ratio={activeVariant.aspectRatio} />}
             {activeVariant ? (
               <BeatList
                 beats={beats}
@@ -236,7 +238,7 @@ export default async function VideoProjectPage({
         </TabsContent>
         <TabsContent value="tournage">
           {tournage ? (
-            <TournageView projectId={project.id} status={tournage.status} beats={tournage.beats} />
+            <TournageView projectId={project.id} status={tournage.status} beats={tournage.beats} aspectRatio={activeVariant?.aspectRatio ?? "16:9"} />
           ) : (
             <p className="text-sm text-muted-foreground">Aucune variante.</p>
           )}
