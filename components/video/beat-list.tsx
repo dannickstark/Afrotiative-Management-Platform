@@ -13,7 +13,7 @@ import { INSERT_KIND_LABEL, LINK_STATUS_LABEL } from "@/lib/video/labels";
 
 // Task 12 — Produces (voir brief) : la forme consommée par la vue Écriture. `sources` est
 // optionnel : script_beats.sources existe en base et alimente BeatInspector (liste des sources),
-// mais n'entre pas dans le contrat BeatList/DurationMeter du plan, donc un champ optionnel plutôt
+// mais n'entrait pas dans le contrat BeatList du plan d'origine, donc un champ optionnel plutôt
 // qu'un ajout au contrat figé — les appelants qui ne le fournissent pas (ex. les fixtures de test)
 // restent valides.
 export type InsertView = {
@@ -137,8 +137,9 @@ export function BeatList({
   // `beats`/`targetDurationSec` — les tests instancient BeatList sans variantId. En usage réel
   // (app/(app)/video/[id]/page.tsx), variantId est toujours fourni : sans lui, reorderBeats n'a
   // pas de variante à cibler et le glisser-déposer reste visuel-seul (voir handleDrop ci-dessous).
-  // `targetDurationSec` a été retiré (Task 4, SP 014 — UX pass) avec la bande DurationMeter : le
-  // cumul/la cible vivent désormais dans le bandeau de projet (Task 3, project-header.tsx), qui
+  // `targetDurationSec` a été retiré (Task 4, plan 014 — passe UX) en même temps que la bande de
+  // cumul que cette vue rendait (le composant `duration-meter.tsx`, supprimé faute d'appelant) :
+  // le cumul et la cible vivent désormais dans le bandeau de projet (project-header.tsx), qui
   // reçoit `targetDurationSec` directement de la variante.
   variantId?: string;
   // Task 5 (SP5) : la liste des intervenants du projet, pour le select « Locuteur » de

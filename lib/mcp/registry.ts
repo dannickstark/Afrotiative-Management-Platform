@@ -28,7 +28,7 @@ export const TOOL_REGISTRY: readonly ToolSpec[] = [
     name: "list_video_projects",
     kind: "lecture",
     domain: "video",
-    description: "Liste les espaces vidéo existants : titre, statut, plateformes et durée estimée.",
+    description: "Liste les espaces vidéo existants : titre, statut, plateformes, et durée estimée face à la durée cible — celles de la variante de tête du projet (la position la plus basse), pas la somme de toutes ses variantes.",
     inputSchema: {},
   },
   {
