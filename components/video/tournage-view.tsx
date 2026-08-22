@@ -4,18 +4,19 @@
 // grand texte pour la lecture caméra. Même motif d'écriture que components/video/verify-all-links.tsx
 // et montage-share-panel.tsx : useTransition par action, toast + router.refresh() sur succès,
 // gestion `{ ok: false }` via `res.message`.
-import { useState, useTransition } from "react";
+import { useState, useTransition, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Loader2, Star, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, Star, ChevronLeft, ChevronRight, Maximize, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RichEditor } from "@/components/article/rich-editor";
 import {
   addTake, updateTake, deleteTake, selectTake,
-  markReadyToShoot, startShooting, finishShooting,
+  markReadyToShoot, startShooting, finishShooting, updateBeat,
 } from "@/lib/actions/video-actions";
 import { TAKE_STATUS_LABEL, VIDEO_STATUS_LABEL } from "@/lib/video/labels";
 import type { TournageBeat } from "@/lib/video/takes-core";
@@ -204,25 +205,142 @@ function PrompteurMode({ beats }: { beats: TournageBeat[] }) {
   const [index, setIndex] = useState(0);
   const beat = beats[index];
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <Button type="button" variant="outline" size="lg" disabled={index === 0} onClick={() => setIndex((i) => Math.max(0, i - 1))}>
+  // Contenu édité localement (Tiptap ne relit `value` qu'à la création — `key={beat.id}` sur
+  // RichEditor remonte l'éditeur au changement de beat). Resynchronisé explicitement ici aussi
+  // pour que `html`/`dirtyRef` (lus par `save()`) reflètent bien le nouveau beat, et pas le
+  // contenu édité (non sauvegardé) du beat précédent.
+  const [html, setHtml] = useState(beat.spokenText);
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    setHtml(beat.spokenText);
+    dirtyRef.current = false;
+  }, [beat.id, beat.spokenText]);
+
+  const [isSaving, startSaving] = useTransition();
+
+  // Plein écran natif ; repli en overlay `fixed inset-0` si `requestFullscreen` est refusé/absent
+  // (iOS Safari notamment).
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const [fs, setFs] = useState(false);
+  const [overlay, setOverlay] = useState(false);
+
+  // Retourne `false` uniquement sur échec réel de la sauvegarde (garde `dirtyRef.current` à
+  // `true`) — tout appelant qui enchaîne sur un changement de beat (`goTo`) DOIT vérifier ce
+  // retour avant de bouger l'index : `setIndex` change `beat.id`, ce qui déclenche le
+  // `useEffect` de resynchronisation ci-dessus et écraserait silencieusement `html`/`dirtyRef`
+  // avec le nouveau beat, perdant l'édit non sauvegardé du beat précédent sans aucun recours.
+  async function save(): Promise<boolean> {
+    if (!dirtyRef.current) return true;
+    const res = await updateBeat({ beatId: beat.id, spokenText: html });
+    if (!res.ok) {
+      toast.error(res.message);
+      return false;
+    }
+    dirtyRef.current = false;
+    // `router.refresh()` recharge les beats depuis le serveur — ne pas ré-injecter localement
+    // `res.spokenText` par-dessus : le prochain rendu porte déjà la version sanitisée serveur.
+    router.refresh();
+    return true;
+  }
+
+  function goTo(next: number) {
+    startSaving(async () => {
+      const ok = await save();
+      if (!ok) return; // reste sur le beat courant — l'édit non sauvegardé est préservé
+      setIndex(next);
+    });
+  }
+
+  useEffect(() => {
+    function onFullscreenChange() {
+      const active = !!document.fullscreenElement;
+      setFs(active);
+      if (!active) startSaving(async () => { await save(); });
+    }
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beat.id, html]);
+
+  useEffect(() => {
+    if (!overlay) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        startSaving(async () => {
+          await save();
+          setOverlay(false);
+        });
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay, beat.id, html]);
+
+  async function enterFullscreen() {
+    try {
+      await surfaceRef.current?.requestFullscreen();
+    } catch {
+      setOverlay(true);
+    }
+  }
+
+  function closeOverlay() {
+    startSaving(async () => {
+      await save();
+      setOverlay(false);
+    });
+  }
+
+  const content = (
+    <div ref={surfaceRef} className="prompteur-surface space-y-6 rounded-xl border border-border p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button type="button" variant="outline" size="lg" disabled={index === 0 || isSaving} onClick={() => goTo(Math.max(0, index - 1))}>
           <ChevronLeft aria-hidden /> Précédent
         </Button>
-        <span className="text-sm text-muted-foreground">Beat {index + 1} / {beats.length}</span>
-        <Button type="button" variant="outline" size="lg" disabled={index === beats.length - 1} onClick={() => setIndex((i) => Math.min(beats.length - 1, i + 1))}>
+        <span className="text-sm">Beat {index + 1} / {beats.length}</span>
+        <Button type="button" variant="outline" size="lg" disabled={index === beats.length - 1 || isSaving} onClick={() => goTo(Math.min(beats.length - 1, index + 1))}>
           Suivant <ChevronRight aria-hidden />
         </Button>
       </div>
-      <div className="space-y-3 rounded-xl border border-border p-6 text-center">
-        <p className="text-sm text-muted-foreground">{beat.kindLabel}</p>
-        <p className="text-2xl leading-snug font-medium sm:text-3xl">{beat.spokenText}</p>
-        {beat.directionNote && <p className="text-sm text-muted-foreground">{beat.directionNote}</p>}
+      <div className="space-y-3 text-center">
+        <p className="text-sm">{beat.kindLabel}</p>
+        <RichEditor
+          key={beat.id}
+          value={beat.spokenText}
+          onChange={(h) => {
+            setHtml(h);
+            dirtyRef.current = true;
+          }}
+          editable={!isSaving}
+          allowHighlight
+          className="font-editorial prose prose-neutral max-w-none focus:outline-none prompteur-editor"
+        />
+        {beat.directionNote && <p className="text-sm">{beat.directionNote}</p>}
       </div>
-      <LogButtons beatId={beat.id} onDone={() => router.refresh()} />
+      <LogButtons beatId={beat.id} disabled={isSaving} onDone={() => router.refresh()} />
+      <div className="flex flex-wrap items-center gap-3">
+        {overlay ? (
+          <Button type="button" variant="outline" size="lg" disabled={isSaving} onClick={closeOverlay}>
+            <X aria-hidden /> Fermer
+          </Button>
+        ) : (
+          <Button type="button" variant="outline" size="lg" disabled={isSaving} aria-pressed={fs} onClick={enterFullscreen}>
+            <Maximize aria-hidden /> Plein écran
+          </Button>
+        )}
+        <Button type="button" size="lg" disabled={isSaving} onClick={() => startSaving(async () => { await save(); })}>
+          {isSaving && <Loader2 className="animate-spin" aria-hidden />}
+          Enregistrer
+        </Button>
+      </div>
     </div>
   );
+
+  if (overlay) {
+    return <div className="fixed inset-0 z-50 overflow-auto bg-white p-4">{content}</div>;
+  }
+  return content;
 }
 
 export function TournageView({

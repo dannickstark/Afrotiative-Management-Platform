@@ -1,14 +1,17 @@
 "use client";
 import { useEditorState, type Editor } from "@tiptap/react";
-import { Bold, Heading2, Heading3, Link2, List, ListOrdered } from "lucide-react";
+import { Bold, Eraser, Heading2, Heading3, Link2, List, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { HIGHLIGHT_COLORS } from "@/lib/highlight";
 
 // Constrained toolbar: bold, H2, H3, link, bullet list, ordered list — nothing
 // else (matches the StarterKit configuration in rich-editor.tsx, which
 // disables blockquote/codeBlock/code/horizontalRule and limits headings to
-// levels 2–3).
-export function EditorToolbar({ editor }: { editor: Editor }) {
+// levels 2–3). The highlight palette (surlignage) is prop-gated by
+// `allowHighlight` — only the video prompteur editor (beat-inspector.tsx)
+// enables it; the article editor never passes the prop, so no palette shows.
+export function EditorToolbar({ editor, allowHighlight }: { editor: Editor; allowHighlight?: boolean }) {
   // `useEditorState` subscribes to the editor's "transaction"/"update" events
   // directly, so the active-state highlights stay correct even for
   // selection-only changes (e.g. clicking into a heading) — a plain re-render
@@ -61,6 +64,34 @@ export function EditorToolbar({ editor }: { editor: Editor }) {
           <Icon />
         </Button>
       ))}
+      {allowHighlight && (
+        <>
+          <div className="mx-1 h-5 w-px bg-border" aria-hidden />
+          {HIGHLIGHT_COLORS.map((couleur) => (
+            <Button
+              key={couleur}
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Surligner ${couleur}`}
+              aria-pressed={editor.isActive("highlight", { color: couleur })}
+              onClick={() => editor.chain().focus().setHighlight(couleur).run()}
+              className={cn(editor.isActive("highlight", { color: couleur }) && "bg-muted")}
+            >
+              <span className={cn("size-3.5 rounded-full border border-border/60", `hl-${couleur}`)} />
+            </Button>
+          ))}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Retirer le surlignage"
+            onClick={() => editor.chain().focus().unsetHighlight().run()}
+          >
+            <Eraser />
+          </Button>
+        </>
+      )}
     </div>
   );
 }

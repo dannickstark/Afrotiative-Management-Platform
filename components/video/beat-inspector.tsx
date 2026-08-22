@@ -456,6 +456,7 @@ export function BeatInspector({
               value={form.spokenText}
               onChange={(html) => setForm({ ...form, spokenText: html })}
               editable={!isPending}
+              allowHighlight
             />
             {breathRisk && (
               <div className="flex items-center gap-1.5 text-xs text-[var(--status-pending)]">
