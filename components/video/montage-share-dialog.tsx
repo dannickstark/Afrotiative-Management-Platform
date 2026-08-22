@@ -23,6 +23,17 @@ import type { ShareRow } from "@/lib/montage/access";
 // booléen, jamais le secret lui-même — remonté par MontageSharePanel via `onSecretPendingChange`)
 // annule toute tentative de fermeture tant que l'utilisateur n'a pas cliqué « J'ai copié le
 // lien », qui vide `justCreated` côté panneau et donc repasse `secretPending` à false.
+
+// Prédicat pur de la garde de fermeture — extrait pour être testable sans monter le Dialog
+// (tests/montage-share-dialog.test.ts), même patron que
+// components/video/tournage-progress.tsx#resolveExpandedId. `next` est l'état demandé par base-ui :
+// une OUVERTURE n'est jamais refusée ; seule une fermeture l'est, et seulement tant qu'un lien
+// fraîchement créé n'a pas été acquitté.
+export function mayCloseShareDialog(next: boolean, secretPending: boolean): boolean {
+  if (next) return true;
+  return !secretPending;
+}
+
 export function MontageShareDialog({
   projectId, shares, canManage,
 }: {
@@ -37,7 +48,7 @@ export function MontageShareDialog({
     <Dialog
       open={open}
       onOpenChange={(next, eventDetails) => {
-        if (!next && secretPending) {
+        if (!mayCloseShareDialog(next, secretPending)) {
           eventDetails.cancel();
           return;
         }
@@ -45,7 +56,10 @@ export function MontageShareDialog({
       }}
     >
       <DialogTrigger render={<Button variant="outline" size="sm"><Users aria-hidden /> Accès monteur</Button>} />
-      <DialogContent className="ring-0 sm:max-w-lg">
+      {/* Le X de fermeture disparaît tant que la garde ci-dessus annulerait le geste : un bouton
+          pleinement actif dont le clic est avalé sans un mot est pire que pas de bouton du tout
+          (revue finale, F5). Il revient dès que « J'ai copié le lien » a été cliqué. */}
+      <DialogContent className="ring-0 sm:max-w-lg" showCloseButton={!secretPending}>
         <DialogHeader className="sr-only">
           <DialogTitle>Accès monteur</DialogTitle>
         </DialogHeader>
