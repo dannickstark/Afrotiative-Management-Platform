@@ -119,7 +119,7 @@ describe("TournageProgressHeader", () => {
     const html = renderToStaticMarkup(
       React.createElement(TournageProgressHeader, { beats: [], filter: "tous", onFilterChange: () => {} }),
     );
-    expect(html).toContain("Prises retenues : 0 / 0 beats");
+    expect(html).toContain("Prises retenues : 0 / 0 beat");
     expect(html).not.toContain("NaN");
   });
 
@@ -127,7 +127,7 @@ describe("TournageProgressHeader", () => {
     const html = renderToStaticMarkup(
       React.createElement(TournageProgressHeader, { beats: [beat], filter: "tous", onFilterChange: () => {} }),
     );
-    expect(html).toContain("Prises retenues : 1 / 1 beats");
+    expect(html).toContain("Prises retenues : 1 / 1 beat");
   });
 
   it("affiche le badge des beats sans prise quand il y en a", () => {
@@ -136,7 +136,7 @@ describe("TournageProgressHeader", () => {
         beats: [beat, beatNoTake], filter: "tous", onFilterChange: () => {},
       }),
     );
-    expect(html).toContain("1 beats sans prise");
+    expect(html).toContain("1 beat sans prise");
   });
 });
 

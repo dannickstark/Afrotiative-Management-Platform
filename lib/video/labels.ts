@@ -32,3 +32,12 @@ export const VIDEO_STATUS_LABEL: Record<string, string> = {
   brouillon: "Brouillon", en_ecriture: "En écriture", pret_a_tourner: "Prêt à tourner",
   tourne: "Tourné", en_montage: "En montage", publie: "Publié", archive: "Archivé",
 };
+
+// Accord du pluriel français d'un nom régulier : « 1 beat », « 2 beats », et « 0 beat » — le
+// français prend le singulier à zéro (même règle que le « 0 projet » de
+// components/video/project-list.tsx). Un seul helper pour les sites qui n'accordaient pas du tout
+// (« 1 beats ») ; les libellés en « (s) » parenthétique restent tels quels, c'est une convention
+// légitime là où le nombre est souvent inconnu à la lecture.
+export function plural(count: number, noun: string): string {
+  return count > 1 ? `${noun}s` : noun;
+}

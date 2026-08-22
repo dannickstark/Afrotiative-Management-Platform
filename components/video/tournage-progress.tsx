@@ -5,6 +5,7 @@
 // de progression (piste + remplissage `var(--status-approved)`) est reprise ici à l'identique.
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { plural } from "@/lib/video/labels";
 import type { TournageBeat } from "@/lib/video/takes-core";
 
 export type TournageFilter = "tous" | "sans_prise" | "a_revoir";
@@ -64,7 +65,7 @@ export function TournageProgressHeader({ beats, filter, onFilterChange }: {
     <div className="space-y-3 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
       <div className="flex items-center gap-3">
         <span className="shrink-0 text-xs text-muted-foreground">
-          Prises retenues : {retainedCount} / {totalBeats} beats
+          Prises retenues : {retainedCount} / {totalBeats} {plural(totalBeats, "beat")}
         </span>
         <div className="h-1 w-full flex-1 rounded-full bg-border">
           <div
@@ -75,7 +76,7 @@ export function TournageProgressHeader({ beats, filter, onFilterChange }: {
       </div>
       <div className="flex flex-wrap items-center gap-4">
         <span>{totalTakes} prise(s)</span>
-        {noTakeCount > 0 && <Badge variant="outline">{noTakeCount} beats sans prise</Badge>}
+        {noTakeCount > 0 && <Badge variant="outline">{noTakeCount} {plural(noTakeCount, "beat")} sans prise</Badge>}
       </div>
       <div className="flex flex-wrap gap-2">
         {FILTERS.map((f) => (

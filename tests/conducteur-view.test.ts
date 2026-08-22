@@ -33,7 +33,7 @@ test("état vide", () => {
 test("avancement montage : 0 beat n'affiche pas NaN ni ne divise par zéro", () => {
   const empty: Conducteur = { beats: [], totals: { beatCount: 0, totalDurationSec: 0, insertCount: 0, deadLinkCount: 0 } };
   const html = renderToStaticMarkup(createElement(ConducteurView, { conducteur: empty }));
-  expect(html).toContain("0 / 0 beats montés");
+  expect(html).toContain("0 / 0 beat monté");
   expect(html).not.toContain("NaN");
 });
 

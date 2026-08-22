@@ -1,6 +1,7 @@
 import type { Conducteur } from "@/lib/video/rundown";
 import { Badge } from "@/components/ui/badge";
 import { BeatCheckToggle, InsertDeadFlag } from "@/components/video/conducteur-annotations";
+import { plural } from "@/lib/video/labels";
 import { cn } from "@/lib/utils";
 
 function fmt(sec: number): string {
@@ -29,16 +30,16 @@ export function ConducteurView({
     <div className="space-y-4">
       <div className="space-y-2 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
         <div className="flex flex-wrap gap-4">
-          <span>{totals.beatCount} beats</span>
+          <span>{totals.beatCount} {plural(totals.beatCount, "beat")}</span>
           <span>Durée {fmt(totals.totalDurationSec)}</span>
-          <span>{totals.insertCount} inserts</span>
+          <span>{totals.insertCount} {plural(totals.insertCount, "insert")}</span>
           {totals.deadLinkCount > 0 && (
             <span className="text-destructive">{totals.deadLinkCount} lien(s) mort(s)</span>
           )}
         </div>
         <div className="flex items-center gap-3">
           <span className="shrink-0 text-xs text-muted-foreground">
-            {montedCount} / {totals.beatCount} beats montés
+            {montedCount} / {totals.beatCount} {plural(totals.beatCount, "beat")} {plural(totals.beatCount, "monté")}
           </span>
           <div className="h-1 w-full flex-1 rounded-full bg-border">
             <div
