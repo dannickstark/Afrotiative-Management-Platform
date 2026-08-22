@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
-import { db, scriptJournal, type scriptJournalSource } from "@/db";
+import {
+  db, scriptJournal, scriptVariants, scriptBeats, beatInserts, interviewSpeakers,
+  type scriptJournalSource,
+} from "@/db";
 import { eq } from "drizzle-orm";
 import { createVideoProjectCore, markProjectReviewedCore } from "@/lib/video/persist";
 import { listVideoProjects, unreviewedAgentWrites } from "@/lib/queries/video";
@@ -108,5 +111,53 @@ describe("unreviewedAgentWrites / unreviewedCount", () => {
     const row = rows.find((p) => p.id === projectId);
     expect(row).toBeDefined();
     expect(row!.unreviewedCount).toBe(await unreviewedAgentWrites(projectId));
+  });
+});
+
+// Task 1 (SP 014 — UX pass) — les trois agrégations « ce qui réclame un humain, par projet ».
+// targetSec est couvert en pur (tests/video-project-list.test.ts#pickHeadVariant) ; deadLinkCount
+// et missingConsentCount remontent une chaîne (insert→beat→variante / intervenant direct) que seul un
+// aller-retour DB peut éprouver — d'où leur présence ici plutôt qu'en lane pure.
+describe("listVideoProjects — targetSec / deadLinkCount / missingConsentCount", () => {
+  let projectId: string;
+  let beatId: string;
+
+  beforeAll(async () => {
+    projectId = await newProject("Test — à traiter par projet");
+    const [variant] = await db.select({ id: scriptVariants.id }).from(scriptVariants)
+      .where(eq(scriptVariants.projectId, projectId));
+    const [beat] = await db.insert(scriptBeats).values({
+      variantId: variant.id, externalId: "b-01", position: 0, kind: "narration",
+    }).returning();
+    beatId = beat.id;
+  });
+  afterAll(async () => { await cleanupProject(projectId); });
+
+  it("targetSec reprend la cible (720 s) de la variante de tête — ici l'unique variante du projet", async () => {
+    const rows = await listVideoProjects();
+    const row = rows.find((p) => p.id === projectId);
+    expect(row?.targetSec).toBe(720);
+  });
+
+  it("deadLinkCount compte les inserts « mort » et « interdit » du projet, pas « ok » ni « non_verifie »", async () => {
+    await db.insert(beatInserts).values([
+      { beatId, kind: "image", linkStatus: "mort", position: 0 },
+      { beatId, kind: "image", linkStatus: "interdit", position: 1 },
+      { beatId, kind: "image", linkStatus: "ok", position: 2 },
+      { beatId, kind: "image", linkStatus: "non_verifie", position: 3 },
+    ]);
+    const rows = await listVideoProjects();
+    const row = rows.find((p) => p.id === projectId);
+    expect(row?.deadLinkCount).toBe(2);
+  });
+
+  it("missingConsentCount compte les intervenants sans consentement, pas ceux qui l'ont donné", async () => {
+    await db.insert(interviewSpeakers).values([
+      { projectId, name: "Sans consentement" }, // consentGiven par défaut à false
+      { projectId, name: "Avec consentement", consentGiven: true },
+    ]);
+    const rows = await listVideoProjects();
+    const row = rows.find((p) => p.id === projectId);
+    expect(row?.missingConsentCount).toBe(1);
   });
 });

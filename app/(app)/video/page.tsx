@@ -5,7 +5,7 @@ import { requirePermission } from "@/lib/rbac";
 import { listVideoProjects } from "@/lib/queries/video";
 import { listVideoCategoryOptions } from "@/lib/queries/video-categories";
 import { PageHeader } from "@/components/shell/page-header";
-import { ProjectList } from "@/components/video/project-list";
+import { ProjectListFilters } from "@/components/video/project-list";
 import { NewProjectDialog } from "@/components/video/new-project-dialog";
 
 // Task 10 — écran de liste des projets vidéo. "read" pour l'affichage : "manage" reste réservé aux
@@ -30,7 +30,7 @@ export default async function VideoPage() {
         description="Scripts, briefs et montage des projets vidéo."
         actions={<NewProjectDialog articles={sourceArticles} categories={categories} />}
       />
-      <ProjectList projects={projects} />
+      <ProjectListFilters projects={projects} />
     </div>
   );
 }

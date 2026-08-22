@@ -55,16 +55,44 @@ export type VideoProjectListRow = {
   title: string;
   status: string;
   platforms: string[];
+  // Durée cumulée des beats de la VARIANTE DE TÊTE (la position la plus basse), pas la somme de
+  // toutes les variantes : les variantes sont des rendus ALTERNATIFS d'une même histoire (un
+  // montage YouTube de 10 min et un TikTok de 60 s), pas des segments qui s'additionnent. Additionner
+  // faisait lire « 11:00 » sur /video pendant que /video/[id] affichait « 10:00 » un clic plus loin
+  // (revue finale, F3). La variante de tête est déjà celle qui fixe le brief côté
+  // app/(app)/video/[id]/page.tsx.
   estimatedSec: number;
   articleTitle: string | null;
   updatedAt: Date;
   // Task 8 — nombre d'écritures d'agent (source "mcp") de ce projet dont `reviewedAt` est encore
   // `null`. Le marqueur « non relue » : voir lib/video/persist.ts#markProjectReviewedCore.
   unreviewedCount: number;
+  // Task 1 (SP 014 — UX pass) — ce qui réclame un humain, par projet. `deadLinkCount` et
+  // `missingConsentCount` alimentent la colonne « À traiter » (Task 2) et se comptent bien sur TOUT
+  // le projet. `targetSec`, lui, est la cible propre à la variante de tête — même portée
+  // qu'`estimatedSec` ci-dessus, pour que les deux moitiés de la cellule « Durée / cible » parlent
+  // du même montage. `null` quand cette variante n'a pas de cible (ou qu'il n'y a aucune variante).
+  targetSec: number | null;
+  deadLinkCount: number;
+  missingConsentCount: number;
 };
 
-// Liste des projets avec la durée cumulée (toutes variantes confondues) — consommée par l'écran
-// /video (Task 10).
+// Pure : la « variante de tête » d'un projet — celle de position la plus basse, celle que
+// app/(app)/video/[id]/page.tsx tient déjà pour la variante de référence du brief. Départage à
+// position égale par `id` pour rester déterministe (la contrainte d'unicité
+// script_variants_project_position_uq rend le cas théorique, mais un tri instable ferait clignoter
+// la colonne « Durée / cible » d'un rendu à l'autre). `null` pour un projet sans variante.
+// Extraite pour être testable sans DB (voir tests/video-project-list.test.ts).
+export function pickHeadVariant<T extends { id: string; position: number }>(variants: T[]): T | null {
+  if (variants.length === 0) return null;
+  return variants.reduce((head, v) => {
+    if (v.position !== head.position) return v.position < head.position ? v : head;
+    return v.id < head.id ? v : head;
+  });
+}
+
+// Liste des projets avec la durée cumulée de leur variante de tête — consommée par l'écran /video
+// (Task 10) et par l'outil MCP `list_video_projects` (lib/mcp/tools.ts).
 export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   const projects = await db.select({
     id: videoProjects.id, title: videoProjects.title, status: videoProjects.status,
@@ -80,6 +108,7 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   const variantIds = variants.map((v) => v.id);
   const beats = variantIds.length > 0
     ? await db.select({
+      id: scriptBeats.id,
       variantId: scriptBeats.variantId,
       estimatedDurationSec: scriptBeats.estimatedDurationSec,
       durationOverrideSec: scriptBeats.durationOverrideSec,
@@ -100,10 +129,49 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   }
 
   const variantsByProject = new Map<string, typeof variants>();
+  const projectIdByVariant = new Map<string, string>();
   for (const v of variants) {
     const list = variantsByProject.get(v.projectId) ?? [];
     list.push(v);
     variantsByProject.set(v.projectId, list);
+    projectIdByVariant.set(v.id, v.projectId);
+  }
+
+  // Task 1 (SP 014) — inserts « morts » ou « interdits » par projet, en UNE requête groupée. Les
+  // inserts pendent des beats, qui pendent des variantes (aucune colonne projectId directe sur
+  // beat_inserts) : on remonte donc la chaîne variante→beat→insert déjà construite ci-dessus plutôt
+  // que d'interroger par variante — même motif anti-N+1 que unreviewedByProject plus bas.
+  const projectIdByBeat = new Map<string, string>();
+  for (const b of beats) {
+    const projectId = projectIdByVariant.get(b.variantId);
+    if (projectId) projectIdByBeat.set(b.id, projectId);
+  }
+  const beatIds = beats.map((b) => b.id);
+  const deadInsertRows = beatIds.length > 0
+    ? await db.select({ beatId: beatInserts.beatId }).from(beatInserts)
+      .where(and(
+        inArray(beatInserts.beatId, beatIds),
+        inArray(beatInserts.linkStatus, ["mort", "interdit"]),
+      ))
+    : [];
+  const deadLinkCountByProject = new Map<string, number>();
+  for (const r of deadInsertRows) {
+    const projectId = projectIdByBeat.get(r.beatId);
+    if (!projectId) continue;
+    deadLinkCountByProject.set(projectId, (deadLinkCountByProject.get(projectId) ?? 0) + 1);
+  }
+
+  // Intervenants sans consentement, par projet — interview_speakers porte déjà project_id, donc pas
+  // besoin de remonter de chaîne : une seule requête groupée sur inArray(projectIds).
+  const missingConsentRows = await db.select({ projectId: interviewSpeakers.projectId })
+    .from(interviewSpeakers)
+    .where(and(
+      inArray(interviewSpeakers.projectId, projectIds),
+      eq(interviewSpeakers.consentGiven, false),
+    ));
+  const missingConsentByProject = new Map<string, number>();
+  for (const r of missingConsentRows) {
+    missingConsentByProject.set(r.projectId, (missingConsentByProject.get(r.projectId) ?? 0) + 1);
   }
 
   // Compteur « non relue » par projet, en UNE requête groupée plutôt qu'un `unreviewedAgentWrites`
@@ -122,11 +190,16 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
 
   return projects.map((p) => {
     const vs = variantsByProject.get(p.id) ?? [];
-    const estimatedSec = vs.reduce((sum, v) => sum + (durationByVariant.get(v.id) ?? 0), 0);
+    // Durée ET cible décrivent la MÊME variante — celle de tête. Voir VideoProjectListRow.
+    const head = pickHeadVariant(vs);
+    const estimatedSec = head ? (durationByVariant.get(head.id) ?? 0) : 0;
     return {
       id: p.id, title: p.title, status: p.status, platforms: vs.map((v) => v.platform),
       estimatedSec, articleTitle: p.articleTitle, updatedAt: p.updatedAt,
       unreviewedCount: unreviewedByProject.get(p.id) ?? 0,
+      targetSec: head?.targetDurationSec ?? null,
+      deadLinkCount: deadLinkCountByProject.get(p.id) ?? 0,
+      missingConsentCount: missingConsentByProject.get(p.id) ?? 0,
     };
   });
 }

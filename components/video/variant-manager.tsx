@@ -59,14 +59,15 @@ export function VariantManager({ projectId, variants, activeVariantId }: {
           <Button onClick={() => setDeriving(true)}><Plus aria-hidden /> Dériver une variante</Button>
         </CardAction>
       </CardHeader>
+      {/* Task 3 (SP 014 — UX pass) : plus de sélecteur ici — le bandeau de projet
+          (components/video/project-header.tsx) en porte désormais un, avec les mêmes liens
+          `?variant=`. Ce bloc redevient ce qu'il devrait être, une carte d'actions : le libellé de
+          chaque variante en texte simple (plus de Badge cliquable faisant doublon), et le seul
+          bouton Supprimer pour les variantes dérivées. */}
       <CardContent className="flex flex-wrap items-center gap-2">
         {variants.map((v) => (
-          <span key={v.id} className="inline-flex items-center gap-1.5">
-            <a href={`/video/${projectId}?tab=ecriture&variant=${v.id}`}>
-              <Badge variant={v.id === activeVariantId ? "default" : "outline"}>
-                {PLATFORM_LABEL[v.platform] ?? v.platform} · {v.aspectRatio}
-              </Badge>
-            </a>
+          <span key={v.id} className="inline-flex items-center gap-1.5 text-sm">
+            <span>{PLATFORM_LABEL[v.platform] ?? v.platform} · {v.aspectRatio}</span>
             {v.derivedFromId !== null && (
               <Badge variant="secondary" className="text-xs">dérivée</Badge>
             )}

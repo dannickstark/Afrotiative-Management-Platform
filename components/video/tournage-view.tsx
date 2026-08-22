@@ -16,11 +16,14 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { RichEditor } from "@/components/article/rich-editor";
 import { AspectRatioGuide } from "@/components/video/aspect-ratio-guide";
 import {
-  addTake, updateTake, deleteTake, selectTake,
-  markReadyToShoot, startShooting, finishShooting, updateBeat,
+  addTake, updateTake, deleteTake, selectTake, updateBeat,
 } from "@/lib/actions/video-actions";
-import { TAKE_STATUS_LABEL, VIDEO_STATUS_LABEL } from "@/lib/video/labels";
+import { TAKE_STATUS_LABEL } from "@/lib/video/labels";
 import type { TournageBeat } from "@/lib/video/takes-core";
+import {
+  TournageProgressHeader, filterBeats, resolveExpandedId,
+  type TournageFilter,
+} from "@/components/video/tournage-progress";
 
 type LogStatus = "bonne" | "mauvaise" | "a_revoir";
 
@@ -29,43 +32,6 @@ const LOG_BUTTONS: { status: LogStatus; label: string }[] = [
   { status: "mauvaise", label: "Mauvaise" },
   { status: "a_revoir", label: "À revoir" },
 ];
-
-function StatusHeader({ projectId, status }: { projectId: string; status: string }) {
-  const router = useRouter();
-  const [isPending, startTransition] = useTransition();
-
-  function run(action: (projectId: string) => Promise<{ ok: true } | { ok: false; message: string }>) {
-    startTransition(async () => {
-      const res = await action(projectId);
-      if (!res.ok) {
-        toast.error(res.message);
-        return;
-      }
-      toast.success("Statut mis à jour.");
-      router.refresh();
-    });
-  }
-
-  let button: { label: string; action: (projectId: string) => Promise<{ ok: true } | { ok: false; message: string }> } | null = null;
-  if (status === "en_ecriture") button = { label: "Marquer prêt à tourner", action: markReadyToShoot };
-  else if (status === "pret_a_tourner") button = { label: "Démarrer le tournage", action: startShooting };
-  else if (status === "tourne") button = { label: "Tournage terminé", action: finishShooting };
-
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Statut :</span>
-        <Badge variant="outline">{VIDEO_STATUS_LABEL[status] ?? status}</Badge>
-      </div>
-      {button && (
-        <Button type="button" size="lg" disabled={isPending} onClick={() => run(button!.action)}>
-          {isPending && <Loader2 className="animate-spin" aria-hidden />}
-          {button.label}
-        </Button>
-      )}
-    </div>
-  );
-}
 
 function LogButtons({ beatId, disabled, onDone }: { beatId: string; disabled?: boolean; onDone: () => void }) {
   const [isPending, startTransition] = useTransition();
@@ -91,7 +57,10 @@ function LogButtons({ beatId, disabled, onDone }: { beatId: string; disabled?: b
           size="lg"
           variant="outline"
           disabled={disabled || isPending}
-          className="grow sm:grow-0"
+          // Usage plateau : filmé/tapé sur tablette, caméra en main — le plancher normal de 32 px
+          // (contrôles chrome) ne s'applique pas ici. `h-11` (44px) prime sur le `h-9` de `size="lg"`
+          // via twMerge (cf. components/ui/button.tsx#cn) : dernier utilitaire de hauteur gagnant.
+          className="h-11 grow sm:grow-0"
           onClick={() => handleLog(b.status)}
         >
           {b.label}
@@ -198,6 +167,76 @@ function JournalBeatCard({ beat }: { beat: TournageBeat }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// Ligne compacte pour un beat qui n'est pas la carte pleine active — ne montre que l'essentiel
+// (libellé, compteur de prises) et un bouton pour le déplier. Le clic notifie le parent
+// (`JournalMode`) qui décide de la carte à mettre en carte pleine ; voir sa note pour le choix
+// d'accordéon (une seule carte pleine à la fois).
+function CompactBeatRow({ beat, onExpand }: { beat: TournageBeat; onExpand: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-2.5">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{beat.kindLabel}</p>
+        <p className="truncate text-xs text-muted-foreground">{beat.spokenText}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Badge variant="outline">
+          {beat.takes.length} prise{beat.takes.length > 1 ? "s" : ""}
+        </Badge>
+        <Button type="button" size="sm" variant="outline" onClick={onExpand}>
+          Déplier
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Mode Journal : en-tête d'avancement + filtres (état client, pas d'URL — cf. brief Task 6), puis
+// la liste des beats filtrés. Exactement une carte est "pleine" à la fois (patron accordéon) : par
+// défaut le premier beat sans prise retenue (celui qui a le plus besoin d'attention sur le
+// plateau), les autres en lignes compactes avec un bouton pour les déplier. Choix délibéré plutôt
+// que "toutes celles qu'on déplie restent ouvertes" : la personne qui filme veut un seul écran
+// d'action à la fois, pas une pile de cartes à faire défiler — cf. brief "le premier beat ... reste
+// en carte pleine" au singulier.
+function JournalMode({ beats }: { beats: TournageBeat[] }) {
+  const [filter, setFilter] = useState<TournageFilter>("tous");
+  // `expandedId` n'avance PAS tout seul quand une prise est loguée pour le beat déplié (voir
+  // LogButtons#onDone dans JournalBeatCard, qui ne fait que router.refresh()) : c'est délibéré
+  // (revue Task 6, ronde 2) — sur le plateau on logue souvent plusieurs prises d'affilée pour le
+  // même beat, et faire sauter la carte au beat suivant sous les doigts de la personne qui filme
+  // serait pire qu'un clic volontaire sur "Déplier". Ne pas "corriger" ça en auto-avançant.
+  const firstUnresolved = beats.find((b) => b.selectedTakeId === null) ?? beats[0];
+  const [expandedId, setExpandedId] = useState<string | undefined>(firstUnresolved?.id);
+
+  const visible = filterBeats(beats, filter);
+
+  // `expandedId` est posé une fois au montage à partir de la liste NON filtrée — un changement de
+  // filtre peut donc l'exclure de `visible` (revue Task 6, ronde 2 : finding important). Sans
+  // repli, plus aucune carte pleine ne serait rendue tant que l'utilisateur n'a pas cliqué
+  // "Déplier", ce qui prive le plateau de ses boutons 44px précisément quand un filtre est actif.
+  // `resolveExpandedId` (components/video/tournage-progress.tsx) dérive donc la carte pleine à
+  // afficher à CHAQUE rendu plutôt que de faire confiance au seul état stocké.
+  const effectiveExpandedId = resolveExpandedId(visible, expandedId);
+
+  return (
+    <div className="space-y-4">
+      <TournageProgressHeader beats={beats} filter={filter} onFilterChange={setFilter} />
+      {visible.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Aucun beat ne correspond à ce filtre.</p>
+      ) : (
+        <div className="space-y-4">
+          {visible.map((b) => (
+            b.id === effectiveExpandedId ? (
+              <JournalBeatCard key={b.id} beat={b} />
+            ) : (
+              <CompactBeatRow key={b.id} beat={b} onExpand={() => setExpandedId(b.id)} />
+            )
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -346,10 +385,8 @@ function PrompteurMode({ beats, aspectRatio }: { beats: TournageBeat[]; aspectRa
 }
 
 export function TournageView({
-  projectId, status, beats, aspectRatio = "16:9",
+  beats, aspectRatio = "16:9",
 }: {
-  projectId: string;
-  status: string;
   beats: TournageBeat[];
   aspectRatio?: string;
 }) {
@@ -357,7 +394,6 @@ export function TournageView({
 
   return (
     <div className="space-y-6">
-      <StatusHeader projectId={projectId} status={status} />
       <div className="flex items-center gap-2">
         <Button type="button" variant={prompteur ? "default" : "outline"} size="lg" onClick={() => setPrompteur((p) => !p)}>
           Mode prompteur
@@ -368,11 +404,7 @@ export function TournageView({
       ) : prompteur ? (
         <PrompteurMode beats={beats} aspectRatio={aspectRatio} />
       ) : (
-        <div className="space-y-4">
-          {beats.map((b) => (
-            <JournalBeatCard key={b.id} beat={b} />
-          ))}
-        </div>
+        <JournalMode beats={beats} />
       )}
     </div>
   );

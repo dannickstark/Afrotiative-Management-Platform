@@ -1,6 +1,8 @@
 import type { Conducteur } from "@/lib/video/rundown";
 import { Badge } from "@/components/ui/badge";
 import { BeatCheckToggle, InsertDeadFlag } from "@/components/video/conducteur-annotations";
+import { plural } from "@/lib/video/labels";
+import { cn } from "@/lib/utils";
 
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60), s = sec % 60;
@@ -20,15 +22,32 @@ export function ConducteurView({
   annotate?: { projectId?: string; shareToken?: string };
 }) {
   const { beats, totals } = conducteur;
+  // Avancement montage : compte les beats dont `checked` (le flag « Monté ») est vrai. Gardé contre
+  // la division par zéro quand la variante n'a aucun beat — la barre reste alors à 0 %, pas NaN.
+  const montedCount = beats.filter((b) => b.checked).length;
+  const montedPct = totals.beatCount === 0 ? 0 : Math.round((montedCount / totals.beatCount) * 100);
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-4 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-        <span>{totals.beatCount} beats</span>
-        <span>Durée {fmt(totals.totalDurationSec)}</span>
-        <span>{totals.insertCount} inserts</span>
-        {totals.deadLinkCount > 0 && (
-          <span className="text-destructive">{totals.deadLinkCount} lien(s) mort(s)</span>
-        )}
+      <div className="space-y-2 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+        <div className="flex flex-wrap gap-4">
+          <span>{totals.beatCount} {plural(totals.beatCount, "beat")}</span>
+          <span>Durée {fmt(totals.totalDurationSec)}</span>
+          <span>{totals.insertCount} {plural(totals.insertCount, "insert")}</span>
+          {totals.deadLinkCount > 0 && (
+            <span className="text-destructive">{totals.deadLinkCount} lien(s) mort(s)</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {montedCount} / {totals.beatCount} {plural(totals.beatCount, "beat")} {plural(totals.beatCount, "monté")}
+          </span>
+          <div className="h-1 w-full flex-1 rounded-full bg-border">
+            <div
+              className="h-1 rounded-full bg-[var(--status-approved)]"
+              style={{ width: `${montedPct}%` }}
+            />
+          </div>
+        </div>
       </div>
 
       {beats.length === 0 ? (
@@ -36,7 +55,10 @@ export function ConducteurView({
       ) : (
         <ol className="space-y-3">
           {beats.map((b) => (
-            <li key={b.position} className="rounded-lg border px-4 py-3">
+            <li
+              key={b.position}
+              className={cn("rounded-lg border px-4 py-3", b.checked && "bg-muted/40")}
+            >
               <div className="flex items-center gap-2 text-sm">
                 <span className="font-mono text-muted-foreground">#{b.position + 1}</span>
                 <Badge variant="secondary">{b.kindLabel}</Badge>
@@ -47,7 +69,9 @@ export function ConducteurView({
                   <BeatCheckToggle beatId={b.id} checked={b.checked} annotate={annotate} />
                 )}
               </div>
-              {b.spokenText && <p className="mt-2 text-sm">{b.spokenText}</p>}
+              {b.spokenText && (
+                <p className={cn("mt-2 text-sm", b.checked && "text-muted-foreground")}>{b.spokenText}</p>
+              )}
               {b.directionNote && <p className="mt-1 text-xs text-muted-foreground">Réal. : {b.directionNote}</p>}
               {b.screenText && <p className="mt-1 text-xs text-muted-foreground">Écran : {b.screenText}</p>}
               {(b.transitionIn || b.transitionOut) && (

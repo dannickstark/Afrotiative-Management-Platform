@@ -6,7 +6,7 @@
 // de createShareLink (lib/actions/montage-actions.ts) — ce composant le garde en état local
 // UNIQUEMENT le temps de l'afficher avec son avertissement, jamais renvoyé au serveur, jamais
 // journalisé.
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Loader2, Plus, TriangleAlert } from "lucide-react";
@@ -30,17 +30,26 @@ function statusOf(share: ShareRow): ShareStatus {
 }
 
 export function MontageSharePanel({
-  projectId, shares, canManage,
+  projectId, shares, canManage, onSecretPendingChange,
 }: {
   projectId: string;
   shares: ShareRow[];
   canManage: boolean;
+  // Round de correction (revue Task 5) : signale au conteneur (le cas échéant, un Dialog) qu'un
+  // lien fraîchement créé est affiché ci-dessous et n'a pas encore été accusé réception via « J'ai
+  // copié le lien ». UNIQUEMENT un booléen — jamais le lien lui-même, qui reste un state local à
+  // CE composant comme le veut le commentaire d'en-tête ci-dessus.
+  onSecretPendingChange?: (pending: boolean) => void;
 }) {
   const router = useRouter();
   const [expiresAt, setExpiresAt] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [justCreated, setJustCreated] = useState<string | null>(null);
   const [isCreating, startCreating] = useTransition();
+
+  useEffect(() => {
+    onSecretPendingChange?.(justCreated !== null);
+  }, [justCreated, onSecretPendingChange]);
 
   function handleCreate() {
     setCreateError(null);
