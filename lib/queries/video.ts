@@ -61,7 +61,23 @@ export type VideoProjectListRow = {
   // Task 8 — nombre d'écritures d'agent (source "mcp") de ce projet dont `reviewedAt` est encore
   // `null`. Le marqueur « non relue » : voir lib/video/persist.ts#markProjectReviewedCore.
   unreviewedCount: number;
+  // Task 1 (SP 014 — UX pass) — ce qui réclame un humain, par projet. Les trois champs suivants
+  // alimentent la colonne « À traiter » de la Task 2 ; voir sumTargetDurationSec ci-dessous pour la
+  // règle de nullabilité de targetSec.
+  targetSec: number | null;
+  deadLinkCount: number;
+  missingConsentCount: number;
 };
+
+// Pure : somme des `targetDurationSec` des variantes d'un projet. `null` quand AUCUNE variante n'en
+// porte — à distinguer d'une somme à 0, qui signifierait qu'au moins une variante a une cible
+// explicitement nulle en secondes. Extraite pour être testable sans DB (voir
+// tests/video-project-list.test.ts).
+export function sumTargetDurationSec(variants: { targetDurationSec: number | null }[]): number | null {
+  const withTarget = variants.filter((v): v is { targetDurationSec: number } => v.targetDurationSec !== null);
+  if (withTarget.length === 0) return null;
+  return withTarget.reduce((sum, v) => sum + v.targetDurationSec, 0);
+}
 
 // Liste des projets avec la durée cumulée (toutes variantes confondues) — consommée par l'écran
 // /video (Task 10).
@@ -80,6 +96,7 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   const variantIds = variants.map((v) => v.id);
   const beats = variantIds.length > 0
     ? await db.select({
+      id: scriptBeats.id,
       variantId: scriptBeats.variantId,
       estimatedDurationSec: scriptBeats.estimatedDurationSec,
       durationOverrideSec: scriptBeats.durationOverrideSec,
@@ -100,10 +117,49 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   }
 
   const variantsByProject = new Map<string, typeof variants>();
+  const projectIdByVariant = new Map<string, string>();
   for (const v of variants) {
     const list = variantsByProject.get(v.projectId) ?? [];
     list.push(v);
     variantsByProject.set(v.projectId, list);
+    projectIdByVariant.set(v.id, v.projectId);
+  }
+
+  // Task 1 (SP 014) — inserts « morts » ou « interdits » par projet, en UNE requête groupée. Les
+  // inserts pendent des beats, qui pendent des variantes (aucune colonne projectId directe sur
+  // beat_inserts) : on remonte donc la chaîne variante→beat→insert déjà construite ci-dessus plutôt
+  // que d'interroger par variante — même motif anti-N+1 que unreviewedByProject plus bas.
+  const projectIdByBeat = new Map<string, string>();
+  for (const b of beats) {
+    const projectId = projectIdByVariant.get(b.variantId);
+    if (projectId) projectIdByBeat.set(b.id, projectId);
+  }
+  const beatIds = beats.map((b) => b.id);
+  const deadInsertRows = beatIds.length > 0
+    ? await db.select({ beatId: beatInserts.beatId }).from(beatInserts)
+      .where(and(
+        inArray(beatInserts.beatId, beatIds),
+        inArray(beatInserts.linkStatus, ["mort", "interdit"]),
+      ))
+    : [];
+  const deadLinkCountByProject = new Map<string, number>();
+  for (const r of deadInsertRows) {
+    const projectId = projectIdByBeat.get(r.beatId);
+    if (!projectId) continue;
+    deadLinkCountByProject.set(projectId, (deadLinkCountByProject.get(projectId) ?? 0) + 1);
+  }
+
+  // Intervenants sans consentement, par projet — interview_speakers porte déjà project_id, donc pas
+  // besoin de remonter de chaîne : une seule requête groupée sur inArray(projectIds).
+  const missingConsentRows = await db.select({ projectId: interviewSpeakers.projectId })
+    .from(interviewSpeakers)
+    .where(and(
+      inArray(interviewSpeakers.projectId, projectIds),
+      eq(interviewSpeakers.consentGiven, false),
+    ));
+  const missingConsentByProject = new Map<string, number>();
+  for (const r of missingConsentRows) {
+    missingConsentByProject.set(r.projectId, (missingConsentByProject.get(r.projectId) ?? 0) + 1);
   }
 
   // Compteur « non relue » par projet, en UNE requête groupée plutôt qu'un `unreviewedAgentWrites`
@@ -127,6 +183,9 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
       id: p.id, title: p.title, status: p.status, platforms: vs.map((v) => v.platform),
       estimatedSec, articleTitle: p.articleTitle, updatedAt: p.updatedAt,
       unreviewedCount: unreviewedByProject.get(p.id) ?? 0,
+      targetSec: sumTargetDurationSec(vs),
+      deadLinkCount: deadLinkCountByProject.get(p.id) ?? 0,
+      missingConsentCount: missingConsentByProject.get(p.id) ?? 0,
     };
   });
 }
