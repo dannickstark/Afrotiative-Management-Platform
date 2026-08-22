@@ -106,6 +106,13 @@ function worstLinkStatus(inserts: InsertView[]): string | null {
   );
 }
 
+// Accord au pluriel du libellé d'un insert (`INSERT_KIND_LABEL`) quand son compte dépasse 1 —
+// toutes les valeurs actuelles (image, vidéo, extrait, graphique, fichier) prennent un simple
+// « s » ; pas de table de pluriels irréguliers tant qu'aucun cas ne l'exige.
+function pluralizeInsertLabel(label: string, count: number): string {
+  return count > 1 ? `${label}s` : label;
+}
+
 // Nombre d'inserts par nature (`insert_kind`, db/schema.ts), dans l'ordre de première apparition —
 // alimente la colonne Médias (ex. « 1 graphique, 2 images »).
 function insertCountsByKind(inserts: InsertView[]): { kind: string; count: number }[] {
@@ -285,7 +292,7 @@ export function BeatList({
                         {insertCountsByKind(beat.inserts).map(({ kind, count }, i) => (
                           <span key={kind}>
                             {i > 0 && ", "}
-                            {count} {(INSERT_KIND_LABEL[kind] ?? kind).toLowerCase()}
+                            {count} {pluralizeInsertLabel((INSERT_KIND_LABEL[kind] ?? kind).toLowerCase(), count)}
                           </span>
                         ))}
                       </span>

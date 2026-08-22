@@ -98,7 +98,7 @@ describe("BeatList", () => {
         })],
       }),
     );
-    expect(html).toContain("2 image");
+    expect(html).toContain("2 images");
   });
 
   it("montre la pastille rouge (pire statut) quand un insert est mort, devant un insert OK", () => {
