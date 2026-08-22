@@ -115,7 +115,7 @@ describe("unreviewedAgentWrites / unreviewedCount", () => {
 });
 
 // Task 1 (SP 014 — UX pass) — les trois agrégations « ce qui réclame un humain, par projet ».
-// targetSec est couvert en pur (tests/video-project-list.test.ts#sumTargetDurationSec) ; deadLinkCount
+// targetSec est couvert en pur (tests/video-project-list.test.ts#pickHeadVariant) ; deadLinkCount
 // et missingConsentCount remontent une chaîne (insert→beat→variante / intervenant direct) que seul un
 // aller-retour DB peut éprouver — d'où leur présence ici plutôt qu'en lane pure.
 describe("listVideoProjects — targetSec / deadLinkCount / missingConsentCount", () => {
@@ -133,7 +133,7 @@ describe("listVideoProjects — targetSec / deadLinkCount / missingConsentCount"
   });
   afterAll(async () => { await cleanupProject(projectId); });
 
-  it("targetSec reprend la cible (720 s) posée sur l'unique variante créée avec le projet", async () => {
+  it("targetSec reprend la cible (720 s) de la variante de tête — ici l'unique variante du projet", async () => {
     const rows = await listVideoProjects();
     const row = rows.find((p) => p.id === projectId);
     expect(row?.targetSec).toBe(720);

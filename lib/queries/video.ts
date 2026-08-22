@@ -55,32 +55,44 @@ export type VideoProjectListRow = {
   title: string;
   status: string;
   platforms: string[];
+  // Durée cumulée des beats de la VARIANTE DE TÊTE (la position la plus basse), pas la somme de
+  // toutes les variantes : les variantes sont des rendus ALTERNATIFS d'une même histoire (un
+  // montage YouTube de 10 min et un TikTok de 60 s), pas des segments qui s'additionnent. Additionner
+  // faisait lire « 11:00 » sur /video pendant que /video/[id] affichait « 10:00 » un clic plus loin
+  // (revue finale, F3). La variante de tête est déjà celle qui fixe le brief côté
+  // app/(app)/video/[id]/page.tsx.
   estimatedSec: number;
   articleTitle: string | null;
   updatedAt: Date;
   // Task 8 — nombre d'écritures d'agent (source "mcp") de ce projet dont `reviewedAt` est encore
   // `null`. Le marqueur « non relue » : voir lib/video/persist.ts#markProjectReviewedCore.
   unreviewedCount: number;
-  // Task 1 (SP 014 — UX pass) — ce qui réclame un humain, par projet. Les trois champs suivants
-  // alimentent la colonne « À traiter » de la Task 2 ; voir sumTargetDurationSec ci-dessous pour la
-  // règle de nullabilité de targetSec.
+  // Task 1 (SP 014 — UX pass) — ce qui réclame un humain, par projet. `deadLinkCount` et
+  // `missingConsentCount` alimentent la colonne « À traiter » (Task 2) et se comptent bien sur TOUT
+  // le projet. `targetSec`, lui, est la cible propre à la variante de tête — même portée
+  // qu'`estimatedSec` ci-dessus, pour que les deux moitiés de la cellule « Durée / cible » parlent
+  // du même montage. `null` quand cette variante n'a pas de cible (ou qu'il n'y a aucune variante).
   targetSec: number | null;
   deadLinkCount: number;
   missingConsentCount: number;
 };
 
-// Pure : somme des `targetDurationSec` des variantes d'un projet. `null` quand AUCUNE variante n'en
-// porte — à distinguer d'une somme à 0, qui signifierait qu'au moins une variante a une cible
-// explicitement nulle en secondes. Extraite pour être testable sans DB (voir
-// tests/video-project-list.test.ts).
-export function sumTargetDurationSec(variants: { targetDurationSec: number | null }[]): number | null {
-  const withTarget = variants.filter((v): v is { targetDurationSec: number } => v.targetDurationSec !== null);
-  if (withTarget.length === 0) return null;
-  return withTarget.reduce((sum, v) => sum + v.targetDurationSec, 0);
+// Pure : la « variante de tête » d'un projet — celle de position la plus basse, celle que
+// app/(app)/video/[id]/page.tsx tient déjà pour la variante de référence du brief. Départage à
+// position égale par `id` pour rester déterministe (la contrainte d'unicité
+// script_variants_project_position_uq rend le cas théorique, mais un tri instable ferait clignoter
+// la colonne « Durée / cible » d'un rendu à l'autre). `null` pour un projet sans variante.
+// Extraite pour être testable sans DB (voir tests/video-project-list.test.ts).
+export function pickHeadVariant<T extends { id: string; position: number }>(variants: T[]): T | null {
+  if (variants.length === 0) return null;
+  return variants.reduce((head, v) => {
+    if (v.position !== head.position) return v.position < head.position ? v : head;
+    return v.id < head.id ? v : head;
+  });
 }
 
-// Liste des projets avec la durée cumulée (toutes variantes confondues) — consommée par l'écran
-// /video (Task 10).
+// Liste des projets avec la durée cumulée de leur variante de tête — consommée par l'écran /video
+// (Task 10) et par l'outil MCP `list_video_projects` (lib/mcp/tools.ts).
 export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
   const projects = await db.select({
     id: videoProjects.id, title: videoProjects.title, status: videoProjects.status,
@@ -178,12 +190,14 @@ export async function listVideoProjects(): Promise<VideoProjectListRow[]> {
 
   return projects.map((p) => {
     const vs = variantsByProject.get(p.id) ?? [];
-    const estimatedSec = vs.reduce((sum, v) => sum + (durationByVariant.get(v.id) ?? 0), 0);
+    // Durée ET cible décrivent la MÊME variante — celle de tête. Voir VideoProjectListRow.
+    const head = pickHeadVariant(vs);
+    const estimatedSec = head ? (durationByVariant.get(head.id) ?? 0) : 0;
     return {
       id: p.id, title: p.title, status: p.status, platforms: vs.map((v) => v.platform),
       estimatedSec, articleTitle: p.articleTitle, updatedAt: p.updatedAt,
       unreviewedCount: unreviewedByProject.get(p.id) ?? 0,
-      targetSec: sumTargetDurationSec(vs),
+      targetSec: head?.targetDurationSec ?? null,
       deadLinkCount: deadLinkCountByProject.get(p.id) ?? 0,
       missingConsentCount: missingConsentByProject.get(p.id) ?? 0,
     };

@@ -2,7 +2,7 @@ import { describe, it, expect } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ProjectList, ProjectListFilters, type ProjectRow } from "@/components/video/project-list";
-import { sumTargetDurationSec } from "@/lib/queries/video";
+import { pickHeadVariant } from "@/lib/queries/video";
 
 const rows: ProjectRow[] = [{
   id: "6f1c2f7e-0000-4000-8000-000000000000",
@@ -24,7 +24,7 @@ describe("ProjectList", () => {
     expect(html).toContain("La success story de Babadampulu");
   });
 
-  it("affiche la durée cumulée au format m:ss", () => {
+  it("affiche la durée de la variante de tête au format m:ss", () => {
     const html = renderToStaticMarkup(React.createElement(ProjectList, { projects: rows }));
     expect(html).toContain("12:05");
   });
@@ -147,30 +147,45 @@ describe("ProjectListFilters", () => {
   });
 });
 
-// Task 1 (SP 014 — UX pass) — sumTargetDurationSec est la seule des trois nouvelles agrégations à
-// porter une règle non triviale (null vs. 0), d'où son extraction en fonction pure ; deadLinkCount
-// et missingConsentCount sont de simples comptages en base couverts par
-// tests/mcp-review-marker.test.ts (lane DB).
-describe("sumTargetDurationSec", () => {
-  it("somme les cibles des variantes qui en portent une", () => {
-    expect(sumTargetDurationSec([{ targetDurationSec: 300 }, { targetDurationSec: 120 }])).toBe(420);
-  });
-
-  it("ignore les variantes sans cible dans la somme", () => {
-    expect(sumTargetDurationSec([{ targetDurationSec: 300 }, { targetDurationSec: null }])).toBe(300);
-  });
-
-  it("renvoie null quand aucune variante n'a de cible", () => {
-    expect(sumTargetDurationSec([{ targetDurationSec: null }, { targetDurationSec: null }])).toBeNull();
+// Task 1 (SP 014 — UX pass), revue finale (F3) — la colonne « Durée / cible » de /video décrit la
+// VARIANTE DE TÊTE, des deux côtés de la barre oblique : les variantes sont des rendus alternatifs
+// d'une même histoire (un montage YouTube de 10 min, un TikTok de 60 s), les additionner produisait
+// une cible de 11:00 qu'aucun écran ne confirmait. deadLinkCount et missingConsentCount restent, eux,
+// comptés sur tout le projet et sont couverts par tests/mcp-review-marker.test.ts (voie DB).
+describe("pickHeadVariant", () => {
+  it("choisit la variante de position la plus basse, quel que soit l'ordre reçu", () => {
+    const v = [
+      { id: "b", position: 2, targetDurationSec: 60 },
+      { id: "a", position: 0, targetDurationSec: 600 },
+      { id: "c", position: 1, targetDurationSec: null },
+    ];
+    expect(pickHeadVariant(v)?.id).toBe("a");
+    // Et c'est bien SA cible qui sert, pas la somme des trois (600 et non 660).
+    expect(pickHeadVariant(v)?.targetDurationSec).toBe(600);
   });
 
   it("renvoie null pour un projet sans variante", () => {
-    expect(sumTargetDurationSec([])).toBeNull();
+    expect(pickHeadVariant([])).toBeNull();
   });
 
-  it("une cible explicitement nulle en secondes compte, ce n'est pas la même chose que « aucune cible »", () => {
-    // 0 est une somme légitime (une variante cadrée à 0 s), à distinguer du null « aucune variante
-    // n'a de cible » — le point que cette fonction existe pour trancher.
-    expect(sumTargetDurationSec([{ targetDurationSec: 0 }])).toBe(0);
+  it("renvoie l'unique variante d'un projet qui n'en a qu'une", () => {
+    expect(pickHeadVariant([{ id: "a", position: 0 }])?.id).toBe("a");
+  });
+
+  it("départage deux positions égales par id, pour rester déterministe", () => {
+    expect(pickHeadVariant([{ id: "z", position: 0 }, { id: "a", position: 0 }])?.id).toBe("a");
+  });
+
+  it("une cible nulle sur la variante de tête reste nulle, même si une autre variante en a une", () => {
+    const head = pickHeadVariant([
+      { id: "a", position: 0, targetDurationSec: null },
+      { id: "b", position: 1, targetDurationSec: 45 },
+    ]);
+    expect(head?.targetDurationSec ?? null).toBeNull();
+  });
+
+  it("une cible explicitement à 0 s se distingue de « aucune cible »", () => {
+    const head = pickHeadVariant([{ id: "a", position: 0, targetDurationSec: 0 }]);
+    expect(head?.targetDurationSec).toBe(0);
   });
 });
