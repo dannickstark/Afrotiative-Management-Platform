@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/session";
 import { requirePermission, can } from "@/lib/rbac";
@@ -7,7 +6,6 @@ import { getVideoSettings } from "@/lib/queries/video-settings";
 import { buildBrief, type BriefVars } from "@/lib/video/brief";
 import { hasBeforeState, markProjectReviewedCore } from "@/lib/video/persist";
 import { PageHeader } from "@/components/shell/page-header";
-import { PLATFORM_LABEL } from "@/lib/video/labels";
 import { BriefPanel } from "@/components/video/brief-panel";
 import { ProjectCategorySelect } from "@/components/video/project-category-select";
 import { getBriefCategory, listVideoCategoryOptions } from "@/lib/queries/video-categories";
@@ -22,7 +20,7 @@ import { readTournageCore } from "@/lib/video/takes-core";
 import { listSharesCore } from "@/lib/montage/access";
 import { MontageSharePanel } from "@/components/video/montage-share-panel";
 import { SpeakersManager } from "@/components/video/speakers-manager";
-import { Badge } from "@/components/ui/badge";
+import { VariantManager } from "@/components/video/variant-manager";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Issue } from "@/lib/video/import";
 
@@ -177,17 +175,14 @@ export default async function VideoProjectPage({
             <div className="flex justify-end">
               <VerifyAllLinks projectId={project.id} />
             </div>
-            {project.variants.length > 1 && (
-              <div className="flex flex-wrap gap-2">
-                {project.variants.map((v) => (
-                  <Link key={v.id} href={`/video/${id}?tab=ecriture&variant=${v.id}`}>
-                    <Badge variant={v.id === activeVariant?.id ? "default" : "outline"}>
-                      {PLATFORM_LABEL[v.platform] ?? v.platform}
-                    </Badge>
-                  </Link>
-                ))}
-              </div>
-            )}
+            <VariantManager
+              projectId={project.id}
+              variants={project.variants.map((v) => ({
+                id: v.id, platform: v.platform, aspectRatio: v.aspectRatio,
+                derivedFromId: v.derivedFromId, position: v.position,
+              }))}
+              activeVariantId={activeVariant?.id ?? null}
+            />
             {activeVariant ? (
               <BeatList
                 beats={beats}

@@ -6,6 +6,7 @@ import {
   createVideoProjectSchema, updateBeatSchema, updateInsertSchema, prepareImportSchema, applyImportSchema,
   reorderBeatsSchema, revertJournalEntrySchema, setProjectCategorySchema,
   createSpeakerSchema, updateSpeakerSchema, speakerIdSchema,
+  deriveVariantSchema, variantIdSchema,
 } from "@/lib/validation";
 import {
   createVideoProjectCore, updateBeatCore, updateBeatInsertCore, reorderBeatsCore,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/video/persist";
 import { setProjectCategoryCore } from "@/lib/video/categories-persist";
 import { createSpeakerCore, updateSpeakerCore, deleteSpeakerCore } from "@/lib/video/speakers-persist";
+import { deriveVariantCore, deleteVariantCore } from "@/lib/video/variants-persist";
 import { verifyUrl } from "@/lib/video/link-check";
 import { uploadInsertMediaCore } from "@/lib/video/insert-upload-core";
 import { addTakeCore, updateTakeCore, deleteTakeCore, selectTakeCore } from "@/lib/video/takes-core";
@@ -321,6 +323,29 @@ export async function deleteSpeaker(input: unknown): Promise<{ ok: true } | { ok
   const parsed = speakerIdSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
   const res = await refusable(() => deleteSpeakerCore({ speakerId: parsed.data.speakerId }));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true };
+}
+
+// Variantes dérivées (SP6) — dériver copie profondément la variante source (lib/video/variants-persist.ts)
+// vers une nouvelle plateforme/ratio/durée cible ; supprimer une variante dérivée (jamais l'origine,
+// refusé côté cœur DB). Mêmes motifs que setProjectCategory/createSpeaker ci-dessus.
+export async function deriveVariant(input: unknown): Promise<{ ok: true; variantId: string } | { ok: false; message: string }> {
+  await guard();
+  const parsed = deriveVariantSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+  const res = await refusable(() => deriveVariantCore(parsed.data));
+  if (!res.ok) return res;
+  revalidateVideo();
+  return { ok: true, variantId: res.value.variantId };
+}
+
+export async function deleteVariant(input: unknown): Promise<{ ok: true } | { ok: false; message: string }> {
+  await guard();
+  const parsed = variantIdSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Entrée invalide." };
+  const res = await refusable(() => deleteVariantCore({ variantId: parsed.data.variantId }));
   if (!res.ok) return res;
   revalidateVideo();
   return { ok: true };
