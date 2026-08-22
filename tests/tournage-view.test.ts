@@ -16,6 +16,9 @@ mock.module("next/navigation", () => ({
   }),
 }));
 const { TournageView } = await import("@/components/video/tournage-view");
+const { TournageProgressHeader, filterBeats, beatNeedsReview, beatHasNoTake } = await import(
+  "@/components/video/tournage-progress"
+);
 
 const beat: TournageBeat = {
   id: "b-1",
@@ -27,6 +30,33 @@ const beat: TournageBeat = {
   selectedTakeId: "t-1",
   takes: [
     { id: "t-1", number: 1, status: "bonne", note: "Bonne énergie", startedAt: new Date("2026-08-20T10:00:00Z") },
+  ],
+};
+
+// Beat sans prise retenue et sans aucune prise — sera le premier « unresolved », donc celui rendu
+// en carte pleine par défaut.
+const beatNoTake: TournageBeat = {
+  id: "b-2",
+  position: 1,
+  kind: "question",
+  kindLabel: "Question",
+  spokenText: "Comment avez-vous commence ce projet ?",
+  directionNote: null,
+  selectedTakeId: null,
+  takes: [],
+};
+
+// Beat avec des prises mais aucune « bonne » — doit tomber dans le filtre « à revoir ».
+const beatToReview: TournageBeat = {
+  id: "b-3",
+  position: 2,
+  kind: "reponse",
+  kindLabel: "Réponse",
+  spokenText: "La réponse enregistrée pour l'instant.",
+  directionNote: null,
+  selectedTakeId: null,
+  takes: [
+    { id: "t-3", number: 1, status: "mauvaise", note: null, startedAt: new Date("2026-08-20T10:05:00Z") },
   ],
 };
 
@@ -59,5 +89,76 @@ describe("TournageView", () => {
       React.createElement(TournageView, { beats: [] }),
     );
     expect(html).toContain("Aucun beat");
+  });
+
+  it("mode Journal : le premier beat sans prise retenue reste en carte pleine, les autres sont compacts", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TournageView, { beats: [beat, beatNoTake, beatToReview] }),
+    );
+    // beatNoTake (b-2) est le premier avec selectedTakeId === null : carte pleine — son texte
+    // parlé complet et ses boutons de log sont rendus.
+    expect(html).toContain("Comment avez-vous commence ce projet ?");
+    // beat (b-1, déjà résolu) et beatToReview (b-3) restent en lignes compactes : compteur de
+    // prises et bouton « Déplier », pas les boutons Bonne/Mauvaise/À revoir pour eux.
+    expect(html).toContain("Déplier");
+    expect(html).toContain("1 prise");
+  });
+
+  it("boutons plateau (Bonne/Mauvaise/À revoir) : hauteur 44px minimum", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TournageView, { beats: [beatNoTake] }),
+    );
+    // beatNoTake est en carte pleine par défaut (seul beat, sans prise retenue) : ses boutons de
+    // log portent la classe h-11 (44px), au-dessus du plancher normal 32px des contrôles chrome.
+    expect(html).toContain("h-11");
+  });
+});
+
+describe("TournageProgressHeader", () => {
+  it("compte 0/0 sans diviser par zéro quand il n'y a aucun beat", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TournageProgressHeader, { beats: [], filter: "tous", onFilterChange: () => {} }),
+    );
+    expect(html).toContain("Prises retenues : 0 / 0 beats");
+    expect(html).not.toContain("NaN");
+  });
+
+  it("compte toutes les prises retenues quand chaque beat en a une", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TournageProgressHeader, { beats: [beat], filter: "tous", onFilterChange: () => {} }),
+    );
+    expect(html).toContain("Prises retenues : 1 / 1 beats");
+  });
+
+  it("affiche le badge des beats sans prise quand il y en a", () => {
+    const html = renderToStaticMarkup(
+      React.createElement(TournageProgressHeader, {
+        beats: [beat, beatNoTake], filter: "tous", onFilterChange: () => {},
+      }),
+    );
+    expect(html).toContain("1 beats sans prise");
+  });
+});
+
+describe("filterBeats / beatNeedsReview / beatHasNoTake", () => {
+  const beats = [beat, beatNoTake, beatToReview];
+
+  it("« Tous les beats » retourne tous les beats", () => {
+    expect(filterBeats(beats, "tous")).toEqual(beats);
+  });
+
+  it("« Sans prise » ne retourne que les beats sans aucune prise", () => {
+    expect(filterBeats(beats, "sans_prise")).toEqual([beatNoTake]);
+  });
+
+  it("« À revoir » ne retourne que les beats avec des prises mais aucune bonne", () => {
+    expect(filterBeats(beats, "a_revoir")).toEqual([beatToReview]);
+  });
+
+  it("beatHasNoTake / beatNeedsReview reflètent bien les cas ci-dessus", () => {
+    expect(beatHasNoTake(beatNoTake)).toBe(true);
+    expect(beatHasNoTake(beatToReview)).toBe(false);
+    expect(beatNeedsReview(beatToReview)).toBe(true);
+    expect(beatNeedsReview(beat)).toBe(false);
   });
 });
